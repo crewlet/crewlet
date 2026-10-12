@@ -255,7 +255,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
             ? undefined
             : {
                 title: "No events carry this trace id",
-                hint: "A trace is assembled from the events that share an id. If the work happened outside the store's 30-day window, or on a node whose events went elsewhere, there is nothing to assemble.",
+                hint: "Traces older than 30 days aren’t kept.",
               }
         }
       >
@@ -327,10 +327,6 @@ export function TraceScreen({ traceId }: { traceId: string }) {
               );
             })}
           </div>
-          <footer className="panel-foot">
-            Spans whose parent is not in this trace are shown as roots rather than dropped — a trace
-            can legitimately begin mid-flight.
-          </footer>
         </Card>
       </QueryState>
     </>

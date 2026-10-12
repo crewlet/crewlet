@@ -30,7 +30,7 @@ describe("the priorities line", () => {
         they: "you",
       }),
     ).toBe(
-      "5 open tasks on your list, in the order to work them — 2 of them assigned to you. The Queue counts only the work assigned to you.",
+      "5 open tasks on your list, in the order to work them. 2 of them assigned to you. The Queue counts only the work assigned to you.",
     );
   });
 
@@ -40,16 +40,16 @@ describe("the priorities line", () => {
     expect(
       listLine({ rows: [row("A"), row("B", "rui")], total: 2, whose: "ada", they: "you" }),
     ).toBe(
-      "2 open tasks on your list, in the order to work them — none assigned to you. The Queue counts only the work assigned to you.",
+      "2 open tasks on your list, in the order to work them. None assigned to you. The Queue counts only the work assigned to you.",
     );
   });
 
   test("a list that is all the person's own says so and says nothing about the Queue", () => {
     expect(
       listLine({ rows: [row("A", "ada"), row("B", "ada")], total: 2, whose: "ada", they: "you" }),
-    ).toBe("2 open tasks on your list, in the order to work them — all assigned to you.");
+    ).toBe("2 open tasks on your list, in the order to work them. All are assigned to you.");
     expect(listLine({ rows: [row("A", "ada")], total: 1, whose: "ada", they: "you" })).toBe(
-      "1 open task on your list, in the order to work them — it is assigned to you.",
+      "1 open task on your list, in the order to work them. It is assigned to you.",
     );
   });
 
@@ -67,7 +67,7 @@ describe("the priorities line", () => {
     expect(
       listLine({ rows: [row("A", "rui"), row("B", "bo")], total: 2, whose: "rui", they: "them" }),
     ).toBe(
-      "2 open tasks on their list, in the order to work them — 1 of them assigned to them. The Queue counts only the work assigned to them.",
+      "2 open tasks on their list, in the order to work them. 1 of them assigned to them. The Queue counts only the work assigned to them.",
     );
   });
 });

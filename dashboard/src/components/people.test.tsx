@@ -285,7 +285,7 @@ describe("a seat's holding", () => {
     failure = json(500, { error: "internal", message: "boom" });
     engine();
     mount(<Holding seat={SAM} grants={ADMIN} />);
-    expect(await screen.findByText(/The engine tried to answer and failed/)).toBeTruthy();
+    expect(await screen.findByText(/The engine failed to answer/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
   });
 

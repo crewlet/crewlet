@@ -29,27 +29,27 @@ export const SERVER_STATE_WORDS: Record<
   running: {
     label: "Running",
     tone: "success",
-    hint: "Every instance a node launched started and listed its tools.",
+    hint: "All instances started",
   },
   partial: {
     label: "Partly failing",
     tone: "warning",
-    hint: "Some instances started and some did not — look at the node or the seat named beside the failure rather than at the server.",
+    hint: "Some instances failed. See the node or seat named beside it.",
   },
   failing: {
     label: "Failing",
     tone: "danger",
-    hint: "Every instance a node launched failed to start: the command, the address or the credentials every seat shares.",
+    hint: "Every instance failed. Check the command, address or credentials.",
   },
   not_started: {
     label: "Not started",
     tone: "neutral",
-    hint: "No node started it: a per-seat server no seat on a live node declares credentials for, or a change no node has applied yet.",
+    hint: "No node has started it yet.",
   },
   unreported: {
     label: "Not reported",
     tone: "neutral",
-    hint: "No live node's latest heartbeat carried its MCP report, so whether it started is unknown.",
+    hint: "No node has reported its status.",
   },
 };
 

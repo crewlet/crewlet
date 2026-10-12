@@ -524,8 +524,11 @@
 // cannot read, a read rate past its census — is evaluated once per log
 // ([Report]), because its consequence and its remedy are that log's: the
 // grace takes a node's copy out of service for one log and nothing for
-// another, and a node behind two re-anchors needs two. Each log's is then ITS
-// OWN ALARM, raised and cleared on its own ([Alarm.Domain], [Tracker]), since
-// a kind that stands for two logs is two things an operator has to be told
+// another, and a node behind two re-anchors needs two. The kind is still ONE
+// ALARM, listing every log it stands on with that log's own measurement
+// ([Alarm.Domains]), because the count, the gauge and the screen read one
+// cause on four logs as one problem; and each log's onset and clearing is
+// still its own pair of log lines ([Tracker]), since a log joining a kind that
+// is already up, and one leaving it, are things an operator has to be told
 // started and ended.
 package statelog

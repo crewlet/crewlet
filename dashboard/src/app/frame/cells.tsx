@@ -134,7 +134,7 @@ export function TurnWhatCell({
  * and spent nothing.
  */
 export function UnsettledCell() {
-  return <EmptyValue label="Not settled — the turn has not ended" />;
+  return <EmptyValue label="Not settled" />;
 }
 
 /**

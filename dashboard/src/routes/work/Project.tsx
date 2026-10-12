@@ -308,10 +308,7 @@ function ProjectAbout({ detail, chrome }: { detail: WorkProjectDetail; chrome: R
                   <span className="count-chip">{line.count}</span>
                 </div>
               ))}
-              <span className="t-caption">
-                Open work only — the {detail.task_counts.done} done and {detail.task_counts.closed}{" "}
-                closed are in the census above.
-              </span>
+              <span className="t-caption">Open work only.</span>
             </div>
           )}
         </QueryState>
@@ -384,9 +381,8 @@ function ProjectAbout({ detail, chrome }: { detail: WorkProjectDetail; chrome: R
               move finishes. */}
           {detail.shadowed?.length ? (
             <Callout variant="info">
-              This project redeclares {detail.shadowed.length} workspace field
-              {detail.shadowed.length === 1 ? "" : "s"}, so its own declaration is what its tasks
-              are read against.
+              This project overrides {detail.shadowed.length} workspace field
+              {detail.shadowed.length === 1 ? "" : "s"}.
             </Callout>
           ) : null}
         </div>
@@ -634,15 +630,13 @@ function projectLede(detail: WorkProjectDetail): string {
   if (detail.purpose) return detail.purpose;
   const unit = detail.unit.name || detail.unit.key;
   const whose = unit
-    ? `${detail.key} is ${unit}'s project.`
+    ? `${detail.key} is ${unit}’s project.`
     : `${detail.key} is a project no unit in the chart owns.`;
   if (filed(detail.task_counts) === 0) return `${whose} Nothing has been filed in it yet.`;
   // A SENTENCE FOR THE PERSON READING IT, not a configuration key: the lede
   // used to print "A `purpose` on that unit…" with its backticks, which read
   // as a template nobody filled in.
-  return unit
-    ? `${whose} No purpose is set for it — add one to ${unit} in the company configuration and this line will say it.`
-    : whose;
+  return unit ? `${whose} Add a purpose in Edit org.` : whose;
 }
 
 /**
@@ -665,7 +659,7 @@ function NothingFiled({ detail }: { detail: WorkProjectDetail }) {
     <EmptyState
       icon={<LayoutDashboardGlyph size={32} />}
       title={`No work has been filed in ${detail.name} yet`}
-      description="A seat files work with create_work_item, and an inbound webhook or a schedule is usually what sets one off. You can file one yourself here, recorded under your own name."
+      description="File the first task with New task."
       // THE WAY IN IS THE STATE'S OWN, not only the page bar's: `action` is
       // the slot this design system gives an empty state for exactly that.
       action={<NewTaskButton preset={{ project: detail.key }} />}
@@ -686,7 +680,7 @@ function NoSuchProject({ projectKey }: { projectKey: string }) {
       size="compact"
       icon={<LayoutDashboardGlyph size="xl" />}
       title={`No project called “${projectKey}”`}
-      description="A project key is declared by a team, or a seat above every team, in the company configuration, and none has declared this one. Renaming a team moves no key it declares. Projects, in Work, lists what this company actually has."
+      description="Nothing in the org declares this project key, and renaming a team moves none. See Projects."
     />
   );
 }
@@ -748,8 +742,8 @@ function ProjectBanners({ detail }: { detail: WorkProjectDetail }) {
           leaves a project's work routed to nobody. */}
       {!detail.unit.resolved && (
         <Callout variant="warning">
-          This project names the unit <span className="mono">{detail.unit.key}</span>, which the
-          current org chart does not have — work filed here routes to nobody.
+          Its team <span className="mono">{detail.unit.key}</span> is no longer in the org. New work
+          here reaches nobody.
         </Callout>
       )}
     </>

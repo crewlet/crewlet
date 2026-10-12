@@ -1204,7 +1204,7 @@ describe("the reporting chart", () => {
 
   test("says its lines are the last check's once the draft has moved past it", () => {
     const { probe, container } = mount(checkedEdit(loop, derivedLoop), { chart: "reporting" });
-    const note = () => screen.queryByText(/These reporting lines are from the last check/);
+    const note = () => screen.queryByText("From the last check.");
     expect(note()).toBeNull();
     act(() =>
       probe.dispatch({

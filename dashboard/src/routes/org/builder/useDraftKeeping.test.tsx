@@ -178,9 +178,7 @@ test("a draft kept for creating a company is discarded, with a word, when a comp
   const engine = new Engine(company());
   mountBuilder({ engine });
   expect(
-    await screen.findByText(
-      "A draft for creating a company was discarded, because this engine now has a company.",
-    ),
+    await screen.findByText("Your new-company draft was discarded: a company now exists."),
   ).toBeDefined();
   expect(kept()).toBeNull();
 });
@@ -245,9 +243,7 @@ test("storage that refuses says the draft will not survive a reload", async () =
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   expect(
-    await screen.findByText(
-      "This browser refuses to keep a draft, so unsaved changes will not survive a reload or leaving the builder.",
-    ),
+    await screen.findByText("This browser can’t keep drafts. Unsaved changes are lost on reload."),
   ).toBeDefined();
   // The work goes on.
   await waitFor(() =>
@@ -266,9 +262,7 @@ test("no storage at all says the draft will not survive a reload", async () => {
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
   );
   expect(
-    screen.getByText(
-      "This browser refuses to keep a draft, so unsaved changes will not survive a reload or leaving the builder.",
-    ),
+    screen.getByText("This browser can’t keep drafts. Unsaved changes are lost on reload."),
   ).toBeDefined();
 });
 
@@ -301,7 +295,7 @@ test("a draft this browser cannot keep asks before the builder is left, not befo
   mountBuilder({ engine: new Engine(company()), storage: refusing });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-  await screen.findByText(/This browser refuses to keep a draft/);
+  await screen.findByText(/This browser can’t keep drafts/);
   const start = location.hash;
 
   act(() => {

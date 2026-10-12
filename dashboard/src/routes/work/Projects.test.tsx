@@ -138,7 +138,7 @@ test("the project count is the answer's total, and a short page says so", async 
   await waitFor(() => expect(screen.getByText(/2 of 340 projects/)).toBeTruthy());
   // AND WHAT THE OTHER NUMBERS COVER, which the count no longer implies: the
   // sums are over the rows that arrived.
-  expect(screen.getByText(/in the order asked for/)).toBeTruthy();
+  expect(screen.getByText("Counts cover the 2 listed of 340.")).toBeTruthy();
   cleanup();
 
   // A PAGE HOLDING EVERYTHING SAYS NOTHING EXTRA: "2 of 2" is one number
@@ -152,7 +152,7 @@ test("the project count is the answer's total, and a short page says so", async 
   });
   mount();
   await waitFor(() => expect(screen.getByText(/2 projects/)).toBeTruthy());
-  expect(screen.queryByText(/in the order asked for/)).toBeNull();
+  expect(screen.queryByText(/Counts cover the/)).toBeNull();
 });
 
 // A ROW OPENS THE PEEK, which is the question a directory is read with — "is
@@ -687,7 +687,9 @@ test("the sortable heads are exactly the orderings the engine takes", async () =
 test("a refused listing is said to be a refusal", async () => {
   serving({}, { work_projects: "unavailable" });
   mount();
-  await waitFor(() => expect(screen.getByText(/This is not an empty company/)).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByText(/Still catching up\. This screen retries on its own\./)).toBeTruthy(),
+  );
   expect(screen.queryByText("No work has been filed yet")).toBeNull();
 });
 
@@ -708,7 +710,7 @@ test("a refused listing is said to be a refusal", async () => {
 // is the COMPANY having nothing, where an empty answer is only ever the
 // SEGMENT having nothing. Gated on All, this greeted a brand-new company with
 // a grid's empty state on the one segment it actually opens on.
-test("a company with no projects is told what a project is and where one comes from", async () => {
+test("a company with no projects is told where one comes from", async () => {
   for (const hash of [
     "#/work",
     "#/work?shown=active",
@@ -721,11 +723,11 @@ test("a company with no projects is told what a project is and where one comes f
     });
     mount();
     await waitFor(() => expect(screen.getByText("No projects yet")).toBeTruthy());
-    expect(screen.getByText(/gets a tracker project key, which New project starts/)).toBeTruthy();
+    expect(screen.getByText("Create one with New project.")).toBeTruthy();
     expect(screen.queryByText("No work has been filed yet")).toBeNull();
     // AND IT IS SAID ONCE: the lede above the grid is what the page IS, not
     // a second copy of where a project comes from.
-    expect(screen.getAllByText(/gets a tracker project key/)).toHaveLength(1);
+    expect(screen.getAllByText(/Create one with New project/)).toHaveLength(1);
     // NEW PROJECT IS ITS FIRST ACTION, as it ends the page's bar.
     expect(screen.getAllByRole("button", { name: "New project" })).toHaveLength(2);
     cleanup();
@@ -733,7 +735,8 @@ test("a company with no projects is told what a project is and where one comes f
 });
 
 // AN EMPTY ACTIVE SEGMENT ON A COMPANY THAT HAS ARCHIVED EVERYTHING SAYS SO,
-// WITH THE COUNT AND A WAY THERE.
+// WITH THE COUNT AND A WAY THERE. The count is on the Archived option the
+// link goes to, so the sentence does not repeat it.
 //
 // This is what the census bought. The page could not tell "no projects" from
 // "every project archived", so it hedged — one sentence naming both, sending
@@ -753,7 +756,7 @@ test("an empty active segment says how many are archived and links to them", asy
   await waitFor(() => expect(screen.getByText("No project is active")).toBeTruthy());
   // NOT the company-has-nothing page: this company has four.
   expect(screen.queryByText("No projects yet")).toBeNull();
-  expect(screen.getByText(/All 4 of the company’s projects have been archived/)).toBeTruthy();
+  expect(screen.getByRole("radio", { name: /Archived\s*4/ })).toBeTruthy();
 
   // A REAL LINK, so it is middle-clickable and copyable like every other way
   // into a segment — and THE REST OF THE QUERY SURVIVES, so a reader who
@@ -765,17 +768,17 @@ test("an empty active segment says how many are archived and links to them", asy
   expect(query.get("sort")).toBe("name");
 });
 
-// AND ONE ARCHIVED PROJECT IS NOT "ALL 1", because a count in a sentence is
-// prose and prose has a singular.
+// AND ONE ARCHIVED PROJECT IS NOT "ALL 1". The count is the option's figure
+// rather than prose, so the sentence has no number to get wrong.
 test("a company with one archived project is not told about all 1 of them", async () => {
   location.hash = "#/work?shown=active";
   serving({
     work_projects: { projects: [], total: 0, census: { active: 0, archived: 1 }, complete: true },
   });
   mount();
-  await waitFor(() =>
-    expect(screen.getByText(/The company’s one project has been archived/)).toBeTruthy(),
-  );
+  await waitFor(() => expect(screen.getByText("No project is active")).toBeTruthy());
+  expect(screen.getByRole("radio", { name: /Archived\s*1/ })).toBeTruthy();
+  expect(screen.queryByText(/All 1/)).toBeNull();
 });
 
 // AND AN EMPTY ARCHIVED SEGMENT IS ITS OWN SENTENCE, which is only reachable

@@ -747,7 +747,7 @@ export function ItemsView({
     ? {
         load: paged.more,
         note: paged.pageError
-          ? "The next page could not be read — try again."
+          ? "Couldn’t load more. Try again."
           : loadedOf(rows.length, data?.total_hint ?? 0, data?.total_capped),
       }
     : undefined;
@@ -927,14 +927,12 @@ export function ItemsView({
       </div>
 
       {data?.groups_overlap && (
-        <Callout variant="info">
-          One item can be on several of these columns, so the counts add up to more than the total.
-        </Callout>
+        <Callout variant="info">Items can appear in more than one column.</Callout>
       )}
       {data?.groups_dropped ? (
         <Callout variant="warning">
-          {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"} did not fit and
-          are not shown. Narrow the list to bring them into range.
+          {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"} hidden. Narrow the
+          list to see them.
         </Callout>
       ) : null}
 
@@ -1210,7 +1208,7 @@ function EmptyList({
       <EmptyState
         size="compact"
         title="Nothing matches"
-        description="No item on this node's copy of the tracker matches the filters you have set. Take one off above, or clear the whole narrowing."
+        description="Remove a filter, or clear them all."
         action={
           <Button size="small" variant="secondary" onClick={onClear}>
             Clear filters
@@ -1240,8 +1238,8 @@ function EmptyList({
   // three sentences below would blame the scope or claim the company has
   // filed nothing — over a company holding every item it ever filed, in
   // projects it has retired. The reader's next move is the projects, not the
-  // scope switch, so this says how many there are and goes to them, which is
-  // the shape the directory's own Active empty state already takes.
+  // scope switch, so this goes to them, which is the shape the directory's own
+  // Active empty state already takes.
   //
   // `Work.tsx` IS THE ONLY CALLER THAT CAN SAY SO, since the count is
   // `work_projects`' census and this list never reads it — so at project
@@ -1253,11 +1251,6 @@ function EmptyList({
         title="Every project is archived"
         description={
           <>
-            {archivedProjects === 1
-              ? "The company’s one project has been archived"
-              : `All ${archivedProjects} of the company’s projects have been archived`}
-            , so nothing is listed here. An archived project keeps its work and stops taking new
-            items.{" "}
             <a className="prose-link" href={href(["work"], { shown: "archived" })}>
               See them under Archived
             </a>
@@ -1281,7 +1274,7 @@ function EmptyList({
       <EmptyState
         size="compact"
         title="Nothing has been filed yet"
-        description="Seats file work with create_work_item, and an inbound webhook or a schedule is usually what starts them."
+        description="Tasks people and agents file appear here."
       />
     );
   }
@@ -1299,8 +1292,8 @@ function EmptyList({
         title={`Nothing is open${where}`}
         description={
           elsewhere
-            ? `Every item here is finished — ${plural(elsewhere, "item")} under Closed. The scope switch in the bar is what shows them.`
-            : "No open item is on this node's copy of the tracker. Finished work is under Closed and All shows both — and if none has been filed at all, seats file it with create_work_item."
+            ? `${plural(elsewhere, "finished item")} ${elsewhere === 1 ? "is" : "are"} under Closed.`
+            : "Finished work is under Closed."
         }
       />
     );
@@ -1311,8 +1304,8 @@ function EmptyList({
       title={`Nothing has been finished${where} yet`}
       description={
         elsewhere
-          ? `Nothing here has been finished — ${plural(elsewhere, "item")} still open. The scope switch in the bar is what shows them.`
-          : "No finished item is on this node's copy of the tracker. Open shows what is still in flight, and All shows both."
+          ? `${plural(elsewhere, "open item")} ${elsewhere === 1 ? "is" : "are"} under Open.`
+          : "Open work is under Open."
       }
     />
   );
@@ -1335,7 +1328,7 @@ export function NoWorkYet() {
     <EmptyState
       icon={<LayoutDashboardGlyph size={32} />}
       title="No work has been filed yet"
-      description="Nothing can be filed until a unit in the company config declares a `project` key, and this company has none. Once one does, seats file work with create_work_item. An inbound webhook or a schedule is usually what starts them."
+      description="Create a project first, with New project."
     />
   );
 }

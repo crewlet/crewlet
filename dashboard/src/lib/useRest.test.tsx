@@ -210,8 +210,8 @@ describe("what makes it read again", () => {
   });
 
   // AN ANSWER TAKEN BEFORE A RECONNECT is about a company that has since
-  // moved, and it is what makes `closed`'s promise — "reads again once the
-  // socket is back" — true of a REST read.
+  // moved, and it is what makes `closed`'s promise ("The screen reloads when
+  // it’s back") true of a REST read.
   test("a socket that came back re-reads, and the first connect does not", async () => {
     const store = new Store();
     const socket = new LiveSocket(store);

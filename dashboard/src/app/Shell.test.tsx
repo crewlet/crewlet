@@ -121,7 +121,11 @@ describe("the state bar's coverage", () => {
   test("it is drawn for the screen that published it", () => {
     frame(<Covered coverage={INCOMPLETE} />);
     expect(screen.getByText(/applied through 41 of 88/)).toBeDefined();
-    expect(screen.getByText("This answer is incomplete")).toBeDefined();
+    expect(
+      screen.getByText(
+        "Some records need a newer engine version to read, so this may be incomplete.",
+      ),
+    ).toBeDefined();
     // AND THE LEVEL IS NOT A WORD ON THE SCREEN. `linearizable` is stronger
     // than this surface's own default; a chip naming it is a label nobody
     // reads, and the one level that matters then arrives as a changed word
@@ -152,15 +156,19 @@ describe("the state bar's coverage", () => {
   });
 
   // THE ONE THAT SHIPPED. Land on the Inbox, which publishes; click through to
-  // a screen that does not — Settings › Secrets, say — and the inbox's
-  // freshness badge and its "this answer is incomplete" banner stayed in the
+  // a screen that does not (Settings › Secrets, say), and the inbox's
+  // freshness badge and its "this may be incomplete" banner stayed in the
   // bar as claims about data the new screen never read.
   test("it goes when the screen that published it does", () => {
     const { show } = frame(<Covered coverage={INCOMPLETE} />);
     show(<Bare />);
     expect(screen.getByText("the bare screen")).toBeDefined();
     expect(screen.queryByText(/applied through/)).toBeNull();
-    expect(screen.queryByText("This answer is incomplete")).toBeNull();
+    expect(
+      screen.queryByText(
+        "Some records need a newer engine version to read, so this may be incomplete.",
+      ),
+    ).toBeNull();
   });
 
   // …and the reset must not eat the INCOMING screen's own facts, which is why
@@ -181,7 +189,11 @@ describe("the state bar's coverage", () => {
     await act(async () => {});
     expect(screen.getByText(/applied through 4 of 9/)).toBeDefined();
     expect(screen.queryByText(/applied through 41 of 88/)).toBeNull();
-    expect(screen.queryByText("This answer is incomplete")).toBeNull();
+    expect(
+      screen.queryByText(
+        "Some records need a newer engine version to read, so this may be incomplete.",
+      ),
+    ).toBeNull();
   });
 });
 
@@ -1074,9 +1086,6 @@ describe("what the frame holds open", () => {
   });
 });
 
-// THE ENGINE'S STATE IS THE HEALTH CARD'S NAME, and the card is the way to the
-// nodes. Every word is the health push's: `HealthCard.test.tsx` holds the
-// precedence, this holds the wiring.
 // THE COMPANY IS THE LOCKUP'S TITLE, beside the product's mark — the approved
 // design's "Nimbus" — and the lockup is the way home.
 test("the lockup is the company's name beside the product's mark, and goes home", async () => {
@@ -1094,17 +1103,64 @@ test("the lockup is the company's name beside the product's mark, and goes home"
   );
 });
 
-test("the health card reads the push and links to the nodes", async () => {
+// THE ENGINE'S STATE IS THE ENGINE ROW'S NAME, at the rail's foot, and the row
+// opens the engine panel. Every word is the health push's: `EnginePanel.test.tsx`
+// holds the precedence and the panel, this holds the wiring.
+test("the engine row reads the push and opens the engine panel", async () => {
   const { store, socket } = answering({});
   mountShell(store, socket);
   act(() => {
     store.setConnected(true);
     store.applyHealth(healthFrame({ nodes: 3, applied_epoch: 42, alarms: { count: 0 } }));
   });
-  const card = document.querySelector<HTMLAnchorElement>("a.health-card");
-  expect(card?.getAttribute("href")).toBe("#/settings/nodes");
-  expect(card?.textContent).toContain("Engine healthy");
-  expect(card?.textContent).toContain("3 nodes · config epoch 42");
+  const row = screen.getByRole("button", { name: "Engine healthy" });
+  expect(row.closest("aside")).not.toBeNull();
+  fireEvent.click(row);
+  const panel = screen.getByRole("dialog", { name: "Engine" });
+  expect(within(panel).getByText("3 live")).toBeDefined();
+  expect(within(panel).getByText("Epoch 42")).toBeDefined();
+});
+
+// THE ALARMS' NAMES ARE THE RETENTION REPORT'S, which takes `fleet:operate`,
+// so the panel asks for them only where Settings › Backups & retention, the
+// section that lists them, opens for the reader: decided by the rule every
+// lock is drawn by, over the frame's one reading of what the reader holds. A
+// reader without it is told the longest-standing alarm off the push, and the
+// engine is never asked a question it would refuse. Mutation: hand the panel
+// `readsReport` unconditionally and the second reader asks.
+test("the engine panel asks the alarms' names only of a reader the report's section opens for", async () => {
+  const report = { domains: [], alarms: [{ kind: "backup_age", detail: "", remedy: "" }] };
+  const holdsNothingButTheCompany = {
+    login: "reader",
+    grants: ["state:read"],
+    handle: "ada",
+    owner: "ada",
+    name: "Ada Lovelace",
+    kind: "human",
+  };
+  for (const [viewer, asks] of [
+    [undefined, true],
+    [holdsNothingButTheCompany, false],
+  ] as const) {
+    const asked: { what: string }[] = [];
+    const { store, socket } = answering(
+      viewer ? { viewer, retention: report } : { retention: report },
+      asked,
+    );
+    mountShell(store, socket);
+    await settle();
+    act(() => {
+      store.setConnected(true);
+      store.applyHealth(healthFrame({ alarms: { count: 1, worst: "backup_age" } }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Engine serving, 1 alarm" }));
+    await settle();
+    expect(
+      asked.some((a) => a.what === "retention"),
+      viewer ? "a reader without fleet:operate" : "a reader holding fleet:operate",
+    ).toBe(asks);
+    cleanup();
+  }
 });
 
 // A PROJECT'S LENSES ARE BESIDE ITS NAME, on the bar: `Work › ENG Core ·

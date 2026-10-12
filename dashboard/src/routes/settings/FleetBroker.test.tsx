@@ -89,7 +89,9 @@ describe("broker membership", () => {
     expect(groupSummary(a.group!, a.group_from)).toBe(
       "Metadata group of acme, as node-a reports it: 3 voters, led by node-a",
     );
-    expect(groupSummary({ ...a.group!, leader: undefined }, a.group_from)).toMatch(/no leader/);
+    expect(groupSummary({ ...a.group!, leader: undefined }, a.group_from)).toBe(
+      "Metadata group of acme: no leader. Electing one, or quorum lost.",
+    );
   });
 
   test("each disagreement is said in words, and a dead member offers its removal", () => {
@@ -107,7 +109,11 @@ describe("broker membership", () => {
     delete a.group_from;
     a.group_error = "node-a did not answer";
     panel(a);
-    expect(screen.getByText(/could not be read: node-a did not answer/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Couldn’t read the metadata group: node-a did not answer. Showing what nodes advertise.",
+      ),
+    ).toBeTruthy();
   });
 
   // A READ THE ENGINE REFUSED ON AUTHORITY names the grant that would admit

@@ -98,21 +98,20 @@ afterEach(() => {
 describe("the shell", () => {
   test("mounts against an engine that has answered nothing", () => {
     mount();
-    // The chrome is present and honest: not connected, and saying so — in the
-    // sidebar's health card and in the landing screen's own sentence.
-    expect(screen.getAllByText("Reconnecting").length).toBeGreaterThan(0);
+    // The chrome is present and honest: not connected yet, and saying so, in
+    // the sidebar's engine row and in the landing screen's own sentence. A tab
+    // still dialling has lost nothing, so the row says it is connecting.
+    expect(screen.getAllByText("Connecting").length).toBeGreaterThan(0);
     // AND THE LANDING SCREEN IS HOME, whose one sentence an engine condition
     // takes over rather than sitting beside a claim that all is well.
-    expect(screen.getByText(/Not connected to the engine/)).toBeDefined();
+    expect(screen.getByText(/Not connected\. Showing the last state received/)).toBeDefined();
   });
 
   test("a disconnected engine is itself the first thing needing a person", () => {
     // It is not a footnote in a popover: the page cannot tell the truth about
     // anything else while the socket is down, so it leads.
     mount();
-    expect(
-      screen.getByText("Not connected to the engine. What is shown is the last state it sent."),
-    ).toBeDefined();
+    expect(screen.getByText("Not connected. Showing the last state received.")).toBeDefined();
   });
 
   test("every workspace is in the sidebar, Settings included", async () => {
@@ -625,7 +624,7 @@ describe("a section, for a reader holding none of its grants", () => {
         ],
       }),
     );
-    expect(await screen.findByText(/Seat ownership is a lease/)).toBeDefined();
+    expect(await screen.findByText(/Log positions are under/)).toBeDefined();
     expect(screen.queryByText("Nodes needs fleet:operate")).toBeNull();
   });
 
@@ -927,7 +926,7 @@ describe("a turn watched to its end", () => {
       },
     ] as never);
     redraw();
-    expect(screen.queryByText(/finished while you were reading/)).toBeNull();
+    expect(screen.queryByText(/new turns?\. Show/)).toBeNull();
     expect(screen.getAllByText("execute").length).toBeGreaterThan(0);
     // And the transcript the reader had open is still open: the card is
     // remounted when it crosses lists, so its latched state does not travel.

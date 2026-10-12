@@ -261,9 +261,8 @@ export function PreviousRevisionNote() {
   if ((health?.applied_epoch ?? 0) >= saved.epoch) return null;
   return (
     <Callout variant="neutral" icon={<RotateCwGlyph />}>
-      This node is still applying revision{" "}
-      <InlineCode>{shortRevision(saved.revisionId)}</InlineCode>, so what is drawn below is the
-      revision before it.
+      Still applying <InlineCode>{shortRevision(saved.revisionId)}</InlineCode>. Showing the
+      previous revision.
     </Callout>
   );
 }
@@ -350,16 +349,12 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
         <>
           {state.revision !== null && state.revision !== savedRevision && (
             <Callout variant="warning">
-              This is revision{" "}
-              <InlineCode tone="inherit">{shortRevision(state.revision)}</InlineCode>, which is
-              active now, rather than the one you saved.
+              Showing active revision{" "}
+              <InlineCode tone="inherit">{shortRevision(state.revision)}</InlineCode>, not the one
+              you saved.
             </Callout>
           )}
-          <p className="t-caption">
-            Credentials are redacted, as every configuration read is: a value the engine holds reads
-            as <InlineCode>__redacted__</InlineCode>, and a reference keeps its{" "}
-            <InlineCode>${"{NAME}"}</InlineCode> form.
-          </p>
+          <p className="t-caption">Credentials are hidden.</p>
           {/* ITS OWN CEILING, the one block that states one: a dialog is
               portaled to the document, outside the shell's scrollers, so the
               view-derived ceiling they declare (`--record-ceiling`,

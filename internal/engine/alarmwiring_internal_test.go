@@ -79,8 +79,9 @@ func TestTheCeilingAlarmFiresOnARunningNode(t *testing.T) {
 		t.Fatal("a tebibyte a day on a log sized for gibibytes raised no " +
 			"log_ceiling_short")
 	}
-	if !strings.HasPrefix(fired.Detail, "tracker: ") {
-		t.Errorf("the alarm reads %q and does not name the log", fired.Detail)
+	if !standsOn(fired, "tracker") {
+		t.Errorf("the alarm stands on %+v and does not name the tracker's log alone",
+			fired.Domains)
 	}
 	if got := alarmGauge(t, e, statelog.KindLogCeilingShort); got != 1 {
 		t.Errorf("the alarm gauge for %s reads %v, want 1",
@@ -89,19 +90,22 @@ func TestTheCeilingAlarmFiresOnARunningNode(t *testing.T) {
 }
 
 // A FRESH NODE'S BLOCKED TRIM IS SILENT, AND A BLOCK THAT HAS KEPT RECORDS
-// PAST THE WINDOW FIRES `trim_blocked` — through the trim's own tick, the floor
-// it publishes and the report every surface reads.
+// PAST THE WINDOW IS NAMED: through the trim's own tick, the floor it publishes
+// and the report every surface reads.
 //
 // A fresh node is the young fleet: its trim is blocked from the first tick,
 // because nothing has been backed up. The report's clock is then put a whole
-// window and more ahead — so the block is older than the threshold by every
-// measure the clock has — and the alarm must stay down, because the age term
-// the tick published keeps every record the log holds. Then the published
-// floor is what the duty would publish once the records had aged — the same
-// block, its age term past the log's head — and the alarm must rise, naming
-// the log. A floor published at another generation must not be read as this
-// log's at all.
-func TestTheTrimBlockedAlarmFiresOnARunningNodeOnlyPastTheWindow(t *testing.T) {
+// window and more ahead, so the block is older than the threshold by every
+// measure the clock has, and the log must be named nowhere, because the age
+// term the tick published keeps every record the log holds. Then the published
+// floor is what the duty would publish once the records had aged (the same
+// block, its age term past the log's head) and the log must be named, under
+// the alarm whose remedy it is: the BACKUP's, since the backup term is what
+// holds it and `backup_age` is up on a node that has never taken one, so it
+// raises no `trim_blocked` of its own and the one cause reads as one problem.
+// A floor published at another generation must not be read as this log's at
+// all.
+func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	e := bootDirectoryNode(t, nil)
@@ -132,9 +136,27 @@ func TestTheTrimBlockedAlarmFiresOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 	later := time.Now().UTC().Add(r.cfg.MinAge() + statelog.TrimInterval + time.Hour)
 	r.now = func() time.Time { return later }
 	r.beat(ctx)
-	if alarmed(r.Report(ctx), statelog.KindTrimBlocked) {
+	young := r.Report(ctx)
+	if alarmed(young, statelog.KindTrimBlocked) {
 		t.Fatal("a fresh node's trim, blocked on its first backup with nothing in " +
 			"its log past the window, raised trim_blocked")
+	}
+	// THE PREMISES: the backup term holds the log, and the backup alarm is up,
+	// which is what a node that has never taken a backup is.
+	backup, up := alarmOf(young, statelog.KindBackupAge)
+	if !up {
+		t.Fatal("a node that has never taken a backup raised no backup_age, so " +
+			"this case is not the young fleet it names")
+	}
+	for _, d := range young.Domains {
+		if d.Domain == name && d.BlockedBy != statelog.TermBackupFloor {
+			t.Fatalf("the %s log is held by %q, not by the backup it is waiting for",
+				name, d.BlockedBy)
+		}
+	}
+	if len(backup.Domains) != 0 {
+		t.Fatalf("backup_age names %+v while nothing in any log is past the window",
+			backup.Domains)
 	}
 
 	// THE SAME BLOCK, AS THE DUTY PUBLISHES IT ONCE THE LOG HAS AGED: its
@@ -158,21 +180,28 @@ func TestTheTrimBlockedAlarmFiresOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 		t.Fatalf("publish the aged floor: %v", err)
 	}
 	r.beat(ctx)
-	var fired statelog.Alarm
-	for _, a := range r.Report(ctx).Alarms {
-		if a.Kind == statelog.KindTrimBlocked {
-			fired = a
+	aging := r.Report(ctx)
+	if alarmed(aging, statelog.KindTrimBlocked) {
+		t.Errorf("a log the missing backup holds raised a trim_blocked of its own " +
+			"beside backup_age, so one cause reads as two problems")
+	}
+	backup, _ = alarmOf(aging, statelog.KindBackupAge)
+	var held *statelog.AlarmDomain
+	for i, d := range backup.Domains {
+		if d.Domain == name {
+			held = &backup.Domains[i]
 		}
 	}
-	if fired.Kind == "" {
-		t.Fatalf("a trim blocked past its window with %d record(s) past it raised "+
-			"no trim_blocked", at.Last-at.First+1)
+	if held == nil {
+		t.Fatalf("a trim blocked past its window with %d record(s) past it is named "+
+			"nowhere: backup_age stands on %+v", at.Last-at.First+1, backup.Domains)
 	}
-	if !strings.HasPrefix(fired.Detail, name+": ") {
-		t.Errorf("the alarm reads %q and does not name the %s log", fired.Detail, name)
+	if held.Term != statelog.TermBackupFloor || !strings.Contains(held.Detail, "record(s) older") {
+		t.Errorf("backup_age names the %s log as %+v; want the backup term holding it "+
+			"and what it is keeping", name, *held)
 	}
-	if got := alarmGauge(t, e, statelog.KindTrimBlocked); got != 1 {
-		t.Errorf("the alarm gauge for %s reads %v, want 1", statelog.KindTrimBlocked, got)
+	if got := alarmGauge(t, e, statelog.KindTrimBlocked); got != 0 {
+		t.Errorf("the alarm gauge for %s reads %v, want 0", statelog.KindTrimBlocked, got)
 	}
 
 	// A FLOOR FROM ANOTHER GENERATION IS NOT THIS LOG'S: its terms and its
@@ -187,6 +216,10 @@ func TestTheTrimBlockedAlarmFiresOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 		t.Error("a floor published at another generation raised trim_blocked " +
 			"against this log's sequences")
 	}
+	if backup, _ := alarmOf(after, statelog.KindBackupAge); len(backup.Domains) != 0 {
+		t.Errorf("a floor published at another generation is named under backup_age "+
+			"against this log's sequences: %+v", backup.Domains)
+	}
 	for _, d := range after.Domains {
 		if d.Domain == name && d.BlockedBy != "" {
 			t.Errorf("the %s row renders a block from generation %d as its own",
@@ -195,10 +228,11 @@ func TestTheTrimBlockedAlarmFiresOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 	}
 }
 
-// A RECORD FROM A NEWER BUILD, HELD PAST THE DEFERRAL GRACE, FIRES
-// `deferred_old` ONCE FOR EACH LOG HOLDING ONE — from a real deferral on a real
-// applier, dated by the real position heartbeat — and each says whether this
-// node's copy of the estate goes out of service for it.
+// A RECORD FROM A NEWER BUILD, HELD PAST THE DEFERRAL GRACE, FIRES ONE
+// `deferred_old` STANDING ON EVERY LOG HOLDING ONE, each with its own
+// measurement — from a real deferral on a real applier, dated by the real
+// position heartbeat — and each log's entry says whether this node's copy of
+// the estate goes out of service for it.
 //
 // The alarm could not fire before: the report stood the grace in for the age
 // whenever a record was held, and the rule fires past the grace. The records
@@ -209,7 +243,8 @@ func TestTheTrimBlockedAlarmFiresOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 // versions leaves behind: one judges this node's copy of the estate and one
 // judges none, so the grace takes the copy out of service for the first and
 // takes nothing out for the second — the seats stay where they are for both.
-// A single alarm naming the node's oldest record said one of those about both.
+// An alarm carrying only the node's oldest record said one of those about both;
+// each log the alarm stands on now carries its own.
 func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -302,13 +337,21 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 		return sighted.Add(statelog.DeferralGrace + statelog.AlarmInterval)
 	}
 	r.beat(ctx)
-	byLog := map[string]statelog.Alarm{}
+	// ONE ALARM, standing on each log that holds a record, with each log's
+	// own measurement.
+	byLog := map[string]statelog.AlarmDomain{}
+	raised := 0
 	for _, a := range r.Report(ctx).Alarms {
 		if a.Kind != statelog.KindDeferredOld {
 			continue
 		}
-		domain, _, _ := strings.Cut(a.Detail, ": ")
-		byLog[domain] = a
+		raised++
+		for _, d := range a.Domains {
+			byLog[d.Domain] = d
+		}
+	}
+	if raised != 1 {
+		t.Errorf("deferred_old was raised %d time(s), want once naming each log", raised)
 	}
 	for _, tc := range []struct {
 		domain  string
@@ -340,7 +383,7 @@ func TestTheDeferredOldAlarmFiresOnARunningNode(t *testing.T) {
 		}
 	}
 	if len(byLog) != 2 {
-		t.Errorf("raised deferred_old for %d log(s), want the two holding a record", len(byLog))
+		t.Errorf("deferred_old stands on %d log(s), want the two holding a record", len(byLog))
 	}
 	if got := alarmGauge(t, e, statelog.KindDeferredOld); got != 1 {
 		t.Errorf("the alarm gauge for %s reads %v, want 1",
@@ -390,16 +433,16 @@ func TestTheFloorUnknownAlarmFiresOnARunningNode(t *testing.T) {
 		t.Fatal("a floor this node could not use for five heartbeats raised no " +
 			"floor_unknown")
 	}
-	// THE ONE LOG WHOSE FLOOR IS AHEAD, and none of the others: every other
-	// log's floor is readable, and its reads are served.
+	// ONE ALARM, standing on THE ONE LOG WHOSE FLOOR IS AHEAD and none of the
+	// others: every other log's floor is readable, and its reads are served.
 	if len(raised) != 1 {
 		t.Errorf("raised floor_unknown %d times for one unusable floor: %v", len(raised), raised)
 	}
 	fired := raised[0]
-	if !strings.HasPrefix(fired.Detail, name+": ") ||
+	if !standsOn(fired, name) ||
 		!strings.Contains(fired.Detail, fmt.Sprintf("generation %d", generation+1)) {
-		t.Errorf("the alarm reads %q; it names the log and why its floor is unusable",
-			fired.Detail)
+		t.Errorf("the alarm stands on %+v and reads %q; it names the log and why "+
+			"its floor is unusable", fired.Domains, fired.Detail)
 	}
 	if got := alarmGauge(t, e, statelog.KindFloorUnknown); got != 1 {
 		t.Errorf("the alarm gauge for %s reads %v, want 1", statelog.KindFloorUnknown, got)
@@ -476,6 +519,23 @@ func awaitObservation(t *testing.T, r *retention, after time.Time,
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// standsOn reports whether an alarm stands on exactly one log, the named one,
+// with that log's measurement as its own detail.
+func standsOn(a statelog.Alarm, domain string) bool {
+	return len(a.Domains) == 1 && a.Domains[0].Domain == domain &&
+		a.Domains[0].Detail == a.Detail
+}
+
+// alarmOf is a report's alarm of a kind, and whether it carries one.
+func alarmOf(report statelog.Report, kind statelog.Kind) (statelog.Alarm, bool) {
+	for _, a := range report.Alarms {
+		if a.Kind == kind {
+			return a, true
+		}
+	}
+	return statelog.Alarm{}, false
 }
 
 // alarmed reports whether a report carries an alarm of a kind.

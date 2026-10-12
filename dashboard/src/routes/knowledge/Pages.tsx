@@ -147,7 +147,7 @@ export function Pages({ container }: { container: string }) {
       <EmptyState
         icon={<FolderGlyph size="xl" />}
         title="This company's pages live in its wiki"
-        description="There is nothing on this engine to browse. The search in the bar reaches the wiki live."
+        description="Use the search in the bar."
       />
     );
   } else if (!read && error) {
@@ -163,7 +163,7 @@ export function Pages({ container }: { container: string }) {
       <EmptyState
         icon={<FolderGlyph size="xl" />}
         title={`No space called “${container}”`}
-        description="A space is created the first time somebody writes into it. This node may also not have caught up with one that exists."
+        description="It may not exist yet, or this node is catching up."
       />
     );
   } else {
@@ -543,9 +543,7 @@ function SpaceOutline({ space }: { space: PageContainer }) {
           return true;
         }}
       />
-      <Card.Footer variant="meta">
-        {plural(space.pages, "page")} in this space. Open a folder to see what is filed under it.
-      </Card.Footer>
+      <Card.Footer variant="meta">{plural(space.pages, "page")}</Card.Footer>
     </Card>
   );
 }
@@ -652,7 +650,7 @@ function FolderField({
   const create = async () => {
     const result = await write.run(
       { title, body: "", container: space, ...(parent ? { parent } : {}) },
-      { done: `Created the folder “${title}”. Use Create inside it to add pages.` },
+      { done: `Created the folder “${title}”.` },
     );
     if (!result || (result.kind !== "applied" && result.kind !== "pending")) return;
     const id = (result.receipt as { id?: unknown } | null)?.id;

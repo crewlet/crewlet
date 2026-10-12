@@ -131,7 +131,7 @@ export function Home() {
   // that is not one of this reader's own decisions — a seat stopped for
   // another reason, a budget near its ceiling. Exactly the Inbox's condition
   // rows (`conditionsToDecide`): the engine's own rows are the sentence's
-  // precedence and the health card's, a stalled round and the parked runs are
+  // precedence and the engine row's, a stalled round and the parked runs are
   // Live's, and a budget-stopped seat is one of the decisions.
   const raised = conditionsToDecide(attention);
   // A stopped seat counts here exactly when it is not counted as one of the

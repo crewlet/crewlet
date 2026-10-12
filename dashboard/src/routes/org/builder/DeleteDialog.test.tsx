@@ -85,7 +85,7 @@ describe("outside the chart", () => {
   test("the Datadog fallback must be replaced before the seat that is it can go", () => {
     const view = open(keyedState(fixtureCompany()), "seat:sre");
     expect(deleteButton().disabled).toBe(true);
-    expect(screen.getByText(/SRE is the Datadog fallback/)).toBeDefined();
+    expect(screen.getByText("Choose the agent that takes untagged Datadog alerts.")).toBeDefined();
     replaceFallback("Dev");
     expect(deleteButton().disabled).toBe(false);
     fireEvent.click(deleteButton());
@@ -110,7 +110,7 @@ describe("outside the chart", () => {
     const spaced = fixtureCompany();
     spaced.integrations = { ...spaced.integrations, datadog: { enabled: true, route_to: " sre " } };
     open(keyedState(spaced), "seat:sre");
-    expect(screen.getByText(/SRE is the Datadog fallback/)).toBeDefined();
+    expect(screen.getByText("Choose the agent that takes untagged Datadog alerts.")).toBeDefined();
     expect(deleteButton().disabled).toBe(true);
   });
 
@@ -144,7 +144,7 @@ describe("outside the chart", () => {
     expect(screen.queryByLabelText("Datadog fallback")).toBeNull();
     expect(
       screen.getByText(
-        /This removal would leave no agent seat to take it over, so add one first, or disconnect Datadog/,
+        /Only is the Datadog fallback and no other agent can take over\. Add an agent first, or disconnect Datadog\./,
       ),
     ).toBeDefined();
     expect(deleteButton().disabled).toBe(true);
@@ -152,11 +152,7 @@ describe("outside the chart", () => {
 
   test("a removed seat's GitLab access level goes with it, so no later seat inherits it", () => {
     open(keyedState(fixtureCompany()), "seat:dev");
-    expect(
-      screen.getByText(
-        "The GitLab access level for dev (developer) is removed, so it cannot pass to a seat added later under that handle.",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("dev’s GitLab access level (developer) is removed.")).toBeDefined();
   });
 
   test("what the engine made at the vendors and the entries the seat references are named, never a credential", () => {
@@ -237,12 +233,13 @@ describe("outside the chart", () => {
     expect(screen.queryByText(/These stay until you decommission them/)).toBeNull();
   });
 
-  test("the mailbox is retired after the grace period and the memory reattaches by handle", () => {
+  test("the mail is kept for 24 hours, and the memory for a seat with the same handle", () => {
     open(keyedState(fixtureCompany()), "seat:dev");
-    const note = screen.getByText(/kept for 24 hours after the engine applies the change/);
-    expect(note.textContent).toContain("then retired");
-    expect(note.textContent).toContain("any coding runs it still has are ended then");
-    expect(note.textContent).toContain("a seat added later with the same handle reattaches to it");
+    expect(
+      screen.getByText(
+        "Its mail is kept for 24 hours. Its memory is kept for a seat with the same handle.",
+      ),
+    ).toBeDefined();
   });
 
   test("a seat added in this draft has no mailbox to retire and nothing at a vendor", () => {
@@ -285,7 +282,7 @@ describe("before the seats go", () => {
       { id: "1", agent_id: "1", role: "Runner", handle: "runner", activity: "working" },
     ];
     open(keyedState(doc), "seat:runner", { agents });
-    expect(screen.getByText(/Schedule sweep on Ops would have no runner/)).toBeDefined();
+    expect(screen.getByText(/Schedule sweep on Ops would have nobody to run it/)).toBeDefined();
     expect(screen.getByText(/Runner is working now/)).toBeDefined();
   });
 
@@ -338,10 +335,6 @@ describe("before the seats go", () => {
   test("a read-only builder deletes nothing, and says why the button is unavailable", () => {
     open(keyedState(fixtureCompany()), "seat:dev", { readOnly: true });
     expect(deleteButton().disabled).toBe(true);
-    expect(
-      screen.getByText(
-        "The organization cannot be changed right now, so this change cannot be applied.",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("The org can’t be changed right now.")).toBeDefined();
   });
 });

@@ -125,7 +125,7 @@ describe("the status sentence", () => {
   test("an engine condition takes the sentence over", () => {
     // NOBODY SIGNED IN, never a token to set: the browser holds no token.
     expect(sentenceText(statusSentence({ ...base, authRejected: true }))).toBe(
-      "Nobody is signed in on this browser — sign in to read the company.",
+      "Nobody is signed in on this browser. Sign in to read the company.",
     );
     expect(sentenceText(statusSentence({ ...base, connected: false }))).toMatch(/^Not connected/);
     expect(sentenceText(statusSentence({ ...base, configured: false }))).toMatch(

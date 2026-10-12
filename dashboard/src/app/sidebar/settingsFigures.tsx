@@ -31,9 +31,10 @@
  *    epoch the fleet activated — the Nodes screen's own "Behind on config"
  *    count — drawn as a warning mark and said in the row's name.
  *  - **Configuration** — the epoch this node applied, in words.
- *  - **Backups & retention** — how many state-log domains have a trim that
- *    something is holding (`blocked_by`), drawn only when there is one: a
- *    held trim is a log that only grows.
+ *  - **Backups & retention**: how many alarms stand, the count the engine
+ *    panel shows and the section's own list leads with, drawn only when one
+ *    does. It counted the logs whose trim is held, which put a 4 here beside
+ *    the rail's 5 for one missing backup.
  *
  * ABSENT IS NOT ZERO throughout: an answer that has not arrived, or was
  * refused, draws no figure rather than a 0.
@@ -136,12 +137,15 @@ export function settingsFigures({
     };
   }
 
-  const held = retention?.domains.filter((d) => d.blocked_by).length ?? 0;
-  if (held > 0) {
+  // THE STANDING ALARMS, the same count the engine panel shows and the
+  // section's own list leads with. It counted the logs whose trim is held,
+  // which put a 4 here beside a 5 in the rail for one missing backup.
+  const alarms = retention?.alarms.length ?? 0;
+  if (alarms > 0) {
     figures.backups = {
       count: {
-        value: held,
-        label: held === 1 ? "domain whose trim is held" : "domains whose trim is held",
+        value: alarms,
+        label: alarms === 1 ? "standing alarm" : "standing alarms",
         mark: <StatusDot tone="warning" />,
       },
     };

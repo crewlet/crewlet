@@ -639,15 +639,15 @@ export function roundLabel(call: LiveCall | null | undefined): {
   hint: string;
 } {
   if (!call) {
-    return { text: "starting", hint: "the turn has begun and no model round has opened yet" };
+    return { text: "starting", hint: "No model round yet" };
   }
   const round = roundOf(call);
   return {
     text: `round ${round}`,
     hint:
       (call.round_num ?? -1) < 0 && (call.rounds_used ?? 0) === 0
-        ? "the first model round is in flight and has not come back"
-        : "the model round this turn is on, counting from one",
+        ? "First round in progress"
+        : "Current model round",
   };
 }
 
@@ -1316,7 +1316,7 @@ export function heldBy(
   agent: AgentRow | undefined,
   health: EngineHealth | null,
 ): string {
-  if (agent?.stopped_reason === "unplaced") return "no node — not placed";
+  if (agent?.stopped_reason === "unplaced") return "no node";
   if (!health) return "not reported by this node";
   if (health.seats.includes(handle))
     return health.node ? `this node · ${health.node}` : "this node";
@@ -1482,7 +1482,7 @@ export function stateLine(
 ): string {
   const { now, seat, nameOf = AS_WRITTEN } = opts;
   if (seat?.kind === "human") {
-    return seat.availability || "Human teammate — not run by the engine";
+    return seat.availability || "Human teammate";
   }
   const state = activityOf(row);
   const item = turnItemKey(row);

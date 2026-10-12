@@ -64,13 +64,16 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{BackupMaxAge: 24 * time.Hour},
 			"no verified backup has been recorded",
 		},
+		// THE TERM IS NOT THE MEASUREMENT: it rides on the log the alarm
+		// stands on (AlarmDomain.Term), and the sentence says how long and
+		// what the block is keeping.
 		"a trim blocked past its window, keeping what a working one removes": {
 			statelog.KindTrimBlocked,
 			statelog.Reading{
 				TrimBlockedFor: 8 * 24 * time.Hour, TrimBlockedBy: "snapshot_floor",
 				TrimPastWindow: 1200, ReplayWindow: 7 * 24 * time.Hour,
 			},
-			"snapshot_floor — and the log is keeping up to 1200 record(s)",
+			"has not advanced for 192h, and the log is keeping up to 1200 record(s)",
 		},
 		"a deferral past the grace": {
 			statelog.KindDeferredOld,
@@ -554,17 +557,25 @@ func TestAnAlarmIsLoggedOnItsTransitionsAndTheGaugeIsALevel(t *testing.T) {
 	}
 }
 
-// ONE KIND ON TWO LOGS IS TWO ALARMS, each logged when it starts and when it
-// ends.
+// ONE KIND ON TWO LOGS IS ONE ALARM AND TWO PAIRS OF LOG LINES: each log is
+// logged when it comes to stand under the kind and when it leaves it.
 //
-// Six conditions are evaluated once per log, so one evaluation can carry
-// `trim_blocked` for the tracker's log and again for the knowledge base's.
-// Keyed on the kind alone, the tracker folded the second into the first: it
-// raised no line of its own, the tracker's clearing while the knowledge base's
-// stood said nothing, and the one `alarm_cleared` that finally came carried the
-// knowledge base's detail against the tracker's start. The gauge stays one
-// series per kind, up while either is.
-func TestOneKindOnTwoLogsIsTwoAlarms(t *testing.T) {
+// Six conditions are evaluated once per log, and the report lists every log a
+// kind stands on under its one alarm, so one `trim_blocked` can stand on the
+// tracker's log and the knowledge base's. Keyed on the kind alone, the tracker
+// folded the second log into the first: it raised no line of its own, the
+// tracker's clearing while the knowledge base's stood said nothing, and the one
+// `alarm_cleared` that finally came carried the knowledge base's detail against
+// the tracker's start. The gauge stays one series per kind, up while either is.
+//
+// AND A NODE-WIDE KIND IS ONE PAIR OF LINES whatever logs it lists: the logs
+// `backup_age` holds are one problem with one remedy, so a log joining its list
+// writes nothing.
+//
+// Mutation: key the instances on the kind alone, form one per listed log for a
+// node-wide kind, or report a kind's age from whichever of its logs the map
+// hands back last rather than the longest, and this fails.
+func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 	t.Parallel()
 	rec, err := metrics.New()
 	if err != nil {
@@ -584,56 +595,91 @@ func TestOneKindOnTwoLogsIsTwoAlarms(t *testing.T) {
 		}
 		return out
 	}
-	blocked := func(domain string) statelog.Alarm {
-		return statelog.Alarm{Kind: statelog.KindTrimBlocked, Domain: domain,
-			Detail: domain + ": the trim has not advanced"}
+	held := func(domain string) statelog.AlarmDomain {
+		return statelog.AlarmDomain{Domain: domain,
+			Detail: "the " + domain + " log's trim has not advanced"}
+	}
+	blocked := func(logs ...string) statelog.Alarm {
+		a := statelog.Alarm{Kind: statelog.KindTrimBlocked}
+		for _, domain := range logs {
+			a.Domains = append(a.Domains, held(domain))
+		}
+		a.Detail = a.Domains[0].Detail
+		return a
 	}
 	lagging := statelog.Alarm{Kind: statelog.KindApplyLag, Detail: "this node is 2m behind"}
+	noBackup := statelog.Alarm{Kind: statelog.KindBackupAge,
+		Detail: "no verified backup has been recorded"}
 
-	tracker.Observe(t.Context(), []statelog.Alarm{lagging, blocked("tracker"), blocked("pages")})
+	// The tracker's log first, alone.
+	tracker.Observe(t.Context(), []statelog.Alarm{lagging, noBackup, blocked("tracker")})
+	if raised := lines("alarm_raised"); len(raised) != 3 {
+		t.Fatalf("raising two node alarms and one log's trim_blocked wrote %d "+
+			"line(s), want three: %v", len(raised), raised)
+	}
+
+	// THE KNOWLEDGE BASE'S LOG JOINS a kind that is already up: its own line.
+	// And a log joining backup_age's list is no line at all.
+	clock = clock.Add(5 * time.Minute)
+	withHeld := noBackup
+	withHeld.Domains = []statelog.AlarmDomain{held("usage")}
+	tracker.Observe(t.Context(), []statelog.Alarm{lagging, withHeld, blocked("tracker", "pages")})
 	raised := lines("alarm_raised")
-	if len(raised) != 3 {
-		t.Fatalf("raising one node alarm and one kind on two logs wrote %d line(s), "+
-			"want three: %v", len(raised), raised)
+	if len(raised) != 4 {
+		t.Fatalf("a second log joining trim_blocked, and a log listed under "+
+			"backup_age, wrote %d raise line(s) in all, want four: %v", len(raised), raised)
 	}
 	domains := map[string]bool{}
 	for _, line := range raised {
 		if line["alarm"] != string(statelog.KindTrimBlocked) {
-			// A NODE'S ALARM NAMES NO LOG.
+			// A NODE'S ALARM NAMES NO LOG, even one that lists logs.
 			if _, named := line["domain"]; named {
-				t.Errorf("the node's own alarm names a log: %v", line)
+				t.Errorf("a node-wide alarm's line names a log: %v", line)
 			}
 			continue
 		}
 		domain, _ := line["domain"].(string)
 		domains[domain] = true
-		if !strings.HasPrefix(line["detail"].(string), domain+": ") {
+		if line["detail"] != held(domain).Detail {
 			t.Errorf("the %s log's line carries another's detail: %v", domain, line)
 		}
 	}
 	if !domains["tracker"] || !domains["pages"] {
 		t.Errorf("trim_blocked was raised for %v, want each log once", domains)
 	}
+	// THE KIND'S AGE IS ITS LONGEST-STANDING LOG'S: the tracker's five
+	// minutes, never the knowledge base's none. Asked repeatedly, because
+	// which instance a map hands back last is random per call.
+	for range 16 {
+		if got := tracker.Firing()[statelog.KindTrimBlocked]; got != 5*time.Minute {
+			t.Fatalf("trim_blocked on two logs has been up for %v, want the "+
+				"tracker's log's 5m", got)
+		}
+	}
 
-	// THE TRACKER'S LOG CLEARS WHILE THE KNOWLEDGE BASE'S STANDS: its own line,
-	// its own age, its own detail — and the kind is still up.
+	// THE TRACKER'S LOG LEAVES while the knowledge base's stands: its own line,
+	// its own age, its own detail, and the kind is still up.
 	clock = clock.Add(20 * time.Minute)
-	tracker.Observe(t.Context(), []statelog.Alarm{lagging, blocked("pages")})
+	tracker.Observe(t.Context(), []statelog.Alarm{lagging, withHeld, blocked("pages")})
 	cleared := lines("alarm_cleared")
 	if len(cleared) != 1 || cleared[0]["domain"] != "tracker" ||
-		cleared[0]["for"] != "20m" || cleared[0]["detail"] != "tracker: the trim has not advanced" {
-		t.Fatalf("one log's alarm clearing wrote %v; want one line naming the "+
-			"tracker's log, its twenty minutes and its detail", cleared)
+		cleared[0]["for"] != "25m" || cleared[0]["detail"] != held("tracker").Detail {
+		t.Fatalf("one log leaving the kind wrote %v; want one line naming the "+
+			"tracker's log, its twenty-five minutes and its detail", cleared)
 	}
 	if got := gauge(t, rec, statelog.KindTrimBlocked); got != 1 {
-		t.Errorf("the gauge reads %v while the knowledge base's alarm stands, want 1", got)
+		t.Errorf("the gauge reads %v while the knowledge base's log stands, want 1", got)
+	}
+	if got := tracker.Firing()[statelog.KindTrimBlocked]; got != 20*time.Minute {
+		t.Errorf("trim_blocked on the knowledge base's log alone has been up "+
+			"for %v, want its own 20m", got)
 	}
 
 	clock = clock.Add(10 * time.Minute)
 	tracker.Observe(t.Context(), nil)
 	cleared = lines("alarm_cleared")
-	if len(cleared) != 3 {
-		t.Fatalf("clearing everything wrote %d clear line(s) in all, want three: %v",
+	if len(cleared) != 4 {
+		t.Fatalf("clearing everything wrote %d clear line(s) in all, want four: %v",
 			len(cleared), cleared)
 	}
 	for _, line := range cleared[1:] {
@@ -647,8 +693,8 @@ func TestOneKindOnTwoLogsIsTwoAlarms(t *testing.T) {
 	}
 }
 
-// THE STANDING ALARMS ARE THE LATEST EVALUATION'S, THE OLDEST FIRST — and
-// "not evaluated" is not "none firing".
+// THE STANDING ALARMS ARE THE LATEST EVALUATION'S, ONE PER KIND, THE OLDEST
+// FIRST, and "not evaluated" is not "none firing".
 //
 // This is what every node's health envelope counts and names, so it has to
 // be exactly what the gauge and the log were just told: an alarm that cleared
@@ -657,16 +703,15 @@ func TestOneKindOnTwoLogsIsTwoAlarms(t *testing.T) {
 // list first. Before any evaluation it says it cannot say, because an empty
 // list would render a node that has not looked as a node with nothing wrong.
 //
-// AND A KIND ON TWO LOGS STANDS TWICE, each naming its log: the count is how
-// many things an operator has to look at, and `trim_blocked` on the tracker's
-// log and on the knowledge base's is two of them with two remedies. Keyed on
-// the kind, the second log's would have been folded into the first's and the
-// name a health card shows would have sent an operator to one log while the
-// other stood.
+// AND A KIND ON TWO LOGS STANDS ONCE: the count is how many problems an
+// operator has to look at, and one cause standing on four logs counted as four
+// read as four problems on the health card while the gauge said one. It has
+// stood since its OLDEST log's instance was raised, and a log leaving it moves
+// that to the oldest log still standing.
 //
 // Mutation: return the table's order rather than the age order, report
-// (nil, true) before an evaluation, or key the order on the kind alone, and
-// this fails.
+// (nil, true) before an evaluation, count a kind once per log, or date a kind
+// by its newest log, and this fails.
 func TestTheStandingAlarmsAreTheLatestEvaluationsOldestFirst(t *testing.T) {
 	t.Parallel()
 	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
@@ -676,33 +721,42 @@ func TestTheStandingAlarmsAreTheLatestEvaluationsOldestFirst(t *testing.T) {
 		t.Fatalf("before any evaluation Standing = (%v, %v), want (nil, false)", standing, known)
 	}
 
-	// The WAL alarm is raised first; the knowledge base's blocked trim
-	// joins it two minutes later, and apply lag — which the table lists
-	// ahead of both — and the tracker's blocked trim three minutes after
-	// that.
+	// The knowledge base's blocked trim is raised first; the WAL alarm joins
+	// it two minutes later, and apply lag (which the table lists ahead of
+	// both) and the tracker's blocked trim three minutes after that.
 	wal := statelog.Alarm{Kind: statelog.KindWALLarge, Detail: "the write-ahead log is 2.0 GiB"}
 	lag := statelog.Alarm{Kind: statelog.KindApplyLag, Detail: "this node is 2m behind the log"}
-	blocked := func(domain string) statelog.Alarm {
-		return statelog.Alarm{Kind: statelog.KindTrimBlocked, Domain: domain,
-			Detail: domain + ": the trim has not advanced"}
+	blocked := func(logs ...string) statelog.Alarm {
+		a := statelog.Alarm{Kind: statelog.KindTrimBlocked, Detail: "the trim has not advanced"}
+		for _, domain := range logs {
+			a.Domains = append(a.Domains, statelog.AlarmDomain{Domain: domain,
+				Detail: "the trim has not advanced"})
+		}
+		return a
 	}
-	tracker.Observe(t.Context(), []statelog.Alarm{wal})
+	tracker.Observe(t.Context(), []statelog.Alarm{blocked("pages")})
 	clock = clock.Add(2 * time.Minute)
 	tracker.Observe(t.Context(), []statelog.Alarm{blocked("pages"), wal})
 	clock = clock.Add(3 * time.Minute)
-	tracker.Observe(t.Context(), []statelog.Alarm{lag, blocked("tracker"), blocked("pages"), wal})
+	tracker.Observe(t.Context(), []statelog.Alarm{lag, blocked("tracker", "pages"), wal})
 
 	standing, known := tracker.Standing()
-	want := []statelog.StandingAlarm{
-		{Kind: statelog.KindWALLarge},
-		{Kind: statelog.KindTrimBlocked, Domain: "pages"},
-		{Kind: statelog.KindApplyLag},
-		{Kind: statelog.KindTrimBlocked, Domain: "tracker"},
-	}
+	want := []statelog.Kind{statelog.KindTrimBlocked, statelog.KindWALLarge, statelog.KindApplyLag}
 	if !known || !slices.Equal(standing, want) {
 		t.Errorf("Standing = (%v, %v), want (%v, true): the longest-standing "+
-			"alarm leads whatever the table's order is, and each log's alarm "+
-			"stands on its own", standing, known, want)
+			"alarm leads whatever the table's order is, and a kind on two logs "+
+			"stands once", standing, known, want)
+	}
+
+	// THE OLDEST LOG LEAVES: the kind now dates from the tracker's log, which
+	// joined after the WAL alarm, so it no longer leads.
+	clock = clock.Add(time.Minute)
+	tracker.Observe(t.Context(), []statelog.Alarm{lag, blocked("tracker"), wal})
+	standing, _ = tracker.Standing()
+	want = []statelog.Kind{statelog.KindWALLarge, statelog.KindApplyLag, statelog.KindTrimBlocked}
+	if !slices.Equal(standing, want) {
+		t.Errorf("after the oldest log left Standing = %v, want %v: the kind has "+
+			"stood since its oldest log still standing", standing, want)
 	}
 
 	clock = clock.Add(time.Minute)

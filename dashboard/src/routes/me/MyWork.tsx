@@ -438,7 +438,7 @@ export function MyWork({ section }: { section: MeSection }) {
           <EmptyState
             icon={<KeyGlyph size={32} />}
             title="Nobody is signed in"
-            description="A day belongs to a person, and this browser has not said who it is. Sign in: a day is somebody's own record, so reading one — yours or anybody's — is a question the engine answers for a caller it can name."
+            description="Sign in to see your work."
           />
         ) : (
           <EmptyState
@@ -454,7 +454,6 @@ export function MyWork({ section }: { section: MeSection }) {
           seat={index.byHandle.get(whose)}
           ownDay={ownDay}
           login={ownDay && viewer.unbound}
-          they={they}
           stamp={person.data ?? undefined}
           setByName={setByName}
           onPriorities={tab === "priorities" ? undefined : () => showPriorities()}
@@ -520,8 +519,8 @@ export function MyWork({ section }: { section: MeSection }) {
                   total={mine.totals.unblocked_recent}
                   now={now}
                   chrome={chrome}
-                  hint="Work whose blockers have all finished — the one section about a change rather than a state."
-                  empty={`Nothing that was waiting on something else has become workable for ${they}.`}
+                  hint="Work whose blockers have all finished"
+                  empty="Nothing newly unblocked."
                 />
               )}
               {tab === "collaborating" && (
@@ -531,7 +530,7 @@ export function MyWork({ section }: { section: MeSection }) {
                   now={now}
                   chrome={chrome}
                   hint="Brought on without owning."
-                  empty={`Nobody has brought ${they} onto a task they do not own.`}
+                  empty="Not on anyone else’s tasks."
                 />
               )}
               {tab === "watching" && (
@@ -549,7 +548,7 @@ export function MyWork({ section }: { section: MeSection }) {
                   <EmptyState
                     size="compact"
                     title="Nothing is claimed"
-                    description={`A checklist item on somebody else's task can name ${they} as the one who does it.`}
+                    description={`Checklist items assigned to ${they} appear here.`}
                   />
                 ) : (
                   <>
@@ -595,7 +594,7 @@ export function dayHolds({
   lead: boolean;
 }): { all: string | null; reorder: string | null } {
   if (ownDay) return { all: null, reorder: null };
-  const all = `This is ${name}’s day — what is asked of them is theirs to answer, and their work is changed from the work screens.`;
+  const all = `Viewing ${name}’s day. Read-only.`;
   if (lead) return { all, reorder: null };
   return { all, reorder: `Only ${name}, or somebody they report to, reorders their queue.` };
 }
@@ -628,7 +627,6 @@ function WhoseDay({
   seat,
   ownDay,
   login = false,
-  they,
   stamp,
   setByName,
   onPriorities,
@@ -644,7 +642,6 @@ function WhoseDay({
    * linking to one that would answer "no such seat".
    */
   login?: boolean;
-  they: string;
   /** This person's own record, where it has answered. */
   stamp?: WorkPersonState;
   /** Who set the order, by name, or "" where nobody else did. */
@@ -674,9 +671,8 @@ function WhoseDay({
       </div>
       {setByName && (
         <Callout variant="info">
-          {setByName} put this order in place
-          {stamp?.priorities_set_at ? ` ${relTime(stamp.priorities_set_at, now)}` : ""}. The next
-          change {they === "you" ? "you make" : "they make"} to it clears the stamp.{" "}
+          Order set by {setByName}
+          {stamp?.priorities_set_at ? ` ${relTime(stamp.priorities_set_at, now)}` : ""}.{" "}
           {onPriorities && (
             <button type="button" className="t-link" onClick={onPriorities}>
               Priorities →
@@ -864,21 +860,18 @@ function assignedEmpty(scope: Scope, they: string): { title: string; description
   if (scope === "closed") {
     return {
       title: `Nothing assigned to ${they} has been finished`,
-      description:
-        "Open is what is still to do, and All shows both. The scope switch in the bar is what moves between them.",
+      description: "Switch to Open or All in the bar.",
     };
   }
   if (scope === "all") {
     return {
       title: `Nothing is assigned to ${they}`,
-      description:
-        "Not open, and nothing finished either. A lead assigns work with the tracker's own tools, and a webhook or a schedule is usually what starts them.",
+      description: "Assigned work appears here.",
     };
   }
   return {
     title: `Nothing is assigned to ${they}`,
-    description:
-      "A lead assigns work with the tracker's own tools, and a webhook or a schedule is usually what starts them. Finished work is under Closed.",
+    description: "Finished work is under Closed.",
   };
 }
 
@@ -892,12 +885,12 @@ function askedEmpty(scope: Scope, they: string): { title: string; description: s
   if (scope === "all") {
     return {
       title: `${who} not waiting on an answer`,
-      description: `A question ${subject} put to somebody on a task stays here until it is answered or resolved.`,
+      description: `Open questions ${subject} asked appear here.`,
     };
   }
   return {
     title: `${who} not waiting on an answer here`,
-    description: `Nothing ${subject} asked is still open on work in this scope. All shows every task a question is still waiting on.`,
+    description: "Switch to All to see every open question.",
   };
 }
 
@@ -934,7 +927,7 @@ function AskedOfMe({
       <EmptyState
         size="compact"
         title={`Nothing is waiting on ${they}`}
-        description="A question is a comment that asks something of somebody rather than informing them, and the engine records which."
+        description={`Questions put to ${they} appear here.`}
       />
     );
   }

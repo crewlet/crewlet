@@ -64,7 +64,6 @@ import { Histogram } from "~/ui/Histogram.tsx";
 import { FacetRail } from "~/ui/FacetRail.tsx";
 import { CATEGORIES } from "~/contract/categories.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 
 const PAGE = 100;
 
@@ -370,20 +369,13 @@ export function Activity() {
           </Button>
         ) : undefined}
       </PageActions>
-      <PageNote>
-        Everything the engine published, live and then paged out of the store. This tab holds the
-        last 400 in memory; older rows are fetched, and{" "}
-        {eventHistoryLabel(engine?.event_history_seconds)}.
-      </PageNote>
 
       <Card>
         <Card.Header
           icon={<ChartNoAxesGanttGlyph size="sm" />}
-          // THE HINT RIDES THE SUBTITLE, which gives way before the title
-          // does; as an action it never shrank, and cut the title on a phone.
           subtitle={
             series.data
-              ? `${plural(series.data.total, "event")} over ${spanWords(series.data.since, series.data.until)} · one bar per ${series.data.bucket}, click one to narrow the window`
+              ? `${plural(series.data.total, "event")} over ${spanWords(series.data.since, series.data.until)}`
               : undefined
           }
         >
@@ -457,7 +449,7 @@ export function Activity() {
           <FilterChip
             pressed
             onPressedChange={(on) => !on && setSeat("")}
-            aria-label={`Only ${seatName}'s events — remove`}
+            aria-label={`Remove filter: only ${seatName}'s events`}
           >
             {/* ONE ROW, the name and its ×: the chip's label is an inline
                 box, and the glyph, a block, broke under the name inside a
@@ -472,7 +464,7 @@ export function Activity() {
           <FilterChip
             pressed
             onPressedChange={(on) => !on && setTrace("")}
-            aria-label={`Only trace ${trace}'s events — remove`}
+            aria-label={`Remove filter: only trace ${trace}'s events`}
           >
             <span className="chip-removable">
               Trace <code className="inline">{trace.slice(0, 8)}</code>
@@ -484,7 +476,7 @@ export function Activity() {
           <FilterChip
             pressed
             onPressedChange={(on) => !on && setChannel("")}
-            aria-label={`Only channel ${channel}'s events — remove`}
+            aria-label={`Remove filter: only channel ${channel}'s events`}
           >
             <span className="chip-removable">
               A2A channel <code className="inline">{channel.slice(0, 8)}</code>
@@ -520,9 +512,7 @@ export function Activity() {
           // axis is still loading, because "0" is a claim and "we do not
           // know yet" is the truth.
           count: series.data ? (series.data.by_category[c] ?? 0) : null,
-          title: series.data?.by_category[c]
-            ? undefined
-            : "No events of this category are in this window — the category still exists.",
+          title: series.data?.by_category[c] ? undefined : "None in this window",
         }))}
       />
 
@@ -572,10 +562,10 @@ export function Activity() {
                 // is the one whose empty answer older pages can still change;
                 // every other filter was the engine's, over the whole window.
                 hint: q.trim()
-                  ? "The search reads the rows loaded so far — older rows may still match, so load more history below."
+                  ? "Load more history below to search further back."
                   : filtered
-                    ? "Nothing in this window matches. Widen the range, or clear the filters."
-                    : "The log fills as the engine works. A company with no integrations and no schedules has nothing to react to.",
+                    ? "Widen the range, or clear the filters."
+                    : "Events appear here as agents work.",
               }}
             />
           )

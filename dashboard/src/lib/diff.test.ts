@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MaxDiffLines, collapse, diffLines, diffStat, lines } from "./diff.ts";
+import { MaxDiffLines, collapse, diffLines, diffStat, firstChanged, lines } from "./diff.ts";
 
 function shape(before: string, after: string): string[] {
   return diffLines(before, after).map((l) => `${l.kind[0]} ${l.text}`);
@@ -125,6 +125,41 @@ describe("collapsing the unchanged runs", () => {
 
   it("returns nothing at all for two identical documents", () => {
     expect(collapse(diffLines(before, before))).toEqual([]);
+  });
+});
+
+describe("a preview of a change", () => {
+  const before = Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n");
+  // Four lines replaced at the top and two at the bottom: twelve changed lines.
+  const after = before
+    .replace("line 1\n", "ONE\n")
+    .replace("line 2\n", "TWO\n")
+    .replace("line 3\n", "THREE\n")
+    .replace("line 4\n", "FOUR\n")
+    .replace("line 27", "TWENTY-SEVEN")
+    .replace("line 28", "TWENTY-EIGHT");
+
+  it("shows the first changed lines and counts the rest, never a quiet cut", () => {
+    const preview = firstChanged(collapse(diffLines(before, after), 0), 6);
+    const shown = preview.sections.flatMap((s) => s.lines);
+    expect(shown.every((l) => l.kind !== "same")).toBe(true);
+    expect(shown).toHaveLength(6);
+    expect(preview.more).toBe(6);
+    // THE GAP BEFORE A SECTION IS STILL REPORTED, as the pane draws it.
+    expect(preview.sections[0]?.skipped).toBe(1);
+  });
+
+  it("keeps a context line it draws out of the count", () => {
+    const preview = firstChanged(collapse(diffLines(before, after), 1), 2);
+    const shown = preview.sections.flatMap((s) => s.lines);
+    expect(shown.filter((l) => l.kind !== "same")).toHaveLength(2);
+    expect(shown[0]).toMatchObject({ kind: "same", text: "line 0" });
+    expect(preview.more).toBe(10);
+  });
+
+  it("is the whole diff, with nothing more, when it fits", () => {
+    const sections = collapse(diffLines(before, after), 0);
+    expect(firstChanged(sections, 100)).toEqual({ sections, more: 0 });
   });
 });
 

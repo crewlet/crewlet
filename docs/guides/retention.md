@@ -49,7 +49,7 @@ refuses appends **with every trim term satisfied** — nothing is blocked, so
 the one path to a full log the six terms cannot name, and `log_ceiling_short`
 is the alarm for it: each node measures every log's intake at boot and on
 every trim tick, compares each log's `max_bytes` against `min_age` ×
-`bytes_per_day` on every alarm heartbeat (fifteen seconds), and fires when the
+`bytes_per_day` on every alarm heartbeat (ten seconds), and fires when the
 window no longer fits. Its detail says how long the ceiling holds at that rate;
 the remedy is a bigger ceiling (see [Changing a log's
 ceiling](#changing-a-logs-ceiling)) or a shorter `min_age`.
@@ -96,6 +96,17 @@ prints each one's measurement and remedy on stderr. That is the alarm hook:
 run it from your own cron and page on the exit code. The engine deliberately
 does not invent a notification channel it has no business owning. The full
 alarm list is in [Alarms](../reference/alarms.md).
+
+**An alarm is one per kind, however many logs it stands on.** A condition
+that is a property of a log (`log_headroom`, `log_ceiling_short`,
+`trim_blocked`, `deferred_old`, `floor_unknown`, `census_drift`) lists every
+log it stands on in its `domains`, each with that log's own measurement, so
+four held logs are one `trim_blocked` on the health count, the gauge and the
+dashboard rather than four; `crewlet retention status` prints them under the
+alarm, one log in its headline and several as a line each. The `alarm_raised`
+and `alarm_cleared` log lines are still written per log, carrying it as
+`domain`, so a second log joining an alarm that is already up, and the first
+one leaving it while the second stands, are each said with their own start.
 
 ## The six terms
 
@@ -210,8 +221,7 @@ newest backup is deleting the last thing that could rebuild it. So
 `crewlet retention status` says so in prose, first, before any table:
 
 ```
-Nothing is being trimmed on tracker: the newest complete backup is 3 days old
-(backup_max_age is 24h).
+Nothing is being trimmed on tracker: the newest backup is 72h0m0s old, past the 24h0m0s this deployment accepts.
 ```
 
 Two policies decide which copies count:
@@ -237,7 +247,15 @@ The **backup-age alarm** (`backup_age`) ages the same point the trim reads,
 under the same policy: under `operator` a node's nightly copies are fresh
 while the trim waits on an acknowledgement, and the alarm fires on the missing
 acknowledgement rather than staying green beside a log that cannot be trimmed.
-**Settings › Backups & retention** marks that point **counted · newest**.
+It names every log whose trim the backup term has held for longer than that
+log's `min_age` replay window plus a trim tick while the log keeps records older
+than the window — exactly the logs that would otherwise raise `trim_blocked`
+([above](#a-blocked-trim-is-ordinary-until-it-has-kept-something)) — and those
+logs raise no `trim_blocked` of their own: the backup is the one thing to do
+about all of them. A log the backup term has held for less than that, or that
+keeps nothing past the window, is listed under no alarm; `crewlet retention
+status` still shows its block from the first tick. **Settings › Backups &
+retention** marks that point **counted · newest**.
 
 An **unverified** copy satisfies neither. A file that exists and was never
 opened is not a backup, and deleting the log's only copy of a record against
@@ -950,7 +968,7 @@ The **usage log** refuses the same way, and what it costs is different: no read
 appends to it, so nothing a seat does is refused — what stops is the
 replication of each node's days. Every data node keeps re-deriving its day and
 retrying on every tick, nothing is lost from any node's own event log, and the
-`log_headroom` alarm names the domain (`usage: …`) long before the ceiling. Its
+`log_headroom` alarm names the domain (`log_headroom on usage`) long before the ceiling. Its
 size is a count of node-days rather than a rate — one message per (node, day,
 seat or schedule) for 181 days — so a log that fills has outgrown its census:
 raise `stream.usage_log_max_bytes` as below.
@@ -1207,7 +1225,7 @@ checkpoint was committed under. On a difference the applier **stops** rather
 than resuming — the log line names both instants and this verb — the node's
 reads and writes refuse `wrong_stream` with that reason, it stops serving the
 estate — its seats read it from a peer — and `crewlet retention status` leads with `NOT READY <domain>:
-wrong_stream (recreated) — …` carrying the same sentence, both instants
+wrong_stream (recreated): …` carrying the same sentence, both instants
 included (the dashboard shows the same refusal above the domain's block). A checkpoint past the log's end is caught as `wrong_stream` too,
 because a position the log has never reached is a position on another stream.
 
@@ -1219,7 +1237,7 @@ is where the log **ends**: below the checkpoint of a node whose own database is
 newer. Such a node refuses every read and every write of that domain with
 `wrong_stream` from the moment it boots, logs `statelog_ahead_of_log` with both
 numbers, and `crewlet retention status` on that node leads with `NOT READY
-<domain>: wrong_stream (ahead_of_log) — …` naming both. Its writes have
+<domain>: wrong_stream (ahead_of_log): …` naming both. Its writes have
 to refuse, not only its reads: whatever it appended would land at the log's
 next sequence, which is one its own applier has already passed and will never
 apply.
@@ -1767,10 +1785,14 @@ holds the identity log. Every backup taken meanwhile carries them in its stream
 snapshot.
 
 So the trim is part of an erasure, and a blocked one is an erasure that has not
-finished: `trim_blocked` on the identity log is also the answer to "is that
-person's name still on disk". The remedy is the term's own — a backup that
-never left the host, a pin nobody released — and never a shorter `min_age` for
-its own sake, which only moves when a record *may* go.
+finished: the identity log named by an alarm holding its trim — under
+`trim_blocked`, or under `backup_age` while the backup term is what holds it,
+since that alarm lists the logs it holds and those raise no `trim_blocked` of
+their own ([the backup term](#a-company-that-never-backs-up-never-trims)) — is
+also the answer to "is that person's name still on disk". The remedy is the
+term's own — a backup that never left the host, a pin nobody released — and
+never a shorter `min_age` for its own sake, which only moves when a record
+*may* go.
 
 ### The identity duties
 

@@ -269,7 +269,7 @@ test("Back off the builder over a changed editor asks first, and keeping the cha
 
   act(() => history.back());
   const asked = await screen.findByRole("alertdialog", { name: "Discard your changes?" });
-  expect(asked.textContent).toContain("you are leaving the builder");
+  expect(asked.textContent).toContain("Your edits to CEO aren’t in the draft yet.");
   await waitFor(() => expect(location.hash).toBe(onTable));
   fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
   expect((within(editor).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("Grow");

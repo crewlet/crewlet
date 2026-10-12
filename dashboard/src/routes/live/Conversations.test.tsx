@@ -92,7 +92,7 @@ function mount(
   );
 }
 
-const PURGED = /It may have been purged/;
+const PURGED = /purged, or the id is wrong/;
 
 // THE CONTROL FIRST, or every absence below passes on a screen that never
 // renders the claim at all.
@@ -143,7 +143,9 @@ test("a purged channel whose events the log still holds shows them", async () =>
     exhausted: true,
   });
   expect(await screen.findByText(/how long\?/)).toBeTruthy();
-  expect(screen.getByText(/the log still holds what crossed it/)).toBeTruthy();
+  expect(
+    screen.getByText("The channel is gone, but its messages are still in the log."),
+  ).toBeTruthy();
   expect(screen.queryByText(PURGED)).toBeNull();
 });
 
@@ -156,7 +158,7 @@ test("a purged channel whose events the log still holds shows them", async () =>
 // a confident claim that the channel had been purged.
 test("a read that failed does not claim the channel was purged", async () => {
   mount(() => Promise.reject(new Error("timeout")));
-  expect(await screen.findByText(/did not answer within 10 seconds/)).toBeTruthy();
+  expect(await screen.findByText(/The engine didn’t answer in time\./)).toBeTruthy();
   expect(screen.queryByText(PURGED)).toBeNull();
 });
 
@@ -168,7 +170,7 @@ test("a read that failed does not claim the channel was purged", async () => {
 // branch, so it used to run on underneath it and contradict it.
 test("a node with no channel record does not claim the channel was purged", async () => {
   mount(() => Promise.resolve({ channels: [], available: false }));
-  expect(await screen.findByText(/No channel record is reachable from this node/)).toBeTruthy();
+  expect(await screen.findByText("Can’t read channels from this node right now.")).toBeTruthy();
   expect(screen.queryByText(PURGED)).toBeNull();
 });
 
@@ -214,7 +216,9 @@ test("a cut listing says its counts cover the most recent channels", async () =>
       truncated: true,
     });
   mount(cut);
-  expect(await screen.findByText(/may be older than all of them/)).toBeTruthy();
+  expect(
+    await screen.findByText("It may be older than this list, purged, or the id is wrong."),
+  ).toBeTruthy();
   cleanup();
   mount(cut, <Conversations />);
   expect(await screen.findByText("across the most recent channels only")).toBeTruthy();
@@ -230,7 +234,8 @@ test("a whole listing says it is the whole record", async () => {
       truncated: false,
     });
   mount(whole);
-  expect(await screen.findByText(/holds every one in the record/)).toBeTruthy();
+  expect(await screen.findByText("It may have been purged, or the id is wrong.")).toBeTruthy();
+  expect(screen.queryByText(/older than this list/)).toBeNull();
   cleanup();
   mount(whole, <Conversations />);
   expect(await screen.findByText("across every channel in the record")).toBeTruthy();

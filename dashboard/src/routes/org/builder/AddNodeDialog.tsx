@@ -308,14 +308,14 @@ function AddNodeFields({ form }: { form: AddForm }) {
               onValue={form.setContact}
             />
             <p className="t-caption">
-              Optional. Without one, no agent can mention this person and they are reached through
-              the dashboard only. It can be added here or later in the seat's editor.
+              Optional. Without one, no agent can mention them and they’re reached only through the
+              dashboard. Add it now or later in the seat’s editor.
             </p>
           </>
         ) : (
           <p className="t-caption">
-            The person is reached through the dashboard only. A contact identity is how another
-            system finds them, so adding one takes the config:write grant.
+            They’re reached only through the dashboard. Another system finds a person by their
+            contact identity, so adding one takes the config:write grant.
           </p>
         ))}
     </>

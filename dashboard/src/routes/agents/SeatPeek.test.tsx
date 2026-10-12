@@ -373,7 +373,7 @@ test("each capped window is labelled with its own period", async () => {
 
 test("a seat nothing caps says so", async () => {
   await mount(ANONYMOUS, { agents: [{ ...SWE, budget: null } as AgentRow] });
-  expect(screen.getByText("No budget — nothing caps this seat's tokens")).toBeTruthy();
+  expect(screen.getByText("No budget")).toBeTruthy();
 });
 
 // THE COMPANY'S CEILINGS BIND EVERY SEAT: a seat with none of its own under a
@@ -382,8 +382,8 @@ test("a seat with no budget of its own under a capped company names the company'
   const projection = org();
   projection.token_budget = { day: 60_000_000 };
   await mount(ANONYMOUS, { projection, agents: [{ ...SWE, budget: null } as AgentRow] });
-  expect(screen.getByText("No seat budget — the company's 60M/day applies")).toBeTruthy();
-  expect(screen.queryByText(/nothing caps/)).toBeNull();
+  expect(screen.getByText("No seat budget; the company's 60M/day applies")).toBeTruthy();
+  expect(screen.queryByText("No budget")).toBeNull();
 });
 
 // MESSAGE IS NEVER HIDDEN: it is held with the reason for every reader who
@@ -444,7 +444,7 @@ test("your own seat's peek holds Message and points to your Account, and a colle
 // rather than leaving the line blank.
 test("a seat with no manager reports to nobody, at the top of the chart", async () => {
   await mount(ANONYMOUS, { handle: "jane" });
-  expect(screen.getByText("Nobody — the top of the chart")).toBeTruthy();
+  expect(screen.getByText("Nobody, top of the chart")).toBeTruthy();
 });
 
 test("the tools name their source, and more than three fold into a count", async () => {

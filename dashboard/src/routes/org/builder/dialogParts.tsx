@@ -210,8 +210,8 @@ export function ReadOnlyFact({
  * units may share a name, and renaming one moves nothing that points at it.
  */
 export const NAME_HELP = {
-  seat: "Shown to people. Two seats may share a name: everything that names this seat uses its handle.",
-  unit: "Shown to people. Two units may share a name: everything that names this unit uses its key.",
+  seat: "Shown to people, and may repeat: everything that names this seat uses its handle.",
+  unit: "Shown to people, and may repeat: everything that names this unit uses its key.",
 } as const;
 
 /**
@@ -228,7 +228,7 @@ export const IDENTITY_HELP = {
 
 /** Why an existing node's identity is shown and not edited. */
 export const IDENTITY_FIXED = {
-  seat: "A seat's handle is its identity: its mailbox, memory and agent id. To give the role another handle, replace the seat with a new one; this seat's work stays with this handle.",
+  seat: "A seat’s handle can’t change: its mailbox, memory and agent id hang on it. To use another, replace the seat. Its work stays with this handle.",
   unit: "A unit's key is its identity: what its schedules and work are filed under. To use another key, remove this unit and add a new one.",
 } as const;
 
@@ -247,7 +247,7 @@ export const IDENTITY_FIXED = {
  */
 export const ACKNOWLEDGEMENT_TEXT: Readonly<Record<Acknowledgement, string>> = {
   company_rename:
-    "An agent seat's id is derived from the company name and its handle, so renaming the company gives every agent seat a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged.",
+    "Every agent onboards again and loses its diary. Handles, mailboxes and episodes stay.",
   credential_servers: "The tool credentials the seats listed above receive will change.",
   mass_removal: "This removes more than half of the company's seats.",
 };
@@ -557,11 +557,7 @@ export function Refusal({ message }: { message: string | null }) {
  * their answers is what is in the way.
  */
 export function ReadOnlyNote() {
-  return (
-    <Callout variant="neutral">
-      The organization cannot be changed right now, so this change cannot be applied.
-    </Callout>
-  );
+  return <Callout variant="neutral">The org can’t be changed right now.</Callout>;
 }
 
 /** A read-only list of names or sentences, and nothing at all when there are none. */

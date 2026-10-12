@@ -1639,6 +1639,14 @@ test("a flush grid draws no frame inside its card", () => {
   expect(body).toMatch(/background:\s*transparent/);
 });
 
+// UNDER A CARD HEADER THE GRID DRAWS NO RULE OF ITS OWN: the kit's header
+// rules itself off, and the flush grid's rule under it made two lines.
+test("a flush grid under a card's header leaves the rule to the header", () => {
+  expect(block(sheet("frame.css"), ".crewlet-card__header + .grid-wrap[data-flush]")).toMatch(
+    /border-top:\s*0/,
+  );
+});
+
 // THE SPEND CHART'S SUBTITLE TAKES NO WIDTH FROM ITS LEGEND. Both sit in the
 // kit's head row and shrink by their content widths, so a subtitle as long as
 // the card pushed the legend onto a second, ragged row at 1280.
@@ -1671,6 +1679,141 @@ test("the preferences popover is as wide as its rows, and the account block abov
   expect(block(css, ".preferences-account > .truncate")).toMatch(/max-width:\s*100%/);
 });
 
+// SPEND READS AS ROWS. Its cards started at their own heights, so a table of
+// two seats ended two hundred pixels above the lists beside it and the row
+// under it began below the lists: a hole the width of the table at every
+// desktop width. Each row stretches its cards to the tallest, the narrow
+// track's last list takes what its stack leaves, and a stretched card keeps
+// its foot on the floor.
+describe("the Spend overview's rows", () => {
+  const css = sheet("screens.css");
+
+  test("every row stretches its cards to one height", () => {
+    const rows = block(css, ".spend-top,\n.spend-pair");
+    expect(rows).toMatch(/display:\s*grid/);
+    expect(rows).toMatch(/align-items:\s*stretch/);
+  });
+
+  test("the stacked lists end level with the table beside them", () => {
+    const side = block(css, ".spend-side");
+    expect(side).toMatch(/display:\s*flex/);
+    expect(side).toMatch(/flex-direction:\s*column/);
+    expect(block(css, ".spend-side > :last-child")).toMatch(/flex-grow:\s*1/);
+  });
+
+  test("a stretched card keeps its foot on the floor", () => {
+    expect(block(css, ".spend-card-foot")).toMatch(/margin-top:\s*auto/);
+  });
+
+  test("the ranked lists in the narrow track share one label width", () => {
+    expect(block(css, ".spend-list .spend-bars")).toMatch(/--crewlet-bar-list-label-width:\s*50%/);
+  });
+
+  // THE TOP ROW ENDS ON ONE LINE. The hero stacked its parts from the top and
+  // ended 14 to 53px short of the chart beside it, a strip of nothing under
+  // its tiles; where the hero is the taller, the chart's split control stood
+  // above a strip of its own.
+  test("the hero's facts and the chart's split control stand on their cards' floors", () => {
+    expect(block(css, ".spend-hero > .spend-budget")).toMatch(/margin-top:\s*auto/);
+    expect(block(css, ".spend-chart-foot")).toMatch(/margin-top:\s*auto/);
+  });
+
+  // AND THE PLOT TAKES THE SPARE HEIGHT, NOT A BAND UNDER THE DATES. Where the
+  // hero was the taller, the split control stood 34 to 68px under the dates,
+  // because the plot was a fixed length. The chart fills its card now, which
+  // takes two rules in two sheets: the card is a column, and the kit's fill
+  // figure flexes in it.
+  test("the daily chart's card is a column its kit figure grows in", () => {
+    const chart = block(css, ".spend-chart");
+    expect(chart).toMatch(/display:\s*flex/);
+    expect(chart).toMatch(/flex-direction:\s*column/);
+    expect(block(kitSheet(), ".crewlet-stacked-columns--fill")).toMatch(/flex:\s*1 1 auto/);
+  });
+
+  // ON A PHONE THE LEGEND TAKES A ROW OF ITS OWN under the chart's title. The
+  // kit's head held the two on one line, so the legend stood beside the title
+  // as a column of one band a line, four rows tall at 390px.
+  test("the daily chart's legend wraps under its title where the two do not fit", () => {
+    const head = block(kitSheet(), ".crewlet-stacked-columns__head");
+    expect(head).toMatch(/flex-wrap:\s*wrap/);
+    expect(block(kitSheet(), ".crewlet-stacked-columns__legend--head")).toMatch(
+      /margin-inline-start:\s*auto/,
+    );
+  });
+
+  // A LONE TILE TAKES THE ROW. A tile with nothing to say is not drawn, and
+  // the one left in a two-column row stood beside half a row of nothing.
+  test("the hero's tiles take one column each, and with none the row is not drawn", () => {
+    const tiles = block(css, ".spend-tiles");
+    expect(tiles).toMatch(/grid-auto-flow:\s*column/);
+    expect(tiles).toMatch(/grid-auto-columns:\s*minmax\(0, 1fr\)/);
+    expect(tiles).not.toMatch(/grid-template-columns/);
+    expect(block(css, ".spend-tiles:empty")).toMatch(/display:\s*none/);
+  });
+
+  // ON A PHONE A HEAD'S CAPTION GOES UNDER ITS TITLE. Held beside it, By
+  // agent's sentence stood a two-line column at the end of the head.
+  test("a card's caption wraps under its title when the two do not fit", () => {
+    expect(block(css, ".spend-card-head")).toMatch(/flex-wrap:\s*wrap/);
+  });
+
+  // A SEAT IS TWO LINES ON A PHONE, at every density. With today's bar on its
+  // second line a capped seat's figures did not fit, and it stood three tall.
+  test("a seat's compact phone row draws no day bar", () => {
+    const phone = mediaBodies(css)
+      .filter((m) => m.prelude === PHONE)
+      .map((m) => m.body)
+      .join("\n");
+    expect(
+      block(phone, '.spend-agents .grid-wrap[data-phone-rows="compact"] .spend-day-meter'),
+    ).toMatch(/display:\s*none/);
+  });
+
+  // ON THE TOKEN SCALE. The workspace's rules spelled their own steps, a 52px
+  // figure and gaps of 2, 4, 6 and 10px, beside a scale of 4, 8, 12 and 16
+  // that also follows the density. A step the scale has is its token; a
+  // spacing in ems follows the text it spaces, and only those two are named.
+  test("the Spend workspace spaces and sets its type on the token scale", () => {
+    const EM_SPACING = new Set([".spend-used gap", ".ceiling-warnings padding-left"]);
+    const STEP =
+      /^(gap|row-gap|column-gap|padding(-[a-z-]+)?|margin(-[a-z-]+)?|font-size|letter-spacing|line-height|border-radius)$/;
+    const off: string[] = [];
+    let scanned = 0;
+    for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selector = m[1]!.trim().replace(/\s+/g, " ");
+      if (!/(^|[\s,>+~(])\.(spend-|budget|ceiling)/.test(selector)) continue;
+      scanned++;
+      for (const declaration of m[2]!.split(";")) {
+        const [property = "", ...rest] = declaration.split(":");
+        const prop = property.trim();
+        const value = rest.join(":").trim();
+        if (!STEP.test(prop) || !/\d(px|rem|em)\b/.test(value)) continue;
+        if (/^[\d.]+em$/.test(value) && EM_SPACING.has(`${selector} ${prop}`)) continue;
+        off.push(`${selector} { ${prop}: ${value} }`);
+      }
+    }
+    expect(scanned, "the scan read no Spend rules").toBeGreaterThan(40);
+    expect(off).toEqual([]);
+  });
+
+  test("a card without its partner takes the whole row", () => {
+    expect(block(css, ".spend-pair > :only-child")).toMatch(/grid-column:\s*1 \/ -1/);
+  });
+
+  // ONE FOLD FOR THE PAGE. The hero stacked over the chart at 760 while the
+  // pairs stacked at 900, so between the two the chart stood 450px wide
+  // beside the hero with its title broken over two lines.
+  test("every row folds to one column at the same page width", () => {
+    const folds = [...css.matchAll(/@container page \(width < (\d+)px\)\s*\{/g)].filter((m) =>
+      /\.spend-(top|pair)\b/.test(atRuleBody(css.slice(m.index), m[0].slice(0, -1).trim())),
+    );
+    expect(folds.map((m) => Number(m[1]))).toEqual([900]);
+    expect(atRuleBody(css, "@container page (width < 900px)")).toMatch(
+      /\.spend-top,\s*\.spend-pair\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\);/,
+    );
+  });
+});
+
 /**
  * A REPEATING TRACK'S FLOOR NEVER EXCEEDS ITS CONTAINER.
  *
@@ -1698,25 +1841,26 @@ test("every auto-fit and auto-fill track floor is clamped to its container", () 
 /**
  * THE SIDEBAR'S FOOT WEARS A CONTROL'S MARKS ONLY ON A CONTROL.
  *
- * The health card's statement form — "No access yet", a refusal — is a `div`
- * that does nothing, and it wore the pointer and the hover border every form
- * did, reading as a control that was broken. So `cursor: pointer` and the
- * hover border are declared on the link and the button alone. The user block
- * is the other way round: it IS a control, the way to the reader's Account,
- * and drew no mark until hovered — so it wears the rail's chevron at rest, and
- * it is the Account's row, marked current on `#/account` with the kit's own
+ * The engine's row is the kit's `AppShell.RailRow`, and its statement form
+ * ("No access yet", a refusal) is a `div` the kit draws with no pointer, no
+ * chevron and no place in the tab order (`EnginePanel.test.tsx` holds that it
+ * is drawn so). A rule of ours giving the kit's row a pointer or a hover of
+ * its own would put a control's marks back on a row that does nothing, which is
+ * what the health card it replaced did until it was fixed. The user block is
+ * the other way round: it IS a control, the way to the reader's Account, and
+ * drew no mark until hovered, so it wears the rail's chevron at rest, and it
+ * is the Account's row, marked current on `#/account` with the kit's own
  * current-row lift: the raised surface and a hairline OUTLINE (an outline,
  * since forced-colours mode drops a shadow and a background).
  */
-test("the health card is pressable only as a link or a button, and the user block always", () => {
-  const css = sheet("frame.css");
-  const offenders = mentioning(css, ".health-card")
-    .filter(({ sel, body }) => /cursor:\s*pointer/.test(body) || sel.includes(":hover"))
-    .filter(({ sel }) => !/^(a|button)\.health-card(:hover)?$/.test(sel))
-    .map(({ sel }) => sel);
-  expect(offenders).toEqual([]);
-  expect(block(css, "a.health-card,\nbutton.health-card")).toMatch(/cursor:\s*pointer/);
+test("the engine's row takes its control marks from the kit alone, and the user block always wears one", () => {
+  // THE KIT'S ROW IS THE KIT'S: no sheet of ours styles it, so whether it
+  // wears a pointer is decided by whether the kit drew a control.
+  for (const name of ["base.css", "components.css", "frame.css", "screens.css"]) {
+    expect(sheet(name), name).not.toMatch(/\.crewlet-app-shell__rail-row/);
+  }
 
+  const css = sheet("frame.css");
   expect(block(css, ".user-block-go")).toMatch(/color:\s*var\(--color-text-tertiary\)/);
   const current = block(css, 'a.user-block-who[aria-current="page"]');
   expect(current).toMatch(/background:\s*var\(--color-surface-elevated\)/);

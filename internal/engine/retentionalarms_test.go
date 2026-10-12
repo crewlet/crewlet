@@ -1,19 +1,21 @@
 package engine
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE ALARMS A NODE'S HEALTH CARRIES ARE THE RETENTION REPORT'S ALARMS.
@@ -21,14 +23,15 @@ import (
 // [Engine.Alarms] is what every health probe and push tick reads, and it is the
 // evaluation the gauge and the alarm log lines were fed — never a second one.
 // So after an evaluation it names exactly the alarms the report that
-// evaluation was taken from holds (`work_retention`'s `alarms`), PER LOG — the
-// kind and the log it is about, because the same kind on two logs is two
-// alarms — and before one it says it cannot say: a node that has not looked at
-// its table is not a node with nothing wrong.
+// evaluation was taken from holds (`work_retention`'s `alarms`), ONE PER KIND,
+// because a kind on two logs is one alarm listing both, and before one it says
+// it cannot say: a node that has not looked at its table is not a node with
+// nothing wrong.
 //
-// Mutation: answer (nil, true) before the first evaluation, read a list the
-// tracker was not handed, or drop the domain from a standing alarm, and this
-// fails.
+// Mutation: answer (nil, true) before the first evaluation, or read a list the
+// tracker was not handed, and this fails; counting a kind once per log is
+// [TestTheHealthAlarmsCountAKindOnTwoLogsOnce]'s, since this node runs no log
+// and every alarm it raises is node-wide.
 func TestTheHealthAlarmsAreTheRetentionAlarms(t *testing.T) {
 	t.Parallel()
 	r := &retention{
@@ -49,9 +52,9 @@ func TestTheHealthAlarmsAreTheRetentionAlarms(t *testing.T) {
 
 	r.beat(t.Context())
 	report := r.Report(t.Context())
-	want := make([]statelog.StandingAlarm, 0, len(report.Alarms))
+	want := make([]statelog.Kind, 0, len(report.Alarms))
 	for _, a := range report.Alarms {
-		want = append(want, statelog.StandingAlarm{Kind: a.Kind, Domain: a.Domain})
+		want = append(want, a.Kind)
 	}
 	// A FLOOR: a fleet with no backup recorded raises `backup_age`, so a
 	// comparison of two empty lists cannot pass as agreement here.
@@ -62,11 +65,56 @@ func TestTheHealthAlarmsAreTheRetentionAlarms(t *testing.T) {
 	if !evaluated {
 		t.Fatal("an evaluated table answered as not evaluated")
 	}
-	order := func(a, b statelog.StandingAlarm) int {
-		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Domain, b.Domain))
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("the health envelope names %v and the retention report %v", got, want)
 	}
-	slices.SortFunc(got, order)
-	slices.SortFunc(want, order)
+}
+
+// ONE ENTRY PER KIND ON A RUNNING NODE, however many logs the kind stands on:
+// two logs whose floor this node cannot use raise ONE `floor_unknown` listing
+// both, and the health envelope counts it once — the count a person reads
+// beside the alarm list is the list's length, never its logs'.
+//
+// Mutation: have [statelog.Tracker.Standing] answer one entry per firing
+// instance (a kind once per log), and this fails.
+func TestTheHealthAlarmsCountAKindOnTwoLogsOnce(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e := bootDirectoryNode(t, nil)
+	r := quietRetention(t, e)
+	logs := []string{tracker.Domain{}.Name(), iamdomain.Domain{}.Name()}
+	for _, name := range logs {
+		generation := r.state.Domain(name).runner.Committed().Generation
+		ahead := coord.TrimFloor{Domain: name, Generation: generation + 1,
+			At: time.Now().UTC(), By: "node-b"}
+		if err := r.fleet.PutFloor(ctx, ahead); err != nil {
+			t.Fatalf("publish a floor ahead of this node on %s: %v", name, err)
+		}
+	}
+	t0 := time.Now().UTC()
+	r.now = func() time.Time { return t0 }
+	r.beat(ctx)
+	r.now = func() time.Time { return t0.Add(statelog.FloorCacheStale + statelog.AlarmInterval) }
+	r.beat(ctx)
+	report := r.Report(ctx)
+	want := make([]statelog.Kind, 0, len(report.Alarms))
+	for _, a := range report.Alarms {
+		want = append(want, a.Kind)
+	}
+	fired, ok := alarmOf(report, statelog.KindFloorUnknown)
+	if !ok || len(fired.Domains) != len(logs) {
+		t.Fatalf("floor_unknown stands on %+v, want the %d logs %v", fired.Domains, len(logs), logs)
+	}
+	got, evaluated := e.Alarms()
+	if !evaluated {
+		t.Fatal("an evaluated table answered as not evaluated")
+	}
+	// SORTED, NEVER DEDUPLICATED, so a kind named twice stays visible to the
+	// comparison.
+	slices.Sort(got)
+	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Errorf("the health envelope names %v and the retention report %v", got, want)
 	}
@@ -77,10 +125,11 @@ func TestTheHealthAlarmsAreTheRetentionAlarms(t *testing.T) {
 // The pool-wait delta is ONE observation per interval, so the `pool_starved`
 // alarm's day-long p95 is a percentile over intervals of the trim's length;
 // taken on every [statelog.AlarmInterval] beat it would be a percentile over
-// sixty times as many, shorter intervals — a different alarm nobody decided
-// on. The backup-gauge walk reads the coordination register and every announced
-// manifest and logs an unreadable directory at WARN each time, so on the beat
-// it repeats that line every fifteen seconds for as long as the fault lasts.
+// [statelog.TrimInterval]/[statelog.AlarmInterval] (ninety) times as many,
+// shorter intervals — a different alarm nobody decided on. The backup-gauge
+// walk reads the coordination register and every announced manifest and logs
+// an unreadable directory at WARN each time, so on the beat it repeats that
+// line every [statelog.AlarmInterval] for as long as the fault lasts.
 //
 // Mutation: have [retention.beat] call [retention.capacity], and the first half
 // fails; drop it from [retention.evaluate], and the control fails.

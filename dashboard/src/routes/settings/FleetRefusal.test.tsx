@@ -68,8 +68,8 @@ afterEach(() => {
 });
 
 // A REFUSAL WITH NOTHING KEPT IS THE ANSWER, and it says what would change it.
-// The screen drew the refusal's code in a "this poll failed, what is below is
-// the last reading" banner over an empty table titled "No nodes are reporting"
+// The screen drew the refusal's code in a "refresh failed, showing the last
+// good reading" banner over an empty table titled "No nodes are reporting"
 // — a reading nobody took and a fleet that does not exist — and dropped the
 // grants the engine named.
 test("a refused first read names the grant rather than an empty fleet", () => {
@@ -78,7 +78,7 @@ test("a refused first read names the grant rather than an empty fleet", () => {
   mount();
   expect(screen.getByText("fleet:operate")).toBeDefined();
   expect(screen.queryByText("No nodes are reporting")).toBeNull();
-  expect(screen.queryByText(/This poll failed/)).toBeNull();
+  expect(screen.queryByText(/Refresh failed/)).toBeNull();
 });
 
 // AND A FAILED POLL OVER A READING IT KEPT still says the reading is not now.
@@ -94,5 +94,7 @@ test("a failed poll over a kept reading says the reading is old", () => {
   };
   fleet.error = "unavailable";
   mount();
-  expect(screen.getByText(/This poll failed \(unavailable\)/)).toBeDefined();
+  expect(
+    screen.getByText(/Refresh failed \(unavailable\)\. Showing the last good reading\./),
+  ).toBeDefined();
 });

@@ -119,7 +119,7 @@ export function Settings({
       label: "Handle",
       value: <code className="inline">{handleLabel(seat.handle)}</code>,
     },
-    { label: "Kind", value: human ? "person — never run by the engine" : "agent" },
+    { label: "Kind", value: human ? "person" : "agent" },
     { label: "Email", value: <ConfigValue value={role?.email} /> },
     ...Object.entries(role?.contact ?? {}).map(([k, v]) => ({
       label: contactLabel(k),
@@ -131,10 +131,7 @@ export function Settings({
   return (
     <div className="col gap-4">
       <div className="row gap-2 wrap">
-        <p className="t-caption prof-lede">
-          From the company document. Every value here is changed in the org editor, where the change
-          is validated and applied as a new revision.
-        </p>
+        <p className="t-caption prof-lede">Change these in Edit org.</p>
         <span className="spacer" />
         <ButtonLink
           size="small"
@@ -158,8 +155,8 @@ export function Settings({
                 rather than that one is required. */}
             {human && Object.keys(role?.contact ?? {}).length === 0 && (
               <Callout variant="warning">
-                No contact identity is declared, so this person is reached through the dashboard
-                only: activity on Slack, GitHub or the tracker is not attributed to them.
+                Reached only through the dashboard: their Slack, GitHub or tracker activity is not
+                attributed to them. Add a contact identity in Edit org.
               </Callout>
             )}
           </div>,
@@ -198,7 +195,7 @@ export function Settings({
                         value: llmChain(role?.llm_auxiliary).length ? (
                           <ModelChain keys={llmChain(role?.llm_auxiliary)} />
                         ) : (
-                          <span className="muted">none — reflection uses the model above</span>
+                          <span className="muted">uses the model above</span>
                         ),
                       },
                       {
@@ -225,9 +222,7 @@ export function Settings({
                             typeof limit === "number" ? (
                               `${fmtCount(limit)} tokens`
                             ) : typeof theirs === "number" ? (
-                              <span className="muted">
-                                no seat cap — the company&rsquo;s {fmtCount(theirs)} applies
-                              </span>
+                              <span className="muted">company limit, {fmtCount(theirs)}</span>
                             ) : (
                               <span className="muted">uncapped</span>
                             ),
@@ -255,7 +250,7 @@ export function Settings({
         <Card>
           <Card.Header
             icon={<KeyGlyph size="sm" />}
-            subtitle="its unit's, with this seat's own entries winning"
+            subtitle="from its team, with its own overrides"
             count={Object.keys(credentials).length}
           >
             <Card.Title as="h3">Tool credentials</Card.Title>
@@ -285,7 +280,7 @@ export function Settings({
                 size="compact"
                 icon={<KeyGlyph size={32} />}
                 title="No per-seat tool credentials"
-                description="This seat's tools run with whatever the shared MCP servers were configured with."
+                description="Its tools use the shared server credentials."
               />
             ),
           )}

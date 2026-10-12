@@ -266,7 +266,7 @@ test("a seat listing that failed is said on the page", async () => {
   location.hash = "#/agents/seats/sam";
   engine(json(500, { error: "internal", message: "boom" }));
   await mount("sam", ["state:read", "people:manage"]);
-  expect(await screen.findByText(/The engine tried to answer and failed/)).toBeTruthy();
+  expect(await screen.findByText(/The engine failed to answer/)).toBeTruthy();
   expect(screen.queryByText("Nobody holds this seat.")).toBeNull();
   expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
 });

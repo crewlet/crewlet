@@ -4,8 +4,8 @@
  *
  * Each case names the fact a figure stands for: the Integrations badge is the
  * engine's own roll-up (never a re-derived phase), a node behind the activated
- * epoch is said in the Nodes row's NAME as well as drawn, and a held trim is
- * the only reason Backups & retention draws a figure at all.
+ * epoch is said in the Nodes row's NAME as well as drawn, and a standing
+ * alarm is the only reason Backups & retention draws a figure at all.
  */
 
 import { describe, expect, test } from "vitest";
@@ -40,9 +40,13 @@ function fleet(target: number, nodes: FleetNode[]): FleetAnswer {
   return { nodes, seats: [], duties: [], target_epoch: target } as unknown as FleetAnswer;
 }
 
-function retention(blocked: (string | undefined)[]): RetentionReport {
+function retention(kinds: string[], held = 0): RetentionReport {
   return {
-    domains: blocked.map((b, i) => ({ domain: `d${i}`, blocked_by: b })),
+    domains: Array.from({ length: held }, (_, i) => ({
+      domain: `d${i}`,
+      blocked_by: "backup_floor",
+    })),
+    alarms: kinds.map((kind) => ({ kind, detail: "", remedy: "" })),
   } as unknown as RetentionReport;
 }
 
@@ -115,11 +119,14 @@ describe("settingsFigures", () => {
     expect(f.nodes).toBeUndefined();
   });
 
-  test("Backups & retention draws a figure only for a held trim", () => {
-    expect(settingsFigures({ ...NONE, retention: retention([undefined]) }).backups).toBe(undefined);
-    const one = settingsFigures({ ...NONE, retention: retention(["hold", undefined]) });
-    expect(one.backups?.count).toMatchObject({ value: 1, label: "domain whose trim is held" });
-    const two = settingsFigures({ ...NONE, retention: retention(["hold", "snapshot"]) });
-    expect(two.backups?.count?.label).toBe("domains whose trim is held");
+  // THE STANDING ALARMS, the rail's count: four logs held by one missing
+  // backup are one alarm, and a figure counting the logs said 4 beside the
+  // rail's 5 for the one problem.
+  test("Backups & retention counts the standing alarms, and draws nothing without one", () => {
+    expect(settingsFigures({ ...NONE, retention: retention([]) }).backups).toBe(undefined);
+    const one = settingsFigures({ ...NONE, retention: retention(["backup_age"], 4) });
+    expect(one.backups?.count).toMatchObject({ value: 1, label: "standing alarm" });
+    const two = settingsFigures({ ...NONE, retention: retention(["backup_age", "volume_low"]) });
+    expect(two.backups?.count?.label).toBe("standing alarms");
   });
 });

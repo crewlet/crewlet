@@ -145,7 +145,7 @@ test("a refused first page is not a company that has published nothing", async (
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
-  expect(screen.getByText(/The engine tried to answer and failed/)).toBeTruthy();
+  expect(screen.getByText(/The engine failed to answer\./)).toBeTruthy();
   expect(screen.queryByText("Nothing has been published yet")).toBeNull();
 });
 
@@ -329,7 +329,7 @@ test("a seat's log asks for that seat and shows only its live rows", async () =>
   expect(screen.getByText("swe opened a task")).toBeTruthy();
   expect(screen.queryByText("cto opened a task")).toBeNull();
   // THE FILTER SAYS WHOSE LOG THIS IS, by name, and takes itself off.
-  fireEvent.click(screen.getByRole("button", { name: /Only SWE's events/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove filter: only SWE's events" }));
   expect(location.hash).not.toContain("seat=");
   expect(screen.getByText("cto opened a task")).toBeTruthy();
   location.hash = "#/";
@@ -409,7 +409,7 @@ test("a trace and a channel narrow the pages, the axis and the live rows", async
   }
   expect(screen.getByText("in the trace")).toBeTruthy();
   expect(screen.queryByText("another trace")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: /Only trace tr-1's events/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove filter: only trace tr-1's events" }));
   expect(location.hash).not.toContain("trace=");
   cleanup();
 
@@ -468,6 +468,6 @@ test("a log missing a node names it", async () => {
       : { bucket: "hour", bars: [], total: 0, failed: 0, by_category: {}, coverage },
   );
   expect(screen.getByText("node-b")).toBeTruthy();
-  expect(screen.getByText(/This log is missing one node/)).toBeTruthy();
+  expect(screen.getByText(/This log is missing 1 node\./)).toBeTruthy();
   location.hash = "#/";
 });

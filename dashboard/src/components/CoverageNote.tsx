@@ -47,39 +47,55 @@ export function missingFrom(coverages: readonly (Coverage | null | undefined)[])
   };
 }
 
+/**
+ * What the missing nodes cost an answer, as the sentence after the count. It
+ * points back at them ("Its agents…", "Their agents…"), so it is written once
+ * for a single node and once for several.
+ */
+export interface LostSentence {
+  one: string;
+  many: string;
+}
+
+/** What a history answer loses: whatever the missing nodes published. */
+const PUBLISHED: LostSentence = {
+  one: "What it published is not here",
+  many: "What they published is not here",
+};
+
 export function CoverageNote({
   coverage,
   what,
-  lost = "what each of them published is not here",
+  lost = PUBLISHED,
 }: {
   /** Every answer the screen drew from. */
   coverage: readonly (Coverage | null | undefined)[];
-  /** What the answer is, as the note's subject: "this list", "these turns". */
+  /** What the answer is, as the note's singular subject: "this list", "this trace". */
   what: string;
   /**
-   * What a missing node COSTS this answer, as the clause after the count. A
-   * history answer loses what the node published; an answer each node gives
-   * about the seats it HOLDS (the diaries) loses those seats' counts, and
-   * saying "published" there would send a reader looking for the wrong gap.
+   * What a missing node COSTS this answer. A history answer loses what the
+   * node published; an answer each node gives about the seats it HOLDS (the
+   * diaries) loses those seats' counts, and saying "published" there would
+   * send a reader looking for the wrong gap.
    */
-  lost?: string;
+  lost?: LostSentence;
 }) {
   const { nodes, incomplete } = missingFrom(coverage);
   if (!incomplete && nodes.length === 0) return null;
+  const one = nodes.length === 1;
   return (
     <Callout variant="warning" className="coverage-note">
       {nodes.length === 0 ? (
         <>The fleet&rsquo;s node roster could not be read, so {what} may not include every node.</>
       ) : (
         <>
-          {what.charAt(0).toUpperCase() + what.slice(1)}{" "}
-          {nodes.length === 1 ? "is missing one node" : `is missing ${nodes.length} nodes`}, and{" "}
-          {lost}:
+          {what.charAt(0).toUpperCase() + what.slice(1)} is missing {nodes.length}{" "}
+          {one ? "node" : "nodes"}. {one ? lost.one : lost.many}:
           <ul className="coverage-nodes">
             {nodes.map((n) => (
               <li key={n.id}>
                 <code className="inline">{n.id}</code>
-                {n.error ? ` — ${n.error}` : ""}
+                {n.error ? `: ${n.error}` : ""}
               </li>
             ))}
           </ul>

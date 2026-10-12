@@ -937,15 +937,15 @@ export function Audit() {
       {loading && shown.length === 0 && (
         <Skeleton variant="text" rows={6} label="Loading what was done" />
       )}
-      <CoverageNote coverage={[runtimeData?.coverage]} what="the runtime rows" />
+      <CoverageNote coverage={[runtimeData?.coverage]} what="the runtime list" />
       {/* A PAGE THAT STOPPED SHORT OF THE WINDOW IS A NOTICE OF ITS OWN, not
-          the card's subtitle: a header line is one line, and the sentence was
-          cut at "those rows are the newest, n…" — its whole point, lost at
-          every width. */}
+          the card's subtitle: a header line is one line, and an earlier
+          sentence there was cut at "those rows are the newest, n…", its whole
+          point lost at every width. */}
       {truncated.length > 0 && (
         <Callout variant="warning">
-          {truncated.join(" and ")} answered one page, which does not reach the start of this window
-          — those rows are the newest, not all of them.
+          {truncated.join(" and ")}{" "}
+          {truncated.length === 1 ? "shows only its newest rows." : "show only their newest rows."}
         </Callout>
       )}
       {withheld.length > 0 && (
@@ -967,7 +967,7 @@ export function Audit() {
           <Card.Header
             icon={<FileTextGlyph size="sm" />}
             count={shown.length}
-            subtitle="Every write a person or a credential made, every call they made at runtime, every change to who can reach the company, and every configuration revision, whoever wrote it."
+            subtitle="Writes, runtime calls, access changes and configuration revisions"
           >
             <Card.Title>What was done</Card.Title>
           </Card.Header>
@@ -979,7 +979,7 @@ export function Audit() {
             isFailed={(row) => row.failed === true}
             empty={{
               title: "Nothing in this window",
-              hint: "No person and no credential wrote anything here over this range. Widen the window, or clear the filters.",
+              hint: "Widen the window, or clear the filters.",
               icon: "file-text",
             }}
             loadedNote={`${shown.length} loaded`}

@@ -279,7 +279,7 @@ export function Turns({
           count={
             list.answers.length > 0 ? `${list.items.length}${list.more ? "+" : ""}` : undefined
           }
-          subtitle={`Newest first, from every node, over the ${MAX_TURN_DAYS} days the event store keeps`}
+          subtitle={`Newest first, last ${MAX_TURN_DAYS} days`}
         >
           <Card.Title as="h3">Turns</Card.Title>
         </Card.Header>
@@ -295,7 +295,7 @@ export function Turns({
             rowHref={(t) => peekHref({ kind: "turn", id: t.turn_id })}
             empty={{
               title: "No turns in the record for this seat",
-              hint: `A turn is recorded when it starts; the store keeps ${MAX_TURN_DAYS} days of them.`,
+              hint: `Turns from the last ${MAX_TURN_DAYS} days appear here.`,
             }}
             columns={[
               {
@@ -327,11 +327,7 @@ export function Turns({
                 key: "iterations",
                 // SELF-ITERATE ROUNDS, and the word says so: a phase's TOOL
                 // rounds are on its own card, under their own word.
-                header: (
-                  <span title="self-iterate rounds — the tool rounds each phase used are on the phase row">
-                    Iterations
-                  </span>
-                ),
+                header: <span title="Self-iterate rounds">Iterations</span>,
                 label: "Iterations",
                 shrink: true,
                 sortValue: (t) => (t.complete ? t.iterations : null),
@@ -429,12 +425,12 @@ export function Turns({
             size="compact"
             icon={<BrainGlyph size={32} />}
             title="No phases in the record for this seat"
-            description="A phase is recorded when it completes. A seat that has not taken a turn has nothing here."
+            description="Phases appear once it takes a turn."
           />
         )}
         {settled.pending > 0 && (
           <button className="new-rows" onClick={settled.flush}>
-            {plural(settled.pending, "new turn")} finished while you were reading — show
+            {plural(settled.pending, "new turn")}. Show
           </button>
         )}
         <div className="col gap-2">

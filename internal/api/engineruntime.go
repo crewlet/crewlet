@@ -235,8 +235,7 @@ func (r engineRuntime) Fleet(ctx context.Context) FleetState {
 		// NON-NIL ONCE EVALUATED, even with nothing firing: an empty
 		// slice is the real claim that nothing holds, and nil is that no
 		// evaluation has run — see [FleetState.Alarms].
-		state.Alarms = append(make([]statelog.StandingAlarm, 0, len(standing)),
-			standing...)
+		state.Alarms = append(make([]statelog.Kind, 0, len(standing)), standing...)
 	}
 	// THE FLEET'S SIZE, from the presence leases every fan-out on this node
 	// divides its work by, read live for the posture's reason. A failed or

@@ -344,8 +344,15 @@ func (in TrimInputs) applied() Term {
 	// no age setting bounds what it still holds. The only exit is an
 	// eviction, which advances the trim and deletes nothing on that
 	// machine.
+	// ONE COUNTED NODE IS NOBODY'S STRAGGLER. Worded as the furthest behind
+	// of one, the healthy single node read as a fleet member to bring back
+	// or evict.
+	if len(in.Counted) == 1 {
+		return Term{Name: TermApplied, Seq: lowest, Known: true, Detail: fmt.Sprintf(
+			"%s, the only counted node, has applied through %d", who, lowest)}
+	}
 	return Term{Name: TermApplied, Seq: lowest, Known: true, Detail: fmt.Sprintf(
-		"%s is the furthest behind of %d counted node(s), at %d",
+		"%s is the furthest behind of %d counted nodes, at %d",
 		who, len(in.Counted), lowest)}
 }
 
@@ -453,8 +460,8 @@ func (in TrimInputs) snapshotFloor() Term {
 	k := min(len(in.Counted), SnapshotDonorsRequired)
 	if len(have) < k {
 		detail := fmt.Sprintf(
-			"%d of %d counted node(s) hold a verified snapshot and %d are needed "+
-				"— losing any single donor must still leave a usable artefact",
+			"%d of %d counted nodes hold a verified snapshot and %d are needed, "+
+				"so that losing any one donor still leaves a usable artefact",
 			len(have), len(in.Counted), k)
 		if stale > 0 {
 			detail += fmt.Sprintf(", and %d more hold one from an earlier "+

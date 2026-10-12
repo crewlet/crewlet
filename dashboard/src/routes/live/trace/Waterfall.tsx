@@ -239,12 +239,7 @@ export function Waterfall({
   };
 
   if (!spans.length && !untimed.length) {
-    return (
-      <p className="t-caption waterfall-empty">
-        Nothing this turn did has been recorded yet — its first span appears when it gathers its
-        context.
-      </p>
-    );
+    return <p className="t-caption waterfall-empty">Nothing recorded yet.</p>;
   }
 
   return (
@@ -274,7 +269,7 @@ export function Waterfall({
             <ol
               ref={rowsRef}
               className="waterfall-rows"
-              aria-label="Spans — Up and Down move between them, Enter opens one"
+              aria-label="Spans. Up and Down move between them, Enter opens one."
               onKeyDown={move}
             >
               {spans.map((s) => (
@@ -301,10 +296,7 @@ export function Waterfall({
                       <span className="wf-name truncate">{s.label}</span>
                       {s.sub && <span className="wf-sub truncate">{s.sub}</span>}
                       {marked.has(s.id) && (
-                        <span
-                          className="wf-steer"
-                          title="a note sent to this turn was read at this round"
-                        >
+                        <span className="wf-steer" title="Your note was read here">
                           note
                         </span>
                       )}
@@ -489,10 +481,7 @@ function SpanDetail({
             )}
             {span.failed && <Tag variant="danger">failed</Tag>}
             {span.placed && (
-              <Tag
-                appearance="outline"
-                title="the engine timed this call but did not stamp when it began, so it is placed after the call before it"
-              >
+              <Tag appearance="outline" title="Start time unknown">
                 placed after the model&rsquo;s answer
               </Tag>
             )}
@@ -612,9 +601,7 @@ function ToolDetail({ span, record, agent }: { span: Span; record: PhaseRecord; 
           <span className="t-caption">The call returned nothing.</span>
         )
       ) : (
-        <span className="t-caption">
-          Still running — its output arrives with the round&rsquo;s next frame.
-        </span>
+        <span className="t-caption">Still running.</span>
       )}
     </>
   );
@@ -683,8 +670,7 @@ function RunDetail({
 export function NoJobCaption() {
   return (
     <span className="t-caption">
-      This run&rsquo;s announcement names no job, so its live output cannot be asked for — it
-      arrives on the run&rsquo;s record when the run is collected.
+      No live output. It appears on the run&rsquo;s record when collected.
     </span>
   );
 }
@@ -751,47 +737,29 @@ export function LiveOutput({
       <span className="t-caption">Asking the node that runs it…</span>
     );
   } else if (tail.error) {
-    notice = (
-      <Callout variant="warning">
-        The last read failed ({tail.error}); what is below is what was read before — asking again.
-      </Callout>
-    );
+    notice = <Callout variant="warning">Last read failed ({tail.error}). Retrying.</Callout>;
   } else if (answer.outcome === "owner_silent") {
     notice = (
       <Callout variant="warning">
-        {answer.node
-          ? `${answer.node}, the node that owns this run, did not answer in time — asking again.`
-          : "No node holds this run right now — it is being recovered by the seat's next owner."}
+        {answer.node ? `${answer.node} didn’t answer. Retrying.` : "Recovering this run."}
       </Callout>
     );
   } else if (answer.outcome === "launching") {
-    notice = (
-      <span className="t-caption">
-        The job is being set up — its box made and provisioned, the coding agent not started yet.
-        Its output appears here once the agent begins.
-      </span>
-    );
+    notice = <span className="t-caption">Setting up. Output appears when the agent starts.</span>;
   } else if (answer.outcome === "box_paused") {
-    notice = (
-      <span className="t-caption">
-        The run&rsquo;s box is paused, which is how a job that finished waits to be collected; it is
-        not woken to be read. What it did arrives on the run&rsquo;s record.
-      </span>
-    );
+    notice = <span className="t-caption">Finished. Output appears on the run&rsquo;s record.</span>;
   } else if (answer.outcome === "not_running") {
     notice = (
       <span className="t-caption">
         {answer.status === "awaiting_clarification" || answer.status === "reseed"
-          ? "The run stopped to ask a person something — it is parked until they answer."
+          ? "Waiting for an answer."
           : replaced
             ? "A later job replaced this one on the same run."
-            : "The run is no longer running — its output is on its record once it is collected."}
+            : "Stopped. Output appears on its record."}
       </span>
     );
   } else if (tail.text === "") {
-    notice = (
-      <span className="t-caption">The coding agent has not written anything it can show yet.</span>
-    );
+    notice = <span className="t-caption">No output yet.</span>;
   }
   const out = answer?.output;
   // WHAT IS ANNOUNCED IS THE OUTCOME, never the output. The whole block was a
@@ -832,14 +800,11 @@ export function LiveOutput({
         </div>
       )}
       {tail.held > 0 && !tail.final && (
-        <span className="t-caption">
-          {fmtBytes(tail.held)} written and not shown yet — held until what it redacts to is settled
-          (a line not finished, or a private key whose end has not been written).
-        </span>
+        <span className="t-caption">{fmtBytes(tail.held)} more held until it can be redacted.</span>
       )}
       {!tail.final && (
         <span className="t-caption">
-          {plural(SANDBOX_TAIL_POLL_MS / 1000, "second")} between reads, while this is open.
+          Refreshes every {plural(SANDBOX_TAIL_POLL_MS / 1000, "second")}.
         </span>
       )}
     </div>

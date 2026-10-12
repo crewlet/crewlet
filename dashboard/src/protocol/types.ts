@@ -55,6 +55,7 @@ import type { WorkViewShape } from "../contract/work.ts";
 import type {
   RetentionGenerationState,
   RetentionIdentityCause,
+  RetentionTermName,
   RetentionTrimFloorState,
 } from "../contract/retention.ts";
 
@@ -1816,7 +1817,7 @@ export interface RetentionDomain {
   trim_floor_state: RetentionTrimFloorState;
   /** An EMPTY LIST where nothing is concluded — never null. */
   terms: RetentionTerm[];
-  blocked_by?: string;
+  blocked_by?: RetentionTermName;
   blocked_since?: string;
   /** Why the answering node refuses every read of this domain right now, and
    *  which finding is behind a `wrong_stream`. ABSENT while it serves them. */
@@ -1864,13 +1865,13 @@ export interface RetentionRefusal {
 export type RetentionTermState = "ok" | "unknown" | "n/a" | "unbounded";
 
 export interface RetentionTerm {
-  name: string;
+  name: RetentionTermName;
   state: RetentionTermState;
   /** Meaningless unless `state` is "ok", and zero in every other state. */
   seq?: number;
   detail?: string;
-  /** On EVERY term rather than the blocking one: an operator watching a term
-   *  approach is the case this surface exists for. */
+  /** On every term. The screens print it for the term holding the trim, or
+   *  setting its floor, which is the one an operator acts on. */
   remedy: string;
 }
 
@@ -1936,10 +1937,32 @@ export interface RetentionReplica {
   rejoin_window_seconds: number;
 }
 
+/**
+ * One standing alarm: `statelog.Alarm`. ONE PER KIND, whatever number of logs
+ * it stands on, which is why its length is the health envelope's count.
+ */
 export interface RetentionAlarm {
   kind: string;
+  /** The measurement, or the most pressing log's where it stands on several. */
   detail: string;
   remedy: string;
+  /**
+   * Every log the alarm stands on, each with its own measurement. Under
+   * `backup_age` these are the logs the missing or stale backup has held past
+   * their replay window, which raise no `trim_blocked` of their own; a younger
+   * hold is listed nowhere. Absent for a node-wide condition.
+   */
+  domains?: RetentionAlarmDomain[];
+}
+
+/** One log an alarm stands on: `statelog.AlarmDomain`. */
+export interface RetentionAlarmDomain {
+  domain: string;
+  detail: string;
+  /** The trim term holding this log, where the alarm is about its trim. */
+  term?: RetentionTermName;
+  /** When this log's trim stopped advancing. */
+  since?: string;
 }
 
 /**

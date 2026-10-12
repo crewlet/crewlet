@@ -29,7 +29,6 @@ import { WandSparklesGlyph } from "@crewlethq/icons/glyphs";
 import { href, useParam } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, NumberCell, TextCell } from "~/app/frame/cells.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -50,10 +49,6 @@ export function Skills() {
   const [kind, setKind] = useParam("kind", "pages");
   return (
     <>
-      <PageNote>
-        Tool skills are pages the engine offers an agent&rsquo;s phases; learned skills are what an
-        agent drew from its own repeated work.
-      </PageNote>
       <div className="toolbar">
         <Segmented
           ariaLabel="Which skills"
@@ -95,7 +90,7 @@ function ToolSkills() {
           ? undefined
           : {
               title: "No tool skills yet",
-              hint: "A tool skill is a page in the skills space whose front matter names the tool it teaches. The engine offers each one to the phases that can call that tool.",
+              hint: "Add a page to the skills space that names a tool.",
             }
       }
     >
@@ -217,7 +212,7 @@ function LearnedSkills() {
       <EmptyState
         icon={<WandSparklesGlyph size="xl" />}
         title="No agent seats"
-        description="Learned skills belong to agents, and this company's chart has none."
+        description="Add an agent in Edit org."
       />
     );
   }
@@ -242,7 +237,7 @@ function LearnedSkills() {
             ? undefined
             : {
                 title: `${who?.name ?? seat} has learned no skills yet`,
-                hint: "A skill is drafted after the same kind of work goes well more than once. Its episodes are on the agent's memory tab.",
+                hint: "Skills come from repeated work.",
               }
         }
       >

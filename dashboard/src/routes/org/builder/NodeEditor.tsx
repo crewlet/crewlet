@@ -193,7 +193,7 @@ export function NodeEditor({
       <Modal open variant="sheet" stackBody title="Edit" onClose={onClose}>
         <EmptyState
           title="This node is no longer in the draft"
-          description="It was removed by an undo or an update onto a newer revision. Close this editor and choose another node."
+          description="It was undone or replaced. Choose another node."
         />
       </Modal>
     );
@@ -277,11 +277,11 @@ function placedOn(api: BuilderApi, key: NodeKey): PlacedProblem[] {
  * Why Apply is unavailable when it is the posture rather than the form.
  *
  * NOT THE BANNER'S OWN SENTENCE. The callout at the top of the panel says the
- * organization cannot be changed right now; repeating it on the button reads
- * it out twice to anybody using a screen reader, once on entering the form
- * and again on reaching the control.
+ * form is read-only right now; repeating that sentence on the button reads it
+ * out twice to anybody using a screen reader, once on entering the form and
+ * again on reaching the control.
  */
-const READ_ONLY_REASON = "These fields are for reading, so there is nothing to apply.";
+const READ_ONLY_REASON = "Read-only.";
 
 /**
  * One tab of a node's editor: its label, the field paths it draws (which is how
@@ -550,11 +550,7 @@ function EditorShell({
                 ? { role: "tabpanel", id: panelId, "aria-labelledby": tabId(panelId, active.id) }
                 : {})}
             >
-              {readOnly && (
-                <Callout variant="neutral">
-                  The organization cannot be changed right now, so these fields are for reading.
-                </Callout>
-              )}
+              {readOnly && <Callout variant="neutral">Read-only right now.</Callout>}
               <Refusal message={refusal} />
               <NodeProblems problems={problems} />
               {active ? active.content : children}
@@ -573,11 +569,7 @@ function EditorShell({
         open={confirming !== null}
         destructive
         title="Discard your changes?"
-        message={
-          confirming?.leave === undefined || confirming.leave === null
-            ? `The changes to ${name} have not been applied to the draft. Discarding them leaves the draft as it was.`
-            : `The changes to ${name} have not been applied to the draft, and you are leaving the builder. Discarding them leaves the draft as it was and goes on to where you were going.`
-        }
+        message={`Your edits to ${name} aren’t in the draft yet.`}
         cancelLabel="Keep editing"
         confirmLabel="Discard changes"
         onClose={() => setConfirming(null)}
@@ -644,8 +636,7 @@ function toolCredentialItem(names: ReturnType<typeof toolCredentialNames>): Fact
         variables.length > 0 ? `${server} (${variables.join(", ")})` : server,
       )
       .join(", "),
-    reason:
-      "They name servers the company's mcp_servers block defines, so they are set in the configuration document. Values are never shown.",
+    reason: "Set in the configuration file.",
   };
 }
 
@@ -720,10 +711,7 @@ function Owns({
             error={errorFor(PROJECT)}
           />
         ) : (
-          <p className="builder-note muted">
-            The company runs no work tracker (<InlineCode>tracker.backend: none</InlineCode>), so
-            there is no project to own.
-          </p>
+          <p className="builder-note muted">No work tracker is set up.</p>
         )}
         {backendFor(company, "knowledge") !== "none" ? (
           <ConfigField
@@ -737,10 +725,7 @@ function Owns({
             error={errorFor(SPACE)}
           />
         ) : (
-          <p className="builder-note muted">
-            The company runs no knowledge base (<InlineCode>knowledge.backend: none</InlineCode>),
-            so there is no space to own.
-          </p>
+          <p className="builder-note muted">No knowledge base is set up.</p>
         )}
       </div>
     </EditorSection>
@@ -1029,10 +1014,7 @@ function UnitEditor({
               onChange={(lead) => set({ lead })}
               disabled={disabled || leadLimit !== null}
               autoFocus={section === "leadership"}
-              help={
-                leadLimit ??
-                "The lead manages the unit's direct members, and a unit below that names no lead inherits this one."
-              }
+              help={leadLimit ?? "Sub-units without a lead inherit this one."}
               error={errorFor(["lead"])}
             />
             <ConfigField
@@ -1290,8 +1272,7 @@ function SeatEditor({
             key: "kind",
             label: "Kind",
             value: human ? "Person" : "Agent",
-            reason:
-              "A seat keeps its kind. To make it the other kind, delete this seat and add a new one.",
+            reason: "To change it, delete the seat and add a new one.",
           },
         ]}
       />
@@ -1812,7 +1793,7 @@ function Reports({
       <FormField
         label="Manages"
         optional
-        helper="The seats this seat manages, or a unit to manage every seat in it."
+        helper="Seats, or a whole unit."
         helperOnFocus
         error={withProblems(error)}
       >
@@ -1840,8 +1821,7 @@ function Reports({
             key: g.unit,
             label: `Lead of ${g.unit}`,
             value: g.names.join(", "),
-            reason:
-              "A unit lead manages the unit's direct members unless another member manages them. Change the unit's lead to change this.",
+            reason: "Change the unit’s lead to change this.",
           }))}
         />
       )}
@@ -1899,8 +1879,8 @@ function ModelSection({
               chain.length > 0
                 ? `Tried in this order: ${chain.join(", then ")}.`
                 : unpinned
-                  ? `Runs on ${unpinned}, the provider a seat that names none runs on.`
-                  : "The company has no model provider yet. Add one in the configuration document."
+                  ? `Empty runs on ${unpinned}, the default.`
+                  : "No model provider yet. Add one in the configuration."
             }
             error={withProblems(chainError)}
           >
@@ -1940,7 +1920,7 @@ function ModelSection({
               required={false}
               disabled={disabled}
               placeholder={none}
-              help={`Tokens this seat may spend in one ${period} on the company clock, as 40000000 or 40M. The company's own budget applies on top.`}
+              help={`Tokens per ${period}, like 40M. The company limit also applies.`}
               error={budgetError(period)}
             />
           ))}
@@ -2043,14 +2023,12 @@ function IntegrationsSection({
           </div>
           {enrolling && (
             <Callout variant="info">
-              This enrols the seat in GitHub. Create its app from Integrations.{" "}
+              Create its GitHub app in Integrations.{" "}
               <ScreenLink to="integrations">Open Integrations</ScreenLink>
             </Callout>
           )}
           {tierChanged && (
-            <Callout variant="warning">
-              The app's permissions were fixed when it was created. Raise them at GitHub as well.
-            </Callout>
+            <Callout variant="warning">Also raise the app’s permissions at GitHub.</Callout>
           )}
         </ToolCard>
       )}
@@ -2059,8 +2037,7 @@ function IntegrationsSection({
         <ToolCard tool="gitlab" tools={tools}>
           {!hasGitLabProvisioning(company) ? (
             <p className="builder-note muted">
-              GitLab provisioning is not set up, so there is no access level to set.{" "}
-              <ScreenLink to="integrations">Open Integrations</ScreenLink>
+              GitLab isn’t set up. <ScreenLink to="integrations">Open Integrations</ScreenLink>
             </p>
           ) : (
             <ConfigField
@@ -2076,7 +2053,7 @@ function IntegrationsSection({
               disabled={disabled}
               help={
                 minted
-                  ? "Kept by handle: choosing a handle for this seat carries its level with it."
+                  ? "Follows the seat’s handle."
                   : "The level this seat's GitLab account joins the group with."
               }
             />
@@ -2111,7 +2088,7 @@ function IntegrationsSection({
               {provisioned ? (
                 <ReadOnlyFact
                   label="Bot username"
-                  reason="The engine provisions this bot, because its token names a secret store entry. Changing the username would make the provisioner find or create a second bot."
+                  reason="Managed by the engine. Changing it would create a second bot."
                 >
                   <InlineCode>{form.mattermostUsername || defaultUsername}</InlineCode>
                 </ReadOnlyFact>
@@ -2125,8 +2102,8 @@ function IntegrationsSection({
                   disabled={disabled}
                   help={
                     defaultUsername
-                      ? `The engine provisions a bot only where its token names a secret store entry, so this one is managed by hand. Empty uses ${defaultUsername}.`
-                      : "The engine provisions a bot only where its token names a secret store entry, so this one is managed by hand."
+                      ? `Managed by hand. Leave empty for ${defaultUsername}.`
+                      : "Managed by hand."
                   }
                   error={errorFor(MATTERMOST_USERNAME)}
                 />
@@ -2134,7 +2111,7 @@ function IntegrationsSection({
             </div>
           ) : (
             <p className="builder-note muted">
-              This seat has no Mattermost bot of its own, so it has no channel to set.{" "}
+              No Mattermost bot for this seat.{" "}
               <ScreenLink to="integrations">Open Integrations</ScreenLink>
             </p>
           )}
@@ -2214,9 +2191,7 @@ function DeleteNode({
   return (
     <EditorSection title="Delete">
       <div className="node-editor-delete">
-        <span className="t-caption">
-          {`Removes this ${noun} from the draft. Undo brings it back until you save.`}
-        </span>
+        <span className="t-caption">Removes it from the draft. Undo works until you save.</span>
         <Button
           variant="danger"
           size="small"
@@ -2274,8 +2249,7 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string }) {
       key: "sandbox",
       label: "Sandbox",
       value: `${enabled}${runIn}`,
-      reason:
-        "A sandbox runs on the company's providers.sandbox block, which the builder does not edit.",
+      reason: "Edit in the configuration file.",
     });
   }
   if (Array.isArray(data.workers) && data.workers.length > 0) {
@@ -2283,8 +2257,7 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string }) {
       key: "workers",
       label: "Workers",
       value: data.workers.join(", "),
-      reason:
-        "Workers name templates from the company's workers block, which the builder does not edit.",
+      reason: "Edit in the configuration file.",
     });
   }
   if (isRecord(data.placement)) {
@@ -2292,8 +2265,7 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string }) {
       key: "placement",
       label: "Placement",
       value: placementSummary(data.placement),
-      reason:
-        "Placement is a fleet setting for which nodes run this seat, edited in the configuration document.",
+      reason: "Edit in the configuration file.",
     });
   }
   if (typeof data.learning_enabled === "boolean") {
@@ -2320,8 +2292,7 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string }) {
         </span>
       ),
       value: !on ? "Datadog is off" : fallback ? "This seat" : "Another seat",
-      reason:
-        "An alert whose tags name no seat wakes the fallback seat. It is chosen from Integrations, or when the fallback seat is deleted.",
+      reason: "Set it in Integrations.",
     });
   }
   if (facts.length === 0) return null;

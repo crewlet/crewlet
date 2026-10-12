@@ -119,23 +119,22 @@ export function itemFlags(detail: WorkItemDetail) {
 }
 
 /**
- * The removal, said in full where the reader is about to act on the task:
- * who, when, whether it went with its container — and that it is reversible,
- * which is the fact that decides what a reader does next.
+ * The removal, said where the reader is about to act on the task: who, when,
+ * and whether it went with its container.
  */
 export function RemovedNote({ tomb, now }: { tomb: WorkTombstone; now: number }) {
   return (
     <Callout variant="warning" icon={<TrashGlyph size="md" />}>
       <span>
-        <strong>This is in the trash.</strong> {tomb.by || "somebody"}
-        {tomb.kind ? ` (${tomb.kind})` : ""} removed it {relTime(tomb.at, now)}
+        <strong>In the trash.</strong> Removed by {tomb.by || "somebody"}
+        {tomb.kind ? ` (${tomb.kind})` : ""} {relTime(tomb.at, now)}
         {tomb.removed_with ? (
           <>
             {" "}
             along with <InlineCode>{tomb.removed_with}</InlineCode>
           </>
         ) : null}
-        . Removal is reversible at any age — nothing is destroyed, and Restore brings it back.
+        .
       </span>
     </Callout>
   );
@@ -443,7 +442,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
               size="compact"
               icon={<PackageGlyph size="xl" />}
               title={`Nothing answers to “${itemKey}”`}
-              description="A task is addressed by its key or by its uuid, and both resolve. This node holds neither — it may have been removed, or its log may not have reached this far."
+              description="It may have been removed."
             />
           ))}
       </QueryState>

@@ -123,7 +123,7 @@ export interface Blocked {
 export function blockedBy(draft: NewTaskDraft): Blocked | undefined {
   if (!draft.project) return { field: "project", reason: "Choose the project it is filed in." };
   if (!draft.title.trim()) {
-    return { field: "title", reason: "Give the task a title — one line saying what the work is." };
+    return { field: "title", reason: "Add a title." };
   }
   const title = textBudget(draft.title, TASK_TITLE_MAX_BYTES, "a title", LONG_FORM);
   if (title.over) {
@@ -367,7 +367,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
     }
     const result = await write.run(createArgs(draft), {
       done: asked
-        ? `Asked ${asked} — the answer lands in your Inbox`
+        ? `Asked ${asked}. The answer lands in your inbox.`
         : `Filed “${title}” in ${draft.project}`,
     });
     if (!result) return;
@@ -441,11 +441,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
         held ? (
           <span className="new-task-hold">{held}</span>
         ) : viewer.name ? (
-          <span>
-            {asked
-              ? `Asked as ${viewer.name} — the answer lands in your Inbox`
-              : `Filed as ${viewer.name}`}
-          </span>
+          <span>{asked ? `Asking as ${viewer.name}` : `Filed as ${viewer.name}`}</span>
         ) : undefined
       }
       footer={
@@ -508,11 +504,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
           htmlFor="new-task-body"
           // THE COUNT REPLACES THE HINT only while it is a count; past the cap
           // the hint stays and the refusal is the error line under it.
-          helper={
-            !bodyBudget.over && bodyBudget.line
-              ? bodyBudget.line
-              : "Markdown. What is wanted, why, and how anyone would know it is done."
-          }
+          helper={!bodyBudget.over && bodyBudget.line ? bodyBudget.line : "Markdown."}
           error={bodyBudget.over ? bodyBudget.line : undefined}
         >
           {(field) => (
@@ -595,7 +587,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
           helper={
             detail && (detail.tags ?? []).filter((t) => !t.archived).length === 0
               ? `${draft.project} declares no labels yet.`
-              : "The project's own labels — one it does not declare is refused."
+              : "Only this project’s labels."
           }
         >
           {/* THE HELP LINE — which labels the project takes — is the control's
@@ -657,7 +649,7 @@ function landingOf(
   detail: WorkProjectDetail | undefined,
   byHandle: ReadonlyMap<string, Seat>,
 ): string {
-  if (!detail) return "Left empty, it lands where the project sends unassigned work.";
+  if (!detail) return "Left empty, it goes to triage.";
   const name = (handle: string) => byHandle.get(handle)?.name ?? handle;
   // A DEFAULT THE CHART NO LONGER HOLDS IS NOT WHERE IT GOES: the engine
   // files such a task to nobody and puts it in triage, warning as it does
@@ -665,15 +657,15 @@ function landingOf(
   // a sentence the create contradicts. The same test the engine makes: the
   // handle, exactly, on the chart this screen loaded.
   if (detail.default_assignee && !byHandle.has(detail.default_assignee)) {
-    return `Left empty, it lands in triage: ${detail.key}'s default assignee, ${detail.default_assignee}, is no longer on the org chart.`;
+    return `Left empty, it goes to triage. ${detail.default_assignee} has left the org.`;
   }
   if (detail.default_assignee) {
     return `Left empty, it goes to ${name(detail.default_assignee)}, ${detail.key}'s default assignee.`;
   }
   if (detail.lead.handle) {
-    return `Left empty, it lands in triage and ${name(detail.lead.handle)}, who leads ${detail.key}, is told.`;
+    return `Left empty, ${name(detail.lead.handle)} triages it.`;
   }
-  return `Left empty, it lands in ${detail.key}'s triage — and nobody leads ${detail.key} to route it.`;
+  return `Left empty, it waits in triage. ${detail.key} has no lead.`;
 }
 
 /**
@@ -783,11 +775,11 @@ function AssigneeField({
       // or it is empty — and only the last is where "left empty" is true.
       helper={
         value
-          ? `${chosen?.name ?? handleLabel(value)} is woken with it and follows it.${
+          ? `${chosen?.name ?? handleLabel(value)} is notified and follows it.${
               why ? ` The engine's match for “${quoted(why.words)}”: ${why.why}.` : ""
             }`
           : unchosen
-            ? "Not chosen yet — take the seat from the list. Typed words are never sent as a handle."
+            ? "Pick a seat from the list."
             : landing
       }
     >

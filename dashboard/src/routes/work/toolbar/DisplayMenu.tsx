@@ -197,11 +197,7 @@ function DisplayPanel({
         </div>
       )}
 
-      {empty && (
-        <p className="work-menu-empty">
-          Nothing more to arrange on this shape — its grouping and order are in the bar.
-        </p>
-      )}
+      {empty && <p className="work-menu-empty">Grouping and order are in the bar.</p>}
 
       {/* WHAT A SAVED VIEW ITSELF SAYS, and the way back to it. A reader who
           has overridden its shape has no other way to tell that they have: the

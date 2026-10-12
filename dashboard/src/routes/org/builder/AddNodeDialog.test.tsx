@@ -251,9 +251,5 @@ test("a read-only builder adds nothing, and says why the button is unavailable",
   expect(
     (screen.getByRole("button", { name: "Add agent seat" }) as HTMLButtonElement).disabled,
   ).toBe(true);
-  expect(
-    screen.getByText(
-      "The organization cannot be changed right now, so this change cannot be applied.",
-    ),
-  ).toBeDefined();
+  expect(screen.getByText("The org can’t be changed right now.")).toBeDefined();
 });

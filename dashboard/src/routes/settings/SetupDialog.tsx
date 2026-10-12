@@ -41,7 +41,7 @@
 
 import { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import { Button, Callout, InlineCode, Modal, Tag, useToast } from "@crewlethq/ui";
-import { PlugGlyph, CopyGlyph, FileTextGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
+import { PlugGlyph, CopyGlyph, FileTextGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
 import { Field, type FieldKind } from "~/ui/Field.tsx";
 import { marked, paths, Problems } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
@@ -273,12 +273,6 @@ export function splitFields(
  * an empty string rather than a string that has to be recognised.
  */
 export const HELD = "••••••••••••••••";
-
-/** Why a reference is worth preferring, for the note's hover. */
-const WHY_SECRETS =
-  "Recommendation: keep a credential in Secrets and put its reference here, written " +
-  "${NAME}. The config then names the entry instead of carrying the value, so one " +
-  "credential can serve several fields and rotating it is one edit in one place.";
 
 /**
  * How a field's value is addressed in this form.
@@ -910,9 +904,7 @@ export function SetupDialog({
             <span className="col" style={{ gap: 4 }}>
               {rotate && <span>{rotate}</span>}
               <span className="t-caption">
-                Mint a new token at {title}, type it over the one this form holds, and save. The
-                engine seals it and re-activates the configuration, so every agent picks it up
-                without a restart.
+                Create a new token in {title}, paste it here and save. No restart needed.
               </span>
             </span>
           </Callout>
@@ -934,14 +926,9 @@ export function SetupDialog({
           // strip carries IS an address, and the glyph is the half of the
           // sentence a reader sees first.
           <Callout key={sectionKey(section)} variant="neutral" icon={<LinkGlyph size="md" />}>
-            <span className="col" style={{ gap: 4 }}>
-              <span>
-                Deliveries arrive at <InlineCode>{section.tool.public_url}</InlineCode>
-              </span>
-              <span className="t-caption">
-                This engine registers no webhook for {section.name}, so paste that address into{" "}
-                {section.name}&apos;s own settings yourself.
-              </span>
+            <span>
+              Add <InlineCode>{section.tool.public_url}</InlineCode> to {section.name}’s webhook
+              settings.
             </span>
           </Callout>
         ))}
@@ -1085,25 +1072,12 @@ export function SetupDialog({
             only where there is a credential to keep somewhere: a form with
             no secret on it has nothing this offers.
 
-            ONE LINE, with the reasoning behind an icon. A paragraph at the
-            foot of a form is read once and then never again, and it competes
-            with the fields for the same attention; the sentence that says
-            what to do is short enough to skim past, and why it is worth
-            doing is there for whoever wants it. */}
+            ONE LINE. A paragraph at the foot of a form is read once and then
+            never again, and it competes with the fields for the same
+            attention; the sentence that says what to do is short enough to
+            skim past. */}
         {shown.some((r) => r.kind === "secret") && (
           <p className="int-form-note">
-            {/* THE MARK BEFORE THE SENTENCE, so the line reads as an aside
-                from its first character rather than ending in an icon
-                somebody has to go back for.
-
-                A SPAN CARRIES THE TOOLTIP, not the icon: the svg is
-                aria-hidden, and a `title` ATTRIBUTE on an svg is not the
-                `<title>` CHILD that draws one, so the hover would be silently
-                absent. The same words reach a screen reader as text. */}
-            <span className="int-form-why" title={WHY_SECRETS}>
-              <InfoGlyph size="sm" />
-              <span className="sr-only">{WHY_SECRETS}</span>
-            </span>
             <span>
               Tip: keep credentials in{" "}
               <a className="prose-link" href={href(["settings", "secrets"])}>

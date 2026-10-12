@@ -811,7 +811,9 @@ export function DataGrid<T>({
   // draw at all, which with bands means no band either.
   if (flat.length === 0 && !bands?.length && empty) {
     return (
-      <div className="grid-wrap">
+      // FLUSH WHEN EMPTY TOO: the card is still the frame, and an empty state
+      // drawn in a bordered wrap was a box inside the card's own border.
+      <div className="grid-wrap" data-flush={flush || undefined}>
         {/* `compact` IS OUR `inline`: an empty state inside a panel rather
             than across a screen. The mark is left to theirs when a screen
             names none — their default is the same inbox drawing ours was. */}

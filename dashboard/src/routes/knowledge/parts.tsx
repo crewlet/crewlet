@@ -12,7 +12,8 @@
  * that seat, with the face the chart gives it ([usePeople]), and anything else
  * is a login, drawn as its own words. There is no second name beside the
  * author to prefer over it, so a page's author, its last save and its activity
- * can never name one person three ways. The page reader rebuilt every badge
+ * can never name one person three ways; a change the engine itself made names
+ * nobody and is drawn as the engine ([changedBy]). The page reader rebuilt every badge
  * from a name and a kind, which dropped each agent's own character and drew a
  * seat the chart no longer holds as an agent.
  *
@@ -37,6 +38,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href, useNavigator, useRoute } from "~/app/router.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { plural } from "~/lib/format.ts";
+import { plainText } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useSeatBadgeOf, type SeatBadge } from "~/lib/seats.ts";
@@ -53,11 +55,13 @@ import type { QueryErrorCode } from "~/contract/errors.ts";
 import { PAGE_CHANGES } from "~/contract/pages.ts";
 import type {
   LogRefusal,
+  PageChange,
   PageContainer,
   PageStatus,
   QueryRefusal,
   SearchMode,
 } from "~/protocol/index.ts";
+import { repeatsTitle } from "./page/body.ts";
 
 /** How often the spaces are read again: a space is created by a config apply. */
 export const SPACES_POLL_MS = 60_000;
@@ -99,6 +103,32 @@ const CHANGE_WORDS = new Map<string, { verb: string; phrase: string }>(
  */
 export function changeWords(kind: string): { verb: string; phrase: string } {
   return CHANGE_WORDS.get(kind) ?? { verb: kind, phrase: kind };
+}
+
+/**
+ * The note a change carries under who made it, as the prose it renders to, or
+ * "" when it has none worth drawing: what a save's writer said it changed, a
+ * comment's words, a new page's first line.
+ *
+ * NEVER THE TITLE AGAIN. A new page's excerpt is the body's first line, and a
+ * seat opens a page with `# {title}` more often than not, so a row named the
+ * page and then named it again as its note. Such a note is dropped rather than
+ * replaced: the line under it is in the page, and a feed carries no body to
+ * read it from.
+ */
+export function changeNote(change: Pick<PageChange, "excerpt" | "title">): string {
+  const note = plainText(change.excerpt ?? "");
+  return repeatsTitle(note, change.title ?? "") ? "" : note;
+}
+
+/**
+ * Who made a change, as the one name a row draws: the name the record carries
+ * (`iam.ActorFor`), a seat's handle or a credential's login, and "" for the
+ * engine's own change, which a row draws as the engine rather than as the name
+ * it writes under.
+ */
+export function changedBy(change: Pick<PageChange, "actor" | "actor_kind">): string {
+  return change.actor_kind === "system" ? "" : (change.actor ?? "");
 }
 
 /** A seat's face, sized for a line of text, and named by the words beside it. */
@@ -151,20 +181,12 @@ export function PageTags({
         </Tag>
       )}
       {status === "trashed" && (
-        <Tag
-          size="xs"
-          variant="neutral"
-          title="In the trash: listed nowhere and found by no search"
-        >
+        <Tag size="xs" variant="neutral" title="In the trash, hidden from search">
           Trashed
         </Tag>
       )}
       {skill && (
-        <Tag
-          size="xs"
-          appearance="outline"
-          title="Machinery the engine offers a phase, not prose to read"
-        >
+        <Tag size="xs" appearance="outline" title="Instructions for agents">
           Tool skill
         </Tag>
       )}

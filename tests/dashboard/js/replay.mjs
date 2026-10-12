@@ -393,21 +393,21 @@ if (!health || !health.posture) {
       "of rotation would read exactly like one serving",
   );
 }
-// THE FLEET AND ITS ALARMS, which the sidebar's health card draws from the
-// push rather than from a request of its own: how many nodes are live, and how
-// many alarms stand and how bad the worst is. The capture's company has never
+// THE FLEET AND ITS ALARMS, which the sidebar's engine panel draws from the
+// push rather than from a request of its own: how many nodes are live, how many
+// alarms stand, and which has stood longest. The capture's company has never
 // taken a backup, so at least one alarm stands.
 if (!health || typeof health.nodes !== "number" || health.nodes < 1) {
   problems.push(
     `the health slice counts no live nodes (${JSON.stringify(health && health.nodes)}): ` +
-      "the health card cannot say how big the fleet is",
+      "the engine panel cannot say how big the fleet is",
   );
 }
 const alarms = health && health.alarms;
 if (!alarms || typeof alarms.count !== "number" || alarms.count < 1 || !alarms.worst) {
   problems.push(
     `the health slice carries no standing alarm (${JSON.stringify(alarms)}) on a ` +
-      "company that has never taken a backup: the health card reads as clear",
+      "company that has never taken a backup: the engine panel reads as clear",
   );
 }
 

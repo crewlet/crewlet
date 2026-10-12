@@ -499,6 +499,42 @@ func TestAHealthyNodeReportsNoStrandedSeats(t *testing.T) {
 	}
 }
 
+// A DUTY BEHIND ITS BEAT IS ON THE HEALTH BODY, with how far behind it is:
+// the time since its last beat, which climbs towards the lease TTL at which
+// the watchdog ends the process.
+func TestAStalledDutyIsReportedWithHowFarBehindItIs(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{
+		Runtime: &fakeRuntime{state: api.RuntimeState{
+			Posture: "serve", Seats: []string{"ceo"}, StallLag: 31 * time.Second,
+		}},
+		Sources: queries.Sources{Company: active(t)},
+	})
+	_, body := get(t, a, "/health")
+	if body["stall_lag_seconds"] != float64(31) {
+		t.Errorf("stall_lag_seconds = %v, want 31", body["stall_lag_seconds"])
+	}
+}
+
+// And absent on a node whose duty is on its beat, so a reader alerting on its
+// presence fires on a node falling behind and on no other. The watchdog reads
+// a duty on its beat as zero ([seat.Watchdog.Lag]); this is the half that
+// leaves zero out.
+func TestAHealthyNodeReportsNoStallLag(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{
+		Runtime: &fakeRuntime{state: api.RuntimeState{
+			Posture: "serve", Seats: []string{"ceo"},
+		}},
+		Sources: queries.Sources{Company: active(t)},
+	})
+	_, body := get(t, a, "/health")
+	if _, present := body["stall_lag_seconds"]; present {
+		t.Errorf("stall_lag_seconds = %v on a node whose duty is on its beat",
+			body["stall_lag_seconds"])
+	}
+}
+
 func TestHealthStaysOKThroughADrain(t *testing.T) {
 	t.Parallel()
 	// An orchestrator watching liveness must not SIGKILL a node that is

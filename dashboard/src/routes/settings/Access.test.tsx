@@ -345,17 +345,17 @@ test("a managed document names its writers beside the tokens", async () => {
       : null,
   );
   mount();
-  const line = (await screen.findByText(/The company document is managed/)).closest("span");
+  const line = (await screen.findByText(/can change the company document/)).closest("span");
   expect(line?.textContent).toMatch(
-    /only the tokens gitops, ci may change it \(api\.auth\.company_writers\)/,
+    /^Only gitops, ci can change the company document \(api\.auth\.company_writers\)\./,
   );
-  expect(line?.textContent).toMatch(/Every other credential — a person’s session/);
+  expect(line?.textContent).toMatch(/Every other credential, sessions and machine tokens included/);
   cleanup();
 
   stubIam();
   mount();
   await screen.findAllByText("token:spare");
-  expect(screen.queryByText(/The company document is managed/)).toBeNull();
+  expect(screen.queryByText(/can change the company document/)).toBeNull();
 });
 
 // A REFUSED DIRECTORY IS NOT AN EMPTY COMPANY: the reader sees the refusal and

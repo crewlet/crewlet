@@ -72,10 +72,6 @@ export function KeyLegend({ onClose }: { onClose: () => void }) {
             );
           })}
         </div>
-        <Text as="p" variant="caption" tone="secondary">
-          A key without Ctrl or Command waits while you are typing in a field, and every key on the
-          page waits while a dialog or a menu is open — Escape then closes what is on top.
-        </Text>
       </div>
     </Modal>
   );

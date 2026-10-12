@@ -171,7 +171,7 @@ describe("the panel, as data", () => {
     const p = panel({ data: listing([], { census: { active: 0, archived: 0 } }) });
     expect(p.message).toEqual({
       title: "No projects yet",
-      body: "A project appears when a team or a seat in the org gets a tracker project key.",
+      body: "Create one with New project.",
     });
     expect(p.footer.map((o) => o.id)).toEqual(["new"]);
   });
@@ -179,7 +179,7 @@ describe("the panel, as data", () => {
   test("a company that archived every project is told where they are", () => {
     const p = panel({ data: listing([], { census: { active: 0, archived: 3 } }) });
     expect(p.message?.title).toBe("No active projects");
-    expect(p.message?.body).toBe("Every project is archived. They are listed under Projects.");
+    expect(p.message?.body).toBe("Archived projects are under Projects.");
     expect(p.footer.map((o) => o.id)).toEqual(["browse", "new"]);
   });
 
@@ -187,7 +187,7 @@ describe("the panel, as data", () => {
     const p = panel({
       data: listing(FAIRSPLIT, { truncated: true, census: { active: 340, archived: 0 } }),
     });
-    expect(p.note).toBe("5 of 340 listed. Type to search all of them.");
+    expect(p.note).toBe("5 of 340. Type to search.");
     expect(p.pinned?.meta).toBe("10+");
     expect(figuresOf(listing(FAIRSPLIT, { truncated: true })).open).toBe("10+");
   });

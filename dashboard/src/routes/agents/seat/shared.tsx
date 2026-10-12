@@ -13,6 +13,7 @@ import { href } from "~/app/router.tsx";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { configValueKind } from "~/lib/format.ts";
 import {
+  handleLabel,
   isOwnSeat,
   RUNTIME_GRANT,
   type Seat,
@@ -34,12 +35,14 @@ import type { CompanyDocument, LogRefusal, QueryRefusal } from "~/protocol/index
  * "No company configuration is active" about a company running beside it.
  *
  * `QueryState` covers a refused or failed read, which includes the guarded
- * banner with its Set token button. The three states after it are this
+ * banner with its Sign in button. The three states after it are this
  * screen's own: no configuration is active — only ever an ANSWER, a read that
- * came back with no document — the document has no seat by this name (the
+ * came back with no document — the document has no seat by this HANDLE (the
  * projection and the document can disagree for a moment either side of an
- * apply), and a name held by two seats — unique names are an admission rule an
- * apply does not refuse, so a revision a newer node activated can hold two.
+ * apply), and a handle held by two seats, which only a document this engine
+ * did not write can carry ([seatSettings]). Both are about the handle the
+ * document finds a seat by, never the name, which two seats may share: said
+ * by name, the second sent a reader to rename a seat, which moves no handle.
  *
  * NONE OF THEM IS AN EMPTY VALUE. "Not set" over a field nobody was allowed to
  * read is a statement about the company, and it is the wrong one.
@@ -93,7 +96,7 @@ export function SettingsState({
         size="compact"
         icon={<KeyGlyph size={32} />}
         title="No company configuration is active"
-        description="This seat's settings live in the company document, and none is active on this engine."
+        description="Import a company to see its settings."
       />
     );
   }
@@ -102,8 +105,8 @@ export function SettingsState({
       <EmptyState
         size="compact"
         icon={<KeyGlyph size={32} />}
-        title={`The active configuration has no seat named ${seat.name}`}
-        description="The org chart and the configuration can disagree for a moment while a new revision is applied."
+        title={`The active configuration has no seat ${handleLabel(seat.handle)}`}
+        description="Try again in a moment."
       />
     );
   }
@@ -112,8 +115,8 @@ export function SettingsState({
       <EmptyState
         size="compact"
         icon={<KeyGlyph size={32} />}
-        title={`More than one seat is named ${seat.name}`}
-        description="The active revision holds two seats with this name, so its settings cannot be attributed to one of them. Rename one of the seats to fix it."
+        title={`More than one seat has the handle ${handleLabel(seat.handle)}`}
+        description="Replace one of them in Edit org."
       />
     );
   }

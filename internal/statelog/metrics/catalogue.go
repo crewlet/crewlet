@@ -625,8 +625,8 @@ func Catalogue() []Instrument {
 			Name: AlarmActive, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"kind"},
 			Shows: "Whether each named alarm is firing right now, 0 or 1 — " +
-				"for one raised once per log, whether it is firing on any; " +
-				"the log line and the screen say which. It is the same table " +
+				"for one that stands on several logs, whether it stands on " +
+				"any; its `domains` and its log lines say which. It is the same table " +
 				"the operator record renders and the CLI exits non-zero on, " +
 				"so a collector and a person see one answer.",
 		},

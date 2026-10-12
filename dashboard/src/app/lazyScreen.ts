@@ -107,9 +107,7 @@ export class ChunkLoadError extends Error {
   readonly advice: string;
   constructor(chunk: Chunk, cause: unknown) {
     const title = `The ${chunkLabel(chunk)} screens could not be loaded`;
-    const advice =
-      "This page is probably from another engine version — the engine was upgraded " +
-      "since this tab opened — so reload it to get the current one.";
+    const advice = "The engine was updated. Reload to continue.";
     super(`${title}. ${advice}`, { cause });
     this.chunk = chunk;
     this.title = title;

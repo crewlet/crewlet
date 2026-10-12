@@ -109,10 +109,7 @@ export function CreateCompany({
 
   return (
     <Card as="section">
-      <Card.Header
-        icon={<NetworkGlyph size="sm" />}
-        subtitle="the charter, a shape to start from, and your own seat"
-      >
+      <Card.Header icon={<NetworkGlyph size="sm" />}>
         <Card.Title>Create the company</Card.Title>
       </Card.Header>
       <div className="col gap-4 measure">
@@ -130,7 +127,7 @@ export function CreateCompany({
           value={mission}
           onChange={setMission}
           disabled={disabled}
-          help="What the company is for. Every agent reads it."
+          help="Every agent reads it."
         />
 
         <div className="col gap-1">
@@ -160,8 +157,8 @@ export function CreateCompany({
             />
             <span className="t-caption">
               {leads === "people"
-                ? "Each unit lead is a human seat, created with no contact identity: until one is added in its editor, no agent can mention that person."
-                : "Each unit lead is an agent seat the engine runs."}
+                ? "Each team lead is a person, with no contact identity until you add one, so no agent can mention them yet."
+                : "Each team lead is an agent."}
             </span>
           </div>
         )}
@@ -169,7 +166,7 @@ export function CreateCompany({
         <Checkbox
           framed
           label="Add a seat for yourself"
-          description="A human seat at the top of the organization, so agents can reach you and escalate to you. It is the seat you will hold: every person holds one, and once the company exists you invite or create yourself on it from the org chart."
+          description="At the top, so agents can reach you. It’s the seat you’ll hold: once the company exists, invite or create yourself on it from the org chart."
           checked={ownSeat}
           onCheckedChange={setOwnSeat}
           disabled={disabled}
@@ -181,7 +178,7 @@ export function CreateCompany({
               value={seatName}
               onChange={setSeatName}
               disabled={disabled}
-              help="The seat is named for the role, not the person: it outlives whoever holds it."
+              help="Name the role, not the person."
             />
             <ConfigField
               label="How agents reach you"
@@ -229,7 +226,7 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
     <Card as="section">
       <Card.Header
         icon={<CheckGlyph size="sm" />}
-        subtitle="two steps the dashboard cannot take for you"
+        subtitle="two steps left"
         actions={
           <Button size="small" variant="ghost" onClick={onDismiss}>
             Dismiss
@@ -241,9 +238,6 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
       <div className="col gap-3">
         <div className="col gap-1">
           <strong>Connect chat and trackers</strong>
-          <span className="t-caption">
-            Agents reach people and work through the company's integrations.
-          </span>
           <div className="row">
             <ButtonLink variant="secondary" size="small" href={href(screenPath("integrations"))}>
               Open Integrations
@@ -253,10 +247,8 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
         <div className="col gap-1">
           <strong>Add a model provider</strong>
           <span className="t-caption">
-            Until one is configured no agent seat takes a turn, and work sent to a seat waits on its
-            inbox until it is. No dashboard screen writes <InlineCode>providers.llm</InlineCode>.
-            Seal the key first with <InlineCode>crewlet secrets set ANTHROPIC_API_KEY</InlineCode>,
-            then either import a company file or patch the configuration:
+            Agents can’t work until one is added. Seal the key with{" "}
+            <InlineCode>crewlet secrets set ANTHROPIC_API_KEY</InlineCode>, then add the provider:
           </span>
           <CodeBlock plain wrap code={PROVIDER_SNIPPET} />
         </div>

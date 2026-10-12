@@ -249,7 +249,7 @@ test("a title already taken in the space is said, and holds both presses", async
   // SAID UNDER THE FIELD, and again as the reason both presses are held.
   await waitFor(() =>
     expect(
-      screen.getAllByText(/A page called “Deploy runbook” already exists in Engineering/).length,
+      screen.getAllByText(/“Deploy runbook” already exists in Engineering/).length,
     ).toBeGreaterThan(0),
   );
   expect(screen.getByRole("link", { name: "Open it" }).getAttribute("href")).toBe(

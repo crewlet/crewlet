@@ -855,3 +855,25 @@ test("a flush grid marks its wrap, and the default does not", () => {
   );
   expect(framed.container.querySelector(".grid-wrap")!.hasAttribute("data-flush")).toBe(false);
 });
+
+// AN EMPTY FLUSH GRID IS STILL THE CARD'S BODY. The empty state is drawn in a
+// wrap of its own, and that wrap lost the attribute: an agent table with
+// nothing to list drew its empty state in a bordered box inside the card.
+test("a flush grid's empty state keeps the mark, and the default's does not", () => {
+  const columns = [{ key: "id", header: "Id", cell: (r: Row) => r.id }];
+  const empty = { title: "Nothing here" };
+  const flush = render(
+    <Router>
+      <DataGrid<Row> rows={[]} rowKey={(r) => r.id} columns={columns} empty={empty} flush />
+    </Router>,
+  );
+  expect(screen.getByText("Nothing here")).toBeTruthy();
+  expect(flush.container.querySelector(".grid-wrap")!.hasAttribute("data-flush")).toBe(true);
+  cleanup();
+  const framed = render(
+    <Router>
+      <DataGrid<Row> rows={[]} rowKey={(r) => r.id} columns={columns} empty={empty} />
+    </Router>,
+  );
+  expect(framed.container.querySelector(".grid-wrap")!.hasAttribute("data-flush")).toBe(false);
+});

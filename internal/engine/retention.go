@@ -296,17 +296,17 @@ func (e *Engine) RetentionReport(ctx context.Context) (statelog.Report, bool) {
 	return r.Report(ctx), true
 }
 
-// Alarms is this node's standing alarms as its latest evaluation found them,
-// the longest-standing first ([statelog.Tracker.Standing]), and false where no
-// evaluation has run: a node mid-boot, or one running no state log, which has
-// no alarm table to evaluate.
+// Alarms is the kinds this node's latest evaluation found standing, one per
+// kind however many logs it stands on and the longest-standing first
+// ([statelog.Tracker.Standing]), and false where no evaluation has run: a node
+// mid-boot, or one running no state log, which has no alarm table to evaluate.
 //
 // THE EVALUATION THE GAUGE AND THE LOG WERE FED, never a fresh report. The
 // health envelope reads this on every probe and every push tick, and a report
 // assembled there would be a second evaluation per caller — the cost scaling
 // with how many tabs are open, and the count on the screen able to disagree
 // with the alarm line the log just wrote.
-func (e *Engine) Alarms() ([]statelog.StandingAlarm, bool) {
+func (e *Engine) Alarms() ([]statelog.Kind, bool) {
 	tracker := e.alarms.Load()
 	if tracker == nil {
 		return nil, false

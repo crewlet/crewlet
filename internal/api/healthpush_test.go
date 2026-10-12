@@ -103,10 +103,7 @@ func TestTheHealthPushIsTheWholeEnvelope(t *testing.T) {
 			StallLag: 7 * time.Second,
 		}, fleet: api.FleetState{
 			LiveNodes: &nodes,
-			Alarms: []statelog.StandingAlarm{
-				{Kind: statelog.KindWALLarge, Domain: "tracker"},
-				{Kind: statelog.KindApplyLag, Domain: "pages"},
-			},
+			Alarms:    []statelog.Kind{statelog.KindWALLarge, statelog.KindApplyLag},
 		}},
 	})
 	a.Start(t.Context())
@@ -136,9 +133,9 @@ func TestTheHealthPushIsTheWholeEnvelope(t *testing.T) {
 // COUNTS, NEVER ROWS — the envelope is public.
 //
 // GET /health is a probe and unguarded, so what it says about the fleet and
-// the alarm table is a number and one name — the longest-standing alarm and,
-// for one kept per log, which log. Which nodes hold what, and what each alarm
-// measured, are the `fleet` and `work_retention` answers, behind their grants.
+// the alarm table is a number and one name: the longest-standing alarm's kind.
+// Which nodes hold what, which logs an alarm stands on and what each alarm
+// measured are the `fleet` and `work_retention` answers, behind their grants.
 //
 // Mutation: carry the alarms' details or the node rows on the envelope, and
 // this fails.
@@ -149,9 +146,7 @@ func TestAnAnonymousHealthReadCarriesCountsOnly(t *testing.T) {
 		Sources: queries.Sources{Company: active(t)},
 		Runtime: &fakeRuntime{state: api.RuntimeState{Posture: "serve"}, fleet: api.FleetState{
 			LiveNodes: &nodes,
-			Alarms: []statelog.StandingAlarm{
-				{Kind: statelog.KindBackupAge, Domain: "tracker"},
-			},
+			Alarms:    []statelog.Kind{statelog.KindBackupAge},
 		}},
 	})
 	_, body := get(t, a, "/health")
@@ -160,9 +155,9 @@ func TestAnAnonymousHealthReadCarriesCountsOnly(t *testing.T) {
 	}
 	alarms, _ := body["alarms"].(map[string]any)
 	if got := slices.Sorted(maps.Keys(alarms)); !slices.Equal(got,
-		[]string{"count", "worst", "worst_domain"}) {
-		t.Errorf("an anonymous read's alarms carry %v, want only the count, the "+
-			"worst's name and its log", got)
+		[]string{"count", "worst"}) {
+		t.Errorf("an anonymous read's alarms carry %v, want only the count and "+
+			"the worst's name", got)
 	}
 }
 
@@ -203,33 +198,29 @@ func TestTheNodeCountIsAbsentWhenPresenceCannotBeRead(t *testing.T) {
 // THE ALARM COUNT IS THE STANDING ALARMS', and "not evaluated" is not zero.
 //
 // The runtime hands the envelope the evaluation the gauge and the log were
-// fed, longest-standing first, one entry per log for an alarm kept per log
-// (the engine half of this is `engine.TestTheAlarmCountEqualsTheRetentionAlarms`).
-// Here: the count is its length, the worst is its head — the kind AND the log
-// it fired on, since two logs' alarms of one kind are two conditions — and a
-// node that has not evaluated its table says nothing rather than `{count: 0}`,
-// which a health card reads as healthy.
+// fed, longest-standing first, one entry per kind however many logs it stands
+// on (the engine half of this is `engine.TestTheHealthAlarmsAreTheRetentionAlarms`).
+// Here: the count is its length, the worst is its head, and a node that has not
+// evaluated its table says nothing rather than `{count: 0}`, which a health
+// card reads as healthy.
 //
-// Mutation: report the last kind as the worst, drop the worst's log, or send
-// `{count: 0}` for a nil reading, and this fails.
+// Mutation: report the last kind as the worst, or send `{count: 0}` for a nil
+// reading, and this fails.
 func TestTheAlarmCountIsTheStandingAlarms(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		what   string
-		alarms []statelog.StandingAlarm
+		alarms []statelog.Kind
 		want   map[string]any
 	}{
 		{"no evaluation yet", nil, nil},
-		{"evaluated, nothing firing", []statelog.StandingAlarm{},
+		{"evaluated, nothing firing", []statelog.Kind{},
 			map[string]any{"count": float64(0)}},
-		{"two firing, one per log", []statelog.StandingAlarm{
-			{Kind: statelog.KindWALLarge, Domain: "tracker"},
-			{Kind: statelog.KindWALLarge, Domain: "pages"},
-		}, map[string]any{"count": float64(2), "worst": "wal_large",
-			"worst_domain": "tracker"}},
-		{"one about the node as a whole", []statelog.StandingAlarm{
-			{Kind: statelog.KindHistoryPartial},
-		}, map[string]any{"count": float64(1), "worst": "history_partial"}},
+		{"two firing, the longest-standing first", []statelog.Kind{
+			statelog.KindTrimBlocked, statelog.KindWALLarge,
+		}, map[string]any{"count": float64(2), "worst": "trim_blocked"}},
+		{"one firing", []statelog.Kind{statelog.KindHistoryPartial},
+			map[string]any{"count": float64(1), "worst": "history_partial"}},
 	} {
 		a := newApp(t, api.Options{Runtime: &fakeRuntime{
 			state: api.RuntimeState{Posture: "serve"},
@@ -262,10 +253,8 @@ func TestTheAlarmCountIsTheStandingAlarms(t *testing.T) {
 func TestAWedgedPresenceReadDoesNotHangTheProbes(t *testing.T) {
 	t.Parallel()
 	runtime := &fakeRuntime{
-		state: api.RuntimeState{Posture: "serve"},
-		fleet: api.FleetState{Alarms: []statelog.StandingAlarm{
-			{Kind: statelog.KindBackupAge, Domain: "tracker"},
-		}},
+		state:         api.RuntimeState{Posture: "serve"},
+		fleet:         api.FleetState{Alarms: []statelog.Kind{statelog.KindBackupAge}},
 		presenceHangs: true,
 	}
 	a := newApp(t, api.Options{Sources: queries.Sources{Company: active(t)}, Runtime: runtime})

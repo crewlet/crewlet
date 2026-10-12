@@ -71,7 +71,7 @@ A value that goes both ways, sampled at each export.
 | `crewlet.store.bytes` | `By` | `file` | The store's size on disk, which the snapshot's free-space precondition and the provisioning rule are both derived from. |
 | `crewlet.tracker.search.concurrency` | `1` | — | Searches in flight, which is the row of the supported-corpus table this node is actually on: inside the one-second budget, about 345 000 sources with one running and about 136 000 with eight through the full scan, and about 545 000 and 183 000 through an index probing half its lists. |
 | `crewlet.tracker.vector.coverage` | `1` | — | The fraction of sources carrying a current vector. It is how a stalled embedding backlog is reported, since it never drops a seat. Absent where the company configures no embeddings and while the corpus cannot be measured — an unreadable corpus is neither covered nor uncovered. |
-| `crewlet.alarm.active` | `1` | `kind` | Whether each named alarm is firing right now, 0 or 1 — for one raised once per log, whether it is firing on any; the log line and the screen say which. It is the same table the operator record renders and the CLI exits non-zero on, so a collector and a person see one answer. |
+| `crewlet.alarm.active` | `1` | `kind` | Whether each named alarm is firing right now, 0 or 1 — for one that stands on several logs, whether it stands on any; its `domains` and its log lines say which. It is the same table the operator record renders and the CLI exits non-zero on, so a collector and a person see one answer. |
 
 ## Counters
 

@@ -36,6 +36,7 @@ import {
   conversationLabel,
   tsKey,
   fmtElapsed,
+  fmtUptime,
 } from "./format.ts";
 
 describe("timestamps", () => {
@@ -255,6 +256,27 @@ describe("counts and their nouns", () => {
 
   test("a large count is grouped", () => {
     expect(plural(12000, "event")).toBe(`${(12000).toLocaleString()} events`);
+  });
+});
+
+describe("an uptime is said coarsely", () => {
+  test("seconds, then minutes, then hours and minutes, then days", () => {
+    expect(fmtUptime(12_000)).toBe("12s");
+    expect(fmtUptime(59_999)).toBe("59s");
+    // A panel open past the first minute stops ticking through seconds.
+    expect(fmtUptime(61_000)).toBe("1m");
+    expect(fmtUptime(3_599_000)).toBe("59m");
+    expect(fmtUptime(3_600_000)).toBe("1h");
+    expect(fmtUptime(3_780_000)).toBe("1h 3m");
+    expect(fmtUptime(86_399_000)).toBe("23h 59m");
+    expect(fmtUptime(86_400_000)).toBe("1 day");
+    expect(fmtUptime(2 * 86_400_000 + 3_600_000)).toBe("2 days");
+  });
+
+  test("a start in the future is a clock skew, and nothing is not a zero", () => {
+    expect(fmtUptime(-800)).toBe("0s");
+    expect(fmtUptime(Number.NaN)).toBe(fmtUptime(null));
+    expect(fmtUptime(null)).not.toBe("0s");
   });
 });
 

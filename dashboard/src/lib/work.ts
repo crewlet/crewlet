@@ -1237,9 +1237,9 @@ function checklistClauses(from: string, to: string): string[] | null {
       out.push(`took ${n} ${n === 1 ? "item" : "items"} off ${name}`);
     }
     if (now.done > was.done && now.total === was.total) {
-      out.push(`ticked ${now.done - was.done} on ${name} — ${now.done} of ${now.total} done`);
+      out.push(`ticked ${now.done - was.done} on ${name}, ${now.done} of ${now.total} done`);
     } else if (now.done < was.done && now.total === was.total) {
-      out.push(`unticked ${was.done - now.done} on ${name} — ${now.done} of ${now.total} done`);
+      out.push(`unticked ${was.done - now.done} on ${name}, ${now.done} of ${now.total} done`);
     }
     if (now.promoted > was.promoted) {
       const n = now.promoted - was.promoted;

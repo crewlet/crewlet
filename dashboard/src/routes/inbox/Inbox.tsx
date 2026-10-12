@@ -325,14 +325,12 @@ export function Inbox() {
           three, which is why the screen is not simply locked. */}
       {viewer.anonymous ? (
         <Callout variant="warning" className="inbox-callout">
-          Nobody is signed in, so this browser is nobody. The conditions below are the
-          engine&rsquo;s; your own updates and decisions appear once you sign in.
+          Nobody is signed in. Sign in to see your updates and decisions.
         </Callout>
       ) : viewer.unbound ? (
         <Callout variant="info" className="inbox-callout">
-          You are <code className="inline">{viewer.login}</code> and not bound to a seat, so the
-          updates below are the ones kept under that login: what you follow and what names you.{" "}
-          <UnboundRemedy login={viewer.login} />
+          You are <code className="inline">{viewer.login}</code> and not bound to a seat, so these
+          are the updates kept under that login. <UnboundRemedy login={viewer.login} />
         </Callout>
       ) : null}
 
@@ -419,11 +417,6 @@ export function Inbox() {
           />
         )}
       </div>
-      {!bound && !viewer.loading && (
-        <p className="t-caption inbox-nobody">
-          Signed in, this screen also shows what reached you and what waits on your decision.
-        </p>
-      )}
     </div>
   );
 }

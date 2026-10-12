@@ -140,6 +140,8 @@ function emptyState() {
 		budget: null,
 		schedules: null,
 		connected: false,
+		lostAt: null,
+		everConnected: false,
 		authRejected: false,
 		accessRefused: null,
 		inboxMoves: {}
@@ -362,13 +364,25 @@ var Store = class {
 	}
 	applyHealth(health) {
 		this.state.health = health ?? null;
-		this.state.connected = !!health;
+		this.link(!!health);
 		this.emit("health");
 	}
 	setConnected(value) {
-		this.state.connected = value;
+		this.link(value);
 		if (!value) this.state.health = null;
 		this.emit("health");
+	}
+	/**
+	* The transport's state, and the two facts about its history the frame
+	* reads (`lostAt`, `everConnected`), written in ONE place so a health frame
+	* and the socket's own open and close cannot disagree about them.
+	*/
+	link(connected) {
+		this.state.connected = connected;
+		if (connected) {
+			this.state.everConnected = true;
+			this.state.lostAt = null;
+		} else if (this.state.lostAt === null) this.state.lostAt = Date.now();
 	}
 	/**
 	* One seat's inbox moved. The SEAT is read off the payload's own `handle`
@@ -401,10 +415,12 @@ var Store = class {
 		if (this.state.accessRefused === next) return;
 		this.state.accessRefused = next;
 		if (next !== null) {
-			const { health, connected, authRejected } = this.state;
+			const { health, connected, lostAt, everConnected, authRejected } = this.state;
 			Object.assign(this.state, emptyState(), {
 				health,
 				connected,
+				lostAt,
+				everConnected,
 				authRejected,
 				accessRefused: next
 			});
@@ -1042,7 +1058,7 @@ async function attempt(method, path, options) {
 	} catch {
 		throw new RestError(response.ok ? 502 : response.status, {
 			error: "unreadable_body",
-			detail: response.ok ? "the answer was cut short, or is not the engine's JSON" : `a ${response.status} came back that is not the engine's JSON — something in front of it answered`
+			detail: response.ok ? "the answer was cut short, or is not the engine's JSON" : `a ${response.status} came back without the engine's JSON, so something in front of it answered`
 		}, response.ok ? null : retryAfterOf(response));
 	}
 	if (!response.ok && response.status !== 304) {
@@ -2605,7 +2621,7 @@ var ACT_ERRORS = {
 	csrf_origin: "The engine refused a change sent from another site. Make it from this page's own address.",
 	unauthorized: "You do not hold what this change needs.",
 	step_up_required: "This change needs you to confirm who you are first.",
-	unknown_tool: "This engine does not make that change. It may be running a different version from this page — reload.",
+	unknown_tool: "This engine does not support that change. It may be running a different version. Reload the page.",
 	read_only_tool: "The dashboard sent a read as a change. Reload; if it persists, it is a bug.",
 	unsupported_media_type: "The dashboard sent the change in a form the engine does not take.",
 	op_id_invalid: "The dashboard sent the change without a usable operation key. Reload; if it persists, it is a bug.",

@@ -91,9 +91,9 @@ export type WriteAccess =
 export const WRITE_REASONS: Readonly<Record<Exclude<WriteBlock, "held">, string>> = {
   refused:
     "The engine is not serving you the company, so nothing in it can be changed here — your Account says what you hold.",
-  offline: "Offline. Reconnect to make changes; nothing is queued while you are away.",
+  offline: "Offline. Reconnect to make changes.",
   loading: "Checking who you are before anything can be changed.",
-  anonymous: "Sign in to make changes: every change is recorded under your name.",
+  anonymous: "Sign in to make changes.",
   not_served: "This engine does not make this change for you.",
 };
 
@@ -244,9 +244,8 @@ export const CONFIG_WRITE_REASONS: Readonly<
   refused: WRITE_REASONS.refused,
   offline: WRITE_REASONS.offline,
   loading: WRITE_REASONS.loading,
-  anonymous: "Sign in to change the company's configuration.",
-  no_grant:
-    "Changing the company's configuration takes the config:write grant, which you do not hold — an administrator who holds people:manage can give it to you.",
+  anonymous: "Sign in to change the configuration.",
+  no_grant: "Needs the config:write grant. An administrator with people:manage can give it to you.",
 };
 
 /**

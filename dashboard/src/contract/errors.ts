@@ -68,7 +68,7 @@ export const ACT_ERRORS = {
   step_up_required: "This change needs you to confirm who you are first.",
   // The transport's own.
   unknown_tool:
-    "This engine does not make that change. It may be running a different version from this page — reload.",
+    "This engine does not support that change. It may be running a different version. Reload the page.",
   read_only_tool: "The dashboard sent a read as a change. Reload; if it persists, it is a bug.",
   unsupported_media_type: "The dashboard sent the change in a form the engine does not take.",
   op_id_invalid:

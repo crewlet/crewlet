@@ -119,11 +119,7 @@ export function Spend() {
           mime="text/csv;charset=utf-8"
           text={() => (rollup ? spendCsv(rollup, lines, `${rollup.from}..${rollup.to}`) : "")}
           disabled={!rollup}
-          title={
-            rollup
-              ? `The rollup and the by-agent table for ${words}, as CSV — tokens only`
-              : "Nothing to export until the window has answered"
-          }
+          title={rollup ? "Download as CSV" : "Nothing to export until the window has answered"}
         />
       </PageActions>
 
@@ -153,7 +149,9 @@ export function Spend() {
             />
             <PhaseChart series={series} group={group} onGroup={setGroup} zone={zone} />
           </div>
-          <div className="spend-mid">
+          {/* WHO SPENT IT, three ways: the seats' table beside the two ranked
+              lists that break the same tokens down by model and by team. */}
+          <div className="spend-pair">
             <ByAgent
               lines={lines}
               loading={tokens.loading}
@@ -163,15 +161,17 @@ export function Spend() {
             />
             <div className="spend-side">
               <ByModel rollup={rollup} loading={tokens.loading} words={words} />
-              <ExpensiveTasksCard
-                since={rollup?.since}
-                until={rollup?.until}
-                window={windowParam(range.window)}
-              />
+              <ByUnit params={params} words={words} />
             </div>
           </div>
+          {/* WHAT IT WAS SPENT ON: the tasks, in the wide track their titles
+              need, beside the auxiliary model's purposes. */}
           <div className="spend-pair">
-            <ByUnit params={params} words={words} />
+            <ExpensiveTasksCard
+              since={rollup?.since}
+              until={rollup?.until}
+              window={windowParam(range.window)}
+            />
             <Workers rollup={rollup} loading={tokens.loading} words={words} />
           </div>
         </div>

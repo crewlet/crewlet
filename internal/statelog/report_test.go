@@ -192,9 +192,12 @@ func TestTheHeadroomAlarmNamesItsDomain(t *testing.T) {
 	if len(fired) != 1 {
 		t.Fatalf("one domain is at 3%% headroom and %d headroom alarm(s) fired", len(fired))
 	}
-	if !strings.HasPrefix(fired[0].Detail, "vectors: ") {
-		t.Errorf("the headroom alarm reads %q and does not name the log that is "+
-			"filling", fired[0].Detail)
+	if d := fired[0].Domains; len(d) != 1 || d[0].Domain != "vectors" {
+		t.Errorf("the headroom alarm names %+v, not the log that is filling", d)
+	}
+	if !strings.Contains(fired[0].Detail, "3%") {
+		t.Errorf("the headroom alarm reads %q, which is not the filling log's measurement",
+			fired[0].Detail)
 	}
 }
 
@@ -226,8 +229,12 @@ func TestTheCeilingShortAlarmNamesItsDomain(t *testing.T) {
 		t.Fatalf("one log is short of its window and %d alarm(s) fired: %v",
 			len(fired), rep.Alarms)
 	}
-	if !strings.HasPrefix(fired[0].Detail, "iam: ") {
-		t.Errorf("the alarm reads %q and does not name the log that is short",
+	if d := fired[0].Domains; len(d) != 1 || d[0].Domain != "iam" {
+		t.Fatalf("the alarm stands on %+v, not the log that is short", d)
+	}
+	if fired[0].Detail != fired[0].Domains[0].Detail ||
+		!strings.Contains(fired[0].Detail, "200.0 MiB a day") {
+		t.Errorf("the alarm reads %q, which is not the short log's measurement",
 			fired[0].Detail)
 	}
 
@@ -326,12 +333,14 @@ func TestAReservedLogsHeadroomIsOfItsOrdinaryCeiling(t *testing.T) {
 	var fired []string
 	for _, a := range rep.Alarms {
 		if a.Kind == statelog.KindLogHeadroom {
-			fired = append(fired, a.Detail)
+			for _, d := range a.Domains {
+				fired = append(fired, d.Domain)
+			}
 		}
 	}
-	if len(fired) != 1 || !strings.HasPrefix(fired[0], "tracker: ") {
-		t.Fatalf("the headroom alarm fired %q, want it on tracker alone — the "+
-			"one within a tenth of the ceiling its writes are refused at", fired)
+	if len(fired) != 1 || fired[0] != "tracker" {
+		t.Fatalf("the headroom alarm stands on %q, want tracker alone: the one "+
+			"within a tenth of the ceiling its writes are refused at", fired)
 	}
 }
 
@@ -599,9 +608,14 @@ func TestABlockedTrimsAlarmReadsWhatTheLogHoldsPastTheWindow(t *testing.T) {
 		t.Fatal("a trim blocked past its window with a hundred records past it " +
 			"raised no trim_blocked, so every silence below proves nothing")
 	}
-	if !strings.Contains(fired.Detail, "keeping up to 100 record(s)") ||
-		!strings.HasPrefix(fired.Detail, "tracker: ") {
-		t.Errorf("the alarm reads %q; it names the log and what it is keeping", fired.Detail)
+	if !strings.Contains(fired.Detail, "keeping up to 100 record(s)") {
+		t.Errorf("the alarm reads %q; it says what the log is keeping", fired.Detail)
+	}
+	// THE LOG AND THE TERM HOLDING IT ride on the log the alarm stands on.
+	if d := fired.Domains; len(d) != 1 || d[0].Domain != "tracker" ||
+		d[0].Term != statelog.TermBackupFloor || !d[0].Since.Equal(old) {
+		t.Errorf("the alarm stands on %+v; want the tracker's log, held by the "+
+			"backup term since %v", d, old)
 	}
 
 	for name, rep := range map[string]statelog.Report{
@@ -630,8 +644,8 @@ func TestABlockedTrimsAlarmReadsWhatTheLogHoldsPastTheWindow(t *testing.T) {
 	}
 }
 
-// A HELD RECORD AND AN UNREADABLE FLOOR ARE EACH LOG'S OWN ALARM, and each
-// says what is true of that log.
+// A HELD RECORD AND AN UNREADABLE FLOOR ARE EACH LOG'S OWN MEASUREMENT, and
+// each says what is true of that log.
 //
 // What the deferral grace does is a log's: past it, a record held on a log that
 // judges this node's copy of the estate has taken the copy out of service and
@@ -661,24 +675,28 @@ func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
 		ReplayWindow: replayWindow,
 		Domains:      []statelog.DomainInputs{identity, work, pages},
 	})
-	byLog := func(kind statelog.Kind) map[string]string {
+	// ONE ALARM PER KIND, listing each log with that log's own measurement,
+	// so the tracker raises and clears a line pair per log while the count
+	// and the gauge say one.
+	byLog := func(kind statelog.Kind) (statelog.Alarm, map[string]string) {
+		var alarm statelog.Alarm
 		out := map[string]string{}
 		for _, a := range rep.Alarms {
 			if a.Kind != kind {
 				continue
 			}
-			log, detail, _ := strings.Cut(a.Detail, ": ")
-			// THE LOG IS THE ALARM'S IDENTITY, not only its first
-			// word: the tracker raises and clears each on it.
-			if a.Domain != log {
-				t.Errorf("a %s alarm about the %s log carries domain %q", kind, log, a.Domain)
+			if len(alarm.Kind) > 0 {
+				t.Errorf("%s was raised twice: %v", kind, rep.Alarms)
 			}
-			out[log] = detail
+			alarm = a
+			for _, d := range a.Domains {
+				out[d.Domain] = d.Detail
+			}
 		}
-		return out
+		return alarm, out
 	}
 
-	held := byLog(statelog.KindDeferredOld)
+	deferred, held := byLog(statelog.KindDeferredOld)
 	if len(held) != 2 {
 		t.Fatalf("deferred_old was raised for %v; want each of the two logs "+
 			"holding a record past the grace, on its own", held)
@@ -698,7 +716,14 @@ func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
 		}
 	}
 
-	floors := byLog(statelog.KindFloorUnknown)
+	// THE ALARM LEADS WITH THE RECORD HELD LONGEST, which is the identity
+	// log's two hours.
+	if deferred.Detail != held["iam"] {
+		t.Errorf("deferred_old leads with %q; want the identity log's, held longest",
+			deferred.Detail)
+	}
+
+	_, floors := byLog(statelog.KindFloorUnknown)
 	if len(floors) != 1 || !strings.Contains(floors["tracker"], "generation 2") {
 		t.Errorf("floor_unknown was raised for %v; want the tracker's log alone, "+
 			"naming its floor", floors)
@@ -708,12 +733,13 @@ func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
 // THE ALARMS THE REPORT RAISES PER LOG ARE EXACTLY THE ONES THE TABLE FLAGS,
 // in both directions.
 //
-// The flag is what the published reference names them from and what a reader
-// relies on to know an alarm's detail leads with a log and stands once per log.
-// So one log is put at the firing value of every per-log condition beside a
-// node reading that fires one of its own: every alarm the report stamps with a
-// log must be a flagged kind, every flagged kind must be stamped, and nothing
-// the node raises may carry a log.
+// The flag is what the published reference names them from, and what the
+// tracker writes a line pair per log for. So one log is put at the firing value
+// of every per-log condition beside a node reading that fires one of its own:
+// every alarm the report lists a log under must be a flagged kind, every
+// flagged kind must list it, and nothing the node raises may list a log. The
+// one node-wide kind that lists logs is `backup_age`, whose logs are the ones
+// its missing backup holds; this case takes no backup policy, so it is quiet.
 func TestTheAlarmsRaisedPerLogAreTheOnesTheTableFlags(t *testing.T) {
 	t.Parallel()
 	d := healthyDomain("tracker", true)
@@ -750,13 +776,18 @@ func TestTheAlarmsRaisedPerLogAreTheOnesTheTableFlags(t *testing.T) {
 	stamped := map[statelog.Kind]bool{}
 	for _, a := range rep.Alarms {
 		switch {
-		case a.Domain == "" && flagged[a.Kind]:
+		case len(a.Domains) == 0 && flagged[a.Kind]:
 			t.Errorf("%s is flagged per log and was raised with no log: %q", a.Kind, a.Detail)
-		case a.Domain != "" && !flagged[a.Kind]:
-			t.Errorf("%s was raised for the %s log and is not flagged per log, so the "+
-				"reference says nothing of it", a.Kind, a.Domain)
-		case a.Domain != "":
+		case len(a.Domains) > 0 && !flagged[a.Kind]:
+			t.Errorf("%s was raised for the logs %+v and is not flagged per log, so "+
+				"the reference says nothing of it", a.Kind, a.Domains)
+		case len(a.Domains) == 0:
+			// A node-wide alarm, unflagged and listing no log.
+		case len(a.Domains) == 1 && a.Domains[0].Domain == "tracker":
 			stamped[a.Kind] = true
+		default:
+			t.Errorf("%s lists %+v; want the one log this case put at its firing value",
+				a.Kind, a.Domains)
 		}
 	}
 	for kind := range flagged {

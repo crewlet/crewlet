@@ -114,7 +114,7 @@ describe("a lead's draft", () => {
     expect(engine.sent("GET", "/config/units/engineering")).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Editing Engineering as its lead" })).toBeDefined();
     // The draft holds no settings, so it says nothing about the providers.
-    expect(screen.queryByText(/No model provider is configured/)).toBeNull();
+    expect(screen.queryByText(/No model provider is set/)).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Edit Dev" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(2));

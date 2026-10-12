@@ -118,7 +118,7 @@ test("an elided middle is said out loud, never left to be inferred", () => {
       })}
     />,
   );
-  expect(screen.getByText(/47 calls from the middle of this log were dropped/)).toBeTruthy();
+  expect(screen.getByText("47 calls from the middle aren’t shown.")).toBeTruthy();
 });
 
 test("a bridged run that genuinely made no calls still shows nothing", () => {
@@ -411,8 +411,8 @@ test("a run's page keeps asking about a job still being set up", async () => {
     },
   });
   await settle();
-  expect(await screen.findByText(/its box made and provisioned/)).toBeTruthy();
-  expect(screen.queryByText(/no longer running/)).toBeNull();
+  expect(await screen.findByText("Setting up. Output appears when the agent starts.")).toBeTruthy();
+  expect(screen.queryByText(/no longer running|Stopped\. Output appears/)).toBeNull();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 2);
   });
@@ -608,8 +608,10 @@ test("a failed run record is named rather than read as no run", async () => {
     turn: { turn_id: "turn-1", events: [] },
   });
   await settle();
-  expect(screen.queryByText(/Neither the run record nor the turn holds/)).toBeNull();
-  expect(screen.getByText(/The run record could not be read/)).toBeTruthy();
+  expect(screen.queryByText(/The id may be wrong, or the turn is too old/)).toBeNull();
+  expect(
+    screen.getByText("Couldn’t read the run record. Showing what the turn holds."),
+  ).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "No coding run" })).toBeNull();
 });
 
@@ -619,8 +621,8 @@ test("a failed turn is named rather than read as no run", async () => {
     turn: new Error("timeout"),
   });
   await settle();
-  expect(screen.queryByText(/Neither the run record nor the turn holds/)).toBeNull();
-  expect(screen.getByText(/The turn could not be read/)).toBeTruthy();
+  expect(screen.queryByText(/The id may be wrong, or the turn is too old/)).toBeNull();
+  expect(screen.getByText("Couldn’t read the turn. Showing the run record.")).toBeTruthy();
 });
 
 // A TURN WITH NO RUN IS HEADED AS HAVING NONE. "No task was recorded" is a

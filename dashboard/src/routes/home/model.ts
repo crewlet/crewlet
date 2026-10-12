@@ -256,14 +256,13 @@ export function statusSentence(input: {
   // NOBODY IS SIGNED IN: the browser holds a session or nothing, never a token
   // to set, so the repair is the sign-in the frame already offers.
   if (authRejected)
-    return sole("Nobody is signed in on this browser — sign in to read the company.");
-  if (!connected)
-    return sole("Not connected to the engine. What is shown is the last state it sent.");
+    return sole("Nobody is signed in on this browser. Sign in to read the company.");
+  if (!connected) return sole("Not connected. Showing the last state received.");
   if (configured === false) return sole("No configuration is active, so no seat is running.");
   if (posture && ["shed", "stuck", "isolated"].includes(posture)) {
     return sole(
       posture === "shed"
-        ? "This node has released its seats: it cannot reach the configuration it should run."
+        ? "This node released its seats. It can’t reach its configuration."
         : "This node cannot converge on the fleet's active configuration.",
     );
   }

@@ -218,7 +218,7 @@ function AssignDialog({
             label="Why it is theirs now"
             optional
             htmlFor="assign-reason"
-            helper="The new assignee is woken with this line, and the task's history shows it beside the hand-off."
+            helper="Sent to the new assignee and kept in history."
           >
             <Input
               id="assign-reason"
@@ -433,7 +433,7 @@ function EditProjectDialog({
           label="Target date"
           optional
           htmlFor="project-target"
-          helper="The day the project is meant to be finished, on the company's clock. Empty clears it."
+          helper="Company time zone. Leave empty to clear."
         >
           <div className="row gap-2">
             <Input
@@ -610,7 +610,7 @@ function SaveViewDialog({
           checked={mine}
           onChange={(event) => setMine(event.target.checked)}
           label="Only for me"
-          description="Kept in your own strip. Otherwise everybody who opens this list sees it."
+          description="Otherwise everyone sees it."
         />
         <RefusalNote write={write} />
       </div>
@@ -1033,7 +1033,7 @@ function AnswerRunDialog({
         <FormField
           label="Your answer"
           htmlFor="answer-run-text"
-          helper="The run resumes with this as the answer to its question, as the coding agent reads it."
+          helper="The run resumes with your answer."
         >
           <Textarea
             id="answer-run-text"
@@ -1362,7 +1362,7 @@ function AssignToSeatDialog({
                   ) : search.loading ? (
                     "Searching…"
                   ) : search.data && !search.data.available ? (
-                    "This node is still indexing the tracker — try again in a moment"
+                    "Still indexing. Try again shortly."
                   ) : (
                     "No task matches"
                   ))
@@ -1391,7 +1391,7 @@ function AssignToSeatDialog({
           // SAID WHERE IT IS READ, not only on a disabled button's title: the
           // match list offers the seat's own tasks too.
           <p className="t-caption">
-            {chosen.key} is already {name}&rsquo;s — find another task, or file a new one.
+            {chosen.key} is already assigned to {name}.
           </p>
         )}
         {chosen && !theirs && (
@@ -1405,7 +1405,7 @@ function AssignToSeatDialog({
               label="Why it is theirs now"
               optional
               htmlFor="assign-seat-reason"
-              helper={`${name} is woken with this line, and the task's history shows it beside the hand-off.`}
+              helper={`Sent to ${name} and kept in history.`}
             >
               <Input
                 id="assign-seat-reason"
@@ -1524,9 +1524,7 @@ function PauseSeatDialog({
   const [reason, setReason] = useState("");
   const [stop, setStop] = useState(false);
   const long = [...reason.trim()].length > PAUSE_REASON_MAX;
-  const blocked = long
-    ? `A reason is one line — at most ${PAUSE_REASON_MAX} characters.`
-    : undefined;
+  const blocked = long ? `Keep the reason under ${PAUSE_REASON_MAX} characters.` : undefined;
   const submit = async () => {
     // THE BUTTON'S OWN GATE, for the dialog's submit.
     if (!pressable(write, blocked)) return;
@@ -1570,8 +1568,7 @@ function PauseSeatDialog({
     >
       <div className="col gap-3">
         <p className="t-body">
-          {name} starts no new turn until somebody resumes it. Work sent to it waits on its inbox,
-          in order, and its scheduled runs are skipped rather than queued.
+          {name} takes no new turns until resumed. Scheduled runs are skipped.
         </p>
         <FormField
           label="Why"
@@ -1591,8 +1588,8 @@ function PauseSeatDialog({
           label="Also stop the current turn"
           description={
             working
-              ? "Without it, the turn it is on finishes first. Stopped, it ends at its next round, what it had not done is lost, and it is not run again."
-              : "It is not on a turn now. Without it, a turn that starts before the pause lands finishes first."
+              ? "Otherwise the current turn finishes first. Unfinished work is lost."
+              : "It isn’t on a turn now."
           }
         />
         <RefusalNote write={write} />
@@ -1613,16 +1610,13 @@ function PauseSeatDialog({
  * A turn parked on a coding run is inside somebody else's loop — a run it
  * launched, or an executor that runs as a coding agent — which reads no notes,
  * and the engine would answer `steer_unsupported` or `not_running` one press
- * too late. Each reason names what to do instead.
+ * too late. A parked turn's reason names what to do instead.
  */
 function steerBlocked(state: { running: boolean; parked: boolean }): string | undefined {
   if (state.parked) {
-    return (
-      "This turn is waiting inside a coding agent's own loop, which reads no notes. " +
-      "Answer the run, or write on the task."
-    );
+    return "A coding run is working. Answer it, or comment on the task.";
   }
-  if (!state.running) return "The turn has ended — a note reaches only a turn that is running.";
+  if (!state.running) return "The turn has ended.";
   return undefined;
 }
 
@@ -1695,7 +1689,7 @@ function SteerTurnDialog({
     length === 0
       ? "Write the note first."
       : length > STEER_NOTE_MAX_RUNES
-        ? `A note is at most ${STEER_NOTE_MAX_RUNES} characters — write anything longer on the task.`
+        ? `Notes are limited to ${STEER_NOTE_MAX_RUNES} characters.`
         : undefined;
   const submit = async () => {
     if (!pressable(write, blocked)) return;
@@ -1735,7 +1729,7 @@ function SteerTurnDialog({
         <FormField
           label="Note"
           htmlFor="steer-turn-note"
-          helper={`Read at the turn's next round, after the call in flight returns, and kept to for the rest of the turn. ${length} of ${STEER_NOTE_MAX_RUNES} characters.`}
+          helper={`Read at the next round. ${length} of ${STEER_NOTE_MAX_RUNES} characters.`}
         >
           <Textarea
             id="steer-turn-note"

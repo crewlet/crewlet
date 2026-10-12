@@ -140,10 +140,8 @@ type LinkRow = { kind: "task"; t: TaskLink } | { kind: "page"; p: PageLink };
 
 /** Why the answering node sent no list, in a curator's words. */
 const LINKS_STATUS: Record<LinkedFromStatus, string> = {
-  building:
-    "This node is still building its search index, so it cannot yet say what links here. Look again in a few minutes.",
-  unavailable:
-    "This node could not read what links here. Reload, or open the page on another node.",
+  building: "Still indexing. Look again in a few minutes.",
+  unavailable: "Couldn’t load links. Reload to try again.",
 };
 
 /**
@@ -215,7 +213,7 @@ function LinkedFrom({
           {more}
           {total > rows.length && (
             <p className="knowledge-note">
-              {rows.length} of {total}, tasks by key and pages by title.
+              {rows.length} of {total}
             </p>
           )}
         </>
@@ -322,10 +320,7 @@ function ReadBy({
       {reads && reads.elided > 0 && (
         // THE CAP IS STATED, never silent, and COMPANY-WIDE: the engine counts
         // what the cap dropped across every page, so the list MAY be short.
-        <p className="knowledge-note">
-          Some agents&rsquo; days were too busy to record every read, so this list may be missing
-          some.
-        </p>
+        <p className="knowledge-note">Some reads may be missing.</p>
       )}
     </Connection>
   );
@@ -357,7 +352,7 @@ function UnderThisPage({ pages, total }: { pages: PageSummary[]; total: number }
           {more}
           {total > pages.length && (
             <p className="knowledge-note">
-              {pages.length} of {total} by title. The page&rsquo;s space lists them all.
+              {pages.length} of {total}
             </p>
           )}
         </>
@@ -399,7 +394,7 @@ export function Revisions({
         Revisions
       </h2>
       {history.length === 0 ? (
-        <p className="knowledge-note">Only this version exists. Nobody has saved over it.</p>
+        <p className="knowledge-note">Only this version exists.</p>
       ) : (
         <ul className="knowledge-revision-list" role="list">
           {history.map((rev) => {

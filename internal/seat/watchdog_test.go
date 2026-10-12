@@ -427,6 +427,121 @@ func TestAWedgedHeartbeatPassIsWhatTheWatchdogSees(t *testing.T) {
 	}
 }
 
+// A HEALTHY DUTY IS NOT BEHIND, and its lag is not reported.
+//
+// The time since a turning duty's last beat is never zero, only shorter than
+// a beat, so Lag reported it whole: every healthy node's /health carried a
+// stall_lag_seconds under a second, the field documented as present only
+// while the duty is behind, and a reader alerting on its presence fired on
+// all of them. Behind is a missed beat: a last beat older than the beat
+// interval the watchdog's own rule gives this threshold.
+func TestADutyOnItsBeatReportsNoLag(t *testing.T) {
+	t.Parallel()
+	clock := newClock()
+	_, onStall := caught()
+	w := newWatchdog(SeatLeaseTTL, clock.Now, onStall)
+	duty := &fakePulse{}
+	w.Watch("seat-heartbeat", duty)
+
+	beat := beatCeiling(SeatLeaseTTL)
+	for _, since := range []time.Duration{0, beat / 2, beat - time.Millisecond, beat} {
+		duty.set(clock.Now().Add(-since), true)
+		if lag := w.Lag(); lag != 0 {
+			t.Errorf("a duty that beat %s ago, inside its %s beat, reports %s behind: "+
+				"a healthy node's health would carry the field", since, beat, lag)
+		}
+	}
+	if !w.Beating() {
+		t.Fatal("a live duty that has beaten is not counted as beating, so the " +
+			"watchdog reads as guarding nothing")
+	}
+}
+
+// A STALLED DUTY IS BEHIND, by the whole time since its last beat: the
+// figure that climbs towards the threshold at which the watchdog ends the
+// process, and the one a screen says before it does.
+func TestAStalledDutyReportsTheTimeSinceItsLastBeat(t *testing.T) {
+	t.Parallel()
+	clock := newClock()
+	fired, onStall := caught()
+	w := newWatchdog(SeatLeaseTTL, clock.Now, onStall)
+	duty := &fakePulse{}
+	w.Watch("seat-heartbeat", duty)
+
+	beat := beatCeiling(SeatLeaseTTL)
+	duty.set(clock.Now(), true)
+	clock.Advance(beat + time.Millisecond)
+	if lag := w.Lag(); lag != beat+time.Millisecond {
+		t.Fatalf("lag one beat and a millisecond after the last = %s, want %s: the "+
+			"duty missed its beat", lag, beat+time.Millisecond)
+	}
+	clock.Advance(30 * time.Second)
+	if lag, want := w.Lag(), beat+time.Millisecond+30*time.Second; lag != want {
+		t.Fatalf("lag = %s, want %s, the whole time since the last beat", lag, want)
+	}
+	// Reporting it changes nothing about when the watchdog fires.
+	if !w.check() {
+		t.Fatal("the watchdog fired on a duty still inside its threshold")
+	}
+	select {
+	case stall := <-fired:
+		t.Fatalf("fired %+v inside the threshold", stall)
+	default:
+	}
+}
+
+// BEHIND IS MEASURED AGAINST THE BEAT THE HOST KEEPS, never a number of its
+// own: the host beats at the same ceiling the watchdog reads a missed beat
+// against, or faster where its pass is faster, so a host on its beat is never
+// read as behind, at the shipped lease and at the tight ones somebody lowers
+// it to.
+func TestBehindIsMeasuredAgainstTheBeatTheHostKeeps(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	for _, tc := range []struct {
+		ttl       time.Duration
+		heartbeat time.Duration
+	}{
+		{SeatLeaseTTL, HeartbeatInterval},
+		{3 * time.Second, time.Second},
+		{500 * time.Millisecond, 200 * time.Millisecond},
+		{50 * time.Millisecond, 10 * time.Millisecond},
+	} {
+		h := f.newHost("node-a", Config{TTL: tc.ttl, HeartbeatInterval: tc.heartbeat})
+		w := newWatchdog(h.TTL(), nil, func(Stall) {})
+		if beat := h.beatInterval(); beat > w.beat {
+			t.Errorf("ttl %s: the host beats every %s and the watchdog reads a missed "+
+				"beat past %s, so a host on its beat reads as behind", tc.ttl, beat, w.beat)
+		}
+	}
+	// At the shipped lease the two are one number.
+	if got := newWatchdog(SeatLeaseTTL, nil, func(Stall) {}).beat; got != WatchdogBeatInterval {
+		t.Fatalf("beat at the shipped lease = %s, want %s", got, WatchdogBeatInterval)
+	}
+}
+
+func TestBeatingIsALiveDutyThatHasBeaten(t *testing.T) {
+	t.Parallel()
+	w := newWatchdog(SeatLeaseTTL, nil, func(Stall) {})
+	if w.Beating() {
+		t.Fatal("a watchdog watching nothing reads as beating")
+	}
+	duty := &fakePulse{}
+	w.Watch("seat-heartbeat", duty)
+	duty.set(time.Time{}, true)
+	if w.Beating() {
+		t.Fatal("a duty that has not beaten yet reads as beating")
+	}
+	duty.set(time.Now(), false)
+	if w.Beating() {
+		t.Fatal("a duty that stopped reads as beating")
+	}
+	duty.set(time.Now(), true)
+	if !w.Beating() {
+		t.Fatal("a live duty that has beaten does not read as beating")
+	}
+}
+
 func TestLagReportsHowFarBehindTheWorstDutyIs(t *testing.T) {
 	t.Parallel()
 	clock := newClock()

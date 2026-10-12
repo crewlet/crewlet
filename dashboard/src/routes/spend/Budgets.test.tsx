@@ -220,6 +220,16 @@ test("every scope states its three windows, the company's first", async () => {
   expect(screen.getByText(/last refused a call/i)).toBeTruthy();
 });
 
+// THE SEATS' TABLE IS ITS CARD'S BODY: a table in a bordered box of its own
+// inside the card drew two edges a pixel apart (styles/frame.test.ts holds
+// the flush form and the one rule under the card's header).
+test("the seats' table runs to its card's edges", async () => {
+  mount(answer());
+  await settle();
+  const seats = screen.getByText("Agent seats").closest(".crewlet-card")!;
+  expect(seats.querySelector(".grid-wrap")!.hasAttribute("data-flush")).toBe(true);
+});
+
 // THE ENGINE'S STATE, AS SERVED. 95% served `ok` is drawn ok and 50% served
 // `near` is drawn near: a bar that re-derived its tone from the fill would
 // get both of these the other way round.
@@ -236,8 +246,8 @@ test("each bar is the state the engine served, whatever its fill", async () => {
   expect(tone("PM's daily token budget")).not.toBe("danger");
   expect(tone("PM's weekly token budget")).toBe("warning");
   expect(tone("PM's monthly token budget")).toBe("danger");
-  // And the threshold the page states is the one the engine served.
-  expect(screen.getByText(/near at 90% of its ceiling/)).toBeTruthy();
+  // And the zone the page states is the one the engine counts the windows in.
+  expect(screen.getByText("Token limits per day, week and month (UTC).")).toBeTruthy();
 });
 
 // A CHECK, THEN THE SAVE — and a seat is written as the seat, read at the
@@ -388,7 +398,7 @@ test("a reader who cannot change the configuration sees why, on every ceiling", 
 test("a counter nobody could read says so, and draws no figures", async () => {
   mount(answer({ durable: false, org: { windows: [] }, seats: [] }));
   await settle();
-  expect(screen.getByText(/could not be READ/)).toBeTruthy();
+  expect(screen.getByText("Couldn’t read current spend. Try again shortly.")).toBeTruthy();
   expect(screen.queryByRole("meter")).toBeNull();
 });
 

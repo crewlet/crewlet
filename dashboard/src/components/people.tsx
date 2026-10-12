@@ -426,7 +426,7 @@ export function useHumanSeats(enabled: boolean): RestResult<HumanSeat[]> {
  * Whether the seat listing was refused because this node runs NO COMPANY
  * (`409 no_active_revision`): not a failure to report but the first step of a
  * first run, since there is no human seat until a company declares one. Read
- * through the generic refusal it was "the engine tried to answer and failed",
+ * through the generic refusal it was "the engine failed to answer",
  * with nothing to do about it.
  */
 export function listsNoCompany(seats: RestResult<unknown>): boolean {

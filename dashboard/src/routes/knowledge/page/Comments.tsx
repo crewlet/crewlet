@@ -126,7 +126,7 @@ export function PageComments({
           id={boxID}
           value={draft}
           rows={3}
-          placeholder="Ask about something it says, or flag that it has gone stale. Markdown; @handle reaches a seat."
+          placeholder="Comment, or @mention a seat"
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {

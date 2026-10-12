@@ -318,6 +318,9 @@ test("a cut diff says how many changes there are", async () => {
   // And where the whole thing is: the CLI writes to a terminal, which has no
   // response budget, so it prints every change.
   expect(screen.getByText("crewlet config diff")).toBeDefined();
+  expect(screen.getByText(/3 of 512 shown/).textContent).toBe(
+    "3 of 512 shown. crewlet config diff shows all.",
+  );
 });
 
 // NO ACTIVE REVISION IS NOT AN EMPTY COLLECTION, and the engine says so by
@@ -639,13 +642,10 @@ test("an author's name comes before its kind, on a line the kind leaves first", 
   expect(rule).toMatch(/line-height:\s*var\(--size-control-sm\)/);
 });
 
-// THE NOTE UNDER THE RECORD IS CLEAR OF IT. At the one-step gap the caption
-// sat almost flush on the code block's bottom edge and read as its last line;
-// every note under a block takes the two-step gap.
-test("the note under the active revision keeps its step from the block", async () => {
-  mount("#/config?lens=active");
-  const note = await screen.findByText(/Click into the revision/);
-  const column = note.parentElement!;
-  expect(column.classList.contains("gap-2"), column.className).toBe(true);
-  expect(column.querySelector(".crewlet-codeblock, pre")).not.toBeNull();
+// THE ACTIVE REVISION IS THE RECORD ALONE. The selection tip that sat under
+// the block is gone, and nothing is drawn in its place.
+test("the active revision carries no note under its block", async () => {
+  const { container } = mount("#/config?lens=active");
+  await waitFor(() => expect(container.querySelector(".crewlet-codeblock, pre")).not.toBeNull());
+  expect(screen.queryByText(/Click into the revision|Ctrl\+A/)).toBeNull();
 });

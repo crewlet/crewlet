@@ -286,7 +286,7 @@ test("a directory that did not answer an administrator is said over the chart", 
   await act(async () => {});
   expect(screen.getByText("The identity directory did not answer")).toBeTruthy();
   expect(screen.getByText(/no vacant seat offers Invite or Create/)).toBeTruthy();
-  expect(screen.getByText(/This node cannot answer yet/)).toBeTruthy();
+  expect(screen.getByText(/Still catching up\. This screen retries on its own\./)).toBeTruthy();
   expect(caption("Jane Founder")).toBe("Human seat");
   expect(controls("Jane Founder")).toEqual([]);
   cleanup();

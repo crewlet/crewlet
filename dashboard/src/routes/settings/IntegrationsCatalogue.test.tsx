@@ -242,7 +242,7 @@ test("a reader refused /setup sees every form action disabled with the grants it
   expect(connect.getAttribute("aria-disabled")).toBe("true");
   expect(connect.getAttribute("aria-describedby")).toBeTruthy();
   expect(document.body.textContent).toContain(
-    "Setting an integration up needs config:read to see what it needs, and config:write and secrets:write to connect it.",
+    "Setting up integrations needs config:read to see what they need, and config:write and secrets:write to connect them.",
   );
   fireEvent.click(connect);
   expect(screen.queryByRole("dialog")).toBeNull();
@@ -260,7 +260,7 @@ test("a managed document holds Connect and keeps Rotate token", async () => {
   mount({ ...OPERATOR, config_writer: false, config_managed_by: ["gitops"] });
   // THE PAGE SAYS IT ONCE, and each held control carries the same sentence.
   expect(
-    (await screen.findAllByText(/configuration is managed by gitops — change it there/)).some(
+    (await screen.findAllByText(/Managed by gitops\. Change it there\./)).some(
       (el) => el.closest(".crewlet-callout") !== null,
     ),
   ).toBe(true);

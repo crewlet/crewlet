@@ -85,7 +85,6 @@ import type {
   SandboxStatus,
 } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /**
  * THE ENGINE'S OWN SEVEN WORDS, and only those.
@@ -287,20 +286,18 @@ export function AwaitingBanner({
           {/* WHO IT IS PUT TO, as the engine resolved it when the run parked
               — never re-derived here from the coding agent's own label. */}
           {audience.length > 0
-            ? `Put to ${listWords(audience)}${run.audience_fallback ? `, ${seat}'s lead chain — "${run.audience}" named nobody on the chart` : ""}.`
-            : "Nothing recorded whom this question is put to — anybody who can act may answer it."}
-          {run.answerable_in_chat
-            ? " A reply on the conversation this turn served is taken as the answer too."
-            : ""}
+            ? `Put to ${listWords(audience)}${run.audience_fallback ? `, ${seat}’s lead chain: “${run.audience}” isn’t in the chart` : ""}.`
+            : "Anyone can answer."}
+          {run.answerable_in_chat ? " A reply in the conversation also counts." : ""}
           {deadline && !expired
-            ? ` The box is held for ${fmtDuration(run.pause_ttl_seconds * 1000)} from ${fmtDateTime(run.paused_at)} — ${inTime(deadline, now)}.`
+            ? ` Box held for ${fmtDuration(run.pause_ttl_seconds * 1000)} from ${fmtDateTime(run.paused_at)}, ${inTime(deadline, now)}.`
             : ""}
           {/* THE HOLD IS THE DEADLINE, and a passed one is the fact that
               explains the rest of the screen: the box is reaped, the work in
               it is gone, and answering now re-seeds the run from the question
               alone. A deadline rendered as "in -3m" would bury that. */}
           {expired
-            ? ` The hold expired at ${fmtDateTime(deadline)}: the box is reclaimed, so an answer now re-seeds the run rather than resuming it.`
+            ? ` The hold expired at ${fmtDateTime(deadline)}. Answering now restarts the run.`
             : ""}
         </span>
         <span className="row gap-2">
@@ -321,15 +318,15 @@ function listWords(names: string[]): string {
 function doingLine(run: SandboxRun): string {
   switch (run.status) {
     case "launching":
-      return "The box is being provisioned. Nothing has run in it yet.";
+      return "Setting up the box.";
     case "running":
-      return "A box is up and the coding agent is working in it.";
+      return "The coding agent is working.";
     case "answered":
-      return "A person answered its question. The answer is recorded on the run and the engine is resuming it.";
+      return "Answered. Resuming.";
     case "resumed":
-      return "An answer came back and the suspended Execute phase is running again.";
+      return "Resuming after an answer.";
     default:
-      return "The run is waiting on a person — see above.";
+      return "Waiting on a person.";
   }
 }
 
@@ -407,7 +404,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
             size="compact"
             icon={<SquareTerminalGlyph size={32} />}
             title="No coding run in flight for this turn"
-            description="A run's record is deleted once it settles, and what it did is then on its turn — open the run's page for its collected output. Otherwise the id may be wrong."
+            description="It may have finished. Its output is on the turn."
           />
         )}
         {run && (
@@ -449,7 +446,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
                         {
                           label: "Ran for",
                           value: fmtDuration(elapsedMs(run.started_at, run.updated_at)),
-                          title: "between the first report and the last, not wall-clock since",
+                          title: "From first to last report",
                         },
                         {
                           label: "Turn",
@@ -529,10 +526,6 @@ export function Runs() {
           </>
         }
       </PageActions>
-      <PageNote>
-        Each one is an Execute phase that suspended. It resumes when the sandbox reports back, after
-        a restart or on another node.
-      </PageNote>
 
       {/* The flush Panel is gone: StatGroup draws that surface itself. */}
       <StatGroup columns={3}>
@@ -573,7 +566,7 @@ export function Runs() {
             ? undefined
             : {
                 title: "No coding run is in flight",
-                hint: "A run is listed while it runs or waits on a person; a finished run's record is its turn's trace. A run starts when a seat calls the sandbox tool, and providers.sandbox gives it a place to run.",
+                hint: "Finished runs are on their turn’s trace.",
               }
         }
       >
@@ -658,7 +651,7 @@ export function Runs() {
                     // placement, so this is genuinely "the store has not
                     // written this run yet" rather than a run with nowhere to
                     // run, and the dash says the first on hover.
-                    <EmptyValue label="The durable row has not been written yet" />
+                    <EmptyValue label="Not recorded yet" />
                   ),
               },
               {
@@ -672,11 +665,7 @@ export function Runs() {
                     glyph={r.box_exists ? "●" : "○"}
                     label={r.box_exists ? "up" : "reclaimed"}
                     tone={r.box_exists ? "info" : "neutral"}
-                    title={
-                      r.box_exists
-                        ? "the sandbox is still there"
-                        : "the sandbox has been reclaimed; the run's record remains"
-                    }
+                    title={r.box_exists ? "the sandbox is still there" : "Sandbox reclaimed"}
                   />
                 ),
               },
@@ -854,15 +843,15 @@ export function RunScreen({ turnId }: { turnId: string }) {
         {unread && (
           <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
             {unread === "board"
-              ? "The run record could not be read, so whether this run is in flight is unknown; what is below is what the turn holds."
-              : "The turn could not be read, so what a collected run did is unknown; what is below is what the run record holds."}
+              ? "Couldn’t read the run record. Showing what the turn holds."
+              : "Couldn’t read the turn. Showing the run record."}
           </Callout>
         )}
         {absent && answered && (
           <EmptyState
             icon={<SquareTerminalGlyph size={32} />}
             title="No coding run for this turn"
-            description="Neither the run record nor the turn holds a coding run under this id. A turn's record is kept for the store's retention window; the id may be wrong, or the turn may be older than that."
+            description="The id may be wrong, or the turn is too old."
           />
         )}
         {run && AWAITING.includes(run.status) && (
@@ -889,10 +878,7 @@ export function RunScreen({ turnId }: { turnId: string }) {
                 onReplaced={board.refetch}
               />
             ) : RUNNING.includes(run.status) ? (
-              <span className="t-caption">
-                The run&rsquo;s durable record has not been written yet; its live output can be
-                asked for once it has.
-              </span>
+              <span className="t-caption">Live output appears once the run is recorded.</span>
             ) : (
               <p className="t-body">{doingLine(run)}</p>
             )}
@@ -920,7 +906,7 @@ export function RunScreen({ turnId }: { turnId: string }) {
                     {
                       label: "Ran for",
                       value: fmtDuration(elapsedMs(run.started_at, run.updated_at)),
-                      title: "between the first report and the last, not wall-clock since",
+                      title: "From first to last report",
                     },
                     {
                       label: "Turn",
@@ -1060,8 +1046,7 @@ export function BridgeLog({ run }: { run: SandboxRun }) {
           // ended are what explain it — and a log that silently skips is a
           // log that lies about what the run did.
           <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
-            {plural(elided, "call")} from the middle of this log were dropped — the engine keeps the
-            first and last hundred, so the run did more than is shown here.
+            {plural(elided, "call")} from the middle {elided === 1 ? "isn’t" : "aren’t"} shown.
           </Callout>
         )}
         <div className="list">

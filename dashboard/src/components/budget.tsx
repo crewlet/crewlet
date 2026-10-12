@@ -53,11 +53,7 @@ export function WindowMeters({
             // single token refuses the next one whatever its size, and
             // says so before any has been.
             <p className="t-caption">
-              {w.refused_at
-                ? `Last refused a call at ${w.refused_at}.`
-                : "No further charge fits, so turns are declined at the gate."}{" "}
-              Room comes back when {w.window} turns over at {w.resets_at}, or when the ceiling is
-              raised.
+              {w.refused_at ? `Last refused ${w.refused_at}.` : "Full."} Resets {w.resets_at}.
             </p>
           )}
         </div>

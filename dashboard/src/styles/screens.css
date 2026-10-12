@@ -644,11 +644,9 @@
    top (`--sticky-top`), less the phase body's own inset below it
    (`--spacing-3`), so the box's bottom border clears the view's edge by the
    same margin the card gives it. THE BOX ALONE: its caption above it
-   ("Rounds · what the model thought, said and called, in order") is not
-   counted, because it is an uppercase label in a column a sidebar and a peek
-   narrow, and it wraps — a bound that subtracted one line of it promised a
-   fit that held only while the caption did. Scrolled until the box's top
-   meets the band, the box fits whatever the caption does. The FLOOR is for a
+   ("Rounds") is not counted, because the caption is no part of the box.
+   Scrolled until the box's top meets the band, the box fits whatever the
+   caption does. The FLOOR is for a
    window too short for that to leave a transcript at all: four rows
    (`--size-row-md` each) — a round's line of speech and three tool rows — is
    the least that reads as a transcript rather than as a slot; below it the
@@ -810,6 +808,44 @@
 .coverage-nodes {
   margin: var(--spacing-1) 0 0;
   padding-inline-start: var(--spacing-5);
+}
+
+/* ---- Backups & retention ------------------------------------------------ */
+
+/* An alarm's measurement, the logs it stands on and its remedy, spaced by the
+   column's gap rather than by margins of their own. */
+.alarm-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.alarm-body > p {
+  margin: 0;
+}
+.alarm-logs {
+  margin: 0;
+  padding-inline-start: var(--spacing-5);
+}
+
+/* A log per row, flush to the card's edges like a list's rows: each on the
+   card's own inset and ruled from the one above, its refusals above its
+   disclosure. */
+.log-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+}
+.log-row + .log-row {
+  border-top: 1px solid var(--color-border-default);
+}
+
+/* A check's words over its term's own name: side by side, "Slowest node
+   applied" read as a phrase. Neither wraps, since the name is an identifier. */
+.check-name {
+  display: flex;
+  flex-direction: column;
+  white-space: nowrap;
 }
 
 /* ---- Seat cards --------------------------------------------------------- */
@@ -2668,25 +2704,127 @@ a.prof-row:hover {
   color: var(--color-text-tertiary);
 }
 
-/* THE LANDING: what is worth returning to, in two columns. */
-.knowledge-home-grid {
+/* THE LANDING: tiles sized by what each is worth, on one screen. The newest
+   change takes the big tile, Recently written runs down the right, and the
+   four small tiles share the rest, each one line when it has nothing to list.
+   Every tile is placed by a named area, so the markup keeps the reading order
+   at every width: below 928px the feed moves under the newest change and the
+   small tiles pair up, and below 640px everything is one column. */
+.knowledge-tiles {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
-  gap: var(--spacing-5);
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.1fr);
+  grid-template-areas:
+    "latest latest written"
+    "reading pinned written"
+    "watching agents written";
+  gap: var(--spacing-4);
+  align-items: stretch;
 }
-.knowledge-home-column {
+@container page (width < 928px) {
+  .knowledge-tiles {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "latest latest"
+      "written written"
+      "reading pinned"
+      "watching agents";
+  }
+}
+@container page (width < 640px) {
+  .knowledge-tiles {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "latest" "written" "reading" "pinned" "watching" "agents";
+  }
+}
+.knowledge-written {
+  grid-area: written;
+}
+.knowledge-reading {
+  grid-area: reading;
+}
+.knowledge-pinned {
+  grid-area: pinned;
+}
+.knowledge-watching {
+  grid-area: watching;
+}
+.knowledge-agents {
+  grid-area: agents;
+}
+
+/* A SMALL TILE'S ROWS, set in by the one step that puts each row's glyph
+   under the tile's own: the head is inset by --spacing-4, a row by
+   --spacing-3. */
+.knowledge-tile-rows {
+  padding: 0 var(--spacing-1) var(--spacing-2);
+}
+/* Anything else a tile holds (the line an empty one says, a reading, a
+   refusal), at the tile's own inset under its head. */
+.knowledge-tile-body {
+  padding: 0 var(--spacing-4) var(--spacing-3);
+}
+/* A ROW'S WORDS: the page, then one quiet line about it. */
+.knowledge-tile-text {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-6);
   min-width: 0;
 }
-.knowledge-section {
-  display: flex;
-  flex-direction: column;
+.knowledge-tile-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* THE NEWEST CHANGE: the page's head and title, who changed it and when, what
+   each save said, the lines it changed, and the page's opening under a rule. */
+.knowledge-latest {
+  grid-area: latest;
   gap: var(--spacing-3);
-  min-width: 0;
 }
+.knowledge-latest-who {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  min-width: 0;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+.knowledge-latest-who b {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.knowledge-latest-who > time {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.knowledge-latest-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.knowledge-latest-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--spacing-3);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-primary);
+}
+.knowledge-latest-note > time {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.knowledge-latest-opening {
+  padding-top: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+}
+
 .knowledge-section-title {
   display: flex;
   align-items: baseline;
@@ -2698,11 +2836,6 @@ a.prof-row:hover {
 }
 .knowledge-section-title > svg {
   align-self: center;
-  color: var(--color-text-tertiary);
-}
-.knowledge-section-hint {
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-regular);
   color: var(--color-text-tertiary);
 }
 .knowledge-count {
@@ -2717,91 +2850,21 @@ a.prof-row:hover {
   color: var(--color-text-tertiary);
 }
 
-/* PINNED: three cards to a row, the page's place above its title. */
-.knowledge-pins {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--spacing-3);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.knowledge-pin {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  height: 100%;
-}
-.knowledge-pin-head {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  color: var(--color-text-tertiary);
-}
-.knowledge-pin-title {
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-}
-.knowledge-row-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  margin-top: auto;
-  min-width: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.knowledge-row-trail {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-}
-
-/* RECENTLY WRITTEN: the company's day, then who did what to which page. */
+/* RECENTLY WRITTEN: the company's day, then the rows under it. A row's note
+   is prose, so it is cut at a line rather than a pixel. */
 .knowledge-day {
   margin: 0;
-  padding: var(--spacing-3) var(--spacing-4) var(--spacing-1);
+  padding: var(--spacing-2) var(--spacing-4) var(--spacing-1);
   font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-medium);
   letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
   color: var(--color-text-tertiary);
 }
-.knowledge-written-rows {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.knowledge-written-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: var(--spacing-3);
-  align-items: start;
-  padding: var(--spacing-2) var(--spacing-4);
-}
-.knowledge-written-text {
-  margin: 0;
-  font-size: var(--font-size-compact);
-  color: var(--color-text-secondary);
-}
-.knowledge-written-text b {
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
 .knowledge-written-note {
-  display: block;
-  margin-top: var(--spacing-1);
+  --clamp-lines: 2;
   font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.knowledge-written-row > time {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
+  color: var(--color-text-secondary);
 }
 
 /* ---- A space ------------------------------------------------------------ */
@@ -4348,8 +4411,8 @@ a.knowledge-reader-how:hover {
    fold is present that rule already ends the form, and a second one would
    box the note in. */
 /* SMALL, because it is an aside. The sentence that says what to do is one
-   line and the reasoning is behind the icon, so it sits under the form
-   without competing with the fields for the same attention. */
+   line, so it sits under the form without competing with the fields for the
+   same attention. */
 .int-form-note {
   margin: 0;
   display: flex;
@@ -4376,14 +4439,6 @@ a.knowledge-reader-how:hover {
 .int-form-note a:hover {
   color: var(--color-text-primary);
 }
-/* The icon is the handle for the tooltip, so it takes a cursor that says
-   there is something to hover and does not shrink out of reach. */
-.int-form-why {
-  display: inline-flex;
-  flex: 0 0 auto;
-  cursor: help;
-}
-
 .int-form-more {
   /* IT CLOSES THE FORM, so it takes the rule and the space above it rather
      than sitting in the field flow with a hairline through the middle. The
@@ -7944,16 +7999,6 @@ a.work-cal-chip {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
-.home-card-foot {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-2);
-  margin: 0;
-  padding: var(--spacing-3) var(--spacing-4);
-  border-top: 1px solid var(--color-border-default);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
 .home-card-more {
   display: block;
   padding: var(--spacing-2) var(--spacing-4) var(--spacing-3);
@@ -8471,9 +8516,6 @@ a.live-row:focus-visible {
 }
 .inbox-callout {
   margin: var(--spacing-3) var(--spacing-4) 0;
-}
-.inbox-nobody {
-  padding: var(--spacing-2) var(--spacing-4) var(--spacing-4);
 }
 
 /* TWO COLUMNS, EACH ITS OWN SCROLLER. The list is 260 to 340px, as the
@@ -9138,9 +9180,10 @@ a.live-row:focus-visible {
 }
 
 /* ---- Spend ---------------------------------------------------------------
-   The design's Spend artboard: the hero beside the daily chart, then the
-   by-agent table beside a column of ranked lists, then the teams and the
-   background workers. Every row is MEASURED FROM THE PAGE COLUMN
+   The design's Spend artboard, in three rows: the hero beside the daily
+   chart; the by-agent table beside the two ranked lists that break the same
+   tokens down by model and by team; then the most expensive tasks beside the
+   auxiliary model's purposes. Every row is MEASURED FROM THE PAGE COLUMN
    (`@container page`), not the window, because the sidebar and the peek take
    their share first. */
 .spend {
@@ -9148,46 +9191,56 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-4);
 }
+/* EVERY ROW IS ONE HEIGHT. Its cards stretch to the tallest, so a row's edges
+   line up and the page reads as rows: started at their own heights, a table of
+   two seats ended two hundred pixels above the lists beside it, and the row
+   under it began below the lists, leaving a hole the width of the table. */
+.spend-top,
+.spend-pair {
+  display: grid;
+  gap: var(--spacing-4);
+  align-items: stretch;
+}
 /* THE HERO'S 340px IS THE ARTBOARD'S: the figure at display size and two
    tiles side by side under it, which is the narrowest that holds "of input
    served from prompt cache" on two lines. */
 .spend-top {
-  display: grid;
   grid-template-columns: 340px minmax(0, 1fr);
-  gap: var(--spacing-4);
-  align-items: stretch;
 }
-/* The table is the wider of the pair: the design's 1.7 : 1. */
-.spend-mid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
-  gap: var(--spacing-4);
-  align-items: start;
-}
-.spend-side,
-.spend-pair {
-  display: grid;
-  gap: var(--spacing-4);
-  align-items: start;
-}
-/* THE SAME TRACKS AS THE ROW ABOVE, so the gutter between By team and
-   Background workers is the gutter between By agent and By model: two rows
-   split 1.7 : 1 and 1 : 1 drew two gutters 150px apart down one page. */
+/* THE DESIGN'S 1.7 : 1, the same tracks in both rows under the hero, so the
+   gutter runs down the page as one line. The wide track holds what is read
+   along a row (the seats' table, the tasks' titles), the narrow one the ranked
+   lists: a team's bar across the wide track ran a thousand pixels from its
+   name to its figure. */
 .spend-pair {
   grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
 }
-/* 900px IS THE TABLE'S FLOOR beside a list column of 300: below it the pairs
-   stack, the table first, since it is what the screen is read for. The hero
-   stacks over the chart below 760, where the chart would be narrower than
-   thirty columns can be read in. */
+/* A CARD WITHOUT ITS PARTNER TAKES THE ROW: on a tracker that is not the
+   engine's there is no task spend to rank, and the auxiliary card alone in
+   the wide track left the narrow one empty beside it. */
+.spend-pair > :only-child {
+  grid-column: 1 / -1;
+}
+/* The two lists stacked in the narrow track. The last takes whatever the row
+   has left, so the stack ends level with the table beside it. */
+.spend-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.spend-side > :last-child {
+  flex-grow: 1;
+}
+/* 900px IS THE PAGE'S ONE FOLD, for every row at once. It is the table's
+   floor beside a list column of 330, and the chart's beside the hero: at an
+   800px column the chart was 450 wide, its title broke over two lines, the
+   sentence under it stood four words wide, and the hero beside it had a
+   hundred pixels to spare. Stacked, the table comes first, since it is what
+   the screen is read for. */
 @container page (width < 900px) {
-  .spend-mid,
+  .spend-top,
   .spend-pair {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-@container page (width < 760px) {
-  .spend-top {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -9195,11 +9248,15 @@ a.live-row:focus-visible {
 .spend-card {
   min-width: 0;
 }
+/* THE CAPTION GOES UNDER THE TITLE WHEN THE TWO DO NOT FIT ON ONE LINE: held
+   beside it, By agent's sentence stood a two-line column at the end of the
+   head on every phone. A caption that fits keeps its place at the end. */
 .spend-card-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: var(--spacing-3);
+  gap: var(--spacing-1) var(--spacing-3);
   padding: var(--spacing-4) var(--spacing-4) var(--spacing-3);
 }
 /* A padded card (a list) draws its head flush with its own padding. */
@@ -9235,16 +9292,25 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-4);
 }
+/* THE FACTS STAND ON THE CARD'S FLOOR. The hero is stretched to the chart's
+   height wherever it sits beside it, and stacked from the top its parts ended
+   14 to 53px short of the chart's own (most at compact, where the chart's
+   plot does not shrink with the density). The budget and the tiles sit at the
+   bottom, level with the chart's split control, and the spare height opens
+   between them and the figure. */
+.spend-hero > .spend-budget {
+  margin-top: auto;
+}
 .spend-hero-figure {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--spacing-2);
   min-width: 0;
 }
 .spend-hero-number {
-  font-size: 3.25rem;
+  font-size: var(--font-size-4xl);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.035em;
+  letter-spacing: var(--font-letter-spacing-tight);
   line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
@@ -9267,17 +9333,25 @@ a.live-row:focus-visible {
 .spend-refusing {
   color: var(--color-feedback-danger-ink);
 }
-/* THE TWO FIGURES INSIDE THE HERO are a block inside a card — the elevated
-   rung, which is exactly what `--color-surface-elevated` is for. */
+/* THE FIGURES INSIDE THE HERO are blocks inside a card, on the elevated rung,
+   which is exactly what `--color-surface-elevated` is for. AS MANY COLUMNS AS
+   THERE ARE TILES: each is absent when it has nothing to say (no cache
+   reported, a tracker that is not the engine's), and a lone tile in a
+   two-column row left half the row empty. With neither, the row is not drawn,
+   so it adds no gap under the budget. */
 .spend-tiles {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: var(--spacing-3);
+}
+.spend-tiles:empty {
+  display: none;
 }
 .spend-tile {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-1);
   min-width: 0;
   padding: var(--spacing-3);
   border-radius: var(--radius-md);
@@ -9297,7 +9371,9 @@ a.live-row:focus-visible {
 
 /* The chart. The group control and the gap sentence sit UNDER the plot: six
    dimensions do not fit beside a title and a four-band legend at a laptop
-   width, and the kit's head row is where the design draws the legend. */
+   width, and the kit's head row is where the design draws the legend. The
+   card is a column, which is what lets the kit's figure flex into the height
+   the row gives it. */
 .spend-chart {
   display: flex;
   flex-direction: column;
@@ -9306,7 +9382,7 @@ a.live-row:focus-visible {
 .spend-chart-head {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-1);
   min-width: 0;
 }
 /* THE SENTENCE UNDER THE TITLE ASKS FOR NO WIDTH OF ITS OWN. The kit's head
@@ -9314,16 +9390,24 @@ a.live-row:focus-visible {
    width — so a one-line sentence as wide as the card squeezed the legend into
    two ragged rows at 1280 (and with four seat names at 1440). With no
    intrinsic width the block's basis is the title's, the legend keeps its one
-   row, and the sentence wraps in the room the block then grows into.
-   ONLY BESIDE THE HERO: stacked on a narrow page the legend is most of the
-   head's width, and a sentence with no width of its own was left a column
-   four words wide under a title wrapped onto two lines. */
+   row, and the sentence wraps in the room the block then grows into. That
+   holds stacked under the hero too, down to 760.
+   NOT ON A NARROWER PAGE: there the legend is most of the head's width, and a
+   sentence with no width of its own was left a column four words wide under a
+   title wrapped onto two lines. */
 @container page (width >= 760px) {
   .spend-chart-head .spend-caption {
     contain: inline-size;
   }
 }
+/* THE SPLIT CONTROL STANDS ON THE CARD'S FLOOR, level with the hero's tiles,
+   where the hero is the taller of the two (a refusal or a long comparison
+   under its figure). With the chart drawn, its plot takes that spare height
+   (`height="fill"`), so the control stands right under the dates; the margin
+   keeps it on the floor while there is no chart to grow (loading, an empty
+   window, a refusal). */
 .spend-chart-foot {
+  margin-top: auto;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -9390,15 +9474,15 @@ a.live-row:focus-visible {
   .spend-tasks .grid-wrap[data-phone-rows="compact"] .spend-task-spend > :last-child {
     flex: none;
   }
-  /* THE CAPTION GOES UNDER THE TITLE on a phone: beside it, a sentence
-     wrapped into four lines in the width the title left. */
-  .spend-tasks .spend-card-head {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--spacing-1);
-  }
   .spend-agents .spend-share-track {
     flex: 0 0 3rem;
+  }
+  /* TODAY'S BAR IS FOR SCANNING ITS COLUMN, as a task's is, and a compact row
+     has none: the percentage and its unit say the same. With the bar, a capped
+     seat's second line did not fit and the seat stood three lines tall at
+     every density. */
+  .spend-agents .grid-wrap[data-phone-rows="compact"] .spend-day-meter {
+    display: none;
   }
   /* ONE LINE FOR A NAME on the compact row: the card layout wraps a value
      because it has a line of its own, and here a wrapped name stood a seat
@@ -9414,7 +9498,7 @@ a.live-row:focus-visible {
 .spend-share-bar {
   display: block;
   height: 10px;
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
   background: var(--color-data-1);
 }
 .spend-share-pct,
@@ -9437,7 +9521,11 @@ a.live-row:focus-visible {
   font-weight: var(--font-weight-medium);
   color: var(--color-feedback-danger-ink);
 }
+/* THE FOOT STANDS ON THE CARD'S FLOOR: a card stretched to its row keeps its
+   link at the bottom edge, level with the lists beside it, rather than under
+   the last row with the spare height below it. */
 .spend-card-foot {
+  margin-top: auto;
   padding: var(--spacing-3) var(--spacing-4);
   border-top: 1px solid var(--color-border-default);
   font-size: var(--font-size-xs);
@@ -9488,7 +9576,7 @@ a.live-row:focus-visible {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-1);
   min-width: 0;
 }
 .spend-task-title {
@@ -9512,12 +9600,16 @@ a.live-row:focus-visible {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
 }
-/* BY MODEL'S WORDS TAKE HALF THE ROW, not the kit's 128px Home column: under
-   each entry's key is who used it, and at 128px "Agent PM, Agent SWE, Agent AI
-   Systems Engineer" was cut to its first name. The bar is a share of the
-   card's one total, and half a card still draws it. Two classes, so this wins
-   over the kit's own declaration on the same element whatever the load order. */
-.spend-list .spend-models {
+/* EVERY RANKED LIST'S WORDS TAKE HALF THE ROW, not the kit's 128px Home
+   column: under each model entry's key is who used it, and at 128px "Agent PM,
+   Agent SWE, Agent AI Systems Engineer" was cut to its first name, as
+   "Product and Engineering" was cut to "Product and Engine". ONE WIDTH FOR
+   THE THREE, which stand in one track, so their bars start at one x down the
+   page: By model's half beside the others' 128px put two bar columns 37px
+   apart at 1280 and 115px apart at 1920. A bar is a share of its card's one
+   total, and half a card still draws it. Two classes, so this wins over the
+   kit's own declaration on the same element whatever the load order. */
+.spend-list .spend-bars {
   --crewlet-bar-list-label-width: 50%;
 }
 /* "Used by" on one line: the names give way, the count never does. */
@@ -9547,14 +9639,14 @@ a.live-row:focus-visible {
   margin: 0 0 var(--spacing-3);
   color: var(--color-text-tertiary);
 }
-/* THE COMPANY'S THREE WINDOWS side by side — the same elevated rung as the
-   Spend overview's tiles, so a window reads as the same object on both
-   screens — stacking below the width where a tile's figure, bar and ceiling
-   editor no longer fit a third of the card. */
+/* THE COMPANY'S THREE WINDOWS side by side, on the same elevated rung and at
+   the same gap as the Spend overview's tiles, so a window reads as the same
+   object on both screens. They stack below the width where a tile's figure,
+   bar and ceiling editor no longer fit a third of the card. */
 .budget-tiles {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--spacing-3);
   padding: 0 var(--spacing-4) var(--spacing-4);
 }
 @container page (width < 760px) {
@@ -9598,7 +9690,7 @@ a.live-row:focus-visible {
 .budget-figure {
   font-size: var(--font-size-xl);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.02em;
+  letter-spacing: var(--font-letter-spacing-tight);
   color: var(--color-text-primary);
 }
 /* THE TRACK A BAR WOULD HAVE, drawn as a hairline: a window with no ceiling
@@ -9621,7 +9713,7 @@ a.live-row:focus-visible {
 .budget-cell {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--spacing-1);
   min-width: 0;
   width: 100%;
 }
@@ -9640,7 +9732,7 @@ a.live-row:focus-visible {
 .ceiling {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--spacing-1);
   min-width: 0;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);

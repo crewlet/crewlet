@@ -76,13 +76,12 @@ export function ProjectFiles({ project }: { project: string }) {
             size="compact"
             icon={<FileTextGlyph size="xl" />}
             title="No files are kept in this project yet"
-            description="A seat writes one with write_project_file — a report, a plan, the notes it leaves for the next — and so can your own assistant at /operator/mcp, attributed to you. PUT /work/files/{project}/{path} uploads one directly."
+            description="Files agents save for this project appear here."
           />
         )}
         {listing && !listing.complete && (
           <Callout variant="warning" title="This listing may be missing files">
-            This node holds a change it could not apply yet, and it may be to a file here. The
-            listing fills in once it has.
+            It fills in once this node catches up.
           </Callout>
         )}
         {files.length > 0 && (

@@ -195,10 +195,7 @@ export function Board({
     }
     const receipt = (result.receipt ?? {}) as { placed?: boolean; unplaced?: string };
     if (receipt.placed === false) {
-      setUnplaced(
-        receipt.unplaced ||
-          `${args.item} moved lanes, but the engine could not give it that place in the order.`,
-      );
+      setUnplaced(receipt.unplaced || `${args.item} moved lanes, but not to that position.`);
     }
     setDrop((prev) => (prev ? { ...prev, settled: true } : prev));
   };
@@ -470,8 +467,7 @@ function moveNote(access: WriteAccess): string {
 }
 
 /** What a drag tried outside the manual order is answered with. */
-export const MANUAL_ORDER_NOTE =
-  "Cards move in the manual order — choose Manual under Sort to drag them.";
+export const MANUAL_ORDER_NOTE = "Sort by Manual to drag cards.";
 
 /**
  * Which lanes are not wholly in view, by index, on each side.

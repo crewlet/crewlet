@@ -96,10 +96,10 @@ const SeatKindHuman = "human"
 type SeatRow string
 
 const (
-	// SeatRowSeatless is a row that holds no binding — a service account,
-	// an unbound Tier A token's row, or a person recorded before every
-	// person held a seat. Its login is the handle and the chart is never
-	// consulted.
+	// SeatRowSeatless is a row that holds no binding — a service account
+	// or an unbound Tier A token's row, never a person, who holds a human
+	// seat for as long as they are here (ADR-0032). Its login is the handle
+	// and the chart is never consulted.
 	SeatRowSeatless SeatRow = "seatless"
 
 	// SeatRowHeld is a seat the running organisation holds as a human

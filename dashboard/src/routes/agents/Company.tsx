@@ -228,11 +228,10 @@ function unitView(
 
 /** The hint under every "no such unit", on the page and in the rail alike. */
 const NO_UNIT_HINT =
-  "A unit is addressed by its key, which a rename never moves. A link to a unit the company no longer has, or one written with a name in the key's place, finds nothing.";
+  "Units are linked by key, which a rename keeps. It may have been removed, or the link used its name.";
 
 /** And what an empty one costs, which is the part a reader acts on. */
-const NO_SEATS_HINT =
-  "A unit with no seats routes nothing: work filed to it reaches its lead, or nobody.";
+const NO_SEATS_HINT = "Work filed to it goes to its lead, if it has one.";
 
 /**
  * One unit on the Teams tree, and everything under it.
@@ -333,7 +332,7 @@ export function Teams() {
         <EmptyState
           icon={<UsersGlyph size={32} />}
           title="This company declares no units"
-          description="Every seat sits at the top level. A unit is declared in the company configuration — Edit org adds one."
+          description="Add one in Edit org."
         />
       ) : (
         <div className="org-tree">

@@ -46,16 +46,14 @@ export function pageWords(shown: number, total: number): string | null {
 
 /** A card's subtitle: the cut, where there is one, then what the list is. */
 export function cutThen(cut: string | null, what: string): string {
-  return cut ? `${cut} — ${what}` : what;
+  return cut ? `${cut} · ${what}` : what;
 }
 
 /** Who answered, as the sentence under a memory screen's head. */
 export function heldWords(heldBy: string | undefined): string {
   if (!heldBy) return "";
-  if (heldBy === "none") {
-    return "No node holds this seat, so no copy of its memory is current and nothing is shown.";
-  }
-  return `Read from ${heldBy}, the node holding this seat — the copy kept current.`;
+  if (heldBy === "none") return "No node is running this seat, so its memory can’t be shown.";
+  return `From ${heldBy}.`;
 }
 
 /** The heading level a card's title takes on the screen drawing it. */
@@ -98,7 +96,7 @@ export function DiaryCard({ memory, heading = "h3" }: { memory: AgentMemory; hea
           size="compact"
           icon={<BookOpenGlyph size={32} />}
           title="Nothing written yet"
-          description="A seat keeps a note by calling reflect_and_persist during a turn, and the learning loop keeps what it judges worth remembering."
+          description="Notes the agent keeps appear here."
         />
       )}
     </Card>
@@ -202,7 +200,7 @@ function WholeEpisode({
           ) : (
             <EmptyState
               title="No longer in this seat's memory"
-              description="The episode was dropped or folded into a compacted row since the list was read."
+              description="It was removed since the list loaded."
             />
           ))}
       </QueryState>
@@ -280,7 +278,7 @@ export function EpisodesCard({
         count={memory.episodes_total}
         subtitle={cutThen(
           pageWords(memory.episodes.length, memory.episodes_total),
-          "one per completed turn, recalled by similarity at turn start",
+          "one per finished turn",
         )}
       >
         <Card.Title as={heading}>Episodes</Card.Title>
@@ -292,7 +290,7 @@ export function EpisodesCard({
         defaultSort="-at"
         empty={{
           title: "No episodes recorded",
-          hint: "An episode is written when a turn completes.",
+          hint: "Episodes appear as turns finish.",
         }}
         columns={[
           {

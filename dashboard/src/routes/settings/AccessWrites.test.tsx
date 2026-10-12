@@ -1290,7 +1290,7 @@ test("an unclaimed node running no company says to create the company first", as
   expect(within(callout).queryByRole("link", { name: "Add a human seat" })).toBeNull();
   // THE GRID SAYS IT TOO, as a sentence rather than a failure.
   expect(await screen.findByText(/it has no human seat to list/)).toBeTruthy();
-  expect(screen.queryByText(/The engine tried to answer and failed/)).toBeNull();
+  expect(screen.queryByText(/The engine failed to answer/)).toBeNull();
 });
 
 // A SEAT LISTING STILL ON ITS WAY DECIDES NOTHING: drawn once the

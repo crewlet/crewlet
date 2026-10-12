@@ -78,7 +78,7 @@ test("the fires are worked out in the schedule's zone, not in UTC", () => {
   render(<NextFires row={row()} now={NOW} count={3} />);
   expect(screen.getAllByText(/00:00:00/).length).toBe(3);
   expect(screen.queryByText(/09:00:00/)).toBeNull();
-  expect(screen.getByText(/evaluated in Asia\/Tokyo/)).toBeTruthy();
+  expect(screen.getByText("next 3 runs, in Asia/Tokyo")).toBeTruthy();
 });
 
 // AND A SCHEDULE THAT NAMES NO ZONE ARRIVES ON THE COMPANY'S CLOCK (ADR-0018):

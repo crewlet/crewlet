@@ -77,7 +77,7 @@ export function Work({
           work.data && rows.length === 0
             ? {
                 title: `Nothing open is assigned to ${self ? "you" : "them"}`,
-                hint: "Work reaches a seat by assignment, and closed work is not counted here.",
+                hint: "Closed work isn’t counted.",
               }
             : undefined
         }
@@ -116,7 +116,7 @@ export function Work({
               <Card.Header count={mine.data?.totals.asked_of_me.total}>
                 <Card.Title as="h3">Waiting on {self ? "your" : "their"} answer</Card.Title>
               </Card.Header>
-              <HoldWrites reason={self ? null : `Asked of ${seat.name} — only they can answer it.`}>
+              <HoldWrites reason={self ? null : `Only ${seat.name} can answer.`}>
                 <AskList
                   rows={mine.data?.asked_of_me ?? []}
                   decider={{ handle, name: self ? undefined : seat.name }}
@@ -157,9 +157,7 @@ export function Work({
         </>
       ) : (
         <p className="t-caption">
-          Their own queue — what they mean to do first, the questions put to them and their
-          checklist items on other seats&apos; tasks — is theirs to read. Signing in as them, or as
-          somebody holding fleet:operate, shows it here.
+          Their queue is theirs. Seeing it needs fleet:operate, or leading them.
         </p>
       )}
     </div>

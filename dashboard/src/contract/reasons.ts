@@ -73,6 +73,6 @@ export const PHRASES: Readonly<Record<string, { short: string; about: string; wh
   lead_fallback: {
     short: "routed to you as the lead",
     about: "the unit's lead",
-    why: "nobody better was found, and you lead the unit that owns it",
+    why: "you lead the team that owns it",
   },
 };

@@ -330,6 +330,25 @@ export function fmtElapsed(ms: number | null | undefined): string {
   return `${h}h ${m % 60}m`;
 }
 
+/**
+ * How long a process has been up, said coarsely: seconds under a minute,
+ * minutes under an hour, hours and minutes under a day, and whole days after
+ * that ("2 days"). A panel that reads it reruns every second, and past the
+ * first minute a second ticking by is motion with nothing to say. Never below
+ * zero, for [fmtElapsed]'s reason: a start a moment in the future is two
+ * clocks disagreeing.
+ */
+export function fmtUptime(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return EMPTY_VALUE;
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 === 0 ? `${h}h` : `${h}h ${m % 60}m`;
+  return plural(Math.floor(h / 24), "day");
+}
+
 /** Elapsed between two ISO stamps, or null when either is missing. */
 export function elapsedMs(from?: string | null, to?: string | null): number | null {
   const a = tsKey(from);
@@ -495,6 +514,19 @@ export function fmtBytes(n: number | null | undefined): string {
 // ---------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------
+
+/**
+ * A clause as a sentence: its first letter capitalised and a full stop after
+ * it. The engine writes a measurement as a clause, so its log line can carry
+ * it after a colon ("backup_age: no verified backup has been recorded"); a
+ * screen that prints it on its own line prints it as a sentence.
+ */
+export function asSentence(clause: string): string {
+  const s = clause.trim();
+  if (s === "") return s;
+  const head = s.charAt(0).toUpperCase() + s.slice(1);
+  return /[.!?]$/.test(head) ? head : `${head}.`;
+}
 
 /** A human label from a snake_case or dotted engine identifier. */
 export function humanize(key: string | null | undefined): string {

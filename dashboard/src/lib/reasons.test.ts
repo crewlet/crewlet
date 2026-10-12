@@ -91,6 +91,6 @@ describe("reason phrasing", () => {
     // from a chip that was never drawn, which hides the one fact this
     // surface exists to show.
     expect(reasonPhrase("")).toBe("no reason recorded");
-    expect(reasonWhy("")).toContain("carries no reason");
+    expect(reasonWhy("")).toBe("no reason recorded");
   });
 });

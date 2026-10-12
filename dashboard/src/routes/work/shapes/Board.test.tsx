@@ -548,13 +548,13 @@ describe("moving a card", () => {
     mountBoard({ movable: false });
     await settle();
     expect(cardOf("ENG-1").getAttribute("draggable")).toBeNull();
-    expect(screen.queryByText(/Cards move in the manual order/)).toBeNull();
+    expect(screen.queryByText(/Sort by Manual to drag cards/)).toBeNull();
     fireEvent.keyDown(cardOf("ENG-1"), { key: "ArrowRight", altKey: true });
     await settle();
     expect(posted).toEqual([]);
-    expect(screen.getByText(/Cards move in the manual order/)).toBeTruthy();
+    expect(screen.getByText(/Sort by Manual to drag cards/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    expect(screen.queryByText(/Cards move in the manual order/)).toBeNull();
+    expect(screen.queryByText(/Sort by Manual to drag cards/)).toBeNull();
   });
 
   test("a pointer drag outside the manual order is caught and answered", async () => {
@@ -565,7 +565,7 @@ describe("moving a card", () => {
       cardOf("ENG-1").dispatchEvent(start);
     });
     expect(start.defaultPrevented).toBe(true);
-    expect(screen.getByText(/Cards move in the manual order/)).toBeTruthy();
+    expect(screen.getByText(/Sort by Manual to drag cards/)).toBeTruthy();
   });
 });
 

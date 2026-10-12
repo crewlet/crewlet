@@ -135,7 +135,7 @@ export function Feed({ now }: { now: number }) {
                   filter.value === "all"
                     ? "Nothing has happened yet"
                     : `No ${filter.label.toLowerCase()} yet`,
-                hint: "A row appears here as the company's agents file, finish and hand on work.",
+                hint: "Agent activity appears here.",
               }
             : undefined
         }
@@ -224,9 +224,9 @@ function phrase(row: FeedEntry, index: OrgIndex, now: number) {
       case "completed": {
         const review =
           w.first_pass === true
-            ? " — approved on first review"
+            ? " · approved on first review"
             : w.first_pass === false
-              ? " — sent back in review"
+              ? " · sent back in review"
               : "";
         return {
           icon: <CircleCheckGlyph size="sm" />,

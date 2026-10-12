@@ -50,33 +50,54 @@ type Tracker struct {
 	mu     sync.Mutex
 	firing map[instance]firing
 
-	// order is the alarms the latest evaluation reported, in the order it
-	// reported them — the table's own — and observed whether any
-	// evaluation has run at all. Both are for [Tracker.Standing].
-	order    []instance
+	// order is the kinds the latest evaluation reported, in the order it
+	// reported them (the table's own), and observed whether any evaluation
+	// has run at all. Both are for [Tracker.Standing].
+	order    []Kind
 	observed bool
 }
 
-// instance is ONE alarm: its kind, and the log it is about when it is a
-// per-log condition.
+// instance is what the tracker writes ONE PAIR OF LOG LINES for: a kind, and
+// the log it stands on when it is a per-log condition ([PerLogKinds]).
 //
-// THE KIND ALONE IS NOT THE IDENTITY. Five conditions are evaluated once per
-// log ([Report]), so one evaluation can carry `trim_blocked` for the tracker's
-// log and again for the knowledge base's. Keyed on the kind, the second was
-// folded into the first: it raised no line of its own, a log whose alarm
-// cleared while another's stood said nothing, and the one `alarm_cleared`
-// that finally came carried the LAST log's detail against the FIRST one's
-// start — the dashboard had already found this out about its own list and
-// keyed its rows on the pair, and the log line was left behind.
+// THE KIND ALONE IS NOT THE LOG LINE'S IDENTITY. Six conditions are evaluated
+// once per log ([Report]), so one alarm can stand on the tracker's log and the
+// knowledge base's at once ([Alarm.Domains]). Keyed on the kind, the second log
+// joining it raised no line of its own, a log whose condition cleared while
+// another's stood said nothing, and the one `alarm_cleared` that finally came
+// carried the LAST log's detail against the FIRST one's start.
+//
+// AND THE KIND ALONE IS STILL THE ALARM'S IDENTITY everywhere else: the alarm
+// is one per kind, the gauge one series per kind and [Tracker.Standing] one
+// entry per kind, so an instance is a log line's key and nothing more. A
+// node-wide kind is one instance with no log, even where it lists logs of its
+// own: `backup_age` names the logs it holds past their replay window, and those
+// are one problem with one remedy rather than a line each.
 type instance struct {
 	kind   Kind
 	domain string
 }
 
-// firing is one alarm currently up.
+// firing is one instance currently up.
 type firing struct {
 	since  time.Time
 	detail string
+}
+
+// instancesOf is an alarm's instances, each with the detail its lines carry:
+// one per log a per-log kind stands on, carrying that log's own measurement,
+// and otherwise one with no log, carrying the alarm's.
+func instancesOf(a Alarm) ([]instance, []string) {
+	if !perLogKind(a.Kind) || len(a.Domains) == 0 {
+		return []instance{{kind: a.Kind}}, []string{a.Detail}
+	}
+	keys := make([]instance, 0, len(a.Domains))
+	details := make([]string, 0, len(a.Domains))
+	for _, d := range a.Domains {
+		keys = append(keys, instance{kind: a.Kind, domain: d.Domain})
+		details = append(details, d.Detail)
+	}
+	return keys, details
 }
 
 // NewTracker builds a tracker. A nil recorder records nothing and still logs,
@@ -92,24 +113,41 @@ func NewTracker(rec *metrics.Recorder, now func() time.Time) *Tracker {
 // Observe records one evaluation and returns the alarms currently up, in the
 // table's own order.
 //
-// EACH ALARM IS RAISED AND CLEARED ON ITS OWN — its kind and, for a per-log
-// condition, its log (see [instance]) — so a log line starts and ends each
-// one, as the published reference promises, however many logs share a kind.
+// EACH INSTANCE IS RAISED AND CLEARED ON ITS OWN in the log: a node-wide kind,
+// or one log a per-log kind stands on (see [instance]). So a log line starts
+// and ends each, as the published reference promises, however many logs share
+// a kind, and a log joining or leaving a kind that stays up is said.
 //
 // EVERY KIND IS WRITTEN TO THE GAUGE on every observation, firing or not.
 // Writing only the firing ones would leave a cleared alarm's last value at 1
 // for as long as the collector remembers it, which is an alarm that never
 // goes away for anybody reading the metric rather than the log. The gauge
-// stays ONE SERIES PER KIND, at 1 while any log's instance is up: a series
-// per log would be a label a collector keeps for every log a deployment ever
-// ran, for a question the log line and the screen already answer by name.
+// stays ONE SERIES PER KIND, at 1 while the kind's alarm is up on any log: a
+// series per log would be a label a collector keeps for every log a
+// deployment ever ran, for a question the log line and the screen already
+// answer by name.
 func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 	now := t.now()
-	up := make(map[instance]Alarm, len(alarms))
+	type raised struct {
+		key    instance
+		detail string
+		remedy string
+	}
+	var up []raised
+	live := make(map[instance]bool, len(alarms))
 	kinds := make(map[Kind]bool, len(alarms))
 	for _, a := range alarms {
-		up[instance{kind: a.Kind, domain: a.Domain}] = a
 		kinds[a.Kind] = true
+		keys, details := instancesOf(a)
+		for i, key := range keys {
+			if live[key] {
+				// One log listed twice under one kind is one
+				// instance; the first listing's detail stands.
+				continue
+			}
+			live[key] = true
+			up = append(up, raised{key: key, detail: details[i], remedy: a.Remedy})
+		}
 	}
 
 	t.mu.Lock()
@@ -118,22 +156,23 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 	t.observed = true
 	t.order = t.order[:0]
 	for _, a := range alarms {
-		t.order = append(t.order, instance{kind: a.Kind, domain: a.Domain})
+		if !slices.Contains(t.order, a.Kind) {
+			t.order = append(t.order, a.Kind)
+		}
 	}
-	for _, a := range alarms {
-		key := instance{kind: a.Kind, domain: a.Domain}
-		if was, already := t.firing[key]; already {
-			// Still up. The detail may have moved — a lag grows — and
+	for _, r := range up {
+		if was, already := t.firing[r.key]; already {
+			// Still up. The detail may have moved (a lag grows), and
 			// that is not a transition.
-			t.firing[key] = firing{since: was.since, detail: a.Detail}
+			t.firing[r.key] = firing{since: was.since, detail: r.detail}
 			continue
 		}
-		t.firing[key] = firing{since: now, detail: a.Detail}
-		t.logger.WarnContext(ctx, "alarm_raised", key.attrs(
-			"detail", a.Detail, "remedy", a.Remedy)...)
+		t.firing[r.key] = firing{since: now, detail: r.detail}
+		t.logger.WarnContext(ctx, "alarm_raised", r.key.attrs(
+			"detail", r.detail, "remedy", r.remedy)...)
 	}
 	for _, key := range slices.SortedFunc(maps.Keys(t.firing), compareInstances) {
-		if _, still := up[key]; still {
+		if live[key] {
 			continue
 		}
 		was := t.firing[key]
@@ -154,8 +193,8 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 	return alarms
 }
 
-// attrs is a transition line's attributes: the alarm, the log it is about when
-// it is a per-log one, and the rest.
+// attrs is a transition line's attributes: the alarm, the log it stands on
+// when it is a per-log one, and the rest.
 func (i instance) attrs(rest ...any) []any {
 	out := []any{"alarm", string(i.kind)}
 	if i.domain != "" {
@@ -173,52 +212,42 @@ func compareInstances(a, b instance) int {
 	return cmp.Compare(a.domain, b.domain)
 }
 
-// StandingAlarm is one alarm the latest evaluation found up, named the way a
-// surface that cannot carry the whole table names it: its kind, and the log it
-// is about when it is a per-log condition ([Alarm.Domain]).
-//
-// BOTH HALVES, for the reason [instance] has both: `trim_blocked` standing on
-// the tracker's log and on the knowledge base's is two alarms with two
-// remedies, and a name that dropped the log would send an operator to the
-// wrong one — or count two alarms and name one.
-type StandingAlarm struct {
-	Kind   Kind   `json:"kind"`
-	Domain string `json:"domain,omitempty"`
-}
-
-// Standing reports the alarms the latest evaluation found firing, the
+// Standing reports the kinds the latest evaluation found firing, the
 // LONGEST-STANDING first, and false before any evaluation has run.
 //
 // For the fourth surface, the health envelope every node pushes to every tab,
 // which carries a count and ONE name rather than the table: the name a health
 // card can afford is the condition that has gone unanswered longest. Not the
 // table's order, which is the order the reference reads in and asserts no
-// ranking — a table sorted by severity would be a second opinion about each
+// ranking: a table sorted by severity would be a second opinion about each
 // alarm beside the threshold that already decides it. How long something has
 // been wrong is a fact this tracker holds and nothing else does, and the
 // table's order breaks a tie only between alarms raised by one evaluation.
 //
-// ONE ENTRY PER ALARM, which is per LOG for a per-log kind: the count is how
-// many things an operator has to look at, and a kind standing on two logs is
-// two of them.
+// ONE ENTRY PER KIND, however many logs it stands on: the count is how many
+// problems an operator has to look at, and one cause standing on four logs is
+// one of them, as the gauge beside it says. A per-log kind has stood since its
+// longest-standing log's instance was raised.
 //
 // FALSE IS NOT "NONE FIRING": a node whose alarm table has not been evaluated
-// yet — mid-boot, or running no state log at all — cannot say, and an empty
+// yet (mid-boot, or running no state log at all) cannot say, and an empty
 // list here would tell a health card it is healthy.
-func (t *Tracker) Standing() ([]StandingAlarm, bool) {
+func (t *Tracker) Standing() ([]Kind, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.observed {
 		return nil, false
 	}
-	order := slices.Clone(t.order)
-	slices.SortStableFunc(order, func(a, b instance) int {
-		return t.firing[a].since.Compare(t.firing[b].since)
-	})
-	out := make([]StandingAlarm, 0, len(order))
-	for _, key := range order {
-		out = append(out, StandingAlarm{Kind: key.kind, Domain: key.domain})
+	since := make(map[Kind]time.Time, len(t.order))
+	for key, f := range t.firing {
+		if at, seen := since[key.kind]; !seen || f.since.Before(at) {
+			since[key.kind] = f.since
+		}
 	}
+	out := append(make([]Kind, 0, len(t.order)), t.order...)
+	slices.SortStableFunc(out, func(a, b Kind) int {
+		return since[a].Compare(since[b])
+	})
 	return out, true
 }
 

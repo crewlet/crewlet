@@ -18,7 +18,7 @@
  *  - `loading`  — the read is in flight, or the viewer has not answered yet.
  *                 Not "needs a grant": that sentence was drawn at a reader who
  *                 HOLDS it for as long as the read took.
- *  - `refused`  — the read answered with an error.
+ *  - `refused`  — the read answered with an error: "Owner unknown".
  *
  * ONE HOOK for the tree's space rows and the container rail, because both
  * state the same fact about the same space and two derivations of it had
@@ -66,7 +66,7 @@ export function ownerSentence(owners: SpaceOwners): string {
     case "loading":
       return "Who files here is still being read";
     case "refused":
-      return "Who files here could not be read";
+      return "Owner unknown";
     case "read": {
       if (owners.units.length === 0) return "No unit names this space in its space:";
       return owners.units

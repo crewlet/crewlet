@@ -153,11 +153,11 @@ describe("the fleet, refused before any reading", () => {
         </Router>
       </ClientContext.Provider>,
     );
-    expect(await screen.findByText(/does not carry the grant this answer needs/)).toBeDefined();
+    expect(await screen.findByText(/This needs a grant you don’t hold\./)).toBeDefined();
     expect(document.getElementById(PAGE_ACTIONS_SLOT)?.textContent).toBe("");
     expect(view.container.querySelector(".crewlet-statcard")).toBeNull();
     expect(screen.queryByText("No nodes are reporting")).toBeNull();
-    expect(screen.queryByText(/last reading that succeeded/)).toBeNull();
+    expect(screen.queryByText(/last good reading/)).toBeNull();
   });
 });
 

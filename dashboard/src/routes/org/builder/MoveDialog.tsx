@@ -189,15 +189,14 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
       />
       {unitRef && (
         <p className="t-caption">
-          {name} is placed in {unitRefName} by its unit reference. Moving it writes it into the
-          destination and removes the reference.
+          {name} is placed in {unitRefName} by reference. Moving it removes the reference.
         </p>
       )}
       {led.length > 0 && (
         <EditorSection title={`Stays lead of ${led.map((u) => u.data.name).join(", ")}`}>
           <p className="t-caption">
-            A unit's lead names a seat by its handle, so {name} leads{" "}
-            {led.length === 1 ? "it" : "them"} from wherever it sits.
+            {name} still leads {led.length === 1 ? "it" : "them"} after the move: a lead names a
+            seat by its handle.
           </p>
           <Checkbox
             label="Clear lead"
@@ -230,10 +229,7 @@ function MoveChanges({
   if (!preview.known) {
     return (
       <EditorSection title="What changes">
-        <p className="t-body muted">
-          The engine has not described this draft yet, so what the move changes is shown after the
-          next check.
-        </p>
+        <p className="t-body muted">Changes appear after the next check.</p>
       </EditorSection>
     );
   }
@@ -247,12 +243,12 @@ function MoveChanges({
       !preview.reportsTo
         ? `Today ${name} reports to nobody.`
         : preview.endsAsLeadOf
-          ? `Today ${name} reports to ${preview.reportsTo} as the lead of ${preview.endsAsLeadOf}, which ends with the move.`
+          ? `${name} stops reporting to ${preview.reportsTo}.`
           : `Today ${name} reports to ${preview.reportsTo}.`,
     );
     if (preview.destinationLead) {
       lines.push(
-        `In ${destination}, ${preview.destinationLead} leads the unit and manages its direct members unless another member manages ${name}.`,
+        `In ${destination}, ${name} reports to ${preview.destinationLead} unless someone else manages them.`,
       );
     } else if (destination === "the top level") {
       lines.push("At the top level, no unit lead manages it.");
@@ -281,10 +277,7 @@ function MoveChanges({
     lines.push(`${name} loses the tool credentials of ${preview.credentials.lost.join(", ")}.`);
   }
   return (
-    <EditorSection
-      title="What changes"
-      hint="From the engine's check of the draft as it stands. The check after the move confirms it, and the review lists it before you save."
-    >
+    <EditorSection title="What changes">
       <ul className="builder-list">
         {lines.map((line) => (
           <li key={line}>{line}</li>

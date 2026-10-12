@@ -125,9 +125,11 @@ func (w *floorWatch) observe(ctx context.Context, now time.Time, subjects []floo
 // form this replaced reduced the watch to the domain unreadable longest, so a
 // node two logs behind a re-anchor named one of them — and an operator who
 // repaired it met the second only after the fix, under an alarm that had never
-// cleared. The report evaluates each domain's answer on its own and names the
-// log; a coordination outage that fails every domain at once raises one per
-// log, each saying so.
+// cleared. The report evaluates each domain's answer on its own and lists every
+// unreadable log, with its own cause, under the one `floor_unknown` alarm
+// ([statelog.Alarm.Domains]); a coordination outage that fails every domain at
+// once is that one alarm naming every log, and the [statelog.Tracker] writes a
+// raise and a clear line for each.
 //
 // FIRST SIGHTING TO LATEST OBSERVATION, never to now: a report assembled
 // between two beats knows only what the last one found, and measuring to now

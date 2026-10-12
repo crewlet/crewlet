@@ -7,10 +7,10 @@
  * The answer is the PRINCIPAL the engine resolved for this browser and the
  * seat the identity directory binds it to (`lib/viewer.ts`). BOUND: a person
  * the directory binds to a seat — their name, their login and their seat.
- * UNBOUND: somebody resolved with no seat — a Tier A token's session, a
- * service account, or a person recorded before every person held a human
- * seat (ADR-0032) — which is ORDINARY, so the block names the login and says
- * it is not bound rather than reporting a fault.
+ * UNBOUND: somebody resolved with no seat — a Tier A token's session or a
+ * service account, never a person, who holds a human seat for as long as they
+ * are here (ADR-0032) — which is ORDINARY, so the block names the login and
+ * says it is not bound rather than reporting a fault.
  * NOBODY: the block says so and offers the sign-in. Each is a sentence, never
  * a blank avatar, because "who does the engine think I am" is the question
  * every write this dashboard makes turns on. The GRANTS are said in the

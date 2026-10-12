@@ -51,7 +51,9 @@ describe("a queue nothing in it can move", () => {
   it("is critical rather than caution", () => {
     // It is the one row on this screen somebody has to act on.
     expect(loadTone(loadOf(row("ada", { open: 4, blocked: 4 })))).toBe("critical");
-    expect(loadSentence(loadOf(row("ada", { open: 4, blocked: 4 })))).toContain("can move none");
+    expect(loadSentence(loadOf(row("ada", { open: 4, blocked: 4 })))).toBe(
+      "4 open items, all blocked.",
+    );
   });
 });
 

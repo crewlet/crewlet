@@ -32,7 +32,7 @@ test("a seat held elsewhere is a peer's, and one nobody holds is said", () => {
       { id: "b", agent_id: "b", role: "PM", activity: "stopped", stopped_reason: "unplaced" },
       health,
     ),
-  ).toBe("no node — not placed");
+  ).toBe("no node");
 });
 
 // UNKNOWN IS NOT "ELSEWHERE": with no push this node has said nothing about

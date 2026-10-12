@@ -641,9 +641,7 @@ test("Assign task decides whose the task is from the read, not the search's answ
   expect(dialog.getByRole("option", { name: /ENG-20/ }).getAttribute("aria-disabled")).toBe("true");
 
   await pick("ENG-21");
-  await waitFor(() =>
-    expect(dialog.getByText(/ENG-21 is already SWE’s — find another/)).toBeTruthy(),
-  );
+  await waitFor(() => expect(dialog.getByText(/ENG-21 is already assigned to SWE\./)).toBeTruthy());
   expect(assign().getAttribute("aria-disabled")).toBe("true");
 });
 
@@ -663,7 +661,7 @@ test("pausing sends stop_running only when the box is ticked", async () => {
   await settle();
 
   let dialog = await openPause();
-  expect(dialog.getByText(/the turn it is on finishes first/)).toBeTruthy();
+  expect(dialog.getByText(/Otherwise the current turn finishes first\./)).toBeTruthy();
   fireEvent.change(dialog.getByLabelText(/Why/), { target: { value: "rolling the fleet" } });
   fireEvent.click(dialog.getByRole("button", { name: "Pause" }));
   await waitFor(() => expect(posted).toHaveLength(1));
@@ -1045,9 +1043,7 @@ test("a seat with no budget of its own under a capped company says the company's
   // KPI row — and the whole sentence on its title.
   const sub = within(tile("Tokens · 7 days")).getByText(/company cap/);
   expect(sub.textContent).toBe("company cap 60M/day +1");
-  expect(sub.getAttribute("title")).toBe(
-    "No seat cap — the company's 60M/day and 900M/month apply",
-  );
+  expect(sub.getAttribute("title")).toBe("No seat cap; the company's 60M/day and 900M/month apply");
   expect(tile("Tokens · 7 days").textContent).not.toContain("no budget caps it");
 });
 
@@ -1209,7 +1205,9 @@ test("without the document the setup card says whose read it is, not that nothin
   const setup = screen.getByText("Setup").closest(".crewlet-card") as HTMLElement;
   // THE PUBLIC HALF STILL DRAWS.
   expect(setup.textContent).toContain("anthropic-main");
-  expect(setup.textContent).toContain("which config:read reads");
+  expect(setup.textContent).toContain(
+    "Needs config:read to see its sandbox, placement and workers.",
+  );
   expect(setup.textContent).not.toContain("not offered");
 });
 
@@ -1547,11 +1545,11 @@ test("a running turn's row says what it is doing, and has no figures yet", async
       },
     },
   });
-  const doing = await screen.findByText("running — executing · round 7 of 25");
+  const doing = await screen.findByText("running · executing · round 7 of 25");
   const row = doing.closest(".grid-row") as HTMLElement;
   expect(within(row).getByText("ENG-412")).toBeTruthy();
   expect(within(row).queryByText("no summary recorded")).toBeNull();
-  expect(within(row).getAllByText("Not settled — the turn has not ended")).toHaveLength(2);
+  expect(within(row).getAllByText("Not settled")).toHaveLength(2);
   // A SETTLED TURN'S STATE CELL HOLDS NOTHING AT ALL, which is what a phone's
   // card drops: an empty wrapper left a "STATE" label alone on its line.
   const settled = screen.getByText("did thing 1").closest(".grid-row") as HTMLElement;
@@ -1822,7 +1820,7 @@ test("the memory tab's lists say they are the latest page of the whole", async (
     },
   });
   await waitFor(() => expect(screen.getByText(/Latest 50 of 142/)).toBeTruthy());
-  expect(screen.getByText(/Read from node-2, the node holding this seat/)).toBeTruthy();
+  expect(screen.getByText(/From node-2\./)).toBeTruthy();
 });
 
 // ONE RULE FOR ALL FOUR HEADERS: the skills card said its cut in a footer,
@@ -2034,9 +2032,13 @@ test("a seat no node holds says why its memory is empty", async () => {
       },
     },
   });
-  await waitFor(() =>
-    expect(screen.getAllByText(/No node holds this seat, so no copy/).length).toBe(2),
-  );
+  await waitFor(() => {
+    // The ledger's line, whole, and the memory card's longer sentence.
+    expect(screen.getByText("No node is running this seat.")).toBeTruthy();
+    expect(
+      screen.getByText(/No node is running this seat, so its memory can’t be shown\./),
+    ).toBeTruthy();
+  });
 });
 
 const THREAD = "slack:C0TEAM/1709280000.000100";
@@ -2100,9 +2102,7 @@ test("with no thread open the pane counts nothing and instructs only from its em
     header("Thread turns").querySelector(".crewlet-count"),
     "nothing was asked for, so a 0 here states a quantity about a thread nobody named",
   ).toBeNull();
-  expect(
-    screen.getByText(/Choose a thread to see the turns this seat recorded in it/),
-  ).toBeTruthy();
+  expect(screen.getByText("Choose a thread.")).toBeTruthy();
 });
 
 test("an open thread's turns are counted, and opening one names it on the question", async () => {
@@ -2350,7 +2350,7 @@ test("a person with no contact identity is said to be reached through the dashbo
   mount("#/agents/seats/jane?tab=settings", { answers: { viewer: OPERATOR, config: document } });
   expect(
     await screen.findByText(
-      "No contact identity is declared, so this person is reached through the dashboard only: activity on Slack, GitHub or the tracker is not attributed to them.",
+      "Reached only through the dashboard: their Slack, GitHub or tracker activity is not attributed to them. Add a contact identity in Edit org.",
     ),
   ).toBeTruthy();
 });
@@ -2371,7 +2371,7 @@ test("the budget rows say where the company's ceiling applies to an uncapped win
   await waitFor(() => expect(screen.getByText("Model and budget")).toBeTruthy());
   const card = screen.getByText("Model and budget").closest(".crewlet-card") as HTMLElement;
   await waitFor(() => expect(card.textContent).toContain("3M tokens"));
-  expect(card.textContent).toContain("the company’s 60M applies");
+  expect(card.textContent).toContain("company limit, 60M");
   // SWE's own week is its own; the month is capped by nobody.
   expect(card.textContent).toContain("3M tokens");
   expect(card.textContent).toContain("uncapped");

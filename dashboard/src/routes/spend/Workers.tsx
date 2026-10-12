@@ -40,6 +40,7 @@ export function Workers({
         <Skeleton height="4.5rem" />
       ) : (
         <BarList
+          className="spend-bars"
           layout="beside"
           emptyLabel="The auxiliary model spent no tokens in this window."
           data={rows

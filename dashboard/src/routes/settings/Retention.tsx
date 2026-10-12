@@ -32,25 +32,35 @@
  *   - `evicted` carrying its `effective_at` while the fence window is open,
  *     because an operator who cannot see that the exclusion is PENDING runs
  *     the gesture twice.
- *   - the snapshot block's OWN blocked reason: a stalled snapshot tier and a
- *     stalled trim are different problems with different remedies, and the
- *     first is silent until a node tries to join.
+ *   - the snapshot block's OWN blocked reason, in the Snapshots card: a
+ *     stalled snapshot tier and a stalled trim are different problems with
+ *     different remedies, and the first is silent until a node tries to join.
+ *
+ * # Each problem is said once
+ *
+ * The alarms lead the page ([RetentionStatus]), each kind once with the logs it
+ * stands on, and every panel under them states facts. A log names what holds
+ * its trim in a word and keeps its six checks behind a disclosure; a single
+ * node's missing snapshots are one sentence. The same missing backup used to
+ * be said about twenty times on this page.
  */
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   Button,
   Callout,
   Card,
+  DescriptionList,
+  Disclosure,
   EmptyValue,
   InlineCode,
   Skeleton,
   StatCard,
   StatGroup,
   Tag,
+  type DescriptionListEntry,
 } from "@crewlethq/ui";
 import {
-  CopyGlyph,
   DatabaseGlyph,
   ServerGlyph,
   PackageGlyph,
@@ -59,16 +69,22 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
-import { useQuery } from "~/lib/useQuery.ts";
-import { fmtBytes, fmtDateTime, fmtDuration, fmtExact, relTime } from "~/lib/format.ts";
+import { href, useRoute } from "~/app/router.tsx";
+import { ALARMS_AT, alarmKindTitle, alarmLogLines, type AlarmLogLine } from "~/lib/alarms.ts";
+import { bindingTerm, TERM_WORDS } from "~/lib/retention.ts";
+import { reveal } from "~/lib/scroller.ts";
+import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
+import { asSentence, fmtBytes, fmtDateTime, fmtDuration, fmtExact, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { marked } from "~/ui/Problems.tsx";
 import type {
+  RetentionAlarm,
   RetentionDomain,
   RetentionEviction,
   RetentionMaintenance,
   RetentionNode,
   RetentionNodeDomain,
+  RetentionReplica,
   RetentionReport,
   RetentionSnapshot,
   RetentionTerm,
@@ -78,65 +94,267 @@ import type { GateGesture } from "./GateDialog.tsx";
 
 /** Sixty seconds: this document is assembled from coordination and three
  *  loops, and none of them moves faster than a tick. */
-const POLL_MS = 60_000;
+export const RETENTION_POLL_MS = 60_000;
 
-/** One domain whose trim is blocked, in the sentence the server composed. */
-export function BlockedBanner({ domain: d, now }: { domain: RetentionDomain; now: number }) {
-  return (
-    <Callout variant="warning">
-      <span>
-        {d.prose ? (
-          d.prose.replace(/\.$/, "")
-        ) : (
-          <>
-            Nothing is being trimmed on <InlineCode>{d.domain}</InlineCode>: the {d.blocked_by} term
-            is holding it
-          </>
-        )}
-        {d.blocked_since && <> — since {relTime(d.blocked_since, now)}</>}.{" "}
-        <a
-          className="prose-link"
-          href="https://docs.crewlet.ai/engine/latest/guides/retention/"
-          target="_blank"
-          rel="noreferrer"
-        >
-          What the six terms mean
-        </a>
-      </span>
-    </Callout>
-  );
+/**
+ * The retention report, asked the one way every reader of it asks: this
+ * section's page, a log's own page and the tests that stand either up.
+ *
+ * ONE ANSWER PER PAGE, held by the page and handed to each panel, so the
+ * alarms leading the page and the panels under them can never describe two
+ * different reports, and a poll asks once rather than once per panel.
+ */
+export function useRetentionReport(enabled: boolean): QueryResult<RetentionReport> {
+  return useQuery("retention", undefined, { pollMs: RETENTION_POLL_MS, enabled });
 }
 
 /** The trim's sixth term (D72), and the number an operator has to fix when the
  *  banner names `snapshot_floor`. */
 const SNAPSHOT_DONORS_REQUIRED = 2;
 
-export function RetentionPanels({ thisNode }: { thisNode?: string }) {
+/** The alarm list's element, which `at=alarms` brings into view. */
+const ALARMS_ID = "retention-alarms";
+
+/**
+ * What is wrong, drawn first: the report's own health, an open maintenance
+ * operation, and the standing alarms.
+ *
+ * # Each problem once
+ *
+ * This page used to say a missing backup about twenty times: in three empty
+ * panels, a banner per log, an alarm per log, and the same sentence and remedy
+ * in every log's table of terms. The engine now raises each alarm ONCE, with
+ * the logs it stands on (`statelog.Alarm.Domains`), so the alarm list is the
+ * page's diagnosis and leads it; every panel below states facts and points back
+ * up to it rather than saying it again.
+ */
+export function RetentionStatus({
+  retention,
+  onTakeBackup,
+}: {
+  retention: QueryResult<RetentionReport>;
+  /** Opens this page's backup dialog, offered to a reader holding fleet:operate. */
+  onTakeBackup?: () => void;
+}) {
   const now = useNow();
-  // GATED ON THE GRANT THE ENGINE DECIDES IT ON, `fleet:operate`, so the
-  // panel renders only for a reader the engine will answer. Asking for
-  // anybody else would refuse on every poll and paint the screen red for a
-  // reader who simply does not operate the fleet.
-  const viewer = useViewer();
-  const operator = viewer.operatesFleet;
-  const { data, loading, error, refetch } = useQuery("retention", undefined, {
-    pollMs: POLL_MS,
-    enabled: operator,
-  });
+  const { data, error } = retention;
+  // ARRIVING FOR THE ALARMS (`at=alarms`, the engine panel's "Open alarms")
+  // brings their list into view once the report has drawn it, ONCE per
+  // arrival, so a poll that moved the count does not scroll a reader who has
+  // moved on.
+  const route = useRoute();
+  const forAlarms = route.query.get("at") === ALARMS_AT;
+  const standing = data?.alarms?.length ?? 0;
+  const revealed = useRef<string | null>(null);
+  useEffect(() => {
+    if (!forAlarms || standing === 0 || revealed.current === route.hash) return;
+    revealed.current = route.hash;
+    reveal(document.getElementById(ALARMS_ID));
+  }, [forAlarms, standing, route.hash]);
+
+  return (
+    <>
+      {error && (
+        <Callout variant="danger" role="alert">
+          Refresh failed ({error}). Showing the last good reading.
+        </Callout>
+      )}
+      {data?.maintenance && <MaintenanceBanner op={data.maintenance} now={now} />}
+      <ServedLevelBanner level={data?.read_level} />
+      {data && standing > 0 && (
+        <AlarmList alarms={data.alarms} now={now} onTakeBackup={onTakeBackup} />
+      )}
+    </>
+  );
+}
+
+/** The one alarm whose remedy is a gesture this page offers. */
+const BACKUP_AGE = "backup_age";
+
+/** The standing alarms, each drawn once with the logs it stands on. */
+export function AlarmList({
+  alarms,
+  now,
+  onTakeBackup,
+}: {
+  alarms: RetentionAlarm[];
+  now: number;
+  onTakeBackup?: () => void;
+}) {
+  return (
+    <Card id={ALARMS_ID}>
+      <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={alarms.length}>
+        Alarms
+      </Card.Header>
+      <div className="col gap-2">
+        {alarms.map((alarm) => (
+          // THE KIND IS THE IDENTITY: the engine raises each one once.
+          <AlarmItem key={alarm.kind} alarm={alarm} now={now} onTakeBackup={onTakeBackup} />
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * One alarm: its name, what was measured, the logs it stands on, and what to
+ * do about it.
+ *
+ * THE NAME IS THE KIND IN WORDS (`lib/alarms.ts`) and the measurement is the
+ * engine's own sentence, so this reads the same as the log line and
+ * `crewlet retention status`. A single log whose measurement IS the alarm's is
+ * folded into it, as the CLI folds it: drawn as both a headline and a line,
+ * the one sentence read as two facts. Every other log the alarm stands on says
+ * its own measurement under it, as the CLI prints one, so a log a backup holds
+ * says how many records it keeps past its window and the second log of a
+ * blocked trim is not read as the first one's.
+ */
+export function AlarmItem({
+  alarm,
+  now,
+  onTakeBackup,
+}: {
+  alarm: RetentionAlarm;
+  now: number;
+  onTakeBackup?: () => void;
+}) {
+  const lines = alarmLogLines(alarm);
+  const only = lines.length === 1 ? lines[0] : undefined;
+  const folded = only && !only.term && only.detail === alarm.detail ? only : undefined;
+  // ONE HELD LOG WHOSE MEASUREMENT IS THE HEADLINE keeps its term's line and
+  // drops the sentence under it, which would repeat the headline word for word.
+  const headlined =
+    only?.term !== undefined && only.logs?.length === 1 && only.logs[0]?.detail === alarm.detail;
+  return (
+    <Callout
+      variant="warning"
+      title={alarmKindTitle(alarm.kind)}
+      action={
+        alarm.kind === BACKUP_AGE && onTakeBackup ? (
+          <Button variant="secondary" size="small" onClick={onTakeBackup}>
+            Take a backup
+          </Button>
+        ) : undefined
+      }
+    >
+      <div className="alarm-body">
+        <p>
+          {folded && (
+            <>
+              <LogLink domain={folded.domains[0] ?? ""} />:{" "}
+            </>
+          )}
+          {marked(asSentence(alarm.detail), "inherit")}
+        </p>
+        {!folded && lines.length > 0 && (
+          <ul className="alarm-logs">
+            {lines.map((line) => (
+              <li key={`${line.term ?? ""}:${line.domains.join(",")}`}>
+                <AlarmLogText line={line} now={now} measured={!headlined} />
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="t-caption muted">{marked(alarm.remedy)}</p>
+      </div>
+    </Callout>
+  );
+}
+
+/**
+ * One line of the logs an alarm stands on, in words: a held trim's term with
+ * each log's own measurement under it (unless `measured` is false, where the
+ * one log's sentence is the headline already).
+ */
+function AlarmLogText({
+  line,
+  now,
+  measured,
+}: {
+  line: AlarmLogLine;
+  now: number;
+  measured: boolean;
+}) {
+  if (!line.term) {
+    return (
+      <>
+        <LogLink domain={line.domains[0] ?? ""} />: {marked(line.detail ?? "", "inherit")}
+      </>
+    );
+  }
+  const held = line.since ? fmtDuration(now - Date.parse(line.since)) : undefined;
+  const logs = measured ? (line.logs ?? []).filter((l) => l.detail !== "") : [];
+  return (
+    <>
+      Trim held by {TERM_WORDS[line.term].holds} on <LogNames domains={line.domains} />
+      {held ? <>, for {held}</> : null}.
+      {logs.length > 0 && (
+        <ul className="alarm-logs">
+          {logs.map((l) => (
+            <li key={l.domain}>
+              <LogLink domain={l.domain} />: {marked(l.detail, "inherit")}
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+/** Logs in a sentence: "tracker, vectors and pages", each one a link to its page. */
+function LogNames({ domains }: { domains: string[] }) {
+  return (
+    <>
+      {domains.map((domain, i) => (
+        <Fragment key={domain}>
+          {i === 0 ? null : i === domains.length - 1 ? " and " : ", "}
+          <LogLink domain={domain} />
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
+/**
+ * A log's name in a sentence, as a link to the log's own page. INLINE, unlike
+ * a table's key cell, which is a box of its own and stacked a sentence's four
+ * names one per line.
+ */
+function LogLink({ domain }: { domain: string }) {
+  return (
+    <a className="mono t-link" href={href(["settings", "backups", domain])}>
+      {domain}
+    </a>
+  );
+}
+
+/**
+ * The fleet's own state under the alarms: every node's place in each log, the
+ * logs and their trims, and what seeds a new node.
+ */
+export function RetentionPanels({
+  thisNode,
+  retention,
+}: {
+  thisNode?: string;
+  retention: QueryResult<RetentionReport>;
+}) {
+  const now = useNow();
+  const { data, loading, refetch } = retention;
   const [gate, setGate] = useState<{ node: string; evict: boolean } | null>(null);
   // THE GESTURES STILL TO BE FINISHED, keyed by node and sign, held HERE
   // rather than in the dialog: the dialog is unmounted when it closes, and a
-  // partial eviction reopened as a fresh one is a second gesture — every log
-  // the first one reached is written again and its eviction re-dated.
+  // partial eviction reopened as a fresh one is a second gesture, which writes
+  // every log the first one reached again and re-dates its eviction.
   //
   // A COMPLETE ONE IS HELD TOO, until the report shows it. The report is
   // polled, and until its next answer the row still read "Evict…" for a node
-  // just evicted — reopened, that minted a fresh id and wrote a second record
+  // just evicted; reopened, that minted a fresh id and wrote a second record
   // on every log, re-dating the eviction straight after the dialog said not
   // to retry. So an answer asks the report again at once, and the gesture
-  // stays on the row until the report agrees with it — or until a report
-  // that already includes it disagrees, because something later moved the
-  // node ([heldGestures]).
+  // stays on the row until the report agrees with it, or until a report that
+  // already includes it disagrees because something later moved the node
+  // ([heldGestures]).
   const [gestures, setGestures] = useState<Record<string, GateGesture>>({});
   const holdGesture = (node: string, evict: boolean, g: GateGesture | null) => {
     setGestures((all) => {
@@ -164,79 +382,26 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
     });
   }, [nodesSeen, domainsSeen, servedBy]);
 
-  if (!operator) return null;
-
-  const domains = data?.domains ?? [];
-  const nodes = data?.nodes ?? [];
-  const blocked = domains.filter((d) => d.blocked_by);
+  if (!data) {
+    return loading ? <Skeleton variant="text" rows={3} label="Loading the logs" /> : null;
+  }
+  const domains = data.domains ?? [];
+  const nodes = data.nodes ?? [];
 
   return (
     <>
-      {error && (
-        <Callout variant="danger" role="alert">
-          This retention poll failed ({error}). What is below is the last reading that succeeded —
-          on this screen, which is read while nodes are dying, that difference matters.
-        </Callout>
-      )}
-      {loading && !data && <Skeleton variant="text" rows={3} label="Loading" />}
-
-      {/* THE BANNER NAMES THE TERM IN THE OPERATOR'S OWN WORDS, and never the
-          term name alone: `backup_max_age` is a field, and "the newest
-          complete backup is 3 days old" is the fact somebody acts on. The
-          server composes that sentence, because the CLI renders the same one
-          — and it is the WHOLE sentence, headline included ("Nothing is being
-          trimmed on tracker: …"), so it is printed as it came rather than
-          after a headline of our own, which drew the headline twice. Only a
-          report with no sentence is given one here. */}
-      {blocked.map((d) => (
-        <BlockedBanner key={d.domain} domain={d} now={now} />
-      ))}
-
-      {data?.maintenance && <MaintenanceBanner op={data.maintenance} now={now} />}
-
-      {data?.register_readable === false && (
-        <Callout variant="warning">
-          The node register could not be listed, so the rows below are what could be READ of the
-          fleet rather than the fleet. An empty list here is not an empty company.
-        </Callout>
+      {data.register_readable === false && (
+        <Callout variant="warning">Couldn’t list nodes, so some may be missing below.</Callout>
       )}
 
       {domains
         .filter((d) => d.evictions_unreadable)
         .map((d) => (
           <Callout key={`evictions:${d.domain}`} variant="warning">
-            This node could not read <InlineCode>{d.domain}</InlineCode>'s evictions, so no node
-            below shows as evicted there — an eviction may be hidden rather than absent. The next
-            report reads them again.
+            Couldn’t read <InlineCode>{d.domain}</InlineCode>’s evictions, so evicted nodes may not
+            show.
           </Callout>
         ))}
-
-      <ServedLevelBanner level={data?.read_level} />
-
-      {(data?.alarms?.length ?? 0) > 0 && (
-        <Card>
-          <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={data?.alarms.length}>
-            Alarms
-          </Card.Header>
-          <div className="col gap-2">
-            {data?.alarms.map((a) => (
-              // THE KIND IS NOT THE IDENTITY. `trim_blocked` is raised PER
-              // DOMAIN — the tracker's log, the vectors' and the pages' — and
-              // `statelog.Alarm` carries only `{kind, detail, remedy}`, so
-              // three genuinely different alarms arrive under one kind and
-              // React kept ONE of them. Caught by running a node with no
-              // backup: three blocked trims, one banner. The pair is what
-              // identifies the alarm, and the detail is where the domain is.
-              <Callout key={`${a.kind}:${a.detail}`} variant="warning">
-                <span>
-                  <InlineCode>{a.kind}</InlineCode> — {a.detail}{" "}
-                  <span className="muted">{a.remedy}</span>
-                </span>
-              </Callout>
-            ))}
-          </div>
-        </Card>
-      )}
 
       <Card padding="none">
         <Card.Header icon={<ServerGlyph size="sm" />} count={nodes.length}>
@@ -323,10 +488,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
                         the button alone read as though it would simply
                         work. */}
                     {action.evict && n.live && (
-                      <Tag
-                        variant="neutral"
-                        title="it holds a presence lease, so an eviction is refused unless you force it"
-                      >
+                      <Tag variant="neutral" title="Still running. Eviction needs force.">
                         live
                       </Tag>
                     )}
@@ -345,31 +507,69 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
         />
       </Card>
 
-      <Card>
-        <Card.Header icon={<DatabaseGlyph size="sm" />} count={domains.length}>
-          Log retention
-        </Card.Header>
-        {/* ONE BLOCK PER REGISTERED DOMAIN, from the document itself rather
-            than as hand-written sections — so a domain added to the register
-            appears here with no dashboard change at all. */}
-        <div className="col gap-3">
-          {domains.map((d) => (
-            <DomainBlock key={d.domain} domain={d} />
-          ))}
-        </div>
-      </Card>
+      <LogRetention domains={domains} />
 
-      <Card padding="none">
-        <Card.Header
-          icon={<PackageGlyph size="sm" />}
-          count={data?.snapshots?.length}
-          subtitle={`${donorsCounted(data?.snapshots ?? [])} of ${SNAPSHOT_DONORS_REQUIRED} donors — the trim's sixth term`}
-        >
-          Snapshots
-        </Card.Header>
+      <SnapshotsCard snapshots={data.snapshots ?? []} replica={data.replica} now={now} />
+
+      {gate && (
+        <GateDialog
+          node={gate.node}
+          evict={gate.evict}
+          held={gestures[gestureKey(gate.node, gate.evict)]}
+          onHeld={(g) => holdGesture(gate.node, gate.evict, g)}
+          onClose={() => setGate(null)}
+        />
+      )}
+    </>
+  );
+}
+
+/** The skip reason a single-node fleet's snapshot loop gives, by design. */
+const SOLE_NODE = "sole_node";
+
+/**
+ * Snapshots and joining: which nodes can seed a new one, and what a join costs.
+ *
+ * A SINGLE NODE TAKES NO SNAPSHOTS BY DESIGN: its recovery artefact is a
+ * backup, which the backup term already gates. It was drawn as a table of one
+ * row reading `sole_node`, a donor count of 0 of 2 and a warning under every
+ * log, four faults on a fleet working as configured. One sentence says it. Any
+ * other reason a node holds no snapshot is a real gap and keeps its row:
+ * `lagging`, `unhydrated`, `insufficient_space`, `deferred` and `recent` are
+ * five different things to do about it.
+ */
+export function SnapshotsCard({
+  snapshots,
+  replica,
+  now,
+}: {
+  snapshots: RetentionSnapshot[];
+  replica?: RetentionReplica;
+  now: number;
+}) {
+  const solo = snapshots.length > 0 && snapshots.every((s) => !s.at && s.skip === SOLE_NODE);
+  return (
+    <Card padding="none">
+      <Card.Header
+        icon={<PackageGlyph size="sm" />}
+        count={solo ? undefined : snapshots.length}
+        subtitle={
+          solo ? undefined : `${donorsCounted(snapshots)} of ${SNAPSHOT_DONORS_REQUIRED} donors`
+        }
+      >
+        Snapshots and joining
+      </Card.Header>
+      {solo ? (
+        <Card.Body padding="md">
+          <p className="muted">
+            Snapshots start when a second node joins. Until then, a backup is this company’s
+            recovery copy.
+          </p>
+        </Card.Body>
+      ) : (
         <DataGrid<RetentionSnapshot>
           name="snapshots"
-          rows={data?.snapshots ?? []}
+          rows={snapshots}
           rowKey={(s) => s.node_id}
           defaultSort="node"
           columns={[
@@ -427,45 +627,33 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
             },
           ]}
         />
-      </Card>
-
-      {data?.replica && (
-        <Card>
-          <Card.Header icon={<CopyGlyph size="sm" />}>This node as a replica</Card.Header>
+      )}
+      {replica && (
+        <Card.Body padding="md">
           <StatGroup>
             <StatCard
               icon={<DatabaseGlyph size="xs" />}
               label="Replicated store"
-              value={fmtBytes(data.replica.store_bytes)}
+              value={fmtBytes(replica.store_bytes)}
               sub="what a joining peer has to receive"
             />
             <StatCard
               icon={<ClockGlyph size="xs" />}
               label="Projected join"
-              value={fmtDuration(data.replica.projected_join_seconds * 1000)}
+              value={fmtDuration(replica.projected_join_seconds * 1000)}
               sub={
-                data.replica.rejoin_window_seconds > 0 &&
-                data.replica.projected_join_seconds > data.replica.rejoin_window_seconds
-                  ? `LONGER than the ${fmtDuration(
-                      data.replica.rejoin_window_seconds * 1000,
-                    )} window — a node that fell out could not catch up`
-                  : `inside the ${fmtDuration(data.replica.rejoin_window_seconds * 1000)} window`
+                replica.rejoin_window_seconds > 0 &&
+                replica.projected_join_seconds > replica.rejoin_window_seconds
+                  ? `Longer than the ${fmtDuration(
+                      replica.rejoin_window_seconds * 1000,
+                    )} window, so a lagging node can’t catch up`
+                  : `inside the ${fmtDuration(replica.rejoin_window_seconds * 1000)} window`
               }
             />
           </StatGroup>
-        </Card>
+        </Card.Body>
       )}
-
-      {gate && (
-        <GateDialog
-          node={gate.node}
-          evict={gate.evict}
-          held={gestures[gestureKey(gate.node, gate.evict)]}
-          onHeld={(g) => holdGesture(gate.node, gate.evict, g)}
-          onClose={() => setGate(null)}
-        />
-      )}
-    </>
+    </Card>
   );
 }
 
@@ -514,10 +702,7 @@ export function Tombstone({ evicted, now }: { evicted: RetentionEviction; now: n
 export function ServedLevelBanner({ level }: { level?: string }) {
   if (!level || level === "stale") return null;
   return (
-    <Callout variant="warning">
-      This node could not measure its own distance from the log, so the figures below are a coherent
-      point in its order with no statement about age (read level <InlineCode>{level}</InlineCode>).
-    </Callout>
+    <Callout variant="warning">How current these figures are can’t be measured right now.</Callout>
   );
 }
 
@@ -542,15 +727,14 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
     <Callout variant="danger" role="alert">
       <span className="col" style={{ gap: 6 }}>
         <span>
-          <strong>Maintenance is open on {op.stream}</strong> — no publisher is running anywhere in
-          this fleet. Phase <InlineCode>{op.phase}</InlineCode>, attempt {op.attempt}, since{" "}
-          {relTime(op.since, now)}
-          {op.by && <> ({op.by})</>}. Resizing from {fmtBytes(op.original_max_bytes)} to{" "}
+          <strong>Maintenance on {op.stream}</strong>: publishing is paused. Phase{" "}
+          <InlineCode>{op.phase}</InlineCode>, attempt {op.attempt}, since {relTime(op.since, now)}
+          {op.by && <> ({op.by})</>}. Resizing {fmtBytes(op.original_max_bytes)} to{" "}
           {fmtBytes(op.target_max_bytes)}.
         </span>
         {op.blocked && (
           <span>
-            <strong>Blocked:</strong> {op.blocked} — this needs a person, not time.
+            <strong>Blocked:</strong> {op.blocked}. Needs a person.
           </span>
         )}
         <span className="t-caption">
@@ -560,7 +744,7 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
             // NOBODY OUTSTANDING IS NOT PROGRESS. It is the operation
             // waiting on whoever ran the verb, and rendering it as an
             // empty list would read as "nearly done".
-            <>No acknowledgement is outstanding — this operation is waiting on its operator.</>
+            <>Waiting on its operator.</>
           )}
         </span>
       </span>
@@ -747,16 +931,13 @@ export function NodePositions({ node }: { node: RetentionNode }) {
           {d.log_diverged && (
             <Tag
               variant="danger"
-              title="the log holds another record at this node's checkpoint than the one it consumed there; every other node refuses its writes of this log until an operator decides which history the fleet keeps"
+              title="This node’s history differs from the log. An operator must choose which to keep."
             >
               log diverged
             </Tag>
           )}
           {(d.deferred ?? 0) > 0 && (
-            <Tag
-              variant="danger"
-              title="this node holds records it cannot decode; its rows are missing their effects"
-            >
+            <Tag variant="danger" title="Records this node can’t read yet">
               {d.deferred} deferred
             </Tag>
           )}
@@ -779,7 +960,11 @@ function PositionStanding({ d }: { d: RetentionNodeDomain }) {
     return (
       <Tag
         variant="warning"
-        title="this position is from another generation of the log, so its sequence compares with nothing the log holds now"
+        title={
+          d.generation_state === "ahead"
+            ? "From a newer generation of the log"
+            : "From an older generation of the log"
+        }
       >
         {d.generation_state} gen {d.generation}
       </Tag>
@@ -787,8 +972,8 @@ function PositionStanding({ d }: { d: RetentionNodeDomain }) {
   }
   if (d.lag == null) {
     return (
-      <span className="muted" title="the stream could not be read, so the lag is unknown">
-        lag —
+      <span className="muted" title="Lag unknown">
+        lag unknown
       </span>
     );
   }
@@ -796,50 +981,115 @@ function PositionStanding({ d }: { d: RetentionNodeDomain }) {
 }
 
 /**
- * One domain's whole state, drawn once.
+ * Every registered log, one row each: what it holds, and whether its trim is
+ * moving.
  *
- * EXPORTED so the domain's own page and the fleet card draw the same thing: a
- * domain is recognised by its floor, its six terms and what is blocking it,
- * and two renderings of that would let the card and the page disagree about
- * whether a log is advancing.
+ * ONE ROW PER DOMAIN, from the document rather than written by hand, so a
+ * domain added to the register appears here with no dashboard change at all.
+ *
+ * A ROW SAYS WHAT HOLDS ITS TRIM AND NOTHING MORE. Why, and what to do about
+ * it, is the alarm's, drawn once above; the six checks are behind the row for
+ * a reader who wants the arithmetic. They were a table of six under every log,
+ * each with its remedy, which printed the same backup paragraph once per log
+ * and told a healthy single node to evict itself.
  */
-export function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
+export function LogRetention({ domains }: { domains: RetentionDomain[] }) {
   return (
-    <div className="col gap-2">
-      <DomainRefusals domain={d} />
-      <div className="row wrap gap-2 baseline">
-        <InlineCode>{d.domain}</InlineCode>
-        <Tag appearance="outline">{d.replay}</Tag>
-        <span className="t-caption">generation {d.generation}</span>
-        <span className="t-caption t-num">
-          {d.first_seq}…{d.last_seq}
-        </span>
-        <span className="t-caption">
-          <FloorFact domain={d} />
-        </span>
-        <span className="t-caption t-num">
-          <DomainSize domain={d} />
-        </span>
-        <TrimStatus domain={d} />
+    <Card padding="none">
+      <Card.Header
+        icon={<DatabaseGlyph size="sm" />}
+        count={domains.length}
+        subtitle="A log trims old history once all six checks allow it"
+      >
+        Log retention
+      </Card.Header>
+      <div>
+        {domains.map((d) => (
+          <LogRow key={d.domain} domain={d} />
+        ))}
       </div>
-      <Terms terms={d.terms} snapshotBlocked={d.snapshot_blocked_by} empty={noConclusion(d)} />
+    </Card>
+  );
+}
+
+/**
+ * One log: a refusal first, above everything else about it, then its facts and
+ * what holds its trim, with its six checks behind a disclosure.
+ *
+ * EXPORTED so the log's own page and this card draw the same facts, the same
+ * status and the same checks: two renderings of a log let the card and the
+ * page disagree about whether it is advancing.
+ */
+export function LogRow({ domain: d }: { domain: RetentionDomain }) {
+  return (
+    <div className="log-row">
+      <DomainRefusals domain={d} />
+      <Disclosure
+        title={d.domain}
+        mono
+        size="compact"
+        meta={<LogFacts domain={d} />}
+        actions={<TrimStatus domain={d} />}
+      >
+        <div className="col gap-2">
+          <Checks domain={d} />
+          <a className="t-link" href={href(["settings", "backups", d.domain])}>
+            Open the {d.domain} log
+          </a>
+        </div>
+      </Disclosure>
     </div>
   );
 }
 
 /**
- * The trim's status as one tag — ONE rendering, for the card and the page.
+ * A log's facts in one line: how it replays, its generation, its range, its
+ * floor and its size, each a phrase of its own so each reads as itself.
+ */
+function LogFacts({ domain: d }: { domain: RetentionDomain }) {
+  const facts = [
+    <span key="replay">{d.replay}</span>,
+    <span key="generation">generation {d.generation}</span>,
+    <span key="range" className="t-num">
+      {d.first_seq}…{d.last_seq}
+    </span>,
+    <span key="floor">
+      <FloorFact domain={d} />
+    </span>,
+    <span key="size" className="t-num">
+      <DomainSize domain={d} />
+    </span>,
+  ];
+  return (
+    <span className="t-caption">
+      {facts.map((fact, i) => (
+        <Fragment key={fact.key}>
+          {i > 0 && " · "}
+          {fact}
+        </Fragment>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * The trim's status as one tag, ONE rendering for the card and the page.
  *
  * "ADVANCING" ONLY WHERE THE TRIM HAS CONCLUDED SOMETHING. A domain with no
  * published floor at its own generation has no blocking term because it has
- * no terms at all, and both screens drew that as a trim nothing is holding —
+ * no terms at all, and both screens drew that as a trim nothing is holding,
  * right after every reanchor, which is when they are read.
+ *
+ * A HELD TRIM SAYS WHAT HOLDS IT, in words, with the term's own name on hover:
+ * the name is what the CLI prints and the guide is indexed by.
  */
 export function TrimStatus({ domain: d }: { domain: RetentionDomain }) {
   switch (d.trim_floor_state) {
     case "published":
       return d.blocked_by ? (
-        <Tag variant="warning">{d.blocked_by}</Tag>
+        <Tag variant="warning" title={`Held by the ${d.blocked_by} check`}>
+          held by {TERM_WORDS[d.blocked_by].holds}
+        </Tag>
       ) : (
         <Tag variant="success">advancing</Tag>
       );
@@ -886,14 +1136,14 @@ export function FloorFact({ domain: d }: { domain: RetentionDomain }) {
 }
 
 /** The sentence a domain with no conclusion shows in place of its terms. */
-function noConclusion(d: RetentionDomain): string | undefined {
+export function noConclusion(d: RetentionDomain): string | undefined {
   switch (d.trim_floor_state) {
     case "published":
       return undefined;
     case "unreadable":
-      return `The trim floor register could not be read, so nothing is known here about the trim of generation ${d.generation}.`;
+      return `Couldn’t read the trim floor for generation ${d.generation}.`;
     default:
-      return `The trim has concluded nothing about generation ${d.generation} yet — its first tick on this stream is pending.`;
+      return `No trim result for generation ${d.generation} yet.`;
   }
 }
 
@@ -912,7 +1162,7 @@ export function DomainRefusals({ domain: d }: { domain: RetentionDomain }) {
             <strong>Not ready on this node:</strong> <InlineCode>{d.not_ready.code}</InlineCode>
             {(d.not_ready.causes?.length ?? 0) > 0 && (
               <> ({d.not_ready.causes!.join(", ")})</>
-            )} — {d.not_ready.detail}
+            )}: {d.not_ready.detail}
           </span>
         </Callout>
       )}
@@ -920,7 +1170,7 @@ export function DomainRefusals({ domain: d }: { domain: RetentionDomain }) {
         <Callout variant="warning" role="alert">
           <span>
             <strong>Writes refused on this node:</strong>{" "}
-            <InlineCode>{d.writes_refused.code}</InlineCode> — {d.writes_refused.detail}
+            <InlineCode>{d.writes_refused.code}</InlineCode>: {d.writes_refused.detail}
           </span>
         </Callout>
       )}
@@ -957,60 +1207,71 @@ export function DomainSize({ domain: d }: { domain: RetentionDomain }) {
   );
 }
 
-/** Terms renders the six, each with its own sentence and its own remedy. */
-export function Terms({
-  terms,
-  snapshotBlocked,
-  empty,
+/**
+ * A domain's six checks, the one that decides where its trim stops marked.
+ *
+ * EACH IS ITS WORDS BESIDE ITS NAME (`lib/retention.ts`), its value and the
+ * engine's sentence for it. The remedy is printed for the deciding check only:
+ * every term carries one, and six side by side told a reader to evict a node
+ * that was healthy and to read `min_age` as the problem on a log the backup
+ * was holding.
+ *
+ * `n/a` RATHER THAN `0` for a term this domain does not have, and `unknown`
+ * rather than a number for one that could not be read: a term permitting zero
+ * and a term nobody could evaluate are different things to do. And
+ * `unbounded` for one that binds nothing, whose sequence inside the engine is
+ * 2^64-1: printed, it sat beside the term's own sentence saying nothing was
+ * pinning the log. Every state but `ok` is a word, because in each of them
+ * the number is not an answer.
+ */
+export function Checks({ domain: d }: { domain: RetentionDomain }) {
+  if (d.terms.length === 0) {
+    const empty = noConclusion(d);
+    return empty ? <p className="t-caption muted">{empty}</p> : null;
+  }
+  const deciding = bindingTerm(d);
+  const holding = Boolean(d.blocked_by);
+  return (
+    <DescriptionList
+      dense
+      items={d.terms.map((t): DescriptionListEntry => [
+        <span className="check-name">
+          <span>{TERM_WORDS[t.name].name}</span>
+          <span className="mono t-caption muted">{t.name}</span>
+        </span>,
+        <CheckValue term={t} deciding={t.name === deciding} holding={holding} />,
+      ])}
+    />
+  );
+}
+
+/** One check's value, its sentence, and the remedy where it decides the trim. */
+function CheckValue({
+  term: t,
+  deciding,
+  holding,
 }: {
-  terms: RetentionTerm[];
-  snapshotBlocked?: string;
-  /** What stands in the table's place where there are no terms to draw. */
-  empty?: string;
+  term: RetentionTerm;
+  deciding: boolean;
+  holding: boolean;
 }) {
   return (
-    <div className="col gap-2">
-      {snapshotBlocked && (
-        <Callout variant="warning">
-          <span>
-            This node is taking no snapshots: <InlineCode>{snapshotBlocked}</InlineCode>. A stalled
-            snapshot tier and a stalled trim are different problems — this one is silent until a
-            node tries to join.
-          </span>
-        </Callout>
-      )}
-      {terms.length === 0 && empty && <p className="t-caption muted">{empty}</p>}
-      <table className="table">
-        <tbody>
-          {terms.map((t) => (
-            <tr key={t.name}>
-              <td>
-                <InlineCode>{t.name}</InlineCode>
-              </td>
-              <td>
-                {/* `n/a` RATHER THAN `0` for a term this domain does not
-                    have, and `unknown` rather than a number for one that
-                    could not be read — a term permitting zero and a term
-                    nobody could evaluate are different things to do. And
-                    `unbounded` for one that binds nothing: its sequence
-                    inside the engine is 2^64-1, the identity for the
-                    minimum the trim takes, which this cell printed as
-                    `18446744073709552000` next to the term's own prose
-                    saying nothing was pinning the log. Every state but
-                    `ok` is a word, because in every one of them the
-                    number is not an answer. */}
-                {t.state === "ok" ? (
-                  <span className="t-num t-caption">{t.seq ?? 0}</span>
-                ) : (
-                  <Tag variant={t.state === "unknown" ? "warning" : "neutral"}>{t.state}</Tag>
-                )}
-              </td>
-              <td className="t-caption">{t.detail}</td>
-              <td className="t-caption">{t.remedy}</td>
-            </tr>
+    <span className="col gap-1">
+      <span className="row wrap gap-1 baseline">
+        {t.state === "ok" ? (
+          <span className="t-num">{t.seq ?? 0}</span>
+        ) : (
+          <Tag variant={t.state === "unknown" ? "warning" : "neutral"}>{t.state}</Tag>
+        )}
+        {deciding &&
+          (holding ? (
+            <Tag variant="warning">holding the trim</Tag>
+          ) : (
+            <Tag appearance="outline">sets the floor</Tag>
           ))}
-        </tbody>
-      </table>
-    </div>
+      </span>
+      {t.detail && <span className="t-caption muted">{marked(t.detail)}</span>}
+      {deciding && t.remedy && <span className="t-caption">{marked(t.remedy)}</span>}
+    </span>
   );
 }

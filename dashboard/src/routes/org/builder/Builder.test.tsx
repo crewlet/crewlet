@@ -112,9 +112,7 @@ describe("the posture table", () => {
   test("no active revision while the org names a company is a node that has not caught up", async () => {
     const engine = new Engine(null);
     mountBuilder({ engine, org: named });
-    expect(
-      await screen.findByText("This node has not caught up with the fleet's configuration yet."),
-    ).toBeDefined();
+    expect(await screen.findByText("This node is still catching up")).toBeDefined();
     expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
     // Never create mode: nothing is checked, let alone written.
     await new Promise((r) => setTimeout(r, 50));
@@ -129,9 +127,7 @@ describe("the posture table", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(engine.checks()).toHaveLength(0);
     act(() => store.applyOrg(named));
-    expect(
-      await screen.findByText("This node has not caught up with the fleet's configuration yet."),
-    ).toBeDefined();
+    expect(await screen.findByText("This node is still catching up")).toBeDefined();
   });
 
   test("a refusal for nobody signed in asks them to sign in", async () => {
@@ -516,16 +512,16 @@ test("a company with no model provider is told so, and one with a provider is no
   const engine = new Engine(without);
   mountBuilder({ engine });
   // The engine applies the company and holds its agents' work, so the
-  // caution says what waits rather than claiming nothing is applied.
+  // caution says the agents cannot work rather than claiming nothing is applied.
   expect(
-    await screen.findByText(/no agent seat takes a turn: work sent to a seat waits on its inbox/),
+    await screen.findByText(/No model provider is set, so agents can’t work\. Add one with/),
   ).toBeDefined();
   cleanup();
 
   const engineWith = new Engine(company());
   mountBuilder({ engine: engineWith });
   await screen.findByText("No problems");
-  expect(screen.queryByText(/No model provider is configured/)).toBeNull();
+  expect(screen.queryByText(/No model provider is set/)).toBeNull();
 });
 
 describe("the selection in the URL", () => {
@@ -779,7 +775,7 @@ describe("somebody else signing in mid-edit", () => {
     reconnect(store);
     expect(
       await screen.findByText(
-        "Editing the organization needs you to sign in. Your draft stays on this page, and leaving it to sign in asks first.",
+        "Sign in to edit. Your draft is kept, and leaving to sign in asks first.",
       ),
     ).toBeDefined();
     expect(screen.getByText("read only")).toBeDefined();
@@ -824,9 +820,7 @@ describe("a step-up the person declined", () => {
 
     expect(await screen.findByText("Needs confirmation")).toBeDefined();
     expect(screen.queryByText("Needs config:write")).toBeNull();
-    expect(
-      screen.getByText(`${ACT_ERRORS.step_up_required} Your draft stays on this page.`),
-    ).toBeDefined();
+    expect(screen.getByText(`${ACT_ERRORS.step_up_required} Your draft is kept.`)).toBeDefined();
     expect(screen.queryByRole("button", { name: "Sign in as somebody else" })).toBeNull();
     // The same person declining is not the tab changing hands.
     expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain("Lead and more");
@@ -916,11 +910,7 @@ describe("a document another system manages", () => {
     const engine = new Engine(company());
     mountBuilder({ engine, viewer: () => MANAGED });
     expect(await screen.findByText("CEO")).toBeDefined();
-    expect(
-      await screen.findByText(
-        /This company's configuration is managed by gitops — change it there/,
-      ),
-    ).toBeDefined();
+    expect(await screen.findByText(/Managed by gitops\. Change it there\./)).toBeDefined();
 
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() =>
@@ -952,7 +942,7 @@ describe("a document another system manages", () => {
     expect(await screen.findByText("Managed by another system")).toBeDefined();
     expect(screen.queryByText("Needs config:write")).toBeNull();
     expect(screen.queryByText("Refused")).toBeNull();
-    expect(screen.getByText(/managed by gitops — change it there/)).toBeDefined();
+    expect(screen.getByText(/Managed by gitops\. Change it there\./)).toBeDefined();
     const checks = engine.checks().length;
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(liveRegion().textContent).toContain("Editing is paused"));
@@ -966,7 +956,7 @@ describe("a document another system manages", () => {
       viewer: () => ({ ...EDITOR, config_writer: true, config_managed_by: ["gitops"] }),
     });
     expect(await screen.findByText("No problems")).toBeDefined();
-    expect(screen.queryByText(/managed by gitops/)).toBeNull();
+    expect(screen.queryByText(/managed by gitops/i)).toBeNull();
   });
 });
 

@@ -142,7 +142,7 @@ func TestAProbeNodesHealthIsTheNodesHalfOfTheEnvelope(t *testing.T) {
 				ShuttingDown: true, Posture: "serve", AppliedEpoch: 41,
 				InFlight: 2, Seats: []string{"eu-support"}, StartedAt: "2026-10-09T08:00:00Z",
 			},
-			fleet: api.FleetState{LiveNodes: &nodes, Alarms: []statelog.StandingAlarm{}},
+			fleet: api.FleetState{LiveNodes: &nodes, Alarms: []statelog.Kind{}},
 		},
 		configured: true,
 		work:       api.WorkState{Broker: errors.New("down")},

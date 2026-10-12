@@ -29,7 +29,7 @@ import type { DecisionsAnswer, LogRefusal, QueryRefusal } from "~/protocol/index
 
 /** What a reader signed in as nobody is told: a decision is a person's, so
  *  there is nothing to list until the browser is somebody. */
-export const NOBODY_SENTENCE = "Sign in to see what waits on your decision.";
+export const NOBODY_SENTENCE = "Sign in to see your decisions.";
 
 /** How many decisions the landing screen shows before "Open inbox". */
 export const HOME_DECISIONS = 3;
@@ -81,10 +81,6 @@ export function Decisions({
           {subjects.length === 0 ? (
             <div className="home-quiet">
               <strong className="t-cell">Nothing needs your decision</strong>
-              <span className="t-caption">
-                No question is put to you, no coding run is waiting on your answer, and no seat is
-                stopped on its budget.
-              </span>
             </div>
           ) : (
             <DecisionList
@@ -96,10 +92,6 @@ export function Decisions({
           )}
         </QueryState>
       )}
-      <p className="home-card-foot">
-        Agents only bring you what their own authority can't decide. Everything else is in the
-        activity below.
-      </p>
     </Card>
   );
 }

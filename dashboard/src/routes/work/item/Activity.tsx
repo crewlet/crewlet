@@ -66,6 +66,7 @@ import {
   fmtElapsed,
   fmtMinute,
   humanize,
+  plural,
 } from "~/lib/format.ts";
 import { reasonAbout } from "~/lib/reasons.ts";
 import { activityOf, doingWords, statusOf, type OrgIndex } from "~/lib/seats.ts";
@@ -107,7 +108,7 @@ const EMPTY: Record<ActivityTab, string> = {
   all: "Nothing has happened on this task yet.",
   comments: "Nobody has commented on this task yet.",
   turns: "No agent turn has been charged to this task.",
-  changes: "Nothing has changed on this task since it was filed.",
+  changes: "No changes since it was filed.",
 };
 
 export function Activity({
@@ -316,7 +317,7 @@ export function Activity({
               replyTo
                 ? undefined
                 : assignee
-                  ? `Leave a comment, or use Ask… to put a question to ${assignee} directly`
+                  ? "Leave a comment"
                   : "Leave a comment. @mention to bring someone in"
             }
             // A REPLY SENT CLOSES ITS TARGET: the banner over the field said
@@ -383,7 +384,7 @@ function actorOf(record: WorkActivityRecord, chrome: RowChrome): string {
 
 /**
  * One change, as a sentence about the task: "Jane Founder filed this in ENG",
- * "CTO assigned it to SWE — “owns the provisioner”", "Maya moved it to In
+ * "CTO assigned it to SWE: “owns the provisioner”", "Maya moved it to In
  * review". What no sentence here covers falls through to the delta, which
  * names every field it moved.
  */
@@ -450,7 +451,7 @@ function ChangeRow({
       <div className="task-entry-line">
         <p>
           <b>{actorOf(record, chrome)}</b> {what}
-          {why && <> — “{why}”</>}{" "}
+          {why && <>: “{why}”</>}{" "}
           <time className="task-when" dateTime={at} title={fmtDateTime(at)}>
             {`· ${fmtDateCompact(at, now)}`}
           </time>
@@ -619,7 +620,7 @@ export function turnPills(
       out.push({ label: "parked on a coding run", variant: "info" });
       break;
     case "skipped":
-      out.push({ label: "skipped — nothing to do", variant: "neutral" });
+      out.push({ label: "skipped, nothing to do", variant: "neutral" });
       break;
   }
   return out;
@@ -685,16 +686,11 @@ export function TurnCard({
           {/* A TURN NO SEGMENT WROTE AN ACCOUNT FOR (it failed, or parked,
               before one was written) says so in one quiet line: a card per
               turn repeating the reason in full body text read as the turn's
-              content. The reason is the title. */}
+              content. */}
           {turn.summary ? (
             <p className="task-turn-summary">{turn.summary}</p>
           ) : (
-            <p
-              className="task-turn-nosummary"
-              title="This turn failed or parked before it wrote an account of itself. The trace has the detail while the event history holds it."
-            >
-              No summary recorded — see the trace
-            </p>
+            <p className="task-turn-nosummary">No summary. See the trace.</p>
           )}
           {turn.review && (
             <div className="task-turn-review">
@@ -771,7 +767,7 @@ function LiveRow({
       <a
         className="task-live"
         href={turn ? watchHref(turn) : href(["live"])}
-        aria-label={`${name} is on turn ${ordinal} of ${item.key} — watch live`}
+        aria-label={`${name} is on turn ${ordinal} of ${item.key}. Watch live.`}
       >
         <span className="task-live-dot" aria-hidden="true" />
         <b>{`${name} is on turn ${ordinal}`}</b>
@@ -818,7 +814,7 @@ export function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome:
         </Tag>
         {answer.addressed > 0 && <AsksTag count={answer.addressed} />}
         {answer.fallback > 0 && (
-          <Tag appearance="outline" title="reached only because nobody better was found">
+          <Tag appearance="outline" title="Fallback recipient">
             {answer.fallback} by fallback
           </Tag>
         )}
@@ -852,12 +848,7 @@ export function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome:
           </div>
         ))}
       </div>
-      {answer.truncated && (
-        <p className="t-caption">
-          The list was cut. A change this engine wrote cannot name this many people, so a peer on a
-          different build wrote a larger recipient set.
-        </p>
-      )}
+      {answer.truncated && <p className="t-caption">Some recipients aren’t shown.</p>}
     </div>
   );
 }
@@ -870,19 +861,26 @@ function NobodyWoken({ answer }: { answer: WorkRoutingAnswer }) {
         size="compact"
         icon={<CircleQuestionMarkGlyph size="xl" />}
         title="No such change here"
-        description="A record id this node holds no history row for — a link from before a purge, or a reanchor that has not replayed this far."
+        description="The link may be out of date."
       />
     );
   }
   if (answer.delivery === "swept") {
+    // THE WINDOW AS A LENGTH. The answer carries the instant the horizon falls
+    // on, which the engine sets to its own clock less the company's
+    // `inbox_retention_days`, so the whole days between that instant and now
+    // are the setting itself.
+    const days = answer.retained_from
+      ? Math.round((Date.now() - Date.parse(answer.retained_from)) / 86_400_000)
+      : undefined;
     return (
       <EmptyState
         size="compact"
         icon={<ClockGlyph size="xl" />}
         title="Beyond the retention window"
-        description={`This change announced something, and it is older than ${
-          answer.retained_from ? fmtDateTime(answer.retained_from) : "the inbox horizon"
-        } — so whether anybody was reached is a fact this node no longer holds. The history it points at is untouched.`}
+        description={`Recipients are kept for ${
+          days !== undefined ? plural(days, "day") : "the inbox horizon"
+        }. The change is still in history.`}
       />
     );
   }
@@ -892,7 +890,7 @@ function NobodyWoken({ answer }: { answer: WorkRoutingAnswer }) {
         size="compact"
         icon={<BellGlyph size="xl" />}
         title="Cannot say"
-        description="This change announced something and no recipients remain, and this node was not told how long an inbox is kept — so an absent set cannot be dated."
+        description="The recipients are no longer recorded."
       />
     );
   }
@@ -901,7 +899,7 @@ function NobodyWoken({ answer }: { answer: WorkRoutingAnswer }) {
       size="compact"
       icon={<UsersGlyph size="xl" />}
       title="It announced, and reached nobody"
-      description="Every candidate was the person making the change, or has left the company. The notification was formed and had nowhere to go — which is a different fact from a quiet commit, and the only place it is visible."
+      description="Everyone it would notify made the change or has left."
     />
   );
 }

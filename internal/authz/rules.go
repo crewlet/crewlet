@@ -404,9 +404,9 @@ var rules = map[Action]rule{
 	// costs is one auxiliary model call on the asker's own seat — which a
 	// seat would be spending on its own behalf, beside the search and the
 	// model it already has. The tool itself refuses a principal no seat
-	// binds — a token, a service account, or a person recorded before
-	// every person held a seat — naming why: there is no seat whose model
-	// to run on.
+	// binds — a Tier A token's session or a service account, never a
+	// person, who holds a human seat for as long as they are here
+	// (ADR-0032) — naming why: there is no seat whose model to run on.
 	ActionKnowledgeAnswer: {class: ClassRead, humanOnly: true, recency: iam.RecencyAny},
 
 	ActionSkillUse:      {class: ClassSelf, recency: iam.RecencyAny},

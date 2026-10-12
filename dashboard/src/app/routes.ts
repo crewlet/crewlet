@@ -353,11 +353,7 @@ function live(rest: string[], screen: Make, under: Under): Route {
       // turns list under a trail naming traces, which is two claims at once
       // and neither of them the address.
       if (!id) {
-        return missing(
-          "live",
-          under("Live"),
-          "a trace has no list — open one from a turn, a run or an event",
-        );
+        return missing("live", under("Live"), "Open a trace from a turn, run or event");
       }
       return screen({ screen: "trace", id });
     default:

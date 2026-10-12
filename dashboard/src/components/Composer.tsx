@@ -433,7 +433,7 @@ function AskDialog({
         <FormField
           label="Who owes the answer"
           htmlFor="composer-ask-who"
-          helper="They are woken asking for it and start following the task. It stays yours."
+          helper="They start following the task. It stays yours."
         >
           <Select
             id="composer-ask-who"
@@ -447,7 +447,7 @@ function AskDialog({
         </FormField>
         <Checkbox
           label="They are to choose between options"
-          description="Their answer names one, and you are woken with the choice."
+          description="You’re notified of their choice."
           checked={choose}
           onCheckedChange={setChoose}
         />
@@ -467,7 +467,7 @@ function AskDialog({
               />
             </FormField>
             <fieldset className="col gap-2 composer-ask-fieldset">
-              <legend className="t-label">Options — mark the one you recommend</legend>
+              <legend className="t-label">Options. Mark the one you recommend.</legend>
               {labels.map((label, i) => (
                 <div key={i} className="row gap-2">
                   <input
@@ -523,7 +523,7 @@ function AskDialog({
                   {
                     value: "contributor",
                     label: "A contributor",
-                    description: "Their answer is an input to a decision somebody else makes.",
+                    description: "Their answer informs someone else’s decision.",
                   },
                 ]}
                 onChange={(next) => setRole(next === "contributor" ? "contributor" : "approver")}
@@ -758,7 +758,7 @@ function AttachPageDialog({
             helper={
               titleBudget.over
                 ? undefined
-                : (titleBudget.line ?? "Filed in your team's container, then attached to the task.")
+                : (titleBudget.line ?? "Saved in your team’s space and attached.")
             }
             error={titleBudget.over ? titleBudget.line : undefined}
           >
@@ -775,7 +775,7 @@ function AttachPageDialog({
             leadingIcon={<FileTextGlyph size="sm" />}
             blocked={
               !draft.trim()
-                ? "Write something in the reply first — that is the page's body."
+                ? "Write the reply first."
                 : !title.trim()
                   ? "Give the page a title."
                   : titleBudget.over

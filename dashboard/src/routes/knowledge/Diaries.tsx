@@ -56,8 +56,7 @@ const DIARY_POLL_MS = 60_000;
 
 /** Why a row carries no count: nobody holds the seat, or its holder did not say. */
 export function uncounted(row: MemoryOverviewSeat): string | null {
-  if (row.held_by === "none")
-    return "No node holds this agent, so no copy of its memory is current";
+  if (row.held_by === "none") return "Not running on any node";
   if (row.unavailable) return `Not answered: ${row.unavailable}`;
   return null;
 }
@@ -80,14 +79,14 @@ export function Diaries() {
 
   return (
     <>
-      <PageNote>
-        What each agent chose to remember, counted by the node holding the agent — the one copy of
-        its memory kept current.
-      </PageNote>
+      <PageNote>What each agent chose to remember.</PageNote>
       <CoverageNote
         coverage={[overview.data?.coverage]}
-        what="this list"
-        lost="the agents each of them holds are listed without their counts"
+        what="Diaries"
+        lost={{
+          one: "Its agents are listed without counts",
+          many: "Their agents are listed without counts",
+        }}
       />
       <QueryState
         error={overview.error}
@@ -97,7 +96,7 @@ export function Diaries() {
           overview.data && rows.length === 0
             ? {
                 title: "No agents",
-                hint: "A diary belongs to an agent seat, and this company's chart has none yet.",
+                hint: "Add an agent in Edit org.",
               }
             : undefined
         }
@@ -230,7 +229,7 @@ export function Diary({ handle }: { handle: string }) {
       <EmptyState
         icon={<BrainGlyph size="xl" />}
         title={`${name} is a person`}
-        description="A diary is what an agent keeps; a person's memory is their own."
+        description="Only agents keep diaries."
       />
     );
   }
@@ -246,8 +245,8 @@ export function Diary({ handle }: { handle: string }) {
       )}
       {!seat && org && (
         <Callout variant="info" icon={<CircleAlertGlyph size="md" />}>
-          No agent in the chart is called <code className="inline">{handleLabel(handle)}</code> —
-          this is whatever memory the fleet still holds under that handle.
+          No agent is called <code className="inline">{handleLabel(handle)}</code>. Showing memory
+          left under that handle.
         </Callout>
       )}
       <QueryState error={memory.error} refusal={memory.refusal} loading={memory.loading && !data}>
@@ -263,13 +262,12 @@ export function Diary({ handle }: { handle: string }) {
               <DiaryCard memory={data} heading="h2" />
               <EpisodesCard memory={data} now={now} heading="h2" />
               <p className="t-caption">
-                {plural(data.skills_total, "learned skill")} and{" "}
-                {plural(data.counterparties_total, "colleague")} remembered —{" "}
                 <a
                   className="t-link prose-link"
                   href={href(["agents", "seats", handle], { tab: "memory" })}
                 >
-                  {name}&rsquo;s whole memory
+                  {plural(data.skills_total, "learned skill")} and{" "}
+                  {plural(data.counterparties_total, "colleague")} remembered
                 </a>
               </p>
             </>

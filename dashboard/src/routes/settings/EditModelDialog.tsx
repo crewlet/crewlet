@@ -197,7 +197,6 @@ export function EditModelDialog({
       toast.show({
         variant: "success",
         title: `Saved ${id}`,
-        message: "Each node rebuilds its pools once it has applied the new configuration.",
       });
       onSaved();
       return;
@@ -282,7 +281,6 @@ export function EditModelDialog({
       open
       size="md"
       title={`Edit ${id}`}
-      subtitle="Which model this entry serves, the keys it rotates through, and how long a refused key is benched."
       icon={<CpuGlyph />}
       onClose={onClose}
       onSubmit={press}
@@ -315,7 +313,7 @@ export function EditModelDialog({
             onChange={(model) => edit({ model })}
             disabled={busy}
             error={errorOf("model")}
-            help="The vendor's model id. A ${NAME} is resolved when the model is built."
+            help="The vendor’s model id."
             // FOCUS STARTS ON THE FIRST FIELD. The body is a skeleton when
             // the dialog opens, so the frame's own first-control rule found
             // only the footer and put the reader on Cancel.
@@ -355,7 +353,7 @@ export function EditModelDialog({
                 placeholder="3600"
                 disabled={busy}
                 error={errorOf("rateLimit")}
-                help={`Seconds a key the vendor answered 429 is left out, ${MIN_BENCH_SECONDS}–${MAX_BENCH_SECONDS}; empty is an hour. A Retry-After the vendor sends wins.`}
+                help={`Seconds, ${MIN_BENCH_SECONDS} to ${MAX_BENCH_SECONDS}. Empty is one hour.`}
               />
               <ConfigField
                 label="After an auth failure"
@@ -366,7 +364,7 @@ export function EditModelDialog({
                 placeholder="300"
                 disabled={busy}
                 error={errorOf("auth")}
-                help={`Seconds a key answered 401 or 403 is left out, doubling on each repeat, ${MIN_BENCH_SECONDS}–${MAX_BENCH_SECONDS}; empty is five minutes.`}
+                help={`Seconds, doubling each time, ${MIN_BENCH_SECONDS} to ${MAX_BENCH_SECONDS}. Empty is five minutes.`}
               />
             </div>
           </Disclosure>
@@ -426,9 +424,7 @@ function KeysEditor({
               {k.value === REDACTED ? (
                 <span className="model-key-locked">
                   <KeyGlyph size="sm" />
-                  <span className="model-key-locked-text">
-                    Key {i + 1} is written inline — its value is never sent here.
-                  </span>
+                  <span className="model-key-locked-text">Key {i + 1} is inline.</span>
                   <Button
                     variant="ghost"
                     size="small"
@@ -467,11 +463,7 @@ function KeysEditor({
             {/* SAID UNDER THE ROW IT IS ABOUT, once, after the last locked
                 row — under Add key it read as a rule about the new key. */}
             {i === lastLocked && (
-              <p className="t-caption">
-                Kept by its place in the list, so the list cannot grow or shrink while it is here.
-                Replace it with a <span className="mono">{"${NAME}"}</span> stored under Secrets to
-                add or remove keys.
-              </p>
+              <p className="t-caption">Replace it with a secret to add or remove keys.</p>
             )}
           </div>
         );

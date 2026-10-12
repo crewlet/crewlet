@@ -28,25 +28,15 @@ import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { eventHistoryLabel, fmtDateTime, humanize, relTime } from "~/lib/format.ts";
+import { fmtDateTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { useAgents, useEngineHealth } from "~/lib/store-hooks.ts";
+import { useAgents } from "~/lib/store-hooks.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import type { AgentRow, EventRecord } from "~/protocol/index.ts";
 
-/**
- * What an id that resolves to nothing means, on the page and in the rail.
- *
- * THE FLOOR IS THE ENGINE'S. This sentence said "the store keeps 30 days" of
- * its own accord while `store.EventHistory` was the only thing that decided
- * it, so a deployment that changed its retention was told the wrong number by
- * a screen with nothing to catch it — and a reader told the wrong floor stops
- * paging early.
- */
-const noEventHint = (seconds: number | null | undefined) =>
-  `An id older than the retained record, or from a different node's store, will not resolve: ${eventHistoryLabel(seconds)}.`;
+/** What an id that resolves to nothing means, on the page and in the rail. */
+const NO_EVENT_HINT = "It may be too old, or from another node.";
 
 /**
  * What an event is called: the sentence the ENGINE wrote for it, or the type
@@ -180,7 +170,6 @@ export function EventScreen({ eventId }: { eventId: string }) {
   const nav = useNavigator();
   const now = useNow();
   const { data, loading, error, refusal } = useQuery("event", { id: eventId });
-  const engine = useEngineHealth();
   const agents = useAgents();
   const handle = data ? seatHandleOf(data, agents) : "";
 
@@ -233,10 +222,6 @@ export function EventScreen({ eventId }: { eventId: string }) {
           </>
         }
       </PageActions>
-      {/* WHAT THE SCREEN ANSWERS, which is what a note is for. It used to
-          hold the event's own type — identity, in the one line on the screen
-          that is not about identity, and now the header's first fact. */}
-      <PageNote>One stored event, exactly as the engine wrote it.</PageNote>
 
       {loading && <Skeleton variant="text" rows={5} label="Loading the event" />}
 
@@ -262,9 +247,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
         refusal={refusal}
         loading={loading}
         empty={
-          !loading && !data
-            ? { title: "No event with that id", hint: noEventHint(engine?.event_history_seconds) }
-            : undefined
+          !loading && !data ? { title: "No event with that id", hint: NO_EVENT_HINT } : undefined
         }
       >
         {data && (
@@ -307,29 +290,21 @@ export function EventScreen({ eventId }: { eventId: string }) {
               {data.payload ? (
                 // Same treatment as the Turn record: this screen's whole
                 // point is one JSON record, so the record owns select-all
-                // rather than the page taking it. The caption keeps the step
-                // every note under a block takes, clear of the block's edge.
-                <div className="col gap-2">
-                  {/* `plain` is THEIR word for no header; ours was "no wrap",
-                      which is `wrap={false}`. The copy control is the panel's
-                      own, so the block's is off — two of them over one record
-                      is a reader choosing between identical buttons. */}
-                  <CodeBlock
-                    plain
-                    wrap={false}
-                    copyable={false}
-                    selectable
-                    label="The event payload, as JSON"
-                    code={JSON.stringify(data.payload, null, 2)}
-                  />
-                  <span className="t-caption">
-                    Click into the payload, and ⌘A / Ctrl+A selects it alone rather than the page.
-                  </span>
-                </div>
+                // rather than the page taking it. `plain` is THEIR word for
+                // no header; ours was "no wrap", which is `wrap={false}`. The
+                // copy control is the panel's own, so the block's is off, as
+                // two of them over one record is a reader choosing between
+                // identical buttons.
+                <CodeBlock
+                  plain
+                  wrap={false}
+                  copyable={false}
+                  selectable
+                  label="The event payload, as JSON"
+                  code={JSON.stringify(data.payload, null, 2)}
+                />
               ) : (
-                <span className="t-caption">
-                  This event carries no payload — its type and summary are the whole record.
-                </span>
+                <span className="t-caption">No payload.</span>
               )}
             </Card>
 
@@ -384,7 +359,6 @@ export function EventPeek({ eventId }: { eventId: string }) {
     { id: eventId },
     { enabled: eventId !== "" },
   );
-  const engine = useEngineHealth();
   const agents = useAgents();
   const handle = data ? seatHandleOf(data, agents) : "";
 
@@ -420,7 +394,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
             missing
               ? {
                   title: "No event with that id",
-                  hint: noEventHint(engine?.event_history_seconds),
+                  hint: NO_EVENT_HINT,
                 }
               : undefined
           }
@@ -474,9 +448,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
                   />
                 </Disclosure>
               ) : (
-                <p className="t-caption">
-                  This event carries no payload — its type and summary are the whole record.
-                </p>
+                <p className="t-caption">No payload.</p>
               )}
             </>
           )}

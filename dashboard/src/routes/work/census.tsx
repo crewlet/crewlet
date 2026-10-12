@@ -89,11 +89,7 @@ export function ProjectProgress({
 }) {
   const whole = progressWhole(counts);
   if (whole === 0) {
-    return (
-      <EmptyValue
-        label={counts.closed > 0 ? "Only closed work — nothing to do" : "Nothing filed yet"}
-      />
-    );
+    return <EmptyValue label={counts.closed > 0 ? "Only closed work" : "Nothing filed yet"} />;
   }
   return (
     <SegmentedMeter

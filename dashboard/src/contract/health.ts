@@ -17,13 +17,6 @@ interface HealthAlarms {
    * own. Absent when nothing is firing.
    */
   worst?: string;
-  /**
-   * The state log the worst alarm fired on, for an alarm the table keeps PER
-   * LOG — absent for one about the node as a whole. Two logs' `trim_blocked`
-   * are two conditions with two remedies, so a card names the log beside the
-   * kind.
-   */
-  worst_domain?: string;
 }
 
 /**
@@ -86,17 +79,19 @@ export interface EngineHealth {
   /** The handles THIS node currently holds. */
   seats: string[];
   /**
-   * Each identity duty this node armed — the retention sweep, the claim
-   * report — mapped to the interval it runs at, in seconds; `{}` on a node
-   * that armed none, which is how an operator tells a duty that never runs
-   * from one that finds nothing.
+   * Each identity duty this node armed (the retention sweep) mapped to the
+   * interval it runs at, in seconds; `{}` on a node that armed none, which is
+   * how an operator tells a duty that never runs from one that finds nothing.
    */
   identity_duty_seconds: Record<string, number>;
   /**
-   * How far behind this node's watched duty is, in seconds — present only
-   * while it is behind at all. It climbs towards the seat lease TTL, at which
-   * the watchdog ends the process, so a node degrading shows here before the
-   * restart rather than only afterwards in its exit code.
+   * How far behind this node's watched duty is, in seconds, present only
+   * while it is behind at all: once its last beat is older than the beat
+   * interval it keeps (a second at the shipped lease TTL), which is a missed
+   * beat, and then the whole time since that beat. It climbs towards the seat
+   * lease TTL, at which the watchdog ends the process, so a node degrading
+   * shows here before the restart rather than only afterwards in its exit
+   * code. Absent on a node whose duty is on its beat.
    */
   stall_lag_seconds?: number;
   /**

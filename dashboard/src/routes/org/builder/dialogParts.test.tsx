@@ -2,7 +2,7 @@
  * `ScreenLink` is PROSE BY DEFAULT, and that default is load-bearing.
  *
  * Eleven of its fourteen call sites are a remedy trailing the sentence that
- * states the problem — "…so it has no channel to set. Open Integrations" — so
+ * states the problem ("…No Mattermost bot for this seat. Open Integrations"), so
  * the anchor is a word in a line and takes `.prose-link`, which is the only
  * non-colour cue separating it from the sentence (base.css, WCAG 1.4.1). They
  * carried `.t-link` alone until the reset that stopped links underlining on

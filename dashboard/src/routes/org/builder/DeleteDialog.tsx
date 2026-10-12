@@ -199,14 +199,13 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
               ]
                 .filter(Boolean)
                 .join(" and ")} inside it.`
-          : `Deletes the ${kindOf(found.node.data) === "human" ? "human" : "agent"} seat ${name}.`}{" "}
-        Undo brings it back until the draft is saved.
+          : `Deletes the ${kindOf(found.node.data) === "human" ? "human" : "agent"} seat ${name}.`}
       </p>
 
       {bare.ok && bare.op.type === "remove" && bare.op.placed.length > 0 && (
         <EditorSection
           title="Seats placed here by unit reference"
-          hint="These seats are declared at the top level with a unit reference to this unit, so the chart draws them inside it."
+          hint="These seats sit at the top level but point to this team."
         >
           <NameList
             names={bare.op.placed.map((p) =>
@@ -249,7 +248,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
           framed
           tone="danger"
           label={`Delete ${mass.removed} of the ${plural(mass.total, "seat")} the company has`}
-          description="More than half of the saved company's seats would go. Confirm this is the change you mean."
+          description="This removes more than half the seats."
           checked={acknowledged}
           onCheckedChange={setAcknowledged}
         />
@@ -334,9 +333,8 @@ function OutsideTheChart({
     parts.push(
       replacements.length === 0 ? (
         <Callout key="datadog" variant="danger">
-          {fallbackSeat.data.name} is the Datadog fallback, and the engine refuses a Datadog
-          fallback that names no agent seat. This removal would leave no agent seat to take it over,
-          so add one first, or disconnect Datadog.{" "}
+          {fallbackSeat.data.name} is the Datadog fallback and no other agent can take over. Add an
+          agent first, or disconnect Datadog.{" "}
           <ScreenLink to="integrations">Open Integrations</ScreenLink>
         </Callout>
       ) : (
@@ -347,7 +345,7 @@ function OutsideTheChart({
           choices={replacements}
           value={routeTo}
           onChange={onRouteTo}
-          help={`${fallbackSeat.data.name} is the Datadog fallback: an alert whose tags name no seat wakes it. Choose the agent seat that takes over; the engine refuses a Datadog fallback that names no agent seat.`}
+          help="Choose the agent that takes untagged Datadog alerts."
         />
       ),
     );
@@ -358,7 +356,7 @@ function OutsideTheChart({
         key="gitlab"
         names={accessLevels.map(
           (level) =>
-            `The GitLab access level for ${level.handle}${level.before ? ` (${level.before})` : ""} is removed, so it cannot pass to a seat added later under that handle.`,
+            `${level.handle}’s GitLab access level${level.before ? ` (${level.before})` : ""} is removed.`,
         )}
       />,
     );
@@ -371,12 +369,8 @@ function OutsideTheChart({
     parts.push(
       <p key="mailbox" className="t-body">
         {one
-          ? "Its mailbox, and the mail still addressed to it, is"
-          : "Their mailboxes, and the mail still addressed to them, are"}{" "}
-        kept for 24 hours after the engine applies the change and then retired, and any coding runs{" "}
-        {one ? "it still has are" : "they still have are"} ended then.{" "}
-        {one ? "Its memory is" : "Their memory is"} kept, and a seat added later with the same
-        handle reattaches to it.
+          ? "Its mail is kept for 24 hours. Its memory is kept for a seat with the same handle."
+          : "Their mail is kept for 24 hours. Their memory is kept for seats with the same handles."}
       </p>,
     );
   }

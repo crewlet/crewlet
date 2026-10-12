@@ -237,11 +237,6 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
         </>
       }
     >
-      <Text as="p" tone="secondary">
-        A project belongs to a team or a seat in the org. Give one a tracker project key in Edit
-        org, and the engine creates the project when the change is saved. The project takes its
-        owner’s name.
-      </Text>
       {!access.can ? (
         <Text as="p" role="alert" className="row gap-2">
           {access.block === "no_grant" && <KeyGlyph size="xs" aria-hidden="true" />}
@@ -249,7 +244,7 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
         </Text>
       ) : config.error ? (
         <Text as="p" role="alert">
-          The org could not be read, so there is no owner to offer. Close this and try again.
+          Couldn’t load the org. Close this and try again.
         </Text>
       ) : (
         <>
@@ -299,8 +294,7 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
       {access.can && (
         <Text as="p" variant="caption" className="row gap-2">
           <KeyGlyph size="xs" aria-hidden="true" />
-          Saving the key in Edit org takes the config:write grant, which you hold: a project
-          outlives the team that names it, so it is the company’s to make.
+          Saving the key takes config:write, since a project outlives its team.
         </Text>
       )}
     </Modal>

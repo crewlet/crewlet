@@ -78,14 +78,22 @@ func TestAFullUsageLogRefusesTheAppendAndAlarms(t *testing.T) {
 			Bytes: stats.Bytes, MaxBytes: stats.MaxBytes, StreamReadable: true,
 		}},
 	})
+	// THE ALARM NAMES THE LOG IT STANDS ON in its domains, each with the
+	// log's own measurement, rather than in its sentence.
+	domain := usage.Domain{}.Name()
 	var named bool
 	for _, a := range report.Alarms {
-		if a.Kind == statelog.KindLogHeadroom && strings.HasPrefix(a.Detail, "usage: ") {
-			named = true
+		if a.Kind != statelog.KindLogHeadroom {
+			continue
+		}
+		for _, d := range a.Domains {
+			if d.Domain == domain && strings.Contains(d.Detail, "ceiling") {
+				named = true
+			}
 		}
 	}
 	if !named {
-		t.Fatalf("a usage log at %d of %d bytes raised %+v — the headroom alarm "+
+		t.Fatalf("a usage log at %d of %d bytes raised %+v: the headroom alarm "+
 			"must fire and name the usage domain", stats.Bytes, stats.MaxBytes,
 			report.Alarms)
 	}

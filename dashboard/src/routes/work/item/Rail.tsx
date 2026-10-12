@@ -889,7 +889,7 @@ export function Relations({ detail, chrome }: { detail: WorkItemDetail; chrome: 
               commit the tracker duty writes shortly, the second an edge whose
               mirror was refused for good. */}
           {link.one_sided && !link.one_sided_final && (
-            <Tag variant="info" size="xs" title="The duty writes the other half shortly">
+            <Tag variant="info" size="xs" title="The other side updates shortly">
               mirror pending
             </Tag>
           )}

@@ -31,7 +31,6 @@ import {
 } from "@crewlethq/ui";
 import { MonitorGlyph, MoonGlyph, SunGlyph } from "@crewlethq/icons/glyphs";
 import { themeEntry, useApplyTheme } from "~/app/appearance.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { useViewerPrefs, type Density, type ThemeChoice } from "~/lib/prefs.ts";
 
 const MODES: { value: ThemeChoice; label: string; icon: ReactNode }[] = [
@@ -56,52 +55,46 @@ export function Appearance() {
   const mode = resolveTheme(prefs.theme, system);
 
   return (
-    <>
-      <PageNote>
-        How the console looks in this browser. Nobody else sees this choice, and it never changes
-        the company.
-      </PageNote>
-      <div className="appearance">
-        <div className="appearance-fields">
-          <Section title="Mode" description="Follow the machine, or pin light or dark.">
-            <div className="appearance-choice">
-              <SegmentedControl
-                label="Mode"
-                semantics="radio"
-                size="sm"
-                fill
-                options={MODES}
-                value={prefs.theme}
-                onValueChange={prefs.setTheme}
-              />
-            </div>
-          </Section>
-          <Section title="Density" description="How much room every list gives itself.">
-            <div className="appearance-choice">
-              <SegmentedControl
-                label="Density"
-                semantics="radio"
-                size="sm"
-                fill
-                options={DENSITY_WORDS}
-                value={prefs.density}
-                onValueChange={prefs.setDensity}
-              />
-            </div>
-          </Section>
-          <Section title="Theme" description="Each theme has a light and a dark variant.">
-            <ThemeGallery value={prefs.palette} onValueChange={applyTheme} onPreview={setPointed} />
-          </Section>
-        </div>
-        {/* THE PANE IS A PICTURE of the theme named over it, so it says
-            nothing a reader needs beyond that name. */}
-        <aside className="appearance-preview" aria-label="Theme preview">
-          <span className="t-caption">
-            Preview · <b>{shown.name}</b>
-          </span>
-          <ThemeSwatch swatch={shown.swatch} size="pane" mode={mode} />
-        </aside>
+    <div className="appearance">
+      <div className="appearance-fields">
+        <Section title="Mode" description="Follow the machine, or pin light or dark.">
+          <div className="appearance-choice">
+            <SegmentedControl
+              label="Mode"
+              semantics="radio"
+              size="sm"
+              fill
+              options={MODES}
+              value={prefs.theme}
+              onValueChange={prefs.setTheme}
+            />
+          </div>
+        </Section>
+        <Section title="Density" description="How much room every list gives itself.">
+          <div className="appearance-choice">
+            <SegmentedControl
+              label="Density"
+              semantics="radio"
+              size="sm"
+              fill
+              options={DENSITY_WORDS}
+              value={prefs.density}
+              onValueChange={prefs.setDensity}
+            />
+          </div>
+        </Section>
+        <Section title="Theme" description="Each theme has a light and a dark variant.">
+          <ThemeGallery value={prefs.palette} onValueChange={applyTheme} onPreview={setPointed} />
+        </Section>
       </div>
-    </>
+      {/* THE PANE IS A PICTURE of the theme named over it, so it says
+            nothing a reader needs beyond that name. */}
+      <aside className="appearance-preview" aria-label="Theme preview">
+        <span className="t-caption">
+          Preview · <b>{shown.name}</b>
+        </span>
+        <ThemeSwatch swatch={shown.swatch} size="pane" mode={mode} />
+      </aside>
+    </div>
   );
 }

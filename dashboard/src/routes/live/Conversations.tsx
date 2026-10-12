@@ -27,7 +27,7 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { EventRow, QueryState, Section } from "~/components/common.tsx";
+import { EventRow, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { Callout, Card, EmptyState, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -38,7 +38,7 @@ import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { href } from "~/app/router.tsx";
-import { MessageSquareGlyph, UsersGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
+import { MessageSquareGlyph, UsersGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
@@ -53,7 +53,6 @@ import {
 } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { A2AChannel } from "~/protocol/index.ts";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /** The channel record has no push behind it; a channel's life is one exchange. */
 const POLL_MS = 30_000;
@@ -174,8 +173,7 @@ function Exchange({
         {answered && <span className="t-caption nowrap">{relTime(channel.last_at, now)}</span>}
       </div>
       <span className="t-caption">
-        The words themselves are not in the channel record: both halves travel over the seat inbox
-        and are published as events.{" "}
+        The messages are in the event log.{" "}
         <a className="t-link prose-link" href={channelEventsHref(channel.id)}>
           Read this channel's events ↗
         </a>
@@ -271,12 +269,11 @@ function ChannelBody({
                   // ABSENT IS NOT A DATE. An open channel has no close, and
                   // the rail renders a missing value as the dash that says so.
                   value: channel.closed_at ? fmtDateTime(channel.closed_at) : undefined,
-                  title: "a closed channel is a finished exchange; re-opening is a new ask",
                 },
                 {
                   label: "Open for",
                   value: span == null ? undefined : fmtDuration(span),
-                  title: "from the ask to the close, or to the last message on an open channel",
+                  title: "From ask to close",
                 },
                 { label: "Channel", value: <code className="inline">{channel.id}</code> },
               ],
@@ -301,8 +298,8 @@ function ChannelBody({
  */
 function missingChannel(truncated: boolean | undefined): string {
   return truncated
-    ? "This listing holds the most recently active channels and the record has more, so it may be older than all of them. It may have been purged, or the id may be wrong."
-    : "A channel is kept until the retention horizon, and this listing holds every one in the record. It may have been purged, or the id may be wrong.";
+    ? "It may be older than this list, purged, or the id is wrong."
+    : "It may have been purged, or the id is wrong.";
 }
 
 /**
@@ -337,8 +334,7 @@ export function ChannelPeek({ id }: { id: string }) {
       <QueryState error={error} refusal={refusal} loading={loading}>
         {data?.available === false && (
           <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
-            No channel record is reachable from this node, so this channel cannot be read here.
-            Channels live in the fleet's coordination store.
+            Can’t read channels from this node right now.
           </Callout>
         )}
         {data?.available !== false && !channel && (
@@ -406,11 +402,6 @@ export function Conversations() {
 
   return (
     <>
-      <PageNote>
-        The private channels seats opened with each other. One ask, one answer, then closed — the
-        channel is the authorization record, not the transport.
-      </PageNote>
-
       {/* The flush Panel this row sat in is gone: StatGroup draws that surface
           itself — the same hairline, radius and clip our `panel-flush` did —
           and the tiles inside it are flush, so wrapping it would be two
@@ -425,11 +416,7 @@ export function Conversations() {
           icon={<LinkGlyph size="xs" />}
           label="Open channels"
           value={rows.filter((c) => !c.closed_at).length}
-          sub={
-            cut
-              ? "among the most recent — the record holds more"
-              : "one ask, one answer, then closed"
-          }
+          sub={cut ? "of the most recent" : "one ask, one answer, then closed"}
         />
         <StatCard
           icon={<MessageSquareGlyph size="xs" />}
@@ -448,8 +435,7 @@ export function Conversations() {
       {channels.loading && <Skeleton variant="text" rows={4} label="Loading channels" />}
       {channels.data?.available === false ? (
         <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
-          No agent-to-agent channel record is reachable from this node. Channels live in the fleet's
-          coordination store; a node that cannot read it says so rather than drawing an empty list.
+          Can’t read channels from this node right now.
         </Callout>
       ) : (
         <QueryState
@@ -461,7 +447,7 @@ export function Conversations() {
               ? undefined
               : {
                   title: "No channels have been opened",
-                  hint: "A seat opens one with a2a_ask — narrowly scoped to tight-loop sync between agents. Ordinary collaboration goes through chat and the tracker, where a human can see it.",
+                  hint: "Agents open these to ask each other quick questions.",
                 }
           }
         >
@@ -533,23 +519,6 @@ export function Conversations() {
           </Card>
         </QueryState>
       )}
-
-      <Section title="What this surface is, and is not">
-        <Callout variant="neutral" icon={<InfoGlyph size="md" />}>
-          <span className="col" style={{ gap: 4 }}>
-            <span>
-              A2A is deliberately narrow: one ask, one answer, then the channel closes. Both halves
-              travel over the durable seat inbox, so a colleague owned by another node is an
-              ordinary target.
-            </span>
-            <span className="t-caption">
-              Anything a human teammate would reasonably want to see goes through the company's
-              chat, tracker or code host instead — so it is readable where it actually happens,
-              which is why nothing here tries to be an inbox.
-            </span>
-          </span>
-        </Callout>
-      </Section>
     </>
   );
 }
@@ -614,8 +583,7 @@ export function ChannelScreen({ id }: { id: string }) {
             the second is guarded on a record that was actually read. */}
         {channels.data?.available === false && (
           <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
-            No channel record is reachable from this node, so this channel cannot be read here.
-            Channels live in the fleet&rsquo;s coordination store.
+            Can’t read channels from this node right now.
           </Callout>
         )}
         {missing && !eventsCard && (
@@ -632,8 +600,7 @@ export function ChannelScreen({ id }: { id: string }) {
         )}
         {missing && eventsCard && (
           <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
-            The channel record no longer holds this channel, but the log still holds what crossed
-            it.
+            The channel is gone, but its messages are still in the log.
           </Callout>
         )}
         {channel && <ChannelBody channel={channel} seatName={seatName} now={now} />}
@@ -656,7 +623,7 @@ export function ChannelScreen({ id }: { id: string }) {
           >
             <Card.Title>On this channel</Card.Title>
           </Card.Header>
-          <CoverageNote coverage={[events.data?.coverage]} what="this channel's events" />
+          <CoverageNote coverage={[events.data?.coverage]} what="this channel's history" />
           {events.loading && !events.data && (
             <Skeleton variant="text" rows={3} label="Loading the channel's events" />
           )}
@@ -668,7 +635,7 @@ export function ChannelScreen({ id }: { id: string }) {
               events.data && rows.length === 0
                 ? {
                     title: "No event names this channel",
-                    hint: "Its events may be older than the store keeps, or on a node that did not answer.",
+                    hint: "Its events may be too old, or on a node that didn’t answer.",
                   }
                 : undefined
             }
@@ -681,9 +648,9 @@ export function ChannelScreen({ id }: { id: string }) {
             {events.data?.next && (
               <footer className="panel-foot">
                 <span>
-                  The newest {plural(rows.length, "event")} are shown —{" "}
+                  Newest {plural(rows.length, "event")}. The rest are in{" "}
                   <a className="t-link prose-link" href={channelEventsHref(id)}>
-                    the event log pages the rest
+                    the event log
                   </a>
                   .
                 </span>

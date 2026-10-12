@@ -607,10 +607,13 @@ out of service at the same moment — its seats stay, and read the estate from
 the other data nodes — because both are measured from one instant — the
 position heartbeat's first sighting of the record — and the alarm says which of
 the two it is. It
-is raised **once for each log** holding a record past the grace, so an upgrade
-that moved two logs' record versions raises two, each saying what its own
-grace did: one alarm naming the node's oldest record would have said the
-identity estate's took nothing out of service while the tracker's had.
+is **one alarm** however many logs hold such a record, and it lists each of
+them in its `domains` with that log's own detail, so an upgrade that moved two
+logs' record versions names both, each saying what its own grace did: a detail
+naming only the node's oldest record would have said the identity estate's took
+nothing out of service while the tracker's had. Its log lines are written per
+log, so the second log's record passing the grace, and the first log's clearing
+while the second's stands, are each said.
 
 So a rolling upgrade should finish inside that window. An upgrade that stalls
 half-done leaves the old nodes holding records they cannot apply and refusing

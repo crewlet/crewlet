@@ -76,7 +76,7 @@ test("a window that ends where it begins is refused, and says why", () => {
   const from = screen.getByLabelText("From") as HTMLInputElement;
   fireEvent.change(to, { target: { value: from.value } });
 
-  expect(screen.getByText(/half-open/)).toBeTruthy();
+  expect(screen.getByText("The end must be after the start.")).toBeTruthy();
   const apply = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
   expect(apply.disabled).toBe(true);
   fireEvent.click(apply);
@@ -167,7 +167,7 @@ test("a screen of company days picks two dates on the company's clock", () => {
       <TimeRangePicker range={range} />
     </LayerHost>,
   );
-  fireEvent.click(screen.getByTitle("Name two company days of your own"));
+  fireEvent.click(screen.getByTitle("Pick two dates"));
   const first = screen.getByLabelText("First day") as HTMLInputElement;
   const last = screen.getByLabelText("Last day") as HTMLInputElement;
   expect(first.type).toBe("date");

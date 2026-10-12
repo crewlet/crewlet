@@ -153,7 +153,7 @@ stop.
 
 **Where a seat runs is which node holds it** — the peek's **Running on** fact
 (**Runs on** on the profile's Setup card), never the human seat's **Held by**:
-"this node · node-a", "another node", or "no node — not placed", read off this
+"this node · node-a", "another node", or "no node", read off this
 node's own health push (the seats it holds) and the engine's `unplaced`. It was
 the agent instance id, which exists only mid-turn, so an idle seat this very
 node held read "not running on this node". Which peer holds one held elsewhere
@@ -679,7 +679,7 @@ nothing, and what it waits on is the Inbox's and Now running's *Waiting on a
 person*. Nothing in it ticks — no elapsed clock and no pulse per row — because
 the chrome is on every screen; the Live row's one dot says something runs, and
 these rows say which. At the foot, Settings, the
-**health card** and the **user block**. The head carries the company's lockup,
+**engine panel** and the **user block**. The head carries the company's lockup,
 alone on its line.
 
 **Every "New task" is one sheet.** A work screen's
@@ -832,41 +832,70 @@ numbers. A surface mounted outside the frame is refused rather than handed a
 read of its own, because that fallback would bring the per-surface reads back
 without a sound.
 
-**The health card** says the one state that decides what a reader should do,
-in precedence order: nobody is signed in (the card is then the button that
-goes to the sign-in), **no access yet** — a session without `state:read`, said
-in neutral ink because a person invited with no grants is not a fault, and
-for which the socket is never dialled (see [Signing in](#signing-in-is-a-screen-outside-the-frame))
-— then the engine knows who this is and will not serve them (a seat taken out
-of the chart). Both are statements — a card that wears nothing a control
-wears: no chevron, no pointer, no hover border, since it does nothing and
-cannot be focused, where the sign-in button and the link to the nodes keep all
-three — with every screen but the reader's own (their Account and Settings ›
-Appearance) replaced by one panel that names who they are from `GET /auth/session`, what
-they hold and why — for no access, that `state:read` would open the
-dashboard, which it then does by itself; for a refusal, the engine's reason —
-and offers the Account, a check or a retry, and the sign-out. Then
-reconnecting,
-draining, no configuration, a posture that
-diverged from the fleet (`shed`, `stuck`, `isolated`), no health push yet
-("Waiting for the engine" — nothing reported is not healthy), and serving —
-"3 nodes · config epoch 42", or "node count unavailable" where the presence
-read failed. The dot is the POSTURE and nothing else: a serving node has a
-success dot whatever its alarms say — and the dot sits on the TITLE's line,
-sharing its grid row, rather than centred on a card whose height the alarm line
-grows. The title is "Engine healthy" only when the alarm table was evaluated
-and nothing in it fires, and "Engine serving" otherwise, because "healthy"
-directly above "5 alarms" is a claim the line under it refutes.
-The alarm line beneath is a second fact with its own tone and glyph — the
-health push's `alarms`, a count and the alarm that has stood longest ("5
-alarms · oldest: backup age"), with the log it stands on where the alarm is a
-log's own (`worst_domain`: "oldest: trim blocked (tracker)"), in warning ink
-beside a warning triangle, never the rows, because the push reaches every
-reader; a push with no alarm table says "Alarms
-not evaluated yet" in plain text, because an unevaluated table is neither an
-empty one nor a fault. Recolouring the dot for an alarm drew a green title
-beside an amber dot, and a title such as "serving, with alarms" only repeats
-the alarm line. Everything comes off the one health push; nothing polls.
+**The engine panel** is one row at the foot of the rail, drawn in the rail's
+own grammar (the kit's `AppShell.RailRow`, the row Settings is above it): a
+dot, the state in words, and, while alarms stand, how many, beside a warning
+triangle ("Engine serving ⚠ 5"). Its words are a few in every state, so it
+keeps one 30px height and the foot never moves when the engine's state does.
+It says the one state that decides what a reader should do, in precedence
+order. Three are about THIS BROWSER rather than the engine: nobody is signed
+in ("Not signed in": the row is then the button that goes to the sign-in, and
+opens nothing), **no access yet** (a session without `state:read`, said in
+neutral ink because a person invited with no grants is not a fault, and for
+which the socket is never dialled; see [Signing in](#signing-in-is-a-screen-outside-the-frame)),
+and the engine knows who this is and will not serve them ("Access refused", a
+seat taken out of the chart). Then the engine is unreachable, the tab is still
+connecting (a neutral dot: nothing has reported yet, which is neither healthy
+nor a fault), draining, falling behind (amber, while the push carries
+`stall_lag_seconds`, which the engine sends only once the node's watched duty
+has missed its beat; the panel says how far behind, "31s behind", a figure
+that climbs towards the lease TTL at which the node restarts itself), starting
+(a neutral dot, while the node applies its first configuration and its posture
+says `wait`), no configuration, a posture
+that diverged from the fleet (`shed`, `stuck`, `isolated`), and serving. The
+dot is the POSTURE and nothing else: a serving node has a success dot whatever
+its alarms say. "Engine healthy" is said only when the alarm table was
+evaluated and nothing in it fires, and "Engine serving" otherwise, because
+"healthy" beside a count of alarms is a claim the count refutes.
+
+**No access yet and a refusal are statements**, repaired by an administrator
+rather than by a press, so their row wears nothing a control wears: it is the
+kit's static rail row, with no trailing mark, no pointer, no hover and no
+place in the tab order, where the sign-in row (which carries a key mark) and
+every other state's row (which opens the panel) are buttons. A statement
+wearing a control's marks reads as a control that does nothing. Every screen but the reader's own (their Account and Settings ›
+Appearance) is then replaced by one panel that names who they are from
+`GET /auth/session`, what they hold and why (for no access, that `state:read`
+would open the dashboard, which it then does by itself; for a refusal, the
+engine's reason), and offers the Account, a check or a retry, and the
+sign-out.
+
+Pressing the row in any other state opens the panel above it (the kit's
+`Popover`, named "Engine"): the state again with this node's name, then the
+live node count ("2 live", or "Count unavailable" where the presence read
+failed, never a zero), the configuration epoch this node applied ("Applying"
+while it starts), how long it has been up, and the alarms, then **Open node**
+(`#/settings/nodes/{node}`) and, while alarms stand, **Open alarms**
+(`#/settings/backups?at=alarms`, which brings the alarm list into view without
+moving it). While the engine is unreachable the panel says how long ago it
+last answered and offers **Reconnect now**, which dials at once rather than at
+the end of the backoff. The alarms are listed by name, the longest-standing
+first. Their COUNT is the health push's, the evaluation the engine's gauge and
+log lines come from; their NAMES are the operator's retention report, the
+document Backups & retention lists them from, asked for when the panel opens
+and again when the count moves, because the push is public and names only the
+one that has stood longest. The report is asked only of a reader holding the
+grant that section opens on (`fleet:operate`); anybody else, or a report not
+answered yet, is told the longest-standing alarm and how many more stand. A
+name is the alarm's kind read as words, its initialisms kept whole ("Backup
+age", "Trim blocked"), and names one alarm: the engine raises each kind once,
+with the logs it stands on in it, and which logs those are is Backups &
+retention's to list (the push names a kind and no log).
+`lib/alarms.ts` holds the rule.
+A table the engine has not evaluated is "Not evaluated", never "None". The
+push counts the nodes holding a presence lease and does not know how many a
+fleet should have, so a node that is down is a smaller count and nothing
+more. On a phone the row and its panel are in the drawer, and nowhere else.
 
 **The user block** is who this browser is — a principal the identity
 directory binds to a seat, which every person is (bound: their name, their
@@ -959,8 +988,8 @@ the bar's line, and Work shrinks to its glyph.
 
 **The panel.** A search band, a list that scrolls and a footer that does not.
 **All projects** comes first, with the open work across every active project;
-then a note when the listing was cut at 200 ("200 of 340 listed. Type to
-search all of them."); **Recent**, the last three projects opened with the
+then a note when the listing was cut at 200 ("200 of 340. Type to search.");
+**Recent**, the last three projects opened with the
 current one aside, once a company has more than eight; **Projects**, the
 active ones with a 52 px key column, the name and the open count, the current
 scope outlined; and the footer's **Browse all projects** and **New project…**,
@@ -1038,13 +1067,13 @@ a screen, and every workspace and section the code declares is below.
 | `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** — a channel's own page draws the channel and what crossed it *(needs `audit:read`)* | |
 | `#/live/traces/{id}` | **Trace** — one distributed trace. NO LIST: nothing enumerates traces, so a bare traces address is Not Found, saying a trace is opened from a turn, a run or an event | |
 | `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows *(needs `audit:read`)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `seat=` · `trace=` · `channel=` · `q=` · `failed=true` |
-| `#/knowledge` | **Knowledge**: with no phrase, the landing (Pinned, Recently written, Continue reading, Watching, For the agents); with one, the ranked answer grouped by space beside a preview. The spaces row and the search sit on every Knowledge screen | `q=` · `mode=hybrid\|keyword\|semantic` (Hybrid, Keyword, Meaning) · `by=space\|rank` · `space=` (narrows what is shown of the answer) |
+| `#/knowledge` | **Knowledge**: with no phrase, the landing (the newest change open to read, Recently written, Continue reading, Pinned, Watching, For the agents); with one, the ranked answer grouped by space beside a preview. The spaces row and the search sit on every Knowledge screen | `q=` · `mode=hybrid\|keyword\|semantic` (Hybrid, Keyword, Meaning) · `by=space\|rank` · `space=` (narrows what is shown of the answer) |
 | `#/knowledge/{CONTAINER}` | **Space** (a knowledge container, by its key): its head, and its pages as an outline read one level at a time, with Create (a document or a folder) at the end of every open level | |
 | `#/knowledge/new` | **New page**: the composer, filed where it was opened from | `space=` · `parent=` (a page id) |
 | `#/knowledge/pages/{id}` | **Page**: addressed by its id, which a rename does not change. The document with its outline, its properties, its comments and what it is connected to; edited as you | `edit=1` · `version=` (History: one revision in the document's place) · `lens=diff\|full` |
 | `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes *(needs `audit:read`)*. Handles live here as they do under `seats/` | |
-| `#/spend` | **Spend › Overview** — the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent, by provider, by team, the auxiliary model by purpose and the three most expensive tasks (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
+| `#/spend` | **Spend › Overview**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by a `config:write` holder whose credential the document admits), and what is refusing. ONE address: Settings lists it as a cross-link | `window=` is not read here, and is carried through to the other sections |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
@@ -1055,7 +1084,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(needs `config:read`)* | |
 | `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes** — leases (each seat's holder and **since** when), duties, config rollout, the fleet broker's members as the nodes advertise them and as its metadata group counts them, and where the company's files are kept (the object store's backend and its collector's last passes) *(needs `fleet:operate`)* | |
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(needs `config:read`)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
-| `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(needs `fleet:operate`)*. Domains live only under `backups/` | |
+| `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(needs `fleet:operate`)*. Domains live only under `backups/` | `at=alarms` (brings the alarm list into view) |
 | `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs `audit:read`)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
 | `#/settings/appearance` | **Appearance**: the mode, the density and the theme gallery for this browser, with a pane previewing the theme the pointer rests on. Not guarded: it is the reader's own and asks the engine nothing. No tail | |
 | `#/account` | **Account** — the signed-in reader's own page, opened from the reader's own name in the user block at the sidebar's foot, from its menu, from Settings' **You** group (it has no sidebar row) or `g u`: the profile the directory holds (an administrator changes it), the password (changed with the current one, which ends every other session and personal token and keeps this browser), the second factor and recovery codes, where they are signed in (this browser marked, any other signed out by name, or everywhere), and their personal access tokens (minted — the value shown once — and revoked). A credential that is not a person's, a Tier A token's session, is told what it is and offered none of it | |
@@ -1216,9 +1245,10 @@ link to.
 ### Every list is one grid
 
 `DataGrid` draws all of them. There is no `<table>` left in the product except
-the retention screen's per-domain terms — a block that already titled itself,
-with no header row and nothing to sort, which is a table in the sense the
-element means rather than a list of objects.
+a project's Files listing: a block inside a card that already titles it, with
+nothing to sort, which is a table in the sense the element means rather than a
+list of objects. (The retention screen's per-domain terms were the other one;
+they are a description list now.)
 
 **Including the tracker's own list and table, which are one grid with two
 column sets.** They were two components over one answer, and the cost was
@@ -1782,9 +1812,9 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 
 | Piece | What it is |
 |---|---|
-| `sidebar/` | the one sidebar — [The sidebar](#the-sidebar) — with the health card and the user block |
-| `sidebar/UserBlock` | who is signed in, at the sidebar's foot, called by their OWN name and never their seat's (`readerName`: their directory row's name as `GET /auth/session` answers it, else their login): bound (that name, the login where it is not the name, and the seat — its name off the chart, or `@handle` where the chart is unread — the seat's kind never captioned, since every binding is to a human seat), unbound (the same name and login, and *Not bound to a seat* — ordinary for a token's session or a service account, and for a person the residue People & access reports, since every person holds a human seat) or nobody (a **Sign in** button back to the screen they are on); a session read that FAILED says it could not tell who this is and still offers the Account and the sign-out. The name of anybody resolved is a link to the reader's own [Account](#account-the-readers-own-page) — never the seat, which holds none of what a person looks for there — named ", your account", titled with the Account row's hint, wearing a chevron at rest, and marked current on `#/account`, where it stands in for the row the Account does not have. Its popover holds the same link (`place: "menu"` in `app/nav.ts`) — where the password, the second factor and recovery codes, the sessions and the personal access tokens are — and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
-| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a lock naming what a section closed to the reader lacks (`sectionOpen`; drawn only once somebody has said what the reader holds), each row's hint as its title, and an arrow on a cross-link. A screen whose own menu carries the star (a knowledge page's More, `useOwnStar`) gets no star from the frame |
+| `sidebar/` | the one sidebar ([The sidebar](#the-sidebar)), with the engine panel and the user block |
+| `sidebar/UserBlock` | who is signed in, at the sidebar's foot, called by their OWN name and never their seat's (`readerName`: their directory row's name as `GET /auth/session` answers it, else their login): bound (that name, the login where it is not the name, and the seat — its name off the chart, or `@handle` where the chart is unread — the seat's kind never captioned, since every binding is to a human seat), unbound (the same name and login, and *Not bound to a seat* — a Tier A token's session or a service account acting as itself, which is ordinary; never a person, who holds a human seat for as long as they are here ([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md))) or nobody (a **Sign in** button back to the screen they are on); a session read that FAILED says it could not tell who this is and still offers the Account and the sign-out. The name of anybody resolved is a link to the reader's own [Account](#account-the-readers-own-page) — never the seat, which holds none of what a person looks for there — named ", your account", titled with the Account row's hint, wearing a chevron at rest, and marked current on `#/account`, where it stands in for the row the Account does not have. Its popover holds the same link (`place: "menu"` in `app/nav.ts`) — where the password, the second factor and recovery codes, the sessions and the personal access tokens are — and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
+| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a lock naming what a section closed to the reader lacks (`sectionOpen`; drawn only once somebody has said what the reader holds), each row's hint as its title, and an arrow on a cross-link. A screen whose design keeps the star in a menu rather than in the bar gets no star from the frame (`useOwnStar`): a knowledge page, whose More carries it, and Knowledge's landing, whose pages are each starred from their own More |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied. The two positions that last one compares (`applied_through` against `log_seq`) are PACKED on the wire — (generation × 2^40) + sequence, so they compare with a plain `<` across a re-anchor — and are printed unpacked (`positionWords` in `components/work.tsx`): the bare sequence in a log's first generation and `generation:sequence` past it. The stride is the engine's `statelog.GenerationStride`, and a gate in internal/api holds the dashboard's copy (`GENERATION_STRIDE`) to it |
@@ -2045,13 +2075,15 @@ show its ancestry beside the controls takes a line of its own.
   object strip measures a twin of the kit's row — hidden, inert, clipped —
   since the kit draws a row whole, and hands the widths to the same fold.
 - **The star is on every page that is one.** A workspace's own page is already
-  a sidebar row, so the star there cannot keep it — but it is drawn,
+  a sidebar row, so the star there cannot keep it, but it is drawn,
   unavailable and saying "Already in the sidebar", rather than left out: left
   out, it appeared on every section of a workspace but the first, and moving
   between two tabs moved the header's controls. Whether a page IS a row is
   `nav.ts`'s `isSidebarRow`, asked by the inline star and by the phone's More
   alike, and never the path's length: the reader's Account is one segment long
-  and has no row, so it is kept like any other page.
+  and has no row, so it is kept like any other page. Knowledge's landing and
+  its pages are the exception: a page is starred from its own More menu, so
+  neither draws the frame's star (`useOwnStar`).
 
 ### Moving, and going back
 
@@ -2489,8 +2521,8 @@ one of the updates: they write as the seat the inbox is kept under.
 **Every row says the same three things.** Who: the seat behind it, with its
 avatar; a person's change is drawn as the seat the engine recorded it under,
 one by a credential bound to no seat (author kind `operator`: a Tier A token's
-session, a service account, or a person recorded before every person held a
-seat, acting as itself) under its own login, the name the record carries
+session or a service account acting as itself, never a person, who holds a
+human seat for as long as they are here) under its own login, the name the record carries
 (`iam.ActorFor`) and a name rather than a secret, and one the engine made
 itself (`system`) names nobody and reads "The engine", with the engine's mark;
 never as the credential a change came through (`operator_id`). What, in up to
@@ -2667,8 +2699,8 @@ HELD (`HoldWrites`): drawn, disabled, and explained once in words above the
 rows, because the questions put to them are theirs to answer and their work is
 changed from the work screens. The one change released there is a LEAD's
 reorder — anybody above them in the chart, as the tracker defines a lead — and
-the page says before the press that the reorder is stamped with the reader's
-name and tells them what is now first.
+the page says before the press that the person is told when the reader
+reorders.
 
 ### A task's page is one reading
 
@@ -2705,7 +2737,7 @@ only down to the newest point any of them with more pages stopped at, so a
 stretch it draws is complete in all three; **Earlier activity** reads the
 history that stopped there. All | Comments | Agent turns | Changes narrows it.
 A change is a sentence about the task ("Jane Founder filed this in ENG",
-"CTO assigned it to SWE — “owns the provisioner”", "Jane Founder ticked 1 on
+"CTO assigned it to SWE: “owns the provisioner”", "Jane Founder ticked 1 on
 Acceptance — 1 of 4 done"), with a quiet **· Who this reached ›** at the end of
 its line opening its routing: the reason each person was woken, whether it asked
 anything, and the three different empty answers in three sentences. A comment
@@ -2714,7 +2746,7 @@ artboard's card: "SWE ran turn 1", its phases as checked steps — the one a fai
 turn broke in wears a cross in the danger tone, and its pill says "failed in
 review" — a pill for a send-back ("sent back for another pass") or a park, what
 it did in the agent's own words (a turn that failed or parked before it wrote an
-account of itself says "No summary recorded — see the trace" in one quiet line), the reviewer's request on the raised rung with the
+account of itself says "No summary. See the trace." in one quiet line), the reviewer's request on the raised rung with the
 caution ink on its mark, the tools it called as chips ("run_sandbox ×4"), and under them, on
 a line of its own read from the left, its wall time and tokens and **Trace**. The number is the TASK's count of turns,
 so the newest card and the cost panel agree. While a seat's turn is running on
@@ -2772,7 +2804,7 @@ under its primary manager, the engine's derived `manager`, the line escalation
 goes up. Both are built by `lib/orgchart.ts` from the projection this node has
 APPLIED, never the builder's draft (a test holds that it imports none of the
 builder's model), so between a save and this node applying it the chart has
-not moved, and the "still applying revision …" note says so. Every reporting
+not moved, and the "Still applying …" note says so. Every reporting
 line and every unit's seats are the engine's derived ones; the client draws no
 hierarchy of its own. **The field runs to the sheet's edges**, dotted, under
 the tabs, as the artboard draws it: the screen's padding and the canvas's own
@@ -2796,13 +2828,10 @@ and a caption that grew with the engine's state line would relay the whole
 chart twice a tool-loop round. That line ("Executing ENG-412", "3 workers on
 ENG-405", "Needs you · run parked", "Stopped · budget", "Idle · last turn 24m
 ago") is the node's title, and it is read after the node's name. **A seat's
-dot shows what it is doing**, which the section tabs say at the end of their
-row on every Agents section, wherever the row has room for it beside every tab
-(it gives way to the tabs, so a phone does without it): the dot and the word
-are the only state hue on a node, and an agent's colour is its own look (see "The
-one rule"). The legend at the chart's foot counts Working, Needs you, Stopped
-and Idle from the engine's `activity`: a seat with no row yet is counted
-nowhere, and a person never.
+dot shows what it is doing**: the dot and the word are the only state hue on a
+node, and an agent's colour is its own look (see "The one rule"). The legend at
+the chart's foot counts Working, Needs you, Stopped and Idle from the engine's
+`activity`: a seat with no row yet is counted nowhere, and a person never.
 
 **A human seat's card says what holds it**, for a reader the identity
 directory answers — `people:manage` or `audit:read`, the two grants
@@ -2934,8 +2963,9 @@ the org projection, which carries it only to a reader holding `config:read` —
 every other reader is told that grant shows it, never that the seat has no
 provider — and the model serving the call in flight), one row per capped
 budget window labelled by its own period ("Budget today", "Budget this week")
-with a meter in the engine's state, or "No seat budget — the company's applies"
-where only the company's ceilings bind it ("No budget" where nothing does),
+with a meter in the engine's state, or "No seat budget; the company's … applies"
+("No seat budget; the company's 60M/day applies") where only the company's
+ceilings bind it ("No budget" where nothing does),
 Running on (the node that holds the lease and since when for a `fleet:operate`
 holder;
 every other reader reads what the health push says — this node by name,
@@ -3237,7 +3267,7 @@ twice and none nowhere:
 | Home | Subjects | Why there |
 |---|---|---|
 | `seat`: the Inbox's "Needs you", and Home's "N conditions need a look" | the seats' own state, the token budgets | a person decides these: raise a ceiling, resume a seat, look at one that failed |
-| `engine` — the sidebar's health card and Home's status sentence | the engine and this node's link to it | a fact about the product the reader is looking at, on every screen, not an item in anybody's queue |
+| `engine`: the sidebar's engine panel and Home's status sentence | the engine and this node's link to it | a fact about the product the reader is looking at, on every screen, not an item in anybody's queue |
 | `live` — Live › Now running, beside what each is about | a round that has stopped moving (a caution or failure mark on its own running-turn row, never while the turn is parked), every coding run parked on a question (a row of **Waiting on a person**, answered in place) | watched rather than decided; a run waiting on a PERSON already reaches them through their own decisions, and a list of alarms restating the rows around it was a second copy of each |
 
 On Home the queue is COUNTED, not drawn: the `seat` conditions that are not
@@ -3470,14 +3500,14 @@ under **Sources of the answer**, below the actions, so the keyboard reaches
 all of them and the three changes stay in the first screen. A term that reads
 as a question also trims All to two task and two page hits, from the moment it
 is typed rather than when the answer lands, so the list does not shrink under
-the highlight. The answer ends with a footnote in **tokens** — "1,440 tokens, charged to
-the company", or "Answered before — no tokens spent" — never money. An
-anonymous reader gets one line instead — *Sign in to get an answer from your
-company's knowledge* — and a reader bound to no seat (an API token's session,
-or a service account) is told the answer is written by their seat's own model and to ask whoever
-manages people to bind their login to one, because the engine refuses the
-answer to anybody without a seat whose model it can run on. A person signed in
-as themselves always gets the answer: every person holds a human seat.
+the highlight. The answer ends with a footnote in **tokens** ("1,440 tokens,
+charged to the company", or "Cached answer, no tokens spent"), never money. An
+anonymous reader gets one line instead (*Sign in to ask.*), and a reader bound
+to no seat (an API token's session, or a service account) is told *Asking needs
+a seat. Ask whoever manages people here to bind your login to one.*, because
+the answer is written by the asker's seat's own model and the engine refuses it
+to anybody without a seat whose model it can run on. A person signed in as
+themselves always gets the answer: every person holds a human seat.
 
 ### Three changes, made as you
 
@@ -3632,9 +3662,9 @@ same, under its own login:
 | You are | The control says |
 |---|---|
 | Refused the company — no access yet (a session without `state:read`, for which nothing is dialled) or a refusal the socket met | The engine is not serving you the company, so nothing in it can be changed here — your Account says what you hold. |
-| Offline | Offline — reconnect to make changes. Nothing is queued while you are away. |
+| Offline | Offline. Reconnect to make changes. |
 | Not yet known | Checking who you are before anything can be changed. |
-| Anonymous | Sign in to make changes — every change is recorded under your name. |
+| Anonymous | Sign in to make changes. |
 | Somebody the engine does not make this change for | This engine does not make this change for you. |
 | Looking at somebody else's record | The screen's own sentence, naming whose record it is — My work read on a report's day holds every control on it (`HoldWrites`), and releases exactly the one change it offers there, a lead's reorder of that queue. |
 
@@ -3683,8 +3713,8 @@ four, and each tells you something different:
 | Outcome | What you see |
 |---|---|
 | `applied` | A toast naming what changed; the screen is re-read and redrawn with it. |
-| `pending` | "Sent — this node has not applied it yet." The re-read waits until this node has. |
-| `unknown` | "Could not confirm — it may have landed", which **stays** until you dismiss it, with Retry. |
+| `pending` | "Sent. This node has not applied it yet." The re-read waits until this node has. |
+| `unknown` | "Could not confirm. It may have landed", which **stays** until you dismiss it, with Retry. |
 | refused | The engine's reason, beside the control that caused it, until your next press. |
 
 **The re-read waits for your write.** An `applied` or `pending` answer carries
@@ -3846,8 +3876,8 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   window, so the other three are asked for their newest page and narrowed on
   the client. A page that fills up before it reaches the start of the window is
   older rows the screen never saw, and a caption reading "some of this may be
-  missing" is one nobody can act on where "Knowledge answered one page" says
-  where to look.
+  missing" is one nobody can act on where "Knowledge shows only its newest
+  rows" says where to look.
 - **The engine** vs **a stated writer.** An empty actor on a tracker or wiki
   commit is the engine's own write, and the Audit screen draws it as "the
   engine". A configuration revision is different: the revision states WHAT
@@ -3865,13 +3895,11 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   matches these filters. Widen them", with no filter set: a claim about a
   narrowing that did not exist, on the day-one state of every project. It is
   drawn from the project's own maintained counts now, names the project, and
-  says how work gets filed (a seat's `create_work_item`, an inbound webhook, a
-  schedule, or your own assistant at `/operator/mcp`). "Nothing matches" is
-  reserved for a query that genuinely narrowed. The same rule sorts the two
-  empty pages apart: the work list's empty state is about ITEMS and the
-  projects directory's is about PROJECTS, so a company with no projects is told
-  what a project is and that a unit's `project` key in the company
-  configuration is what mints one.
+  offers New task to file the first one. "Nothing matches" is reserved for a
+  query that genuinely narrowed. The same rule sorts the two empty pages apart:
+  the work list's empty state is about ITEMS and the projects directory's is
+  about PROJECTS, so a company with no projects is pointed at New project,
+  which starts one.
 - **An empty SEGMENT is not an empty company — so the answer carries the
   census.** The projects directory's three segments each ask the engine for
   their own set, which is what makes the listing honest and is also what makes
@@ -3881,10 +3909,10 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   the Active segment the archived projects have no row on screen to be derived
   from. So `work_projects` answers with a `census` of BOTH sets under the same
   narrowing, and the page never guesses: `active + archived === 0` is the
-  company having nothing and draws "No project has been created yet" on
+  company having nothing and draws "No projects yet" on
   **whichever segment the reader is on** — which matters, because they land on
-  Active; an empty Active answer with archived projects behind it says how many
-  and links to them; and Archived says nothing is archived. The counts also sit
+  Active; an empty Active answer with archived projects behind it links to
+  them; and Archived says nothing is archived. The counts sit
   on the segment control itself, so the switch says what is behind each option
   before it is pressed. A screen that hedges — one sentence naming both ways a
   state happens — is a screen missing a number, and the fix is to send the
@@ -3901,7 +3929,7 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   four had been archived, and both false about a company holding every item it
   ever filed. `active + archived === 0` is the only thing that draws the
   first-run panel now; `active === 0 && archived > 0` keeps the ordinary list
-  and gives it an empty state naming the count with the way to
+  and gives it an empty state with the way to
   `#/work?shown=archived`, the same sentence the directory's own
   Active state writes, because it is the same fact. An answer carrying no
   census concludes neither, on the rule its rows already followed.
@@ -4041,7 +4069,7 @@ rules fix it, and each one names a specific mechanism:
    `submit_work`, the reviewer's `submit_review`, a worker's `submit_result` —
    can still get words and no call, and the commonest form is the model
    printing its own submission as a fenced JSON block. Without a word about it
-   the reader saw that block, then "never said what it did" and "rescued" on
+   the reader saw that block, then "incomplete, no report" and "rescued" on
    the header, and nothing connecting the two. The engine flags such a round
    (`round_narration[].declined`), and the round says beneath its words what
    happened next, which the ledger already knows: a later round means the
@@ -4056,9 +4084,9 @@ rules fix it, and each one names a specific mechanism:
    the engine wrote the decision in its place — `incomplete` for an executor,
    `self_iterate` for a reviewer. Its title used to say the phase "was
    re-asked", which nothing does to a phase as a whole. And a rescued review's
-   decision reads "never decided — the engine sent the turn back", because
-   `self_iterate` is also the word a reviewer chooses on purpose, and "sent the
-   turn back" claimed a judgement nobody made.
+   decision reads "undecided, sent back", because `self_iterate` is also the
+   word a reviewer chooses on purpose, and "sent the turn back" claimed a
+   judgement nobody made.
 
    **A round that did not finish says why, and a refusal is named as one.**
    The engine ends a phase on a round its output cap cut off, one that filled
@@ -4073,11 +4101,10 @@ rules fix it, and each one names a specific mechanism:
    sentence. Such a round keeps its place on the rail even when it said
    nothing and ran nothing: a refusal with no text is exactly that round, and
    it is the one that explains why the phase ended. The header names a refused
-   phase **"declined by model"** rather than its `error_kind` — `refusal` reads
-   as the engine refusing — and the error banner says what the vendor said
-   (`refusal.category`, `refusal.explanation`) and what the engine did about
-   it: nothing rescued, nothing re-asked, the trigger not redelivered. Still
-   danger, because the phase and its turn ended there.
+   phase **"declined by model"** rather than its `error_kind` (`refusal` reads
+   as the engine refusing), and the error banner says what the vendor said
+   (`refusal.category`, `refusal.explanation`) and that the phase ended there.
+   Still danger, because the phase and its turn ended there.
 3. **The model's words are prose; JSON is monospace, and INDENTED.**
    Reasoning and speech get a proportional face, real leading and a bounded
    measure, and are rendered as the markdown they are, read by a model's
@@ -4493,15 +4520,15 @@ of which is what makes them worth having at all:
 - **The settled list does not splice rows in under a reader.** At the top of
   the scroller new rows merge straight in — that is somebody watching the
   feed, and holding rows back from them would look broken. Scrolled down,
-  they are counted and offered: *"3 new turns finished while you were
-  reading — show"*. Keyed on identity, never position, so a row that UPDATES
+  they are counted and offered: *"3 new turns. Show"*. Keyed on identity,
+  never position, so a row that UPDATES
   in place — a round landing, a phase completing — is never held back.
 
   **And identity reaches across the two lists.** A running turn lives in the
   live region; when it finishes it leaves that region and arrives in the
   settled list with a key that list has never admitted — so the row a reader
-  had been watching for four minutes was replaced by *"1 new turn finished
-  while you were reading"*. It was on their screen a moment earlier: it is not
+  had been watching for four minutes was replaced by *"1 new turn. Show"*. It
+  was on their screen a moment earlier: it is not
   new to them, whatever list it was in. Each screen passes the keys it is
   rendering live, and they are admitted without the scroll check.
 
@@ -4548,9 +4575,9 @@ be read at a glance:
   how long it has waited and how long its box is still held, and **Answer**,
   which sends `answer_run{turn_id, answer}` as the person reading.
 - **In a box** — the rest of the detached runs in flight, eight before it
-  says how many more. Empty, it says *No coding run is in flight. A finished
-  run's record is its turn's trace* — a settled run's row is deleted, so the
-  sentence it replaced, promising every finished run under Runs, was false.
+  says how many more. Empty, it says *Finished runs are on their turn’s
+  trace*: a settled run's row is deleted, so the sentence it replaced,
+  promising every finished run under Runs, was false.
 - **Activity** — the engine's own count of events over the window
   (`event_series`, minute bars summed exactly into the strip's cells) and the
   latest seven events, each the time and ONE line: the actor, then what
@@ -4758,7 +4785,7 @@ Four more controls that looked like something they were not:
   `Downloading`, not `Saved`: there is no completion event on an
   `<a download>`, so the only thing observed is the hand-off, and a browser
   can still stop it afterwards. It names the file
-  (`download started — turn-….json`) because a reader who cannot see the
+  (`download started: turn-….json`) because a reader who cannot see the
   download shelf has nothing else to tell them what to go and open. It shares
   the confirmation machinery with `CopyButton` rather than reimplementing it:
   the two sit side by side in the Turn header, so a difference in how long
@@ -4789,7 +4816,7 @@ Four more controls that looked like something they were not:
 
   **And then fifteen more, classified WRONG rather than not at all.** A chrome
   class on an anchor that is a word in a line passes that scan silently, which
-  is what `.t-link` on every "…so it has no channel to set. **Open
+  is what `.t-link` on every "…No Mattermost bot for this seat. **Open
   Integrations**" was. The baseline's hover underline had been standing in for
   the mark — a cue no keyboard or touch reader ever saw, so it never satisfied
   1.4.1 — and resetting it is what made the gap visible rather than what opened
@@ -6003,8 +6030,8 @@ is one of the rules on this page applied to a tracker.
   with the project's NAME and confirmed with the day as the Target fact writes
   it ("Set Core's target to 30 Oct 2026", never the wire's ISO form) — and
   **New task**, filed into this project. A project that declares no purpose
-  says so in a sentence for a person ("No purpose is set for it — add one to
-  Core in the company configuration…"), not a configuration key in backticks.
+  says so in a sentence for a person ("Add a purpose in Edit org."), not a
+  configuration key in backticks.
 - **A lens keeps its filters.** The lenses over a project (Tasks, About,
   History and Files) are readings of ONE container, not separate screens,
   so switching keeps the narrowing AND the arrangement: `lens=` is written
@@ -6193,8 +6220,8 @@ that can.
   - Bytes the owner holds back until their redaction is settled — a line not
     finished, a private key whose end has not been written — are counted
     under the block rather than shown.
-  - *Nothing to show yet* and *the node that owns this run did not answer*
-    are different sentences, and the second names the node. A screen reader
+  - *No output yet* and *node-b didn’t answer* are different sentences, and
+    the second names the node. A screen reader
     is told the tail's STATE — one sentence in a status region, which changes
     only when the state does — never the output or the "read 3s ago" clock,
     which change every poll.
@@ -6362,20 +6389,37 @@ palette and the trail.
   running Hybrid first and reporting "asked for Hybrid, served Keyword" about
   a choice nobody made. A mode the reader named in the address is theirs and
   is kept, and the answer says what served it.
-- **The landing** (no phrase) is what is worth coming back to, in two columns:
-  **Pinned**, the pages this reader starred from a page's More menu, three to a
-  row with each page's space, its title and who last saved it; **Recently
-  written**, every save, comment, rename and new page across the company
-  (`page_activity`), under the COMPANY's days, Today and Yesterday cut at the
-  company's midnight; **Continue reading**, the pages this browser opened last;
-  **Watching**, the pages this person follows (`pages{watcher}`, asked by the
-  seat they act as, and not asked at all for a credential bound to no seat,
-  which follows no page); and **For the
-  agents**, Agent skills with the engine's count of published tool skills and
-  Agent diaries with how many agents keep one and when the newest reflection
-  was written. On a company whose knowledge lives in a vendor's wiki there is
-  nothing on the engine to browse, and the landing says so rather than drawing
-  an error.
+- **The landing** (no phrase) is TILES SIZED BY WHAT EACH IS WORTH, on one
+  screen (the approved Bento layout). The newest save, comment, rename or new
+  page across the company takes the big tile, OPEN TO READ: the page's space
+  and the way into it, its title, who changed it and when, what each save said
+  (back-to-back saves of one page by one writer on one company day are one
+  row, "saved it twice"), the lines the newest save changed as the page's
+  History draws them (six at most, with the count of the rest and a link to
+  that save), and the page's opening, never ending on a heading with nothing
+  under it. That costs ONE `page` read, of the featured page alone, and the
+  `page_revision` before the save; a change to a page since purged never
+  leads. **Recently written** runs down the right with the rest of the same
+  `page_activity` read, never the featured change again, under the COMPANY's
+  days, Today and Yesterday cut at the company's midnight. Each row says its
+  time of day on that same clock (its age is the time's title, since an age
+  under a date heading contradicted it) and its note: a save's own, a
+  comment's words or a new page's first line, never the title again. **Every
+  change** opens the audit log narrowed to the knowledge base. Four small
+  tiles list three pages each and say one line when empty: **Continue
+  reading**, the pages this browser opened last, and **Pinned**, the pages
+  this reader starred from a page's More menu, each page read for its title
+  now and who last saved it; **Watching**, the pages this person follows
+  (`pages{watcher}`, asked by the seat they act as, and not asked at all for a
+  credential bound to no seat, which follows no page and is told so); and
+  **For the agents**, Agent skills with the engine's
+  count of published tool skills and Agent diaries with how many agents keep
+  one and when the newest reflection was written. The grid places each tile by
+  a named area, so the markup keeps the reading order at every width: below
+  928px the feed moves under the newest change and the small tiles pair up,
+  and below 640px everything is one column. On a company whose knowledge lives
+  in a vendor's wiki there is nothing on the engine to browse, and the landing
+  says so rather than drawing an error.
 - **The results** are the ranked answer GROUPED BY SPACE beside a PREVIEW of
   the chosen result. Grouping never reorders the engine's rank: a group is one
   space's hits in the engine's order, the groups follow their best hit, and
@@ -6391,9 +6435,12 @@ palette and the trail.
   PARTIAL, naming the buckets nobody scanned and the node that did not answer
   (`coverage`), because a short list from two thirds of the corpus is
   otherwise indistinguishable from a small corpus. On the native backend the
-  search reads this node's own copy of the pages, and the screen says so.
+  search reads this node's own copy of the pages. The results end with how to
+  move through them (`j` and `k` move, Enter opens).
 - **A search that did not run** says which of `no_company`, `no_backend`,
-  `no_scope` or `building` it was, with the remedy that reason names.
+  `no_scope` or `building` it was, with the remedy that reason names: a
+  backend to set, spaces to add to `knowledge.scope`, or, while a node that
+  joined recently is still indexing, to try again shortly.
 - **A space's peek** (opened from a list elsewhere) reads one window of 500
   and COUNTS off the listing's `total`: Recent pages and "n more pages in this
   space" are the space's, never the window's. When the space outgrows the
@@ -6481,7 +6528,7 @@ page is one column and the outline is not drawn.
   on one without an index. A node that holds an index and cannot answer says
   why instead of "No page or task links here" (`linked_from_status`
   `building` or `unavailable`), and the capped-reads note is worded
-  company-wide ("this list may be missing some"), because `elided` counts what
+  company-wide ("Some reads may be missing."), because `elided` counts what
   the cap dropped on every page rather than this one.
 - **History** swaps the outline for the revisions and the comments for the
   page's changes, each drawn as the person, the change and the turn that made
@@ -6582,6 +6629,27 @@ page and nothing under it: the previous window's answer is not kept on screen
 beneath a control that now names a different window, and Export has nothing to
 export.
 
+**Three rows, each one height.** The hero beside the daily chart; **By agent**
+beside **By model** and **By team**, stacked; then the **most expensive tasks**
+beside the **auxiliary model**. The two rows under the hero share one pair of
+tracks (1.7 : 1), so the gutter runs down the page as one line: the wide track
+holds what is read along a row, the seats' table and the tasks' titles, and the
+narrow one the ranked lists, which a wide track only stretches. The three
+ranked lists give their words one column, half the card, so their bars start at
+one x down the page and a team's name is not cut at the kit's 128px. Every card
+in a row stretches to the tallest, so the row's edges line up and nothing
+leaves a hole under it. A stretched card keeps its content at the top and its
+foot on the floor, the stacked lists' last card takes what the stack leaves,
+and a card whose partner is absent (no task spend to rank on a tracker that is
+not the engine's) takes the whole row. In the top row the hero's figure stays
+at its top while the budget and the tiles stand on its floor, level with the
+chart's split control; a tile with nothing to say is not drawn, and the other
+takes the tiles' whole row. Where the hero is the taller card, the chart's plot
+takes the spare height (the kit's `height="fill"`, never under 12rem), so the
+split control stands right under the dates rather than below a band of nothing.
+Below a page column of 900px every row stacks, the table first; the width is
+the page column's, not the window's.
+
 - **The hero** is the window's tokens, the change against the window before it
   (the engine's `previous=true`, cut on the company's calendar, and "nothing
   was spent" rather than a percentage when the window before spent nothing),
@@ -6608,15 +6676,19 @@ export.
   contract's six `GROUPS`, and any split but phase draws the engine's top four
   and a residual. A seat band is labelled with the seat's name, as the table
   under it names it, and a team band with the unit's. The comparison is the
-  hero's; the chart draws no ghost of the window before.
+  hero's; the chart draws no ghost of the window before. The legend stands at
+  the end of the title's row, and on a card too narrow for both (a phone) it
+  takes a row of its own under the title, still at the end.
 - **By agent** — turns, tokens, share, **budget today** (the seat's daily window
   from its overlay, `exhausted` where the engine says `refusing`) and tokens per
   ended turn. A PERSON the auxiliary model spent for (`person: true` — their
   questions answered with `answer_knowledge`, and the background passes of a
-  unit they lead) is a row of their own, keyed by their handle, and says in its
-  turns and per-turn cells that a person takes no turns. A row opens the seat in the peek; on a phone a seat is one
-  compact row — name, tokens and share, then turns · today · per turn, each
-  with its unit. **Recent turns by tokens** goes to `#/live/turns?sort=-tokens`
+  unit they lead) is a row of their own, keyed by their handle, whose turns and
+  per-turn cells say it is auxiliary model spend for that person. A row opens the seat
+  in the peek; on a phone a seat is one compact row of two lines, at every
+  density: name, tokens and share, then turns · today · per turn, each with its
+  unit, and today as its percentage alone (the day's bar is for scanning the
+  column, which a compact row has none of). **Recent turns by tokens** goes to `#/live/turns?sort=-tokens`
   over the same window where the turn list has it (a quarter goes to its thirty
   days, and a caption beside the link says so): a company day holds no turn, so
   per-turn spend is the turn list's.
@@ -6657,9 +6729,9 @@ refusing it, since when. **The company** comes first, as three tiles, because
 everything a seat spends is the company's spend too and its ceiling binds every
 seat at once; **Agent seats** follow as one table with a column per window, so
 the one seat near its ceiling is found down a column. A window's bar is a kit
-`Meter` handed the engine's `state` — the page states the engine's
-`near_fraction` in its lede and divides nothing itself — and a window with no
-ceiling draws no bar, because a bar needs something to be a fraction of. A
+`Meter` handed the engine's `state`, and the page divides nothing itself; a
+window with no ceiling draws no bar, because a bar needs something to be a
+fraction of. A
 counter nobody could read (`durable: false`) says so and draws no figures.
 
 **Every ceiling is editable in place by a `config:write` holder.** The pencil beside it
@@ -6834,7 +6906,7 @@ screen shares rather than at an inset of its own.
 | Integrations | a **pill in the warning tone** — the tools the engine's roll-up says need a person (`tools[].state = attention`), the one figure here that is waiting on the reader. It is a *state*, so it wears the warning pair the artboard draws it in, never the accent the inbox's unread badge fills with | `integrations` |
 | Nodes | the nodes holding a presence lease ("1 node live"); a warning dot and "*n* behind on config" in the row's name when a node has applied an older epoch than the fleet activated (the Nodes screen's own "Behind on config" count) | the health push, and `fleet` |
 | Configuration | "epoch *n*" — the epoch this node applied, in words rather than a code | the health push |
-| Backups & retention | how many state-log domains have a trim something is holding, drawn only when one is | `retention` |
+| Backups & retention | how many alarms stand, the count the engine panel shows, drawn only when one does | `retention` |
 
 `fleet`, `retention` and `integrations` are guarded answers with no push
 behind them (`fleet:operate`, `fleet:operate` and `config:read`), so those
@@ -7120,9 +7192,9 @@ cooling key comes back. **Runs** is the seats whose resolved chain (the org
 projection's `llm`, the engine's own resolution) starts with the model, and
 how many fall back to it. A row opens the **model's page** (`models/{id}`):
 its facts, the state's sentence when it is not ready, every key with its
-state, when it comes back, why (*Nothing sets ACME_KEY on this node*, *The
-same key as key 1*, and its Back cell says *As key 1*, since the pool
-holds it once), this node's leases of it and the non-reversible **hint**
+state, when it comes back, why (*ACME_KEY isn’t set on this node*, *Same as
+key 1*, and its Back cell says *As key 1*, since the pool holds it once),
+this node's leases of it and the non-reversible **hint**
 the engine's `credential_cooled` log lines carry, then **Seats on it** — each
 seat and which phases run on it or fall back to it. A seat's model chain on
 its Settings tab links here. **Edit** (the page's action, and a row's pencil)
@@ -7213,8 +7285,8 @@ objects a collection deleted because no file names them and the unfinished
 uploads it abandoned; the files an
 audit asked about and how many were missing or damaged. It reads
 the fleet's record rather than this node, so it says the same thing whichever
-node served the screen. **Files that cannot be read** are the one reading an
-operator opens it for: when the last audit to run to its end found any missing
+node served the screen. **Files that are missing or damaged** are the one
+reading an operator opens it for: when the last audit to run to its end found any missing
 or damaged, a danger callout above the passes names the first of them — each
 file, whether it is missing or damaged, and its object — to restore from a
 backup or upload again; an audit that failed after it is said in its row and
@@ -7228,7 +7300,25 @@ metadata group counts it — with every disagreement named and the removal of a
 dead member behind a typed confirmation. See [the object
 store](../concepts/object-store.md) and [the fleet guide](../guides/fleet.md).
 
-**Backups & retention** reads `backups` beside the retention panels. **Take a
+**Backups & retention** says each problem once, and says it first. It reads one
+retention report for the whole page and hands it to every panel, so the alarms
+and the panels under them describe the same report. **Alarms** lead: each kind
+once, named in words, with the engine's measurement as a sentence, the logs it
+stands on (logs one term holds are one line, "Trim held by the backup on
+tracker, vectors, pages and usage, for 46h", with each log's own measurement
+under it, since what a log keeps past its replay window is why it is listed and
+no shared date says it; each log a link to its page; a single log whose
+measurement is the alarm's is said once), and the engine's remedy. The backup alarm offers **Take a backup**. Then the record of
+backups, then **Replication**, then **Log retention**: a row per log with its
+facts and what holds its trim in words ("held by the backup"), and its six
+checks behind a disclosure, each in words beside the term's own name, with the
+remedy printed only for the check that decides the trim. **Snapshots and
+joining** ends the page; a single node, which takes no snapshots by design,
+reads as one sentence rather than a table of `sole_node`. The page said a
+missing backup about twenty times before this: three empty panels, a banner and
+an alarm per log, and the same remedy under every log.
+
+The record reads `backups`. **Take a
 backup** asks the node serving the page for a copy (`POST /backup`) in a
 directory on **that node's host** — the dialog names the host first, since
 nothing is downloaded — and offers a fresh directory beside that node's last
@@ -7237,16 +7327,19 @@ to, and nothing when that copy sat directly under `/`); a relative path is
 refused before the round trip, and the engine's own refusal of a directory —
 occupied, or one its host cannot create or write — is said on the field. The request
 waits up to 30 minutes, the CLI's own wait, and closing the dialog does not
-stop the copy: the outcome arrives as a notice either way. Three tiles (the
-newest backup the trim counts, the `backup_floor` policy, and how many were
-requested and failed — over the span the event log reads, named from the
+stop the copy: the outcome arrives as a notice either way. Its figures are the
+newest backup the trim counts, the `backup_floor` policy, how many were
+requested and failed (over the span the event log reads, named from the
 `event_history_seconds` the engine reports rather than written into the
-screen, or "in the newest N" when the history filled its page), then **Newest per owner** — each node's newest copy and
+screen, or "in the newest N" when the history filled its page), and the
+backup owner (`retention.backup_owner`, "Not set" where nobody is named). With
+nothing backed up and every node's history read, the figure says "none yet"
+and the two lists are not drawn. Otherwise come **Newest per owner**, each node's newest copy and
 the operator's acknowledgement, with its directory, size (none for an
 acknowledgement, never 0), reach, and whether the trim counts it: exactly one
 row reads **counted · newest**, the engine's choice rather than the latest
-date, so a newer copy nobody verified reads **not verified** — and **Backup
-history**, every backup a person asked any node for over the event log's 30
+date, so a newer copy nobody verified reads **not verified**. Then **Backup
+history**: every backup a person asked any node for over the event log's 30
 days, with the node that holds it, the person, the directory and whether its
 manifest was written. A failure is drawn as one. Neither table is derived from
 the other: the register keeps each owner's newest point only, which is why a
@@ -7487,9 +7580,9 @@ pull that workspace back into the entry with nothing failing.
 **A chunk that does not arrive says so, and can be retried.** The usual reason
 is an upgrade: the page names its chunks by content hash, and an engine
 upgraded while the tab was open serves different ones. The screen then names
-what is missing ("The Spend screens could not be loaded"), says the page is
-probably from another engine version, and offers Reload — which is what fixes it — beside Try again,
-for the other reason, a request the network dropped. Try again really asks
+what is missing ("The Spend screens could not be loaded"), says "The engine was
+updated. Reload to continue.", and offers Reload, which is what fixes it, beside
+Try again for the other reason, a request the network dropped. Try again really asks
 again: a failed load is forgotten rather than cached for the life of the page
 the way `React.lazy` caches one — once its boundary has drawn it, so React's
 replay of the render that waited on it reads the same rejection rather than

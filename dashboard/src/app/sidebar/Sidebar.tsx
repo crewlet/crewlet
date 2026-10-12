@@ -68,8 +68,10 @@ import { href, samePath, useRoute } from "~/app/router.tsx";
 import {
   WORKSPACES,
   grantWords,
+  sectionOpen,
   workspaceMissing,
   workspaceOf,
+  workspaceRow,
   type Grant,
   type WorkspaceRow,
 } from "~/app/nav.ts";
@@ -88,7 +90,7 @@ import { useStarred } from "~/lib/starred.ts";
 import { capsOf, keyRow, useKeymap } from "../keymap.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
 import { useOwnQueueCount } from "~/lib/useQueueCount.ts";
-import { HealthCard, healthReading } from "./HealthCard.tsx";
+import { EnginePanel, engineReading } from "./EnginePanel.tsx";
 import { RailBoundary } from "../boundaries.tsx";
 import { preload } from "../lazyScreen.ts";
 import { UserBlock } from "./UserBlock.tsx";
@@ -105,6 +107,13 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   // too. Null while nobody has said: a lock drawn on no answer claims a
   // refusal nobody has made.
   const held = useHeldGrants();
+  // THE ALARMS' NAMES ARE THE RETENTION REPORT'S, asked only of a reader the
+  // section that lists them opens for — by the rule every lock is drawn by —
+  // so the panel never asks a question the engine would refuse.
+  const readsReport = useMemo(() => {
+    const backups = workspaceRow("settings")?.sections.find((s) => s.key === "backups");
+    return held !== null && backups !== undefined && sectionOpen(backups, held);
+  }, [held]);
 
   // BELOW THE SHELL BREAKPOINT THE SIDEBAR IS A DRAWER, and Mod+\ opens it —
   // the reader's way to it without reaching for the toggle in the bar. Only
@@ -118,7 +127,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const org = useOrg();
   const agents = useAgents();
   const health = useEngineHealth();
-  const { connected, authRejected, accessRefused } = useConnection();
+  const { connected, authRejected, accessRefused, lostAt, everConnected } = useConnection();
   // THE ENGINE SERVES THIS BROWSER NO COMPANY — no access yet, or refused —
   // and nothing of one is offered: the rows are locked, and the live
   // sections, whose answers an earlier socket may have left behind, are not
@@ -241,14 +250,17 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
             {WORKSPACES.filter((ws) => ws.place === "foot").map(row)}
           </SidebarNav>
           <RailBoundary label="Engine" resetKey={at}>
-            <HealthCard
-              reading={healthReading({
+            <EnginePanel
+              reading={engineReading({
                 connected,
                 authRejected,
                 accessRefused,
                 noAccess,
+                lostAt,
+                everConnected,
                 health,
               })}
+              readsReport={readsReport}
               onSignIn={goSignIn}
             />
           </RailBoundary>

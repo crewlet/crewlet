@@ -76,11 +76,7 @@ describe("a seat", () => {
       "seat:dev",
     );
     choose("Sales");
-    expect(
-      screen.getByText(
-        "Today Dev reports to VP Engineering as the lead of Engineering, which ends with the move.",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("Dev stops reporting to VP Engineering.")).toBeDefined();
   });
 
   // The credentials a move gives or takes are named by their SERVER, which is
@@ -105,7 +101,7 @@ describe("a seat", () => {
     choose("Engineering");
     expect(
       screen.getByText(
-        "In Engineering, VP Engineering leads the unit and manages its direct members unless another member manages SRE.",
+        "In Engineering, SRE reports to VP Engineering unless someone else manages them.",
       ),
     ).toBeDefined();
   });
@@ -132,7 +128,7 @@ describe("a seat", () => {
     open(withManager(), "seat:designer");
     expect(
       screen.getByText(
-        "Designer is placed in Platform by its unit reference. Moving it writes it into the destination and removes the reference.",
+        "Designer is placed in Platform by reference. Moving it removes the reference.",
       ),
     ).toBeDefined();
   });
@@ -154,11 +150,9 @@ describe("a seat", () => {
     ];
     open(keyedState(doc), "seat:runner", { agents });
     choose("Other");
-    expect(screen.getByText(/Schedule sweep on Ops would have no runner/)).toBeDefined();
+    expect(screen.getByText(/Schedule sweep on Ops would have nobody to run it/)).toBeDefined();
     expect(
-      screen.getByText(
-        "Runner is working now. Its current turn continues on the previous configuration until the engine applies this change.",
-      ),
+      screen.getByText("Runner is working now. The change applies to its next turn."),
     ).toBeDefined();
   });
 });
@@ -170,9 +164,7 @@ describe("a unit", () => {
     ];
     open(keyedState(fixtureCompany()), "unit:platform", { agents });
     expect(
-      screen.getByText(
-        "SRE is working now. Its current turn continues on the previous configuration until the engine applies this change.",
-      ),
+      screen.getByText("SRE is working now. The change applies to its next turn."),
     ).toBeDefined();
   });
 
@@ -216,9 +208,5 @@ describe("a unit", () => {
 test("a read-only builder moves nothing, and says why the button is unavailable", () => {
   open(keyedState(fixtureCompany()), "seat:dev", { readOnly: true });
   expect(moveButton().disabled).toBe(true);
-  expect(
-    screen.getByText(
-      "The organization cannot be changed right now, so this change cannot be applied.",
-    ),
-  ).toBeDefined();
+  expect(screen.getByText("The org can’t be changed right now.")).toBeDefined();
 });

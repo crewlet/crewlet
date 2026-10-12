@@ -109,11 +109,11 @@ export function forgetAnswersForTest(): void {
 function explains(access: WriteAccess, unbound: boolean): string | null {
   if (access.can) {
     return unbound
-      ? "An answer is written by your seat’s own model — ask whoever manages people here to bind your login to a seat."
+      ? "Asking needs a seat. Ask whoever manages people here to bind your login to one."
       : null;
   }
   if (access.block === "anonymous") {
-    return "Sign in to get an answer from your company’s knowledge.";
+    return "Sign in to ask.";
   }
   return null;
 }

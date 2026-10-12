@@ -92,7 +92,7 @@ export function PhaseChart({
           data && data.totals.calls === 0
             ? {
                 title: "No model calls in this window",
-                hint: "Nothing ran, or nothing that ran reports tokens. Widen the window, or check that the seats you expect are running.",
+                hint: "Widen the window.",
               }
             : undefined
         }
@@ -104,13 +104,13 @@ export function PhaseChart({
             head={
               <div className="spend-chart-head">
                 <h2 className="spend-title">Daily tokens by {noun}</h2>
-                <span className="spend-caption">
-                  {drawn === "phase"
-                    ? "Execute does the work; review, workers and auxiliary calls are the overhead"
-                    : drawn === "worker"
-                      ? "Background duties only — every other call is outside these bands"
+                {drawn !== "phase" && (
+                  <span className="spend-caption">
+                    {drawn === "worker"
+                      ? "Background work only"
                       : "The four biggest, and everything else as one band"}
-                </span>
+                  </span>
+                )}
               </div>
             }
             // EVERY BAND THE ENGINE NAMED, in its order: a band's colour is
@@ -121,7 +121,12 @@ export function PhaseChart({
             // nothing. Any other split lists only what spent.
             series={bands.map((b) => ({ id: b.key, name: b.label, color: b.color }))}
             buckets={buckets}
-            height="12rem"
+            // THE PLOT TAKES THE ROW'S HEIGHT. Drawn at a fixed 12rem beside a
+            // taller hero, it stopped short and the split control stood up to
+            // 68px under the dates; filling, the figure flexes in this card and
+            // the plot grows into the spare height, never under that 12rem.
+            height="fill"
+            minHeight="12rem"
             format={(v) => fmtCount(v)}
             formatTime={(at) => labels.get(at) ?? ""}
           />

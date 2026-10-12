@@ -90,8 +90,8 @@ export function unclassified(source: string): number[] {
  * The scan above refuses the shape where nobody classified an anchor at all.
  * It cannot refuse the shape where somebody classified it WRONG — a chrome
  * class on an anchor that is a word in a line — and that is what fifteen
- * anchors were: `.t-link` on the remedy trailing a sentence ("…so it has no
- * channel to set. Open Integrations"), distinguished from the sentence by
+ * anchors were: `.t-link` on the remedy trailing a sentence ("…No Mattermost
+ * bot for this seat. Open Integrations"), distinguished from the sentence by
  * colour. The baseline's hover underline had been standing in for the mark,
  * which no keyboard or touch reader ever saw; resetting it is what made the
  * gap visible rather than what opened it.

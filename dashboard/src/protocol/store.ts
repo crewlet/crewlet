@@ -198,6 +198,22 @@ export interface StoreState {
   schedules: ScheduleRow[] | null;
   connected: boolean;
   /**
+   * When this tab LOST the engine: the moment the socket closed, or a dial
+   * failed, while nothing was connected. Null while connected, and before the
+   * first dial has been answered either way, which is the one thing that
+   * tells a tab still connecting from one that cannot reach the engine: both
+   * are disconnected, and only the second is worth an amber dot. A retry that
+   * fails again does not move it, so it says how long the engine has been
+   * gone rather than when it was last asked.
+   */
+  lostAt: number | null;
+  /**
+   * Whether the engine has reported to this tab at all. The screens keep the
+   * last state they were sent, and "showing the last state received" is true
+   * only of a tab that received one.
+   */
+  everConnected: boolean;
+  /**
    * Whether the engine REFUSED this browser, as opposed to being unreachable.
    * Distinct from `connected` because the repair differs and the reader cannot
    * tell them apart: a stopped engine comes back on its own, a session the
@@ -257,6 +273,8 @@ function emptyState(): StoreState {
     budget: null,
     schedules: null,
     connected: false,
+    lostAt: null,
+    everConnected: false,
     authRejected: false,
     accessRefused: null,
     inboxMoves: {},
@@ -511,16 +529,31 @@ export class Store {
 
   applyHealth(health: EngineHealth | null | undefined): void {
     this.state.health = health ?? null;
-    this.state.connected = !!health;
+    this.link(!!health);
     this.emit("health");
   }
 
   setConnected(value: boolean): void {
-    this.state.connected = value;
+    this.link(value);
     // A dropped socket CLEARS the health slice rather than freezing it. A stale
     // "healthy" is a lie with a timestamp nobody can see.
     if (!value) this.state.health = null;
     this.emit("health");
+  }
+
+  /**
+   * The transport's state, and the two facts about its history the frame
+   * reads (`lostAt`, `everConnected`), written in ONE place so a health frame
+   * and the socket's own open and close cannot disagree about them.
+   */
+  private link(connected: boolean): void {
+    this.state.connected = connected;
+    if (connected) {
+      this.state.everConnected = true;
+      this.state.lostAt = null;
+    } else if (this.state.lostAt === null) {
+      this.state.lostAt = Date.now();
+    }
   }
 
   /**
@@ -555,10 +588,15 @@ export class Store {
     if (this.state.accessRefused === next) return;
     this.state.accessRefused = next;
     if (next !== null) {
-      const { health, connected, authRejected } = this.state;
+      // The transport's own history (`lostAt`, `everConnected`) stays with
+      // it: a refusal says who may read the company, not whether the engine
+      // was reachable.
+      const { health, connected, lostAt, everConnected, authRejected } = this.state;
       Object.assign(this.state, emptyState(), {
         health,
         connected,
+        lostAt,
+        everConnected,
         authRejected,
         accessRefused: next,
       });

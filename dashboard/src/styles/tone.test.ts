@@ -77,7 +77,7 @@ const ACCENT: Site[] = [
   },
   {
     file: "routes/work/SavedViews.tsx",
-    line: `<Tag key="pinned" variant="brand" title="pinned by you — pins are per reader">`,
+    line: `<Tag key="pinned" variant="brand" title="Pinned by you">`,
     why: "A pin is PER READER; the view's own facts beside it are outline. The screen's own comment states the rule, and `viewMarks` is the ONE place that draws it — the grid and the facts block each had their own copy, already drifted.",
   },
 ];

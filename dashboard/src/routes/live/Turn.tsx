@@ -979,7 +979,7 @@ function turnStatus(view: TurnView, now: number): ReactNode {
     <>
       {view.running &&
         (view.parked ? (
-          <Tag variant="warning" dot title="the turn is parked on a coding run it launched">
+          <Tag variant="warning" dot>
             Parked on a coding run{elapsed}
           </Tag>
         ) : (
@@ -1013,10 +1013,7 @@ function turnStatus(view: TurnView, now: number): ReactNode {
       {attempt && (
         <Tag
           appearance="outline"
-          title={
-            `attempt ${attempt.index} of ${attempt.total} at this trigger — a turn ` +
-            `that fails without reaching outside the engine is redelivered and runs again`
-          }
+          title={`Attempt ${attempt.index} of ${attempt.total} for this trigger`}
         >
           attempt {attempt.index}/{attempt.total}
         </Tag>
@@ -1029,11 +1026,7 @@ function turnStatus(view: TurnView, now: number): ReactNode {
         </Tag>
       )}
       {view.clean && (
-        <Tag
-          variant="success"
-          leadingIcon={<CheckGlyph size="xs" />}
-          title="no guard fired, no provider fell through, no call was refused"
-        >
+        <Tag variant="success" leadingIcon={<CheckGlyph size="xs" />}>
           nothing went wrong
         </Tag>
       )}
@@ -1041,7 +1034,7 @@ function turnStatus(view: TurnView, now: number): ReactNode {
         <Tag
           variant="warning"
           leadingIcon={<TriangleAlertGlyph size="xs" />}
-          title="the store stopped at its per-turn cap; this view holds the turn's opening and its ending, and not the middle"
+          title="The turn was too long to show in full"
         >
           middle not shown
         </Tag>
@@ -1172,18 +1165,12 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
   const empty = blocks.filter((b) => !b.hit && !b.gated);
   return (
     <Card padding="sm">
-      <Card.Header
-        icon={<BookOpenGlyph size="sm" />}
-        subtitle="the context blocks its prompt was assembled from, and what each phase's prompt weighed"
-      >
+      <Card.Header icon={<BookOpenGlyph size="sm" />} subtitle="What each prompt was built from">
         <Card.Title>What the turn was given</Card.Title>
       </Card.Header>
       <div className="col gap-2">
         {blocks.length === 0 && (
-          <span className="t-caption">
-            No prefetch record for this turn, so there is no breakdown of where the prompt&rsquo;s
-            context came from — only what each phase&rsquo;s prompt came to.
-          </span>
+          <span className="t-caption">No context breakdown for this turn.</span>
         )}
         {blocks.length > 0 && got.length > 0 ? (
           <div className="num-block">
@@ -1238,16 +1225,14 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
         ) : (
           blocks.length > 0 && (
             <span className="t-caption measure">
-              The prompt was built from the seat&rsquo;s own identity and this turn&rsquo;s trigger
-              alone — no stored context reached it.
+              Built from the seat&rsquo;s identity and the trigger only.
             </span>
           )
         )}
         {gated.length > 0 && (
           <Callout variant="neutral">
-            Not searched: {list(gated.map((b) => b.label))}. The trigger was a bare pointer, so
-            these filters were skipped — the executor searches later with{" "}
-            <code className="inline">search_knowledge</code>, once it knows what the task needs.
+            Not searched: {list(gated.map((b) => b.label))}. The agent searches later when it needs
+            to.
           </Callout>
         )}
         {empty.length > 0 && (
@@ -1343,10 +1328,7 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
                   User columns are legitimately 0, because a re-entered phase
                   opens no conversation. */}
               {w.resumed && (
-                <span
-                  className="t-caption"
-                  title="the phase was re-entered with the conversation it parked on a coding run"
-                >
+                <span className="t-caption" title="Resumed after its coding run">
                   resumed
                 </span>
               )}
@@ -1359,7 +1341,7 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
               </span>
               <span
                 className="mono t-num t-caption num-col"
-                title="bytes of conversation a resumed phase re-entered"
+                title="Size of the resumed conversation"
               >
                 {fmtBytes(w.messageBytes)}
               </span>
@@ -1432,7 +1414,7 @@ function TurnEventRow({ run, actor }: { run: Run; actor: string }) {
         count > 1
           ? `${count} identical events, ${fmtDateTime(event.timestamp)} to ${fmtDateTime(
               last.timestamp,
-            )} — this opens the first`
+            )}. Opens the first.`
           : fmtDateTime(event.timestamp)
       }
     >
@@ -1610,11 +1592,7 @@ function ParkedRun({ turnId, run, now }: { turnId: string; run: Span | null; now
     <Card padding="sm">
       <Card.Header
         icon={<SquareTerminalGlyph size="sm" />}
-        subtitle={
-          run?.sub
-            ? `${run.sub} — the turn is parked on it until it is collected`
-            : "the turn is parked on it until it is collected"
-        }
+        subtitle={run?.sub || undefined}
         actions={
           <a className="t-link" href={href(pathOf({ kind: "run", id: turnId }))}>
             Open the run
@@ -1631,9 +1609,7 @@ function ParkedRun({ turnId, run, now }: { turnId: string; run: Span | null; now
         // THE PARK IS PUSHED BEFORE THE ANNOUNCEMENT IS READ: the stage moves
         // on the agents push and the page asks for the turn again on it, so
         // for a moment the run is known to be out and not yet which one.
-        <span className="t-caption">
-          Reading which run it launched — its live output is drawn here once the announcement is in.
-        </span>
+        <span className="t-caption">Finding its coding run…</span>
       )}
     </Card>
   );
@@ -1839,7 +1815,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         icon: <SaveGlyph size="sm" />,
         onSelect: () => {
           const { started, name } = downloadText(turnJSON(), `turn-${turnId}.json`);
-          if (started) toast.ok(`Download started — ${name}`);
+          if (started) toast.ok(`Download started: ${name}`);
           else toast.show({ variant: "warning", title: "The browser refused the download" });
         },
       },
@@ -1984,7 +1960,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             ? undefined
             : {
                 title: "No events for this turn",
-                hint: "A turn is assembled from the events that name its id. If it ran outside the store's 30-day window there is nothing to assemble.",
+                hint: "Turns older than 30 days aren’t kept.",
               }
         }
       >
@@ -1994,11 +1970,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         <CoverageNote coverage={[view.coverage]} what="this turn" />
         {cut && (
           <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
-            This turn published more than the store returns for one turn. What is here is its{" "}
-            <strong>opening and its ending</strong> — {events.length} events, so the records below
-            are the turn&rsquo;s own — and what is missing is the middle. Phases from the middle of
-            a long self-iterating turn are not on this page, and neither is anything that went wrong
-            in them. {traceId ? "The trace carries the same work from the trigger down." : ""}
+            Too long to show in full; the middle phases are missing.
+            {traceId ? " The trace has the same work." : ""}
           </Callout>
         )}
 
@@ -2010,7 +1983,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             <Card.Header
               icon={<CircleAlertGlyph size="sm" />}
               count={story.wentWrong.length}
-              subtitle="guard breaches, exhausted chains, refused calls — the reason to open this page"
+              subtitle="guard breaches, exhausted chains, refused calls"
             >
               <Card.Title>What went wrong</Card.Title>
             </Card.Header>
@@ -2068,12 +2041,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                       defaultOpen={i === 0 || p.live || p.key === parkedPhase}
                     />
                   ))}
-                  {!own.length && (
-                    <span className="t-caption">
-                      No phase completed in this turn — it may have died before its first phase
-                      published.
-                    </span>
-                  )}
+                  {!own.length && <span className="t-caption">No phase completed.</span>}
                 </div>
               </Card>
 
@@ -2085,7 +2053,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                     // "COLLEAGUES" IS A PROMISE the wire keeps: the A2A records
                     // carry the publishing turn (internal/a2a/service.go), and
                     // internal/events/types/turnbands_client_test.go holds it.
-                    subtitle="work outside the tool loop: coding runs, delegations, colleagues, skills"
+                    subtitle="coding runs, delegations, colleagues, skills"
                   >
                     <Card.Title>What else it did</Card.Title>
                   </Card.Header>
@@ -2111,7 +2079,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                   <Card.Header
                     icon={<ChartNoAxesGanttGlyph size="sm" />}
                     count={story.rest.length}
-                    subtitle="rows this build has no particular place for"
+                    subtitle="other events"
                   >
                     <Card.Title>Also published</Card.Title>
                   </Card.Header>
@@ -2123,10 +2091,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
 
               {(rec.summary || rec.learning) && (
                 <Card padding="sm">
-                  <Card.Header
-                    icon={<FileTextGlyph size="sm" />}
-                    subtitle="the two events the engine closes every turn with"
-                  >
+                  <Card.Header icon={<FileTextGlyph size="sm" />} subtitle="closing events">
                     <Card.Title>The turn&rsquo;s own record</Card.Title>
                   </Card.Header>
                   <div className="col gap-2">
@@ -2157,7 +2122,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                     )}
                     {rec.summary && (
                       <Disclosure
-                        title="agent_turn_completed — the dashboard's summary"
+                        title="Turn summary event"
                         actions={
                           <CopyButton text={summaryJSON} variant="ghost" title="copy this record" />
                         }
@@ -2173,7 +2138,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                     )}
                     {rec.learning && (
                       <Disclosure
-                        title="turn_completed — the learning subsystem's record"
+                        title="Learning record"
                         actions={
                           <CopyButton
                             text={learningJSON}
@@ -2203,9 +2168,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               {prefetch.length > 0 || weights.length > 0 ? (
                 <Given blocks={prefetch} weights={weights} />
               ) : (
-                <p className="t-caption">
-                  No record of what this turn&rsquo;s prompt was assembled from has arrived yet.
-                </p>
+                <p className="t-caption">No prompt breakdown yet.</p>
               )}
             </div>
           )}
@@ -2291,11 +2254,7 @@ function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
             </div>
           );
         })}
-        {phases.length === 0 && (
-          <span className="t-caption">
-            No phase completed in this turn — it may have died before its first phase published.
-          </span>
-        )}
+        {phases.length === 0 && <span className="t-caption">No phase completed.</span>}
       </div>
     </Card>
   );
@@ -2333,7 +2292,7 @@ export function TurnPeek({ turnId }: { turnId: string }) {
         size="compact"
         icon={<LayersGlyph size={32} />}
         title="No events carry this turn id"
-        description="A turn is assembled from the events that name its id. If it ran outside the store's 30-day window there is nothing to assemble."
+        description="Turns older than 30 days aren’t kept."
       />
     );
   }
@@ -2365,9 +2324,7 @@ export function TurnPeek({ turnId }: { turnId: string }) {
               nothing would report a long turn as a short one. */}
           {view.cut && (
             <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
-              The store stopped at its per-turn cap. This is the turn&rsquo;s opening and its ending
-              — the phases from its middle are not here, and neither is anything that went wrong in
-              them.
+              Too long to show in full; the middle phases are missing.
             </Callout>
           )}
           <PhaseStrip phases={view.own} />

@@ -124,7 +124,7 @@ const outstanding = new Map<string, Promise<void>>();
 function refusalMessage(outcome: CheckOutcome): string {
   switch (outcome.status) {
     case "problems":
-      return "The engine refused the save. The problems it found are marked on the chart; fix them, then save again.";
+      return "Save refused. Fix the problems marked on the chart.";
     case "guarded":
       return configGuardedReason(outcome.code);
     case "managed":
@@ -220,8 +220,7 @@ export function useSave({
           if (nothingMoved) {
             setPhase({
               kind: "retry",
-              message:
-                "The save did not reach the engine, and nothing was stored. Save again once the engine is reachable.",
+              message: "The save didn’t reach the engine. Try again.",
             });
             return;
           }

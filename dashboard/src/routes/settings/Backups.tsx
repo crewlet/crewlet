@@ -38,24 +38,17 @@ import {
   RotateCcwGlyph,
   PlusGlyph,
   ShieldGlyph,
+  UserGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { CoverageNote } from "~/components/CoverageNote.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
+import { CoverageNote, missingFrom } from "~/components/CoverageNote.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
 import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useNow } from "~/lib/clock.ts";
-import {
-  eventHistoryLabel,
-  eventHistorySpan,
-  fmtBytes,
-  fmtDateTime,
-  plural,
-  relTime,
-} from "~/lib/format.ts";
+import { eventHistorySpan, fmtBytes, fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { needsSentence } from "~/lib/refusal.ts";
 import { throughOf } from "~/lib/attribution.ts";
@@ -69,7 +62,7 @@ import {
 } from "~/lib/backups.ts";
 
 import type { BackupPointRow, BackupRunRow, BackupsAnswer } from "~/contract/backups.ts";
-import { RetentionPanels } from "./Retention.tsx";
+import { RetentionPanels, RetentionStatus, useRetentionReport } from "./Retention.tsx";
 import { DomainScreen } from "./Domain.tsx";
 import { TakeBackupDialog } from "./TakeBackupDialog.tsx";
 
@@ -82,14 +75,19 @@ export function Backups({ domain }: { domain?: string }) {
   const [taking, setTaking] = useState(false);
   const viewer = useViewer();
   // THE ENGINE DECIDES WHO READS THIS, and the refusal it answers is drawn
-  // with the grant that would have admitted the reader — a page that guessed
+  // with the grant that would have admitted the reader: a page that guessed
   // from a credential's shape decided for a person the engine had not asked
   // about. The button alone reads the viewer, because a press the engine will
   // refuse is one to say no to before it is made.
-  const backups = useQuery("backups", undefined, {
-    pollMs: BACKUPS_POLL_MS,
-    enabled: domain === undefined,
-  });
+  const page = domain === undefined;
+  const backups = useQuery("backups", undefined, { pollMs: BACKUPS_POLL_MS, enabled: page });
+  // THE RETENTION REPORT IS ASKED ONCE FOR THE PAGE, and only of a reader
+  // holding the grant the engine decides it on, `fleet:operate`: the alarms
+  // leading the page and the panels under them read this one answer, and
+  // asking for anybody else would refuse on every poll and paint the screen
+  // red for a reader who simply does not operate the fleet, under the
+  // backups' own refusal that already names the grant.
+  const retention = useRetentionReport(page && viewer.operatesFleet);
   const refused =
     !viewer.loading && !viewer.operatesFleet
       ? needsSentence("Taking a backup", ["fleet:operate"])
@@ -110,10 +108,9 @@ export function Backups({ domain }: { domain?: string }) {
           Take a backup
         </Button>
       </PageActions>
-      <PageNote>
-        What this fleet has backed up, and each state-log domain&rsquo;s trim — which waits for the
-        slowest node and for the newest backup that covers it.
-      </PageNote>
+      {/* WHAT IS WRONG LEADS: the alarms, each once with the logs it stands
+          on, and the backup they ask for one press away. */}
+      <RetentionStatus retention={retention} onTakeBackup={() => setTaking(true)} />
       <QueryState
         error={backups.error}
         refusal={backups.refusal}
@@ -121,12 +118,15 @@ export function Backups({ domain }: { domain?: string }) {
         loading={backups.loading && !backups.data}
       >
         {backups.data ? (
-          <BackupRecord answer={backups.data} />
+          <BackupRecord
+            answer={backups.data}
+            owner={retention.data ? (retention.data.backup_owner ?? "") : undefined}
+          />
         ) : (
           <Skeleton variant="text" rows={4} label="Loading the backups" />
         )}
       </QueryState>
-      <RetentionPanels thisNode={node} />
+      <RetentionPanels thisNode={node} retention={retention} />
       {taking && (
         <TakeBackupDialog
           node={node}
@@ -144,8 +144,26 @@ export function Backups({ domain }: { domain?: string }) {
   );
 }
 
-/** The register's points and the history, with the three figures above them. */
-export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
+/**
+ * The register's points and the history, with the figures above them.
+ *
+ * NOTHING BACKED UP IS SAID ONCE, by the figure. The two lists under it each
+ * drew an empty state of their own when there was nothing at all, three ways
+ * of saying "no backup" beside the alarm that already says it; they are drawn
+ * once there is something to list, or when a node's history could not be
+ * read, which is a gap the empty figure cannot speak for.
+ */
+export function BackupRecord({
+  answer,
+  owner,
+}: {
+  answer: BackupsAnswer;
+  /**
+   * Whose job the backups are (`retention.backup_owner`), empty where nobody
+   * is named, and undefined until the retention report has answered.
+   */
+  owner?: string;
+}) {
   const now = useNow();
   const seatOf = useSeatOf();
   // HOW FAR BACK THE HISTORY READS, as the engine reported it: the history is
@@ -156,11 +174,17 @@ export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
   const newest = answer.points.find((p) => p.newest);
   const failed = answer.history.filter((r) => r.outcome === "failed").length;
   const requested = `${answer.history.length}${answer.more ? "+" : ""}`;
+  const unread = missingFrom([answer.coverage]);
+  const nothingYet =
+    answer.points.length === 0 &&
+    answer.history.length === 0 &&
+    unread.nodes.length === 0 &&
+    !unread.incomplete;
 
   return (
     <>
       <Card padding="none">
-        <StatGroup columns={3}>
+        <StatGroup columns={owner === undefined ? 3 : 4}>
           <StatCard
             icon={<ClockGlyph size="xs" />}
             label="Newest counted backup"
@@ -170,7 +194,7 @@ export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
                 ? `${newest.kind === "operator" ? "acknowledged by an operator" : newest.owner}${
                     newest.bytes != null ? ` · ${fmtBytes(newest.bytes)}` : ""
                   }`
-                : "none — the trim waits for one"
+                : "none yet"
             }
           />
           <StatCard
@@ -193,209 +217,222 @@ export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
               answer.more ? `in the newest ${answer.history.length}` : `in ${span}`
             }`}
           />
+          {owner !== undefined && (
+            <StatCard
+              icon={<UserGlyph size="xs" />}
+              label="Backup owner"
+              value={owner || "Not set"}
+              // THE FIELD THAT NAMES THEM, which is what an operator types to
+              // change it, and what the backup term's remedy points at.
+              sub={owner ? "retention.backup_owner" : "set retention.backup_owner"}
+            />
+          )}
         </StatGroup>
       </Card>
 
-      <Card padding="none">
-        <Card.Header
-          icon={<DatabaseGlyph size="sm" />}
-          count={answer.points.length}
-          subtitle="Each owner's newest copy, as it announced it to the fleet."
-        >
-          Newest per owner
-        </Card.Header>
-        <DataGrid<BackupPointRow>
-          name="points"
-          rows={answer.points}
-          rowKey={(p) => p.owner}
-          defaultSort="-taken"
-          empty={{
-            title: "Nothing has been backed up",
-            // A COMMAND IS CODE, as it is everywhere else on these screens;
-            // in prose `crewlet backup -dir` read as four words of the hint.
-            hint: (
-              <>
-                Until a backup covers them, no state-log domain can be trimmed. Take one from this
-                page, or run <InlineCode>crewlet backup -dir</InlineCode>.
-              </>
-            ),
-            icon: "database",
-          }}
-          columns={[
-            {
-              key: "owner",
-              header: "Owner",
-              phoneLead: true,
-              sortValue: (p) => p.owner,
-              cell: (p) =>
-                p.kind === "node" ? (
-                  <KeyCell value={p.owner} path={["settings", "nodes", p.owner]} />
-                ) : (
-                  <span className="muted">{OWNER_KIND_WORDS.operator}</span>
+      {!nothingYet && (
+        <>
+          <Card padding="none">
+            <Card.Header icon={<DatabaseGlyph size="sm" />} count={answer.points.length}>
+              Newest per owner
+            </Card.Header>
+            <DataGrid<BackupPointRow>
+              name="points"
+              rows={answer.points}
+              rowKey={(p) => p.owner}
+              defaultSort="-taken"
+              empty={{
+                title: "Nothing has been backed up",
+                // A COMMAND IS CODE, as it is everywhere else on these screens;
+                // in prose `crewlet backup -dir` read as four words of the hint.
+                hint: (
+                  <>
+                    Take one from this page, or run <InlineCode>crewlet backup -dir</InlineCode>.
+                  </>
                 ),
-            },
-            {
-              key: "taken",
-              header: "Taken",
-              shrink: true,
-              sortValue: (p) => p.taken_at,
-              cell: (p) => <DateCell at={p.taken_at} now={now} />,
-            },
-            {
-              key: "dir",
-              header: "Directory",
-              sortValue: (p) => p.dir ?? "",
-              cell: (p) =>
-                p.dir ? (
-                  <span className="mono truncate" title={p.dir}>
-                    {p.dir}
-                  </span>
-                ) : (
-                  <EmptyValue label="An acknowledgement names no directory" />
-                ),
-            },
-            {
-              key: "size",
-              header: "Size",
-              align: "right",
-              shrink: true,
-              // ABSENT RATHER THAN ZERO: an acknowledgement asserts a copy the
-              // engine never saw, and a 0 would read as an empty one.
-              sortValue: (p) => p.bytes ?? null,
-              cell: (p) =>
-                p.bytes == null ? (
-                  <EmptyValue label="The engine never saw this copy" />
-                ) : (
-                  <span className="t-num t-caption">{fmtBytes(p.bytes)}</span>
-                ),
-            },
-            {
-              key: "covers",
-              header: "Covers",
-              optional: true,
-              sortValue: (p) => p.covers.length,
-              cell: (p) => (
-                <span className="t-caption" title={p.covers.map(coverWords).join("\n")}>
-                  {plural(p.covers.length, "log")}
-                </span>
-              ),
-            },
-            {
-              key: "trim",
-              header: "Trim",
-              shrink: true,
-              sortValue: (p) => (p.newest ? 2 : p.counted ? 1 : 0),
-              cell: (p) => <TrimCell point={p} />,
-            },
-          ]}
-        />
-      </Card>
+                icon: "database",
+              }}
+              columns={[
+                {
+                  key: "owner",
+                  header: "Owner",
+                  phoneLead: true,
+                  sortValue: (p) => p.owner,
+                  cell: (p) =>
+                    p.kind === "node" ? (
+                      <KeyCell value={p.owner} path={["settings", "nodes", p.owner]} />
+                    ) : (
+                      <span className="muted">{OWNER_KIND_WORDS.operator}</span>
+                    ),
+                },
+                {
+                  key: "taken",
+                  header: "Taken",
+                  shrink: true,
+                  sortValue: (p) => p.taken_at,
+                  cell: (p) => <DateCell at={p.taken_at} now={now} />,
+                },
+                {
+                  key: "dir",
+                  header: "Directory",
+                  sortValue: (p) => p.dir ?? "",
+                  cell: (p) =>
+                    p.dir ? (
+                      <span className="mono truncate" title={p.dir}>
+                        {p.dir}
+                      </span>
+                    ) : (
+                      <EmptyValue label="An acknowledgement names no directory" />
+                    ),
+                },
+                {
+                  key: "size",
+                  header: "Size",
+                  align: "right",
+                  shrink: true,
+                  // ABSENT RATHER THAN ZERO: an acknowledgement asserts a copy the
+                  // engine never saw, and a 0 would read as an empty one.
+                  sortValue: (p) => p.bytes ?? null,
+                  cell: (p) =>
+                    p.bytes == null ? (
+                      <EmptyValue label="The engine never saw this copy" />
+                    ) : (
+                      <span className="t-num t-caption">{fmtBytes(p.bytes)}</span>
+                    ),
+                },
+                {
+                  key: "covers",
+                  header: "Covers",
+                  optional: true,
+                  sortValue: (p) => p.covers.length,
+                  cell: (p) => (
+                    <span className="t-caption" title={p.covers.map(coverWords).join("\n")}>
+                      {plural(p.covers.length, "log")}
+                    </span>
+                  ),
+                },
+                {
+                  key: "trim",
+                  header: "Trim",
+                  shrink: true,
+                  sortValue: (p) => (p.newest ? 2 : p.counted ? 1 : 0),
+                  cell: (p) => <TrimCell point={p} />,
+                },
+              ]}
+            />
+          </Card>
 
-      <Card padding="none">
-        <Card.Header
-          icon={<RotateCcwGlyph size="sm" />}
-          count={answer.history.length}
-          subtitle="Every backup a person asked a node for, newest first, from the runtime audit."
-        >
-          Backup history
-        </Card.Header>
-        <CoverageNote
-          coverage={[answer.coverage]}
-          what="this history"
-          lost="the backups each of them took are not here"
-        />
-        <DataGrid<BackupRunRow>
-          name="history"
-          rows={answer.history}
-          rowKey={(r) => r.id}
-          defaultSort="-at"
-          isFailed={(r) => r.outcome === "failed"}
-          loadedNote={
-            answer.more
-              ? `The newest ${answer.history.length} — older backups are in the event log`
-              : undefined
-          }
-          empty={{
-            title: `No backup was asked for in ${span}`,
-            hint: `This history reads the event log, and ${eventHistoryLabel(historySeconds)}; a backup older than that is still counted above if it is an owner's newest.`,
-            icon: "rotate-ccw",
-          }}
-          columns={[
-            {
-              key: "at",
-              header: "When",
-              shrink: true,
-              sortValue: (r) => r.at,
-              cell: (r) => <DateCell at={r.at} now={now} />,
-            },
-            {
-              key: "node",
-              header: "Node",
-              shrink: true,
-              sortValue: (r) => r.node ?? "",
-              cell: (r) =>
-                r.node ? (
-                  <KeyCell value={r.node} path={["settings", "nodes", r.node]} />
-                ) : (
-                  <EmptyValue label="The node was not recorded" />
-                ),
-            },
-            {
-              key: "who",
-              header: "Who",
-              // WHO AND WITH WHAT, apart (`iam.ActorFor`): the person or seat
-              // that asked, drawn as every audit trail draws a writer, and the
-              // credential they asked through where it names something else.
-              sortValue: (r) => r.actor,
-              cell: (r) => (
-                <WriterCell
-                  writer={writerOf({ actor: r.actor, actorKind: r.actor_kind ?? "" }, seatOf)}
-                />
-              ),
-            },
-            {
-              key: "through",
-              header: "Through",
-              shrink: true,
-              drop: 1,
-              sortValue: (r) => throughOf(r.actor, r.operator_id),
-              cell: (r) => {
-                const through = throughOf(r.actor, r.operator_id);
-                return through ? <KeyCell value={through} /> : <EmptyValue label="Their own" />;
-              },
-            },
-            {
-              key: "dir",
-              header: "Directory",
-              sortValue: (r) => r.dir,
-              cell: (r) => (
-                <span className="mono truncate" title={r.dir}>
-                  {r.dir}
-                </span>
-              ),
-            },
-            {
-              key: "outcome",
-              header: "Outcome",
-              shrink: true,
-              phoneLead: true,
-              sortValue: (r) => r.outcome,
-              cell: (r) => (
-                <StatusCell
-                  glyph={r.outcome === "applied" ? "●" : "✕"}
-                  label={OUTCOME_WORDS[r.outcome]}
-                  tone={r.outcome === "applied" ? "positive" : "critical"}
-                  title={
-                    r.outcome === "applied"
-                      ? `Manifest written ${fmtDateTime(r.at)}`
-                      : "No manifest was written: the directory holds debris, not a backup"
-                  }
-                />
-              ),
-            },
-          ]}
-        />
-      </Card>
+          <Card padding="none">
+            <Card.Header
+              icon={<RotateCcwGlyph size="sm" />}
+              count={answer.history.length}
+              subtitle="Newest first"
+            >
+              Backup history
+            </Card.Header>
+            <CoverageNote
+              coverage={[answer.coverage]}
+              what="this history"
+              lost={{
+                one: "The backups it took are not here",
+                many: "The backups they took are not here",
+              }}
+            />
+            <DataGrid<BackupRunRow>
+              name="history"
+              rows={answer.history}
+              rowKey={(r) => r.id}
+              defaultSort="-at"
+              isFailed={(r) => r.outcome === "failed"}
+              loadedNote={
+                answer.more
+                  ? `Newest ${answer.history.length}. Older ones are in the event log.`
+                  : undefined
+              }
+              empty={{
+                title: `No backup was asked for in ${span}`,
+                hint: "Older backups still count above.",
+                icon: "rotate-ccw",
+              }}
+              columns={[
+                {
+                  key: "at",
+                  header: "When",
+                  shrink: true,
+                  sortValue: (r) => r.at,
+                  cell: (r) => <DateCell at={r.at} now={now} />,
+                },
+                {
+                  key: "node",
+                  header: "Node",
+                  shrink: true,
+                  sortValue: (r) => r.node ?? "",
+                  cell: (r) =>
+                    r.node ? (
+                      <KeyCell value={r.node} path={["settings", "nodes", r.node]} />
+                    ) : (
+                      <EmptyValue label="The node was not recorded" />
+                    ),
+                },
+                {
+                  key: "who",
+                  header: "Who",
+                  // WHO AND WITH WHAT, apart (`iam.ActorFor`): the person or
+                  // seat that asked, drawn as every audit trail draws a
+                  // writer, and the credential they asked through where it
+                  // names something else.
+                  sortValue: (r) => r.actor,
+                  cell: (r) => (
+                    <WriterCell
+                      writer={writerOf({ actor: r.actor, actorKind: r.actor_kind ?? "" }, seatOf)}
+                    />
+                  ),
+                },
+                {
+                  key: "through",
+                  header: "Through",
+                  shrink: true,
+                  drop: 1,
+                  sortValue: (r) => throughOf(r.actor, r.operator_id),
+                  cell: (r) => {
+                    const through = throughOf(r.actor, r.operator_id);
+                    return through ? <KeyCell value={through} /> : <EmptyValue label="Their own" />;
+                  },
+                },
+                {
+                  key: "dir",
+                  header: "Directory",
+                  sortValue: (r) => r.dir,
+                  cell: (r) => (
+                    <span className="mono truncate" title={r.dir}>
+                      {r.dir}
+                    </span>
+                  ),
+                },
+                {
+                  key: "outcome",
+                  header: "Outcome",
+                  shrink: true,
+                  phoneLead: true,
+                  sortValue: (r) => r.outcome,
+                  cell: (r) => (
+                    <StatusCell
+                      glyph={r.outcome === "applied" ? "●" : "✕"}
+                      label={OUTCOME_WORDS[r.outcome]}
+                      tone={r.outcome === "applied" ? "positive" : "critical"}
+                      title={
+                        r.outcome === "applied"
+                          ? `Manifest written ${fmtDateTime(r.at)}`
+                          : "Incomplete, not a usable backup"
+                      }
+                    />
+                  ),
+                },
+              ]}
+            />
+          </Card>
+        </>
+      )}
     </>
   );
 }
@@ -405,20 +442,20 @@ function TrimCell({ point: p }: { point: BackupPointRow }) {
   if (p.newest) return <Tag variant="success">counted · newest</Tag>;
   if (!p.verified) {
     return (
-      <Tag variant="warning" title="The taker never checked this copy, so no policy counts it">
+      <Tag variant="warning" title="Unverified, so it doesn’t count">
         not verified
       </Tag>
     );
   }
   if (p.counted) {
     return (
-      <Tag appearance="outline" title="A newer counted backup is the one the trim reads">
+      <Tag appearance="outline" title="A newer backup is the one in use">
         counted
       </Tag>
     );
   }
   return (
-    <Tag appearance="outline" title="The backup policy does not take this owner's word">
+    <Tag appearance="outline" title="Doesn’t count under the backup policy">
       not counted
     </Tag>
   );

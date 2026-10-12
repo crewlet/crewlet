@@ -570,13 +570,12 @@ export function audienceOf(run: SandboxRun, index: OrgIndex): string {
  * question. Nothing where the run is held on no timer.
  */
 export function holdLine(run: SandboxRun, now: number): string | undefined {
-  if (run.status === "reseed")
-    return "Its box was reclaimed: answering restarts the work from the question";
+  if (run.status === "reseed") return "Answering restarts the work";
   const ttl = run.pause_ttl_seconds;
   const parked = Date.parse(run.paused_at);
   if (!(ttl > 0) || !Number.isFinite(parked)) return undefined;
   const left = parked + ttl * 1_000 - now;
-  if (left <= 0) return "Its box is past its pause window and may be reclaimed";
+  if (left <= 0) return "Answer soon or the work restarts";
   const minutes = Math.round(left / 60_000);
   const hours = Math.floor(minutes / 60);
   return `Its box is held for ${hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`} more`;

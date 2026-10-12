@@ -130,10 +130,13 @@ type Health struct {
 	IdentityDutySeconds map[string]float64 `json:"identity_duty_seconds"`
 
 	// StallLagSeconds is how far behind this node's watched duty is,
-	// present only when it is behind at all. It is the number that climbs
-	// towards the seat lease TTL, at which the watchdog ends the process —
-	// so an operator watching a node degrade sees it here before the
-	// restart rather than only afterwards in the exit code.
+	// present only when it is behind at all: when its last beat is older
+	// than the beat interval it keeps (a second at the shipped lease TTL),
+	// which is a missed beat, and then the whole time since that beat. It is
+	// the number that climbs towards the seat lease TTL, at which the
+	// watchdog ends the process, so an operator watching a node degrade
+	// sees it here before the restart rather than only afterwards in the
+	// exit code.
 	StallLagSeconds *float64 `json:"stall_lag_seconds,omitempty"`
 
 	// UnprovenSeconds maps each seat stranded by a teardown that could not
@@ -181,23 +184,21 @@ type Health struct {
 // HealthAlarms is the alarm table as a public health body can carry it: how
 // many, and which has stood longest.
 type HealthAlarms struct {
-	// Count is how many alarms are firing. Zero is a real zero: the table
-	// was evaluated and nothing holds.
+	// Count is how many alarms are firing, one per kind however many logs
+	// it stands on, which is the count the gauge gives. Zero is a real
+	// zero: the table was evaluated and nothing holds.
 	Count int `json:"count"`
 
 	// Worst names the alarm that has been firing LONGEST
-	// ([statelog.Tracker.Standing]) — the condition that has gone
+	// ([statelog.Tracker.Standing]): the condition that has gone
 	// unanswered longest, since the table asserts no severity of its own.
 	// Absent when nothing is firing.
+	//
+	// A KIND, and no log beside it: an alarm is one per kind, listing the
+	// logs it stands on ([statelog.Alarm.Domains]), and which logs those
+	// are is the operator-only `work_retention` answer this public body
+	// points at rather than restates.
 	Worst string `json:"worst,omitempty"`
-
-	// WorstDomain is the state log [HealthAlarms.Worst] fired on, for an
-	// alarm the table keeps PER LOG — absent for one about the node as a
-	// whole. The kind alone named a class of condition while the alarm is
-	// one log's: two logs' `trim_blocked` are two conditions with two
-	// starts and two remedies, and a card naming the kind could not say
-	// which log to look at.
-	WorstDomain string `json:"worst_domain,omitempty"`
 }
 
 // Readiness is what /ready answers.
@@ -396,11 +397,8 @@ func fleetCounts(fleet FleetState) (*int, *HealthAlarms) {
 		alarms = &HealthAlarms{Count: len(fleet.Alarms)}
 		if len(fleet.Alarms) > 0 {
 			// The first is the one standing longest
-			// ([statelog.Tracker.Standing]); a per-log alarm names
-			// its log beside its kind, since two logs' alarms of one
-			// kind are two conditions.
-			worst := fleet.Alarms[0]
-			alarms.Worst, alarms.WorstDomain = string(worst.Kind), worst.Domain
+			// ([statelog.Tracker.Standing]).
+			alarms.Worst = string(fleet.Alarms[0])
 		}
 	}
 	return nodes, alarms

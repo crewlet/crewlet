@@ -216,7 +216,7 @@ describe("changing the company's configuration", () => {
       block: "managed",
       reason: managedSentence(["gitops"]),
     });
-    expect(managedSentence(["gitops"])).toContain("managed by gitops");
+    expect(managedSentence(["gitops"])).toBe("Managed by gitops. Change it there.");
     expect(configWriteAccess(managed, "open", "these are Rui's")).toMatchObject({
       block: "managed",
     });

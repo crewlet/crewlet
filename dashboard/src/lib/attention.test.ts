@@ -71,7 +71,7 @@ describe("what it surfaces", () => {
     const items = attentionQueue(input({ engine: healthFrame({ configured: false }) }));
     expect(items[0]?.id).toBe("unconfigured");
     expect(items[0]?.severity).toBe("critical");
-    expect(items[0]?.detail).toContain("webhook");
+    expect(items[0]?.detail).toBe("Import a company to start.");
   });
 
   test("a refused token and an unreachable engine are different items", () => {
@@ -171,7 +171,7 @@ describe("what it surfaces", () => {
   test("a run whose box was reaped is waiting on a person too", () => {
     const items = attentionQueue(input({ runs: [parked("reseed")] }));
     expect(items[0]?.detail).toContain("Which branch should I target?");
-    expect(items[0]?.detail).toContain("already reclaimed");
+    expect(items[0]?.detail).toContain("Answering restarts the work.");
   });
 
   // AND A RUNNING ONE IS NOT WAITING ON ANYBODY. Without this the condition
@@ -301,7 +301,11 @@ describe("what it surfaces", () => {
       }),
     );
     expect(items[0]?.id).toBe("seat-budget-a");
-    expect(items[0]?.detail).toContain("11:59");
+    expect(items[0]?.detail).toBe(
+      "10 of 100 tokens spent. Raise the limit, or wait until 2026-01-02T00:00:00Z.",
+    );
+    // The gate's stamp is the row's age rather than a clause of its sentence.
+    expect(items[0]?.at).toBe("2026-01-01T11:59:00Z");
   });
 
   // THE ADVICE IS ONE AN OPERATOR CAN TAKE. The counters are windowed and
@@ -314,8 +318,8 @@ describe("what it surfaces", () => {
       win({ state: "near", used: 95 }),
     ]) {
       const [item] = attentionQueue(input({ budget: meter(w) }));
-      expect(item?.detail).toContain("token_budget.day");
-      expect(item?.detail).toContain("turn over");
+      expect(item?.detail).toContain("Raise the company limit");
+      expect(item?.detail).toContain("or wait until");
       expect(item?.detail).not.toMatch(/reset/i);
     }
   });

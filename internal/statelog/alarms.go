@@ -524,17 +524,11 @@ type Alarm struct {
 	// Kind is which alarm.
 	Kind Kind `json:"kind"`
 
-	// Domain is the log a per-log condition is about, and empty for one
-	// about the node. It is the other half of the alarm's IDENTITY: one
-	// evaluation can carry a kind once per log ([Report]), and the kind
-	// alone folded those into one — see the tracker's [instance]. The
-	// detail still leads with the same name, for a reader who has only the
-	// line.
-	Domain string `json:"domain,omitempty"`
-
 	// Detail says what was measured, in the operator's units. It is the
 	// half of an alarm that makes it actionable: "apply_lag" is a name,
-	// and "this node is 4m12s behind" is a fact.
+	// and "this node is 4m12s behind" is a fact. For a per-log condition
+	// it is the most pressing log's measurement; each log in [Alarm.Domains]
+	// carries its own.
 	Detail string `json:"detail"`
 
 	// Remedy is what to do about it. Carried on the alarm rather than
@@ -542,6 +536,52 @@ type Alarm struct {
 	// and a remedy that lived on one of them would be missing from the
 	// other two.
 	Remedy string `json:"remedy"`
+
+	// Domains is every log this alarm stands on, for a condition that is a
+	// property of a log rather than of the node ([PerLogKinds]): the logs
+	// nearing or short of their ceiling, the logs whose trim is held, the
+	// logs holding a record past the deferral grace, the logs whose floor
+	// cannot be read and the logs past their census — and under
+	// [KindBackupAge] the logs whose [KindTrimBlocked] the missing or stale
+	// backup absorbs: held past their replay window and keeping records
+	// older than it. A younger hold is listed under no alarm. Empty for a
+	// node-wide condition.
+	//
+	// ONE ALARM PER KIND, WITH ITS LOGS IN IT, rather than one alarm per log.
+	// The kind is the alarm's identity on the count, the gauge and every
+	// screen: the gauge carries one series per kind, and a report that
+	// raised `trim_blocked` once per log told the health count four while
+	// the gauge said one, and drew one cause as four problems on the
+	// operator's screen. Detail is the most pressing log's measurement;
+	// each entry here carries its own.
+	//
+	// THE LOG LINES ARE STILL PER LOG. The [Tracker] forms one instance per
+	// (kind, log) from this list, so a second log joining a kind that is
+	// already up writes its own `alarm_raised`, and the first log leaving it
+	// writes its own `alarm_cleared` with its own start and detail: two
+	// things an operator has to be told started and ended, which a line per
+	// kind folded into one.
+	Domains []AlarmDomain `json:"domains,omitempty"`
+}
+
+// AlarmDomain is one log an alarm stands on, and what was measured there.
+type AlarmDomain struct {
+	// Domain is the log's registered name.
+	Domain string `json:"domain"`
+
+	// Detail is this log's own measurement, in the operator's units.
+	Detail string `json:"detail"`
+
+	// Term is the trim term holding this log, where the alarm is about its
+	// trim. It is the term's own name, which is what `crewlet retention
+	// status` prints and the retention guide is indexed by.
+	Term TermName `json:"term,omitempty"`
+
+	// Since is when this log's trim stopped advancing, where the alarm is
+	// about its trim. An instant rather than an age, so a reader renders
+	// the age against its own clock instead of trusting one frozen at the
+	// evaluation.
+	Since time.Time `json:"since,omitzero"`
 }
 
 // rule is one row of the table.
@@ -555,7 +595,8 @@ type rule struct {
 	remedy string
 	// perLog marks a condition that is a property of ONE LOG rather than
 	// of the node, which the report evaluates once per log from that log's
-	// own inputs and stamps with its name ([Alarm.Domain]). DECLARED on the
+	// own inputs and lists under the kind's one alarm ([Alarm.Domains]), and
+	// whose log lines the [Tracker] writes per log. DECLARED on the
 	// row so the published reference can say which they are, and held
 	// against what the report actually raises per log by a test in both
 	// directions — a flag nothing checked would be the second opinion the
@@ -711,32 +752,36 @@ var table = []rule{
 		// is the window's floor), a young fleet waiting for its donors (the
 		// cross-field rule keeps `snapshot_interval` × (kept + 1) below it),
 		// a trim waiting for its first backup (which `backup_age` raises on
-		// its own — from the first reading where none has been taken, at the
+		// its own: from the first reading where none has been taken, at the
 		// policy's age where one has gone stale). The tick is the block's
-		// resolution — `blocked_since` moves only when the trim does — so a
+		// resolution (`blocked_since` moves only when the trim does), so a
 		// block that cleared at the window is seen to clear up to one tick
 		// later.
 		//
 		// AND ONLY WHILE THE LOG HOLDS A RECORD PAST THE WINDOW, which is
 		// the half that is measured rather than borrowed: a block that keeps
 		// nothing the age term would release has cost nothing, however long
-		// it has lasted — a knowledge base nobody writes to is blocked for
+		// it has lasted. A knowledge base nobody writes to is blocked for
 		// the life of the deployment.
+		//
+		// THE TERM IS NOT IN THE SENTENCE. It is a field of the log the
+		// alarm stands on ([AlarmDomain.Term]), because one alarm carries
+		// every held log and two of them can be held by different terms.
 		kind:   KindTrimBlocked,
 		perLog: true,
 		fires: func(r Reading) (string, bool) {
 			if r.TrimBlockedBy == "" || r.ReplayWindow <= 0 || r.TrimPastWindow == 0 {
 				return "", false
 			}
-			return fmt.Sprintf("the trim has not advanced for %s: %s — and the log "+
-					"is keeping up to %d record(s) older than its %s replay window",
-					spoken(r.TrimBlockedFor), r.TrimBlockedBy, r.TrimPastWindow,
-					spoken(r.ReplayWindow)),
+			return fmt.Sprintf("the trim has not advanced for %s, and the log is "+
+					"keeping up to %d record(s) older than its %s replay window",
+					spoken(r.TrimBlockedFor), r.TrimPastWindow, spoken(r.ReplayWindow)),
 				r.TrimBlockedFor > r.ReplayWindow+TrimInterval
 		},
-		remedy: "The blocking term names what to fix; `crewlet retention status` " +
-			"says what it has and what it wants. Until it is fixed the log grows " +
-			"toward its ceiling by a day of records every day.",
+		remedy: "The term holding each log names what to fix, and `crewlet " +
+			"retention status` prints it with what it has and what it wants. " +
+			"Until it is fixed the log grows toward its ceiling by a day of " +
+			"records every day.",
 	},
 	{
 		// PER LOG, like the headroom, the ceiling and the blocked trim: the
@@ -763,7 +808,7 @@ var table = []rule{
 		},
 		remedy: "This node is running a build that cannot decode records its peers " +
 			"are writing. Upgrade it. Where the record's log judges this node's copy " +
-			"of the estate — the detail says — the node has already stopped serving " +
+			"of the estate (the detail says), the node has already stopped serving " +
 			"its copy, and its seats read the estate from the other data nodes.",
 	},
 	{
@@ -783,8 +828,8 @@ var table = []rule{
 		remedy: "Read the cause. An unreachable coordination store clears when " +
 			"coordination does, and every log on this node says so at once; a floor " +
 			"published at a later generation than this node's means that log was " +
-			"re-anchored and this node was not — see re-anchoring in " +
-			"docs/guides/retention.md. Every read of the log on this node is " +
+			"re-anchored and this node was not (see re-anchoring in " +
+			"docs/guides/retention.md). Every read of the log on this node is " +
 			"refused until its floor can be read.",
 	},
 	{
@@ -825,7 +870,7 @@ var table = []rule{
 				"corpus", r.SearchScopedFraction*100), r.SearchScopedFraction > 0
 		},
 		remedy: "A node did not cover its bucket range, so part of the corpus " +
-			"went unscanned — it was unreachable, or its own lexical index has " +
+			"went unscanned: it was unreachable, or its own lexical index has " +
 			"not finished its first lap, which is what a node that joined a " +
 			"few minutes ago looks like and clears itself. The answers were " +
 			"complete for what was searched and silent about what was not; the " +
@@ -851,7 +896,7 @@ var table = []rule{
 				r.HistoryPartialFraction > 0
 		},
 		remedy: "Turn-level history lives only on the node that published it, so " +
-			"a partial answer is missing that node's rows — every answer names " +
+			"a partial answer is missing that node's rows, and every answer names " +
 			"the node in its `coverage`. A node that has left the fleet is gone " +
 			"with its detail, and the aggregates survive it in the usage domain; " +
 			"a live node that keeps missing the budget is slow on its own store " +
@@ -895,7 +940,7 @@ var table = []rule{
 		remedy: "The 1-bit first stage is failing this corpus, index or not: " +
 			"`crewlet search eval` against a backup's copy of the estate " +
 			"measures the full scan beside the index in every query shape and " +
-			"will say the same. The remedy is the evaluation's — raise " +
+			"will say the same. The remedy is the evaluation's: raise " +
 			"BinaryOversample, then an int8 first stage, both code changes (see " +
 			"docs/guides/search.md). No index is installed meanwhile, so " +
 			"searches answer from the full scan at the recall the evaluation " +
@@ -915,8 +960,8 @@ var table = []rule{
 		// named here to the line the applier writes.
 		remedy: "A gated record is recoverable by nothing. Each drop's " +
 			"`statelog_record_gated` log line names the `gate` that dropped it, " +
-			"the record's `position` and `kind`, and the `writer` — the node " +
-			"that wrote it; this is worth reading today.",
+			"the record's `position` and `kind`, and the `writer` (the node " +
+			"that wrote it); this is worth reading today.",
 	},
 	{
 		// NOT `feed_dead_letters`, WHICH NAMED A PATH THIS ENGINE DOES
@@ -934,8 +979,8 @@ var table = []rule{
 				"last day", r.FeedUnreadable), r.FeedUnreadable > 0
 		},
 		remedy: "A record no build on this node can read. It redelivers for ever " +
-			"rather than being dropped, so the wakes behind it are waiting too — " +
-			"upgrade the node past it, or the feed stops moving.",
+			"rather than being dropped, so the wakes behind it are waiting too. " +
+			"Upgrade the node past it, or the feed stops moving.",
 	},
 	{
 		kind: KindMaintenanceOpen,
@@ -961,7 +1006,7 @@ var table = []rule{
 					bytesHuman(r.StoreBytes)),
 				r.StoreBytes > 0 && float64(r.FreeBytes) < VolumeHeadroomFactor*float64(r.StoreBytes)
 		},
-		remedy: "Add space to the volume the alarm names — or, where it could not be " +
+		remedy: "Add space to the volume the alarm names. Where it could not be " +
 			"measured, fix what stops it being read. A backup, a vacuum and a peer's " +
 			"join all need the room, and each fails partway through without it.",
 	},
@@ -991,9 +1036,9 @@ var table = []rule{
 		//
 		// PER LOG, like the headroom: each log was sized for its own
 		// census and is past it on its own, so the report evaluates it once
-		// per log and the log's name is the alarm's [Alarm.Domain]. One
-		// alarm naming the log furthest past its census hid every other log
-		// past its own.
+		// per log and lists every log past its census under the one alarm
+		// ([Alarm.Domains]). A reading naming only the log furthest past its
+		// census hid every other log past its own.
 		kind:   KindCensusDrift,
 		perLog: true,
 		fires: func(r Reading) (string, bool) {
@@ -1016,7 +1061,7 @@ var table = []rule{
 		remedy: "The backend lost or changed bytes it had acknowledged: check its " +
 			"own health (the NATS bucket OBJ_crewlet_files on the data nodes, or " +
 			"the S3 bucket) and restore those files from a backup, or upload them " +
-			"again — see docs/guides/backup.md. `crewlet objects status` names them.",
+			"again (see docs/guides/backup.md). `crewlet objects status` names them.",
 	},
 }
 
@@ -1045,9 +1090,11 @@ func Frac(v float64) *float64 { return &v }
 // [Reading.LogBytesPerDay].
 func PerDay(v uint64) *uint64 { return &v }
 
-// PerLogKinds is every alarm raised once per log rather than once per node, in
-// the table's own order — the six a reader of the reference has to know carry
-// a log's name ([Alarm.Domain]) and stand once for each log they hold on.
+// PerLogKinds is every alarm evaluated once per log rather than once per node,
+// in the table's own order: the six a reader of the reference has to know list
+// the logs they stand on ([Alarm.Domains]) and write a pair of log lines for
+// each of those logs ([Tracker]), while counting once on the health envelope
+// and the gauge.
 func PerLogKinds() []Kind {
 	var out []Kind
 	for _, rule := range table {
@@ -1056,6 +1103,18 @@ func PerLogKinds() []Kind {
 		}
 	}
 	return out
+}
+
+// perLogKind reports whether kind is one of [PerLogKinds]: a condition whose
+// log lines the [Tracker] writes once per log it stands on. A kind the table
+// does not hold is not one.
+func perLogKind(kind Kind) bool {
+	for _, rule := range table {
+		if rule.kind == kind {
+			return rule.perLog
+		}
+	}
+	return false
 }
 
 // Age is a measured age, for the Reading field whose zero value is a real and

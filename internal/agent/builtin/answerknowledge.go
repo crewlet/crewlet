@@ -37,8 +37,8 @@ import (
 // the read grant and human-only; this tool refuses the rest): it runs on the
 // auxiliary model of the seat the identity directory binds them to — the
 // human seat every person holds (ADR-0032). A principal no seat binds — a
-// pipeline's token, a service account, or a person recorded before every
-// person held a seat — has no seat whose model to run on, and is refused
+// pipeline's token or a service account, never a person (ADR-0032) — has no
+// seat whose model to run on, and is refused
 // rather than answered on the company's default model, because "a CI token"
 // is not somebody the spend can be attributed to. A seat is never given it: a seat has `search_knowledge`
 // and its own model, and an answer written by a second model into its context

@@ -106,10 +106,13 @@ describe("navigation identity", () => {
   });
 
   test("every destination says what it answers", () => {
-    // The hint is what the command palette shows. An entry with none is an
-    // entry a reader has to click to understand.
+    // The hint is what the command palette shows. An entry with none, a lone
+    // word or its own label again is an entry a reader has to click to
+    // understand. A phrase is what counts, never a length: "Find tasks" says
+    // what Work's search answers in ten characters.
     for (const d of DESTINATIONS) {
-      expect(d.hint.length, d.key).toBeGreaterThan(10);
+      expect(d.hint.trim().split(/\s+/).length, d.key).toBeGreaterThan(1);
+      expect(d.hint.toLowerCase(), d.key).not.toBe(d.label.toLowerCase());
     }
   });
 
@@ -407,7 +410,7 @@ describe("the resolver", () => {
   test("a bare traces address is Not Found, and says a trace is opened from a turn", () => {
     const bare = resolve(["live", "traces"]);
     expect(bare.resolved).toBe(false);
-    expect(bare.resolved ? "" : (bare.hint ?? "")).toMatch(/a trace has no list/);
+    expect(bare.resolved ? "" : (bare.hint ?? "")).toBe("Open a trace from a turn, run or event");
     expect(resolve(["live", "traces", "abc"])).toMatchObject({ screen: "trace", id: "abc" });
   });
 

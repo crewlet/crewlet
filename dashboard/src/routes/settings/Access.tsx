@@ -694,12 +694,9 @@ export function PeopleAndAccess() {
         </a>
       </PageActions>
       <PageNote>
-        Who can reach this company and as whom: the identity directory, its open invitations, the
-        human seats and who holds them, and this node&rsquo;s API tokens.{" "}
         {manages
-          ? "People are invited and created from their seat in the org chart; change, suspend and remove them here. An invitation's link, a password link and a token are shown once."
-          : "Changing any of it takes people:manage."}{" "}
-        This screen never reads a credential&rsquo;s value back.
+          ? "Invite or create people from their human seat in the org chart; change, suspend or remove them here. A link or token is shown once."
+          : "Changing any of this takes people:manage."}
       </PageNote>
       {creating && (
         <ServiceAccountDialog
@@ -870,7 +867,7 @@ export function PeopleAndAccess() {
             </Card.Header>
             {/* NO COMPANY IS NOT A FAILURE: the listing's 409 is the node
                 saying it has no seat to list yet, which the generic refusal
-                read as "the engine tried to answer and failed". */}
+                read as "the engine failed to answer". */}
             {listsNoCompany(seats) ? (
               <Callout variant="neutral">
                 This node runs no company yet, so it has no human seat to list. Seats appear here
@@ -954,7 +951,7 @@ export function PeopleAndAccess() {
                 defaultSort="id"
                 empty={{
                   title: "This node declares no API token",
-                  hint: "Tokens are declared in Tier A under api.auth.tokens and change with a restart.",
+                  hint: "Tokens are set in api.auth.tokens in the bootstrap file and change with a restart.",
                 }}
                 columns={[
                   {
@@ -1014,16 +1011,16 @@ function CompanyWriters({ writers }: { writers: readonly string[] }) {
   return (
     <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
       <span>
-        The company document is managed: only {writers.length === 1 ? "the token" : "the tokens"}{" "}
+        Only{" "}
         {writers.map((id, i) => (
           <span key={id}>
             {i > 0 && ", "}
             <InlineCode>{id}</InlineCode>
           </span>
         ))}{" "}
-        may change it (<InlineCode>api.auth.company_writers</InlineCode>). Every other credential —
-        a person&rsquo;s session, a machine token, this node&rsquo;s other tokens — reads it, and
-        can still rotate a credential it names.
+        can change the company document (<InlineCode>api.auth.company_writers</InlineCode>). Every
+        other credential, sessions and machine tokens included, can read it and rotate a credential
+        it names.
       </span>
     </Callout>
   );

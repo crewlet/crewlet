@@ -329,9 +329,9 @@ export function LiveNow() {
                 title={filtering ? "No running turn matches these filters" : "No seat is mid-turn"}
                 description={
                   filtering
-                    ? "A turn appears here the moment it starts, if it matches."
+                    ? "Clear the filters to see every running turn."
                     : agentSeats.length
-                      ? "Every seat is waiting for work. A turn starts when a webhook, a schedule or a colleague wakes one."
+                      ? "Turns appear here when they start."
                       : "No agent seats are defined yet."
                 }
               />
@@ -357,7 +357,7 @@ export function LiveNow() {
                 size="compact"
                 icon={<CircleQuestionMarkGlyph size={32} />}
                 title="No run is waiting on anybody"
-                description="A coding run that stops to ask a question is listed here, with an Answer that resumes it."
+                description="Runs that need an answer appear here."
               />
             )}
           </Card>
@@ -394,7 +394,7 @@ export function LiveNow() {
                 {boxed.length > IN_BOX_ROWS && (
                   <a className="list-row clickable" href={href(["live", "runs"])}>
                     <span className="t-caption">
-                      {plural(boxed.length - IN_BOX_ROWS, "more run")} in a box — all runs
+                      {plural(boxed.length - IN_BOX_ROWS, "more run")} · all runs
                     </span>
                   </a>
                 )}
@@ -404,7 +404,7 @@ export function LiveNow() {
                 size="compact"
                 icon={<SquareTerminalGlyph size={32} />}
                 title="Nothing is running in a box"
-                description="No coding run is in flight. A finished run's record is its turn's trace."
+                description="Finished runs are on their turn’s trace."
               />
             )}
           </Card>
@@ -469,7 +469,7 @@ export function LiveNow() {
                 size="compact"
                 icon={<ChartNoAxesGanttGlyph size={32} />}
                 title="Nothing has happened yet"
-                description="The feed fills as the engine publishes. A company with no integrations and no schedules has nothing to react to."
+                description="Events appear here as agents work."
               />
             )}
           </Card>

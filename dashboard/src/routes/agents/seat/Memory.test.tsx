@@ -133,7 +133,7 @@ test("a stale profile says it has stopped learning, not that it has stopped work
       />
     </Router>,
   );
-  expect(screen.getByText(/stopped learning about them/i)).toBeTruthy();
+  expect(screen.getByText(/No longer learning about them/)).toBeTruthy();
 });
 
 // AND A FRESH ONE DOES NOT. The gap is what the sentence is about, so a
@@ -155,7 +155,7 @@ test("a freshly corroborated profile carries no staleness line", () => {
       />
     </Router>,
   );
-  expect(screen.queryByText(/stopped learning about them/i)).toBeNull();
+  expect(screen.queryByText(/No longer learning about them/)).toBeNull();
 });
 
 // `reply` AND `unsent` CARRY THE SAME ARTIFACT, and which one holds it is the
