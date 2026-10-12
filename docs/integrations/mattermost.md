@@ -32,6 +32,14 @@ bot account on its next tick, running the same pass
 fleet's secret store and kept, because disabling those bots again on
 disconnect needs the same authority that created them.
 
+On a first boot the engine claims its seats before that pass has minted their
+tokens, so each agent's `mcp-server-mattermost` is first started with an empty
+`MATTERMOST_TOKEN` and refuses to start (`mcp_server_failed` in the log). The
+pass seals the tokens and re-activates the revision, and once that apply has
+run each seat restarts its server with its token, so the agents get the tools
+they answer through without a restart of the engine. See
+[Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
+
 Disconnecting with **"also remove the accounts this engine created"** revokes
 each seat's bot token and then disables its bot, in that order. The revoke is
 what makes the disable stand up: a disabled account keeps its username and its

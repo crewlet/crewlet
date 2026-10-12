@@ -192,6 +192,56 @@ func TestMayStartRefusesOnceTheLastRenewIsStale(t *testing.T) {
 	}
 }
 
+// PROVABLE IS THE LEASE, NOT THE ADMISSION. Starting a process that carries a
+// seat's credentials needs only that this node's lease is live now, so the
+// answer is yes while the seat establishes — MayStart's is no there, by
+// design — and yes one heartbeat after a renew that is merely late. It is NO
+// the moment the last renew is a TTL old, because from there a peer may hold
+// the seat, and a child started then is the same agent run twice.
+func TestProvableFollowsTheLeaseRatherThanTurnAdmission(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	var whileEstablishing, admittedWhileEstablishing bool
+	var h *Host
+	h = f.newHost("node-a", Config{
+		Seats: seatsNamed("ceo"), TTL: 30 * time.Second, HeartbeatInterval: 5 * time.Second,
+		Hooks: HookFuncs{Acquire: func(_ context.Context, handle string, _ coord.Lease) error {
+			whileEstablishing = h.Provable(handle)
+			_, admittedWhileEstablishing = h.MayStart(handle)
+			return nil
+		}},
+	})
+	h.renewNodePresence(f.ctx)
+	h.Sweep(f.ctx)
+	wantHeld(t, h, "ceo")
+
+	if !whileEstablishing {
+		t.Error("a seat whose lease was taken moments ago is not provable while it " +
+			"establishes, so the acquisition could start none of its children")
+	}
+	if admittedWhileEstablishing {
+		t.Fatal("MayStart admitted a turn on an establishing seat; the case above " +
+			"would then prove nothing about the difference between the two")
+	}
+	if h.Provable("nobody") {
+		t.Error("a seat this node does not hold is provable")
+	}
+
+	f.clock.Advance(6 * time.Second) // one heartbeat interval, and change
+	wantAdmits(t, h, "ceo", false)
+	if !h.Provable("ceo") {
+		t.Error("a renew one heartbeat late made the lease unprovable, " +
+			"though it has most of its TTL to run")
+	}
+
+	f.clock.Advance(24 * time.Second) // the last renew is now exactly one TTL old
+	wantHeld(t, h, "ceo")
+	if h.Provable("ceo") {
+		t.Error("a lease whose last renew is a TTL old is still provable, " +
+			"so a peer that took the seat would be joined by a second child")
+	}
+}
+
 func TestAFailedRenewStopsNewTurnsBeforeTheSeatIsDropped(t *testing.T) {
 	t.Parallel()
 	// The grace keeps the seat so in-flight work can finish, but it must

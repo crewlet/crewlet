@@ -395,9 +395,15 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// current would hand every held seat the new revision's builtins while
 	// its turns still read the outgoing epoch — and an apply refused after
 	// this point would leave them cloned from a revision that never became
-	// current. The per-role CHILDREN are deliberately untouched: they
-	// belong to the seat's lease, not to the epoch.
-	e.refileSeatTools(ctx, next)
+	// current. And each held seat's per-role CHILDREN are then reconciled
+	// against this epoch and the snapshot refreshed above, by the seat's own
+	// runner and NOT WAITED FOR: a child whose resolved spec did not move is
+	// left running, one whose credential this apply sealed or rotated is
+	// restarted, and one that never started is started — but a start is a
+	// handshake that can take a whole startup timeout, and every stage below
+	// would wait behind it with the new epoch already current. See
+	// seatservers.go.
+	e.reconcileSeatServers(ctx)
 	applied = append(applied, "seat_tools")
 
 	// AFTER the epoch is published, because this reads the seat list off

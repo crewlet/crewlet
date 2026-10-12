@@ -338,6 +338,13 @@ func TestAClaimCountsItsLeaseFromBeforeItAskedForIt(t *testing.T) {
 			"the seat: the claim stamped its lease from when the store's answer " +
 			"arrived, not from when it was asked for")
 	}
+	// And a whole TTL after the grant, when the store's lease has lapsed and
+	// a peer may take the seat, no child may be started for it here.
+	f.clock.Advance(24 * time.Second)
+	if h.Provable("ceo") {
+		t.Error("the seat is provable a TTL after the store granted it, so a " +
+			"child could be started for an agent a peer may already run")
+	}
 }
 
 // lateAnswers is the lease store with every seat acquire answered late: the

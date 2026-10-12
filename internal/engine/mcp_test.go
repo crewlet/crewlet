@@ -345,13 +345,13 @@ func TestAHeldSeatsPerRoleToolsSurviveAConfigApply(t *testing.T) {
 	}
 }
 
-// AND THE PER-ROLE CHILD IS NOT RESTARTED BY THE REBUILD.
+// AND THE PER-ROLE CHILD IS NOT RESTARTED BY AN APPLY THAT DID NOT MOVE IT.
 //
-// A per-role child belongs to the seat's LEASE rather than to the epoch, so
-// an apply must leave it alone: restarting one would re-handshake every
-// seat's vendor credentials on every config edit, and the control-plane doc
-// states the rule. The registry is rebuilt; the process never learns an
-// apply happened.
+// Every apply reconciles a held seat's children, so that a credential it seals
+// or rotates reaches them — but a child whose resolved spec is unchanged must
+// be left alone: restarting it would re-handshake every seat's vendor
+// credentials on every config edit, and the control-plane doc states the rule.
+// The registry is rebuilt; the process never learns an apply happened.
 func TestAnApplyDoesNotRestartAHeldSeatsChild(t *testing.T) {
 	t.Parallel()
 	doc := mcpCompany(false, "SEAT_TOKEN")
@@ -367,6 +367,9 @@ func TestAnApplyDoesNotRestartAHeldSeatsChild(t *testing.T) {
 	if _, _, err := e.Apply(t.Context(), parsedCompany(t, doc), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
+	// The apply's reconcile of the children runs after it returns, so a
+	// restart would show only once that reconcile is over.
+	engine.SettleSeatServers(e)
 	second, ok := e.ToolsFor("ceo").Lookup("tracker_probe")
 	if !ok {
 		t.Fatal("the applied epoch has no per-role tool")

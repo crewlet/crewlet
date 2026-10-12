@@ -62,9 +62,10 @@ func TestAFailedMCPStartReachesTheHeartbeatAndLeavesWithItsOwner(t *testing.T) {
 	ctx := t.Context()
 	e := &Engine{mcp: mcp.NewBridge(nil)}
 	company := mcpStatusCompany(t, true)
+	e.epoch.current.Store(company)
 
 	e.startSharedServers(ctx, company)
-	e.startSeatServers(ctx, company, "ceo")
+	e.startSeatServers(ctx, "ceo")
 	rows := e.nodeStatus(ctx).MCP
 	if len(rows) != 2 {
 		t.Fatalf("heartbeat carries %d mcp rows, want the shared and the per-role server: %+v", len(rows), rows)

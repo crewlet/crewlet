@@ -455,7 +455,8 @@ type Engine struct {
 	mcp *mcp.Bridge
 
 	// seatMCP is one bridge per seat this node holds, for that seat's
-	// per-role children. Separate from the shared bridge above because a
+	// per-role children, with what keeps them converged while the seat is
+	// held (seatservers.go). Separate from the shared bridge above because a
 	// bridge's catalogue is keyed by tool name across its servers, and two
 	// seats' children of one template publish the same names.
 	//
@@ -472,14 +473,18 @@ type Engine struct {
 	// offers the model entries that can only fail.
 	//
 	// mcpShared and mcpSeats are what each start of a server concluded —
-	// the shared servers per apply, the per-role children per seat claim —
-	// for the heartbeat's [coord.NodeStatus.MCP]. Under mcpMu too, because
-	// a seat's outcomes are replaced and forgotten with its bridge.
+	// the shared servers per apply, the per-role children per pass over a
+	// seat — for the heartbeat's [coord.NodeStatus.MCP]. Under mcpMu too,
+	// because a seat's outcomes are replaced and forgotten with its bridge.
 	mcpMu     sync.Mutex
-	seatMCP   map[string]*mcp.Bridge
+	seatMCP   map[string]*seatChildren
 	seatTools map[string]*tools.Registry
 	mcpShared []mcpOutcome
 	mcpSeats  map[string][]mcpOutcome
+
+	// seatRetryBase is the first retry's delay for a seat child that would
+	// not start, zero for [seatServerRetryBase]; [Options.seatRetryBase].
+	seatRetryBase time.Duration
 
 	// embeddings is the company's vector backend, swapped on apply. An
 	// atomic pointer rather than a mutex because it is read on the turn's
@@ -756,6 +761,13 @@ type Options struct {
 	// host's decision, and the knob exists only so a case can put the next
 	// tick out of reach and see what claims a seat without one.
 	sweepEvery time.Duration
+
+	// seatRetryBase is the first retry's delay for a seat's per-role child
+	// that would not start, zero for [seatServerRetryBase]. UNEXPORTED for
+	// the reason usageEvery is: the spacing is tied to the seat heartbeat
+	// rather than to a deployment, and the knob exists only so a case can
+	// watch a retry bring a child up without waiting fifteen seconds for it.
+	seatRetryBase time.Duration
 }
 
 // New assembles an engine.
@@ -921,6 +933,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
 		usageEvery:          opts.usageEvery,
+		seatRetryBase:       opts.seatRetryBase,
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
 		metrics:             opts.Metrics,
