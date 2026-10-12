@@ -240,7 +240,7 @@ function Band({
                   data-tone={barTone(bar)}
                   data-kind={bar.kind}
                   href={hrefOf(bar.row)}
-                  title={`${bar.row.key} · ${bar.row.title} — ${barTitle(bar)}`}
+                  title={`${bar.row.key} · ${bar.row.title} · ${barTitle(bar)}`}
                   style={barBox(bar, i)}
                   onClick={(e) => {
                     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;

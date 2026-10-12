@@ -45,7 +45,7 @@ export function workItemLabel(ref: WorkItemRef): { text: string; title?: string 
   const head = UUID.test(ref.id) ? ref.id.slice(0, 8) : ref.id;
   return {
     text: `${kind} ${head}`,
-    title: `${identity} — the work item this turn was about; the turn recorded no key for it`,
+    title: `${identity}: no key recorded`,
   };
 }
 
@@ -72,7 +72,7 @@ export function runningNow(
   if (!seat) return null;
   const parked = seat.turn?.stage === "parked";
   return {
-    words: `${parked ? "parked" : "running"} — ${doingWords(seat)}`,
+    words: `${parked ? "parked" : "running"} · ${doingWords(seat)}`,
     item: seat.live_call?.work_item ?? seat.turn?.work_item ?? null,
   };
 }

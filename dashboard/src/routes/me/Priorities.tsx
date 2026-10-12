@@ -310,7 +310,7 @@ export function listLine({
   const held = rows.filter((r) => r.assignee === whose).length;
   const paged = rows.length < all;
   if (held === rows.length && !paged) {
-    return `${head} — ${all === 1 ? "it is" : "all"} assigned to ${they}.`;
+    return `${head}. ${all === 1 ? "It is" : "All are"} assigned to ${they}.`;
   }
   const split = paged
     ? `${held} of the ${rows.length} shown ${held === 1 ? "is" : "are"} assigned to ${they}`
@@ -318,7 +318,7 @@ export function listLine({
       ? `none assigned to ${they}`
       : `${held} of them assigned to ${they}`;
   const queue = held === rows.length ? "" : ` The Queue counts only the work assigned to ${they}.`;
-  return paged ? `${head}. ${capitalize(split)}.${queue}` : `${head} — ${split}.${queue}`;
+  return `${head}. ${capitalize(split)}.${queue}`;
 }
 
 function capitalize(s: string): string {

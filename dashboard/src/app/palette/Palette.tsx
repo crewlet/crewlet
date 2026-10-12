@@ -457,7 +457,7 @@ export function CommandPalette({
     // why THAT one is answered without the row growing a clause.
     return (
       <span
-        title={why ? `${key} — ${why}` : undefined}
+        title={why ? `${key}: ${why}` : undefined}
       >{`in ${key}${name ? ` · ${name}` : ""}`}</span>
     );
   };
@@ -481,7 +481,7 @@ export function CommandPalette({
         hint: why
           ? why
           : suggested
-            ? `suggested: ${suggested.seat.name} — ${suggested.why}`
+            ? `suggested: ${suggested.seat.name}, ${suggested.why}`
             : "choose who",
         meta: <Kbd subtle keys={capsOf(keyRow("search.assign").presses[0]!)} />,
         onSelect: why

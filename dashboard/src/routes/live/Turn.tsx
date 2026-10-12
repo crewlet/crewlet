@@ -1805,7 +1805,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         icon: <SaveGlyph size="sm" />,
         onSelect: () => {
           const { started, name } = downloadText(turnJSON(), `turn-${turnId}.json`);
-          if (started) toast.ok(`Download started — ${name}`);
+          if (started) toast.ok(`Download started: ${name}`);
           else toast.show({ variant: "warning", title: "The browser refused the download" });
         },
       },

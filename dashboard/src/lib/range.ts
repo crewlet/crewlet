@@ -165,7 +165,7 @@ export function windowLabel(w: Window): string {
   // TO THE MINUTE, because that is the resolution the picker has: the seconds
   // are always `:00` and are fourteen characters of noise in a label that has
   // to sit in a page bar beside everything else.
-  return `${fmtMinute(new Date(w.from).toISOString())} — ${fmtMinute(new Date(w.to).toISOString())}`;
+  return `${fmtMinute(new Date(w.from).toISOString())} – ${fmtMinute(new Date(w.to).toISOString())}`;
 }
 
 /**

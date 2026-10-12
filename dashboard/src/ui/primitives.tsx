@@ -757,7 +757,7 @@ export function DownloadButton({
       // tell them what to go and open.
       doneLabel="Downloading"
       failedLabel="Download failed"
-      doneSaid={`download started — ${name}`}
+      doneSaid={`download started: ${name}`}
       failedSaid="the browser refused the download"
       title={title}
       variant={variant}

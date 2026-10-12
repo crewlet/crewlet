@@ -128,7 +128,7 @@ export function ViewTabs({
           type="button"
           className="work-tab"
           aria-pressed={current === v.key}
-          title={v.pinned ? `${v.name} — pinned` : v.name}
+          title={v.pinned ? `${v.name} (pinned)` : v.name}
           onClick={() => onView(v.key)}
         >
           {v.pinned ? <PinGlyph size="sm" aria-hidden="true" /> : null}

@@ -64,7 +64,7 @@ const seat = (over: Partial<AgentRow> = {}) =>
 // it is on; a settled row, and a row no seat is running, get nothing from it.
 test("a running turn is what the seat running it is doing, on the item it is charged to", () => {
   expect(runningNow(row(), [seat()])).toEqual({
-    words: "running — executing · round 2 of 24",
+    words: "running · executing · round 2 of 24",
     item: { backend: "native", id: ID, key: "ENG-32", project: "ENG" },
   });
 });
@@ -76,7 +76,7 @@ test("a turn that ended, or that no seat is running, is not running now", () => 
 
 test("a turn parked on its coding run says so", () => {
   const parked = seat({ turn: { turn_id: "t-7", stage: "parked" } } as Partial<AgentRow>);
-  expect(runningNow(row({ parked: true }), [parked])?.words).toBe("parked — coding run");
+  expect(runningNow(row({ parked: true }), [parked])?.words).toBe("parked · coding run");
 });
 
 // ---------------------------------------------------------------------------

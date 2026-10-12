@@ -75,7 +75,7 @@ export function TakeBackupDialog({
       toast.show({
         variant: "success",
         title: `Backup written on ${manifest.node_id || host}`,
-        message: `${target} — ${fmtBytes(takenBytes(manifest))} in ${fmtDuration(
+        message: `${target}: ${fmtBytes(takenBytes(manifest))} in ${fmtDuration(
           Date.parse(manifest.finished_at) - Date.parse(manifest.taken_at),
         )}.`,
       });

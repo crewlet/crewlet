@@ -178,12 +178,12 @@ function ToolRecords({
           taller than the box that scrolls it is the transcript's own trap one
           level down — the wheel inside the record while its bottom is below
           the box's. */}
-      <CodeBlock plain selectable label={`${name} — arguments`} code={prettyArgs || "{}"} />
+      <CodeBlock plain selectable label={`${name} · arguments`} code={prettyArgs || "{}"} />
       <div className="t-label">{failed ? "Error" : "Result"}</div>
       <CodeBlock
         plain
         selectable
-        label={`${name} — ${failed ? "error" : "result"}`}
+        label={`${name} · ${failed ? "error" : "result"}`}
         code={prettyResult || "(empty)"}
       />
     </div>

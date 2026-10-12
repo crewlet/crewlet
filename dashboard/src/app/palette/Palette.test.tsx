@@ -711,7 +711,7 @@ describe("the actions, made as the person", () => {
     const where = within(p.row(/Create task “rotate the join timeout”/)).getByText(
       "in ENG · Core platform",
     );
-    expect(where.getAttribute("title")).toBe("ENG — where your own work lands");
+    expect(where.getAttribute("title")).toBe("ENG: where your own work lands");
     await act(async () => {
       fireEvent.click(p.row(/Create task/));
     });
@@ -726,7 +726,7 @@ describe("the actions, made as the person", () => {
     const p = mount({ answers: TASKS, hash: "#/work/OPS-7" });
     await p.type("rotate the join timeout");
     const where = within(p.row(/Create task/)).getByText("in OPS · Operations");
-    expect(where.getAttribute("title")).toBe("OPS — the project you are on");
+    expect(where.getAttribute("title")).toBe("OPS: the project you are on");
   });
 
   // A NAME THE TERM NAMES EXACTLY ONCE is a suggestion; the person still
@@ -785,7 +785,7 @@ describe("the actions, made as the person", () => {
     const p = mount({ answers: TASKS });
     await p.type("swe cluster join");
     const assign = p.row(/Assign ENG-420 to an agent…/);
-    expect(assign.textContent).toContain("suggested: SWE — part of the name matches");
+    expect(assign.textContent).toContain("suggested: SWE, part of the name matches");
     await act(async () => {
       fireEvent.click(assign);
     });

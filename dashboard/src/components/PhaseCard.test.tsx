@@ -483,7 +483,7 @@ describe("a tool call's arguments", () => {
     // put its result into the round's text — so the click is the test's own
     // reader opening it.
     fireEvent.click(screen.getByRole("button", { name: /^read_file/ }));
-    return screen.getByRole("region", { name: "read_file — arguments" }).textContent ?? "";
+    return screen.getByRole("region", { name: "read_file · arguments" }).textContent ?? "";
   }
 
   test("are indented, one key to a line", () => {

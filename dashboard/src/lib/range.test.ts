@@ -123,7 +123,7 @@ describe("the interval a reader named", () => {
     // A heading reading "7 days" over a window somebody chose in March is
     // the one thing a custom range must not say.
     expect(windowLabel("7d")).toBe(RANGE_LABEL["7d"]);
-    expect(windowLabel(parseWindow(SPAN, ANY))).toContain("—");
+    expect(windowLabel(parseWindow(SPAN, ANY))).toContain("–");
   });
 });
 

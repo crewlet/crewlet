@@ -1179,7 +1179,7 @@ test("the priorities say how many they hold and how many are the person's own", 
   mount();
   expect(
     await screen.findByText(
-      "5 open tasks on your list, in the order to work them — 2 of them assigned to you. The Queue counts only the work assigned to you.",
+      "5 open tasks on your list, in the order to work them. 2 of them assigned to you. The Queue counts only the work assigned to you.",
     ),
   ).toBeTruthy();
 });

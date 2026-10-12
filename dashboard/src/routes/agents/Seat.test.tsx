@@ -1382,7 +1382,7 @@ test("a running turn's row says what it is doing, and has no figures yet", async
       },
     },
   });
-  const doing = await screen.findByText("running — executing · round 7 of 25");
+  const doing = await screen.findByText("running · executing · round 7 of 25");
   const row = doing.closest(".grid-row") as HTMLElement;
   expect(within(row).getByText("ENG-412")).toBeTruthy();
   expect(within(row).queryByText("no summary recorded")).toBeNull();
