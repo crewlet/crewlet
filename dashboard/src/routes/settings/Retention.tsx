@@ -37,7 +37,7 @@
  *     first is silent until a node tries to join.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Button,
   Callout,
@@ -59,6 +59,9 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
+import { useRoute } from "~/app/router.tsx";
+import { ALARMS_AT } from "~/lib/alarms.ts";
+import { reveal } from "~/lib/scroller.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtBytes, fmtDateTime, fmtDuration, fmtExact, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -114,6 +117,9 @@ export function BlockedBanner({ domain: d, now }: { domain: RetentionDomain; now
  *  banner names `snapshot_floor`. */
 const SNAPSHOT_DONORS_REQUIRED = 2;
 
+/** The alarm list's element, which `at=alarms` brings into view. */
+const ALARMS_ID = "retention-alarms";
+
 export function RetentionPanels({ thisNode }: { thisNode?: string }) {
   const now = useNow();
   // OPERATOR-GATED, so the panel renders only when this browser holds a
@@ -149,6 +155,19 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
     });
     if (g?.answer) refetch();
   };
+  // ARRIVING FOR THE ALARMS (`at=alarms`, the engine panel's "Open alarms")
+  // brings their list into view once the report has drawn it, ONCE per
+  // arrival: the list sits below the backups and the banners, and a poll
+  // that moved the count must not scroll a reader who has moved on.
+  const route = useRoute();
+  const forAlarms = route.query.get("at") === ALARMS_AT;
+  const standing = data?.alarms?.length ?? 0;
+  const revealed = useRef<string | null>(null);
+  useEffect(() => {
+    if (!forAlarms || standing === 0 || revealed.current === route.hash) return;
+    revealed.current = route.hash;
+    reveal(document.getElementById(ALARMS_ID));
+  }, [forAlarms, standing, route.hash]);
   // WHAT THE REPORT NOW SHOWS IS LET GO OF, so a later gesture on the same
   // node and sign is a new one rather than this one reopened.
   const nodesSeen = data?.nodes;
@@ -211,7 +230,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
       <ServedLevelBanner level={data?.read_level} />
 
       {(data?.alarms?.length ?? 0) > 0 && (
-        <Card>
+        <Card id={ALARMS_ID}>
           <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={data?.alarms.length}>
             Alarms
           </Card.Header>

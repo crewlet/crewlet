@@ -12,7 +12,7 @@
 
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { Backups } from "./Backups.tsx";
@@ -22,6 +22,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { clearToken, storeToken } from "~/protocol/authToken.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { BackupsAnswer } from "~/contract/backups.ts";
+import type { RetentionReport } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 
@@ -106,7 +107,11 @@ class InertWebSocket {
 
 function mount(
   over: Partial<BackupsAnswer> = {},
-  { strict = false, historySeconds = (30 * 86_400) as number | null } = {},
+  {
+    strict = false,
+    historySeconds = (30 * 86_400) as number | null,
+    retention = null as RetentionReport | null,
+  } = {},
 ) {
   const store = new Store();
   store.applyOrg(withDerived(org) as never);
@@ -119,6 +124,7 @@ function mount(
   const socket = new LiveSocket(store);
   const query = vi.fn((what: string) => {
     if (what === "backups") return Promise.resolve({ ...answer(), ...over });
+    if (what === "retention" && retention) return Promise.resolve(retention);
     return new Promise(() => {});
   });
   (socket as unknown as { query: typeof query }).query = query;
@@ -422,4 +428,69 @@ test("with nothing backed up, the command that takes one is code", async () => {
   await settle();
   expect(screen.getByText("Nothing has been backed up")).toBeTruthy();
   expect(screen.getByText("crewlet backup -dir").tagName).toBe("CODE");
+});
+
+// "OPEN ALARMS" LANDS ON THE ALARMS. The engine panel's way to them is
+// `at=alarms`, and their list sits below the backups and the banners, so the
+// screen brings it into view once the report has drawn it, and only then.
+describe("arriving for the alarms", () => {
+  let scrolled: Element[] = [];
+  beforeEach(() => {
+    scrolled = [];
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      writable: true,
+      value(this: Element) {
+        scrolled.push(this);
+      },
+    });
+    // The list is below the fold, as it is under a page of backups.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const top = this.id === "retention-alarms" ? 2_000 : 0;
+      return { top, bottom: top + 40, left: 0, right: 0, width: 0, height: 40 } as DOMRect;
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
+  const report = {
+    v: 1,
+    node_id: "node-a",
+    at: hoursAgo(0),
+    domains: [],
+    nodes: [],
+    register_readable: true,
+    snapshots: [],
+    replica: { store_bytes: 0, projected_join_seconds: 0, rejoin_window_seconds: 0 },
+    alarms: [
+      {
+        kind: "backup_age",
+        detail: "no verified backup has been recorded",
+        remedy: "Run `crewlet backup` against any node.",
+      },
+    ],
+  } as RetentionReport;
+
+  test("the alarm list is brought into view", async () => {
+    location.hash = "#/settings/backups?at=alarms";
+    mount({}, { retention: report });
+    await settle();
+    expect(scrolled.map((el) => el.id)).toEqual(["retention-alarms"]);
+    // Its rows say the kind and what was measured, joined without a dash.
+    expect(screen.getByText(/no verified backup has been recorded/).textContent).not.toMatch(
+      /\u2014/,
+    );
+  });
+
+  test("a reader who came for the page is left at its top", async () => {
+    location.hash = "#/settings/backups";
+    mount({}, { retention: report });
+    await settle();
+    expect(screen.getByText(/no verified backup has been recorded/)).toBeTruthy();
+    expect(scrolled).toEqual([]);
+  });
 });
