@@ -84,14 +84,36 @@ func claimed(t *testing.T, e *engine.Engine, seats int) {
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	waitEstablished(t, e, seats)
+}
+
+// waitEstablished waits for this node to hold seats seats, every one of them
+// ESTABLISHED.
+//
+// Established, not merely held: a seat enters the held set the moment its
+// lease is taken, BEFORE its acquisition has started its children, so a case
+// that read a seat's tools as soon as the seat was held was reading them while
+// they were still starting — and failed whenever the last claim was slower
+// than the read. [seat.Host.MayStart] admits a turn only once the acquisition
+// has returned, which is the moment the seat's surface is complete.
+func waitEstablished(t *testing.T, e *engine.Engine, seats int) {
+	t.Helper()
+	host := e.Node().Host()
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(e.Node().Host().Held()) >= seats {
+		held := host.Held()
+		established := len(held) >= seats
+		for _, handle := range held {
+			if _, ok := host.MayStart(handle); !ok {
+				established = false
+			}
+		}
+		if established {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("held %v after 10s, want %d seats", e.Node().Host().Held(), seats)
+	t.Fatalf("held %v after 30s, want %d seats established", host.Held(), seats)
 }
 
 // surfaceOf is the tool names one seat's turns would be built against.
