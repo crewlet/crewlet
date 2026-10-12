@@ -317,7 +317,7 @@ export function Turns() {
 
       <CoverageNote
         coverage={[series.data?.coverage, list.data?.coverage, ...pages.map((p) => p.coverage)]}
-        what="these turns"
+        what="this list"
       />
 
       <div className="toolbar">

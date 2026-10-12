@@ -734,7 +734,7 @@ export function Audit() {
       {loading && shown.length === 0 && (
         <Skeleton variant="text" rows={6} label="Loading what was done" />
       )}
-      <CoverageNote coverage={[runtime.data?.coverage]} what="the runtime rows" />
+      <CoverageNote coverage={[runtime.data?.coverage]} what="the runtime list" />
       {/* A PAGE THAT STOPPED SHORT OF THE WINDOW IS A NOTICE OF ITS OWN, not
           the card's subtitle: a header line is one line, and an earlier
           sentence there was cut at "those rows are the newest, n…", its whole

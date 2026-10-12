@@ -622,7 +622,7 @@ export function ChannelScreen({ id }: { id: string }) {
           >
             <Card.Title>On this channel</Card.Title>
           </Card.Header>
-          <CoverageNote coverage={[events.data?.coverage]} what="this channel's events" />
+          <CoverageNote coverage={[events.data?.coverage]} what="this channel's history" />
           {events.loading && !events.data && (
             <Skeleton variant="text" rows={3} label="Loading the channel's events" />
           )}
