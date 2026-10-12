@@ -33,15 +33,22 @@ func (*slowBody) Close() error { return nil }
 // A STREAM IS BOUNDED BY ITS SILENCE, NOT ITS LENGTH: a body that keeps
 // arriving runs well past the idle bound in total and is never cut off,
 // because each read that returns data restarts the clock.
+//
+// The bound is wide enough that the test measures the watchdog and not the
+// machine: what the clock sees between two reads is the body's gap PLUS
+// however long the reading goroutine waits to be scheduled, and at 80 ms with
+// a 20 ms gap a race-instrumented suite on four busy CPUs stalled it past the
+// remaining 60 ms and cancelled a stream that never went silent. A 300 ms
+// margin is a stall nothing healthy produces.
 func TestALongStreamThatKeepsTalkingIsNeverCutOff(t *testing.T) {
 	t.Parallel()
-	const idle = 80 * time.Millisecond
+	const idle = 400 * time.Millisecond
 	ctx, w := WatchIdle(context.Background(), idle)
 	defer w.Stop()
-	body := w.Body(&slowBody{gap: idle / 4, reads: 16}) // ~4x idle in total
+	body := w.Body(&slowBody{gap: idle / 4, reads: 12}) // ~3x idle in total
 	start := time.Now()
 	got, err := io.ReadAll(body)
-	if err != nil || len(got) != 16 {
+	if err != nil || len(got) != 12 {
 		t.Fatalf("read %d bytes, err %v", len(got), err)
 	}
 	if elapsed := time.Since(start); elapsed < 2*idle {

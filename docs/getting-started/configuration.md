@@ -726,6 +726,67 @@ which must come back as a tool call. A gateway that does not serve
 `/v1/models` is reported as *not served* rather than as a failure. See the
 [CLI reference](../reference/cli.md#crewlet-llm).
 
+### Reasoning models behind an OpenAI-compatible endpoint
+
+OpenAI's Chat Completions format has no field for a model's reasoning, so
+every host that serves a reasoning model over it added its own, and most now
+require it back on the next request. An `openai` or `openai-compatible` entry
+keeps whatever reasoning a response carried, **exactly as the host sent it**,
+and sends it back on every later round of the same tool loop, in the same
+field and the same shape:
+
+| Host | What a response carries | What the vendor says about sending it back |
+|---|---|---|
+| Moonshot (`kimi-k3`, `kimi-k2.7-code`), Together's Kimi K3 | `reasoning_content` | Required for K3 "in multi-turn conversations and tool-call loops"; K3 always thinks and was trained to read it |
+| DeepSeek | `reasoning_content` | With `tools` in the request, every earlier turn's, or a **400**; ignored without `tools` |
+| Fireworks, Z.ai, SGLang, MiniMax | `reasoning_content` (MiniMax: or `reasoning_details`, when its thinking is split out) | Interleaved thinking must see it again |
+| OpenRouter | `reasoning` and `reasoning_details` (text with a signature, summaries, encrypted payloads) | The details' sequence must match what the model produced; `reasoning_content` is accepted as an alias |
+| Groq, vLLM, Ollama, Together's other models | `reasoning` | Accepted on input (vLLM's interleaved thinking relies on it) |
+| A LiteLLM proxy in front of Claude | `thinking_blocks`, signed | Required beside a tool call, or Anthropic answers **400** |
+| Gemini 3 on Google's OpenAI-compatible endpoint | a thought signature on each tool call (`extra_content`; LiteLLM's `provider_specific_fields`) | Required on the calls of the current step, or **400** |
+| Mistral reasoning models | `content` as a list of chunks, the thinking in a `thinking` chunk | Send the whole message back, thinking chunk included |
+| OpenAI | nothing | — |
+
+There is **no setting** for this. Every field above goes back only to the
+**endpoint that wrote it** — the same `base_url`, whatever the model or the
+key — because a field one host emits is one another may refuse, and a refused
+request is a 400 the [fallback chain](../concepts/architecture.md#2-inside-one-node)
+does not retry. A response that carried none of it (OpenAI's own, and any
+model that does not reason) changes nothing about the requests that follow.
+The reasoning is read for the dashboard as before (the readable trace, from
+`reasoning_content`, `reasoning` or a thinking chunk), and a Mistral answer's
+visible text is its `text` chunks rather than the list's JSON.
+
+**An empty reasoning is still sent.** A round that reasoned nothing goes back
+with the empty value its host sent (`"reasoning_content": ""`); only a `null`
+counts as no field. And once any turn of a request carries
+`reasoning_content`, every assistant turn of it does — the empty string for a
+round whose stream never named the field, and for a turn another endpoint or
+backend wrote, whose reasoning this host cannot read — because Moonshot
+refuses an assistant tool-call message whose `reasoning_content` is missing
+while thinking is on, and DeepSeek wants every earlier turn's. No other field
+is filled in: an empty `reasoning_details` block would be a sequence the model
+never produced.
+
+**Within one tool loop, and across a suspension.** Every assistant turn in a
+request belongs to the phase that is still running: a new turn starts from
+its [conversation ledger](../concepts/conversation-sessions.md), never from an
+earlier turn's messages, so no reasoning crosses from one task into the next.
+A coding run that suspends the loop parks the reasoning with the conversation,
+and the resumed rounds send it back as the suspended ones would have.
+
+**A fallback to another endpoint carries none of the first one's reasoning.**
+When a chain moves a running loop to a member on a different `base_url`, the
+turns the first member wrote go to the second without their reasoning. Once the
+second member has written a turn of that loop carrying `reasoning_content`, the
+first member's turns go to it with an empty one, which is what Moonshot and
+DeepSeek check for. Before that, and on a host that checks more than the
+field's presence (Gemini 3's thought signatures within a step, a LiteLLM
+proxy's signed thinking blocks), the request may be refused, and the turn then
+fails on that member as it would on any 400. A chain whose members serve such a
+model should keep them on one endpoint: two `providers.llm` entries on the same
+`base_url` with different keys or models share their reasoning.
+
 ## Tier A (`crewlet.yaml`)
 
 Tier A is restart-only and says where this node's stream, store and API
