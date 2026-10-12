@@ -2803,6 +2803,7 @@ Point any MCP client at it:
 The **same tools a seat holds**, not a parallel implementation: `list_work_items`,
 `get_work_item`, `create_work_item`, `update_work_item`, `comment_on_work_item`,
 `merge_work_item`, `move_work_item`, `search_work_items`, `get_work_catalogue`, `list_projects`, `describe_project`, `write_project`,
+`list_project_files`, `read_project_file`, `write_project_file`, `remove_project_file`,
 `task_activity`, `my_work`,
 `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`, and
 `search_knowledge`. A schema, a default, a trimmed field and the wording of a
@@ -3143,9 +3144,11 @@ saved view and a person's own marks, pins and queue all follow the one rule.
 
 Each tool appears only where its half of the company is native: a company on
 `tracker.backend: jira` gets the page tools and not the work tools, and one on
-neither gets only `answer_run`, which is about the fleet's own run record. `search_knowledge` is the exception and is
-offered against **any** knowledge backend, Confluence included — a ranked
-search over the company's own wiki is exactly as useful to an assistant there.
+neither gets only the tools about the fleet's own records — `answer_run`,
+`pause_seat`, `resume_seat` and `steer_turn`. `search_knowledge` and
+`answer_knowledge` are the exception and are offered against **any** knowledge
+backend, Confluence included — a ranked search over the company's own wiki, or
+an answer drawn from it, is exactly as useful to an assistant there.
 
 The turn-only tools are deliberately absent: the memory tools (a diary belongs
 to a seat), the skill tools (a skill is loaded into a phase), `a2a_ask` (a
