@@ -304,7 +304,9 @@ internal/
 │                         #   every one lives in dashboard/src/contract/
 ├── sourcetree/           # What is this repository's tree: the module root,
 │                         #   a walk that never reads a nested checkout, and
-│                         #   what a gate may skip unread
+│                         #   what a gate may skip unread — plus decltype/, a
+│                         #   value's type read from the declarations it
+│                         #   reaches, for the gates that judge by type
 ├── e2e/                  # The end-to-end company, and the dashboard replay
 ├── period/               # The company calendar: the day, ISO week and month a
 │                         #   moment falls in, named by a label every node
