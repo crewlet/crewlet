@@ -1458,6 +1458,12 @@ a.user-block-who:focus-visible {
   border-radius: 0;
   background: transparent;
 }
+/* UNDER THE KIT'S CARD HEADER, THE HEADER'S RULE IS THAT ONE. The header
+   draws a rule beneath itself, and the grid's own stood a pixel under it: two
+   lines where the card has one edge between its head and its body. */
+.crewlet-card__header + .grid-wrap[data-flush] {
+  border-top: 0;
+}
 
 /* A FULL-WIDTH BAND BY DEFAULT — the head, the body, the footer, the column
    reset, and the empty state, which is the one child rendered when the wrap

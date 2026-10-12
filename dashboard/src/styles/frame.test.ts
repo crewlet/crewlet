@@ -1639,6 +1639,14 @@ test("a flush grid draws no frame inside its card", () => {
   expect(body).toMatch(/background:\s*transparent/);
 });
 
+// UNDER A CARD HEADER THE GRID DRAWS NO RULE OF ITS OWN: the kit's header
+// rules itself off, and the flush grid's rule under it made two lines.
+test("a flush grid under a card's header leaves the rule to the header", () => {
+  expect(block(sheet("frame.css"), ".crewlet-card__header + .grid-wrap[data-flush]")).toMatch(
+    /border-top:\s*0/,
+  );
+});
+
 // THE SPEND CHART'S SUBTITLE TAKES NO WIDTH FROM ITS LEGEND. Both sit in the
 // kit's head row and shrink by their content widths, so a subtitle as long as
 // the card pushed the legend onto a second, ragged row at 1280.

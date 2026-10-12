@@ -208,6 +208,16 @@ test("every scope states its three windows, the company's first", async () => {
   expect(screen.getByText(/last refused a call/i)).toBeTruthy();
 });
 
+// THE SEATS' TABLE IS ITS CARD'S BODY: a table in a bordered box of its own
+// inside the card drew two edges a pixel apart (styles/frame.test.ts holds
+// the flush form and the one rule under the card's header).
+test("the seats' table runs to its card's edges", async () => {
+  mount(answer());
+  await settle();
+  const seats = screen.getByText("Agent seats").closest(".crewlet-card")!;
+  expect(seats.querySelector(".grid-wrap")!.hasAttribute("data-flush")).toBe(true);
+});
+
 // THE ENGINE'S STATE, AS SERVED. 95% served `ok` is drawn ok and 50% served
 // `near` is drawn near: a bar that re-derived its tone from the fill would
 // get both of these the other way round.

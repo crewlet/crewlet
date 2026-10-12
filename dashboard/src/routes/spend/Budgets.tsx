@@ -337,6 +337,9 @@ export function Budgets() {
               rows={seats}
               rowKey={(s) => s.agent_id || s.role}
               defaultSort="-month"
+              // THE CARD IS THE FRAME: unflushed, the table drew a bordered
+              // box of its own inside the card's border.
+              flush
               // THE SEAT BESIDE ITS BUDGET: the rail answers "what is it, what
               // was it doing" without losing the row that raised it.
               rowHref={(s) => peekHref({ kind: "seat", id: s.handle || s.role })}
