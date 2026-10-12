@@ -1327,6 +1327,10 @@ type httpSurface struct {
 	public    *http.Server
 	projector *observe.Projector
 	runs      *observe.SandboxReconciler
+	// operators is the operator surface, nil on a node without the ingress
+	// role: it holds a subscription on the engine's queue for its peers'
+	// rebuilds, which has to end before the engine closes that queue.
+	operators *api.EngineOperators
 }
 
 // stop closes the HTTP surface, once the engine has drained. See [shutdown]
@@ -1353,6 +1357,13 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	// ingress role, which has neither.
 	if s.projector != nil {
 		s.projector.Stop(grace)
+	}
+	// AND THE OPERATOR SURFACE'S HOLD ON THE QUEUE — the subscription its
+	// peers' rebuilds arrive on and the nudges of its own still in flight —
+	// after the listeners, whose shutdown already ended every stream an
+	// assistant listened on, and before the teardown closes the queue.
+	if s.operators != nil {
+		s.operators.Close(grace)
 	}
 	// Nil-safe, and nil on a node without ingress: it has no panel to keep.
 	s.runs.Stop()
@@ -1399,6 +1410,12 @@ func shutdownListener(ctx context.Context, server *http.Server, listener string,
 // never resume, its record is in the fleet's coordination store, and the
 // alternative — a listener held open for a build — is the thing the grace
 // exists to stop.
+//
+// The other request a listener holds open on purpose is NOT an exception: an
+// assistant's listening stream on /operator/mcp is ended as the shutdown
+// begins (the operator surface's EndListens, registered on the listener), so
+// it answers and completes like any other request rather than spending the
+// grace — and api_shutdown_failed keeps meaning that something was stuck.
 const apiShutdownGrace = 5 * time.Second
 
 // seedPauses puts every paused seat on the live projection, named by the role
@@ -1627,8 +1644,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// viewer that says what it serves — both asking it per request, since the
 	// catalogue it answers is built again when this node's native runtime
 	// arrives (a company applied after boot) or the company's knowledge
-	// backend changes.
-	operators, err := api.NewEngineOperators(e)
+	// backend changes. It hears its peers' rebuilds on the engine's queue, so
+	// it is closed on every way out of here that does not hand it to the
+	// surface, and by the surface's stop otherwise.
+	operators, err := api.NewEngineOperators(ctx, e)
 	if err != nil {
 		return nil, err
 	}
@@ -1858,6 +1877,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		},
 	})
 	if err != nil {
+		operators.Close(context.WithoutCancel(ctx))
 		return nil, err
 	}
 	// NOTHING PUSHES "CONFIGURED" FROM HERE. [api.App.Configured] reads the
@@ -1886,6 +1906,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	projector := observe.NewProjector(e.Backends().Queue, app.Stream())
 	if err = projector.Start(ctx); err != nil {
 		app.Stop()
+		operators.Close(context.WithoutCancel(ctx))
 		return nil, err
 	}
 
@@ -1939,7 +1960,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	cancelSeed()
 	runs.Start(ctx)
 
-	surface := &httpSurface{app: app, projector: projector, runs: runs}
+	surface := &httpSurface{app: app, projector: projector, runs: runs, operators: operators}
 	// api.port FIRST, then the public listener: the probes are on api.port,
 	// so the moment anything is reachable an orchestrator can read it. A
 	// public bind that fails takes the admin one down with it, through the
@@ -1953,9 +1974,17 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		runs.Stop()
 		projector.Stop(context.WithoutCancel(ctx))
 		app.Stop()
+		operators.Close(context.WithoutCancel(ctx))
 		return nil, err
 	}
 	surface.server = server
+	// AN ASSISTANT'S LISTENING STREAM ENDS AS THIS LISTENER SHUTS DOWN. It is
+	// one request held open (operator.MCPPattern), so the graceful shutdown
+	// waited for every assistant listening until apiShutdownGrace ran out and
+	// then cut them, logging api_shutdown_failed — on every stop of a node an
+	// assistant was connected to, burying the warning that means a request
+	// was stuck. Only api.port: the operator routes are never public.
+	server.RegisterOnShutdown(operators.EndListens)
 	publicAddr := ""
 	if app.Public() != nil {
 		surface.public, publicAddr, err = listenAPI(ctx, boot.API.Public.Addr(), app.Public(), log)
@@ -1994,13 +2023,20 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// all. Without this an open dashboard renders the company it connected
 	// to until someone reloads.
 	//
+	// AND THE OPERATOR'S CATALOGUE, built again where the apply moved what
+	// it is built from, which tells every assistant listening on this
+	// node's /operator/mcp that its tools changed, and every other node to
+	// tell its own — at the apply, rather than at whichever request next
+	// happened to find the move.
+	//
 	// Registered after the app exists, which is the whole reason it is a
 	// setter — see Engine.SetOnApplied.
-	e.SetOnApplied(func(context.Context) {
+	e.SetOnApplied(func(ctx context.Context) {
 		app.Stream().Broadcast(stream.KindSeats, app.Stream().Roster())
 		app.Stream().Broadcast(stream.KindOrg, app.Stream().Org())
 		app.Stream().Broadcast(stream.KindTools, app.Stream().Tools())
 		app.Stream().Broadcast(stream.KindSchedules, app.Stream().Schedules())
+		operators.Refresh(ctx)
 	})
 
 	return surface, nil

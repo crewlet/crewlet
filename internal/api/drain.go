@@ -72,7 +72,12 @@ const DrainRetryAfter = 30 * time.Second
 // call it carries — reads included — is refused with the writes. Split by
 // call, it would have to read the body to tell a listing from a filed task,
 // which is the per-route carve-out the default exists to avoid; an assistant
-// asking a draining node is told to retry elsewhere, as the dashboard is.
+// asking a draining node is told to retry elsewhere, as the dashboard is. A
+// listening stream opened BEFORE the drain is no request this gate sees again:
+// it is held through the drain, still hearing every other node's rebuild of
+// the operator tools, and answered as the listener shuts down
+// (operator.Listeners.End) — ending it at the drain's first moment would cut
+// off a client that does not open another stream for the drain's whole length.
 // /mcp/{token} is not split either, because the whole prefix is exempted above.
 func servedWhileDraining(r *http.Request) bool {
 	path := r.URL.Path

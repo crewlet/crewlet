@@ -40,6 +40,9 @@ type unconfiguredNode struct {
 	boot       *config.Bootstrap
 	e          *engine.Engine
 	reconciler *engine.Reconciler
+	// surface is the HTTP surface serveNodeWith bound, stopped when the test
+	// ends.
+	surface *httpSurface
 	// base is the API's own address, and token the operator credential
 	// `ops` that every write and operator-only read here carries.
 	base   string
@@ -68,7 +71,7 @@ func bootUnconfigured(t *testing.T, token string) *unconfiguredNode {
 	}
 	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
 	return &unconfiguredNode{
-		t: t, boot: boot, e: e, reconciler: reconciler,
+		t: t, boot: boot, e: e, reconciler: reconciler, surface: surface,
 		base:   "http://127.0.0.1:" + strconv.Itoa(boot.API.Port),
 		token:  token,
 		client: httpxtest.Pool(t),

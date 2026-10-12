@@ -252,10 +252,11 @@ func TestAnOperatorWriteIsJudgedAgainstTheCurrentCompanysReservedContainers(t *t
 // the one `crewlet run` builds ([api.NewEngineOperators]).
 func operatorCatalogue(t *testing.T, e *engine.Engine) *operator.Server {
 	t.Helper()
-	operators, err := api.NewEngineOperators(e)
+	operators, err := api.NewEngineOperators(t.Context(), e)
 	if err != nil {
 		t.Fatalf("the operator surface: %v", err)
 	}
+	t.Cleanup(func() { operators.Close(context.Background()) })
 	server, ok := operators.Operator()
 	if !ok {
 		t.Fatal("the operator surface serves no catalogue beside an engine")

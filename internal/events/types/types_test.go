@@ -68,6 +68,8 @@ func catalogue() []events.Payload {
 		ReflectionDue{},
 		// operator.go
 		OperatorActed{}, BackupRequested{},
+		// operatortools.go
+		OperatorToolsChanged{},
 		// seat.go
 		SeatPaused{}, SeatResumed{}, AgentTurnStopped{}, AgentTurnSteered{},
 	}
@@ -109,6 +111,7 @@ var wireTypes = []string{
 	"notification_skipped",
 	"notifications_coalesced",
 	"operator_acted",
+	"operator_tools_changed",
 	"org_started",
 	"org_stopped",
 	"persist_decider_completed",
@@ -356,6 +359,7 @@ var wireTags = map[string][]string{
 	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "message_bytes", "phase", "role", "system_bytes", "tool_bytes", "tool_count", "turn_id", "user_bytes", "work_key"},
 	"turn.guard_breach":               {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},
 	"tool_skill_page_changed":         {"backend", "container", "page_id", "walk"},
+	"operator_tools_changed":          {},
 	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers", "trigger"},
 	"inbound_delivery":                {"body", "channel", "delivery_key", "label", "recipient", "replayed", "route", "summary"},
 }

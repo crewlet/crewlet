@@ -4,14 +4,19 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -67,8 +72,31 @@ func engineOperatorWriter(as func(estate.Actor) estate.WorkWriter, actor builtin
 // request is served by one whole catalogue and never by half of two. A swap
 // ends no client's connection: the MCP transport keeps no session (see
 // [operator.MCPPattern]), so a client connected before it is answered by the
-// new catalogue at its next request, and nothing of it is left on the server
-// this replaced.
+// new catalogue at its next request. What a client can leave on a catalogue
+// is the stream a 2026-07-28 client holds open to hear that its tools changed,
+// and a swap says so on every such stream on the node ([operator.Listeners])
+// AND ON EVERY OTHER NODE ([EngineOperators.tell]) — and, since nothing would
+// otherwise build again until a request came, every apply asks for the swap
+// ([EngineOperators.Refresh]).
+//
+// # Told by the fleet, not by one node
+//
+// Every node applies a revision on its own clock — the activation reaches
+// each by a nudge and a poll, and a company's first apply builds the native
+// runtime, which takes seconds — while an assistant's next listing, with no
+// session to pin it, reaches whichever ingress node a load balancer picks.
+// Told only by the node holding its stream, an assistant listed again at once
+// and was often answered by a peer that had not applied yet; that peer's own
+// rebuild later told only ITS listeners, so the assistant kept the old tools
+// until the next change: after a knowledge backend was removed it went on
+// offering `search_knowledge`, answered "unknown tool". So each swap is
+// announced to the fleet (`operator_tools_changed`), and every node that hears
+// a peer's tells every stream it holds, on whichever catalogue — the current
+// one included, since a client connected after this node's own swap may have
+// listed from a peer that had not swapped. The last thing an assistant hears
+// therefore follows the last node's rebuild, and the listing it makes then is
+// the new catalogue wherever it lands — for as long as its stream is open and
+// the broker carries the nudge, which is best effort like every nudge.
 //
 // THE SAME DEPS A SEAT'S TOOLS GET, with one field different: the actor. That
 // is what makes this one implementation of every tool rather than two — see
@@ -98,7 +126,7 @@ type EngineOperators struct {
 	// and what a failed build leaves — is held by a test that moves the facts
 	// without standing an engine up.
 	basis func() operatorBasis
-	build func(operatorBasis) (*operator.Server, error)
+	build func(operatorBasis, *operator.Listeners) (*operator.Server, error)
 
 	// current is the catalogue serving now and the key it was built under,
 	// one value swapped whole, so a request reads a server and the facts it
@@ -109,7 +137,51 @@ type EngineOperators struct {
 	// builds, and every other request finding the same takes the catalogue
 	// it built rather than building its own.
 	rebuild sync.Mutex
+
+	// listeners is every stream an MCP client listens on at this node,
+	// whichever catalogue answered it: one registry, handed to every
+	// catalogue this surface builds.
+	listeners *operator.Listeners
+
+	// fleet carries this node's swaps to every other node and theirs to
+	// this one. The zero value is a node alone: its own swaps are told to
+	// its own listeners and to nobody else.
+	fleet operatorFleet
 }
+
+// operatorFleet is how one node's operator surface hears of, and tells, every
+// other node's rebuilds ([types.OperatorToolsChanged]).
+type operatorFleet struct {
+	// stream is where the nudge is published and heard; nil for a node
+	// alone.
+	stream announcements
+	// node is this node's id — the origin its queue stamps on every event it
+	// publishes ([events.Event.Node]) — so a node does not hear its own.
+	node string
+	// detach ends the subscription; nil where none was made.
+	detach queue.Unsubscribe
+	// telling is every publish of this node's nudge still in flight.
+	telling sync.WaitGroup
+}
+
+// announcements is the event stream the fleet's rebuilds travel on: the
+// engine's queue.
+type announcements interface {
+	Publish(ctx context.Context, topic string, ev *events.Event) error
+	SubscribeStream(ctx context.Context, pattern string, h queue.StreamHandler) (queue.Unsubscribe, error)
+}
+
+// operatorToolsTopic is where a node's rebuild is announced to the fleet.
+var operatorToolsTopic = topics.Event(types.OperatorToolsChanged{}.EventType())
+
+// fleetTellBudget bounds the publish of one rebuild's nudge.
+//
+// FIVE SECONDS, the bound the engine gives a lifecycle announcement on the
+// same event stream: a publish a healthy broker acknowledges in milliseconds,
+// and one a broker that will not acknowledge must not hold a goroutine for
+// longer than a person would wait for the dashboard beside it. A nudge lost to
+// it costs listeners elsewhere this one rebuild, never a node's catalogue.
+const fleetTellBudget = 5 * time.Second
 
 // builtOperators is one catalogue and the facts it was built from.
 type builtOperators struct {
@@ -123,28 +195,93 @@ type builtOperators struct {
 // NewEngineOperators builds the operator surface over e, refusing a catalogue
 // [operator.New] refuses — a wiring mistake ([operator.ErrNoAudit]) that no
 // fact about the company can change, and so is the node's to refuse at boot
-// rather than a request's to discover.
-func NewEngineOperators(e *engine.Engine) (*EngineOperators, error) {
-	return newOperators(
+// rather than a request's to discover — and joins it to the fleet's
+// announcements on the engine's queue ([EngineOperators.join]).
+//
+// The caller owns what it starts: [EngineOperators.EndListens] as the API
+// listener shuts down, then [EngineOperators.Close] before the engine closes
+// its queue.
+func NewEngineOperators(ctx context.Context, e *engine.Engine) (*EngineOperators, error) {
+	o, err := newOperators(
 		func() operatorBasis { return operatorBasisOf(e) },
-		func(basis operatorBasis) (*operator.Server, error) {
-			return operator.New(basis.options(e))
+		func(basis operatorBasis, listeners *operator.Listeners) (*operator.Server, error) {
+			opts := basis.options(e)
+			opts.Listeners = listeners
+			return operator.New(opts)
 		})
-}
-
-// newOperators is [NewEngineOperators] over any reading and builder.
-func newOperators(basis func() operatorBasis,
-	build func(operatorBasis) (*operator.Server, error)) (*EngineOperators, error) {
-	read := basis()
-	server, err := build(read)
 	if err != nil {
 		return nil, err
 	}
-	o := &EngineOperators{basis: basis, build: build}
+	o.join(ctx, e.Backends().Queue, e.Node().ID())
+	return o, nil
+}
+
+// newOperators is [NewEngineOperators] over any reading and builder, alone:
+// a surface that tells nobody else of its swaps until [EngineOperators.join].
+func newOperators(basis func() operatorBasis,
+	build func(operatorBasis, *operator.Listeners) (*operator.Server, error),
+) (*EngineOperators, error) {
+	listeners := operator.NewListeners()
+	read := basis()
+	server, err := build(read, listeners)
+	if err != nil {
+		return nil, err
+	}
+	o := &EngineOperators{basis: basis, build: build, listeners: listeners}
 	o.current.Store(&builtOperators{key: read.key(), server: server})
 	logOperatorsBuilt(server)
 	return o, nil
 }
+
+// join attaches this surface to the fleet's announcements on stream, as the
+// node named node: its own swaps are published there, and every other node's
+// are heard ([EngineOperators.hear]).
+//
+// A SUBSCRIPTION THAT WILL NOT ATTACH IS NOT FATAL, and saying so is the
+// design, as for every nudge between nodes: this node still tells its own
+// listeners of its own swaps and still tells its peers of them, and what it
+// costs is that a listener here is not told of a peer's rebuild.
+func (o *EngineOperators) join(ctx context.Context, stream announcements, node string) {
+	o.fleet.stream, o.fleet.node = stream, node
+	detach, err := stream.SubscribeStream(ctx, operatorToolsTopic, o.hear)
+	if err != nil {
+		log.WarnContext(ctx, "operator_tools_nudge_unavailable", "error", err,
+			"detail", "an MCP client listening on this node is not told when another "+
+				"node rebuilds its operator tools, only when this one does")
+		return
+	}
+	o.fleet.detach = detach
+}
+
+// Close detaches this surface from the fleet's announcements and waits for
+// the nudges it is still publishing, bounded by ctx. The node runs it as its
+// API comes down, before the engine closes the queue both ride.
+func (o *EngineOperators) Close(ctx context.Context) {
+	if o.fleet.detach != nil {
+		// WithoutCancel: a stop is routinely driven by the cancellation it is
+		// cleaning up after, and a detach that inherited it would leave the
+		// subscription behind on the broker.
+		if err := o.fleet.detach(context.WithoutCancel(ctx)); err != nil {
+			log.WarnContext(ctx, "operator_tools_nudge_detach_failed", "error", err)
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		o.fleet.telling.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+}
+
+// EndListens ends every stream an MCP client listens on at this node
+// ([operator.Listeners.End]). The node runs it as its API listener begins to
+// shut down: a stream is one request held open, and the listener's graceful
+// shutdown would otherwise wait for every assistant listening until its grace
+// ran out and then cut them with a warning meant for a request that was stuck.
+func (o *EngineOperators) EndListens() { o.listeners.End() }
 
 // Operator answers the catalogue that serves this request: the current one
 // where the facts it was built from still hold, and otherwise one built now
@@ -164,9 +301,25 @@ func newOperators(basis func() operatorBasis,
 // request does not try again (and log again) until they move once more:
 // [operator.New] refuses only a wiring mistake, which [NewEngineOperators]
 // already refused at boot, so this is a path no node is expected to take.
+//
+// IT TAKES NO CONTEXT, because what it may set off is owed to everybody but
+// its caller: a swap it makes is told to every listener and to the fleet in
+// the background, whatever becomes of the request that found the facts moved.
 func (o *EngineOperators) Operator() (*operator.Server, bool) {
+	built, _ := o.serve(context.Background())
+	return built.server, built.server != nil
+}
+
+// serve is [EngineOperators.Operator], saying whether it swapped.
+//
+// A SWAP IS TOLD AT ONCE, to every stream on this node and to the fleet: a
+// swap whose new catalogue offers the same tools as the old — a rename only
+// retitles the server — is told all the same, for the price of one listing per
+// listener, and swaps are a node's applies. ctx lends what it carries to the
+// telling and never its cancellation ([operator.Listeners.Announce]).
+func (o *EngineOperators) serve(ctx context.Context) (*builtOperators, bool) {
 	if built := o.current.Load(); built.key == o.basis().key() {
-		return built.server, built.server != nil
+		return built, false
 	}
 	o.rebuild.Lock()
 	defer o.rebuild.Unlock()
@@ -174,19 +327,81 @@ func (o *EngineOperators) Operator() (*operator.Server, bool) {
 	key := basis.key()
 	previous := o.current.Load()
 	if previous.key == key {
-		return previous.server, previous.server != nil
+		return previous, false
 	}
-	server, err := o.build(basis)
+	server, err := o.build(basis, o.listeners)
 	if err != nil {
 		log.Error("operator_surface_not_built", "error", err,
 			"detail", "the operator's catalogue could not be built for what this "+
 				"node now runs; the previous one is still served")
-		o.current.Store(&builtOperators{key: key, server: previous.server})
-		return previous.server, previous.server != nil
+		built := &builtOperators{key: key, server: previous.server}
+		o.current.Store(built)
+		return built, false
 	}
-	o.current.Store(&builtOperators{key: key, server: server})
+	built := &builtOperators{key: key, server: server}
+	o.current.Store(built)
 	logOperatorsBuilt(server)
-	return server, server != nil
+	o.listeners.Announce(ctx)
+	o.tell(ctx)
+	return built, true
+}
+
+// Refresh builds the catalogue again where a fact it is built from has moved,
+// and so tells every MCP client listening that its tools changed. The node
+// runs it after every config apply ([engine.Engine.SetOnApplied]), which is
+// where each of those facts moves: the native runtime arriving at a node's
+// first company, the knowledge backend, the company's name. A node's mode,
+// which gates the writers, is fixed at boot.
+//
+// [EngineOperators.Operator] alone builds only when a REQUEST finds the facts
+// moved, and a connected assistant makes none while it waits: its stream is
+// held open on the catalogue it connected to, and nothing told it anything
+// until some other caller happened to ask — the dashboard's `viewer`, a press,
+// another assistant's call. Built here, the apply that changes what the node
+// offers is the moment its listeners hear of it.
+func (o *EngineOperators) Refresh(ctx context.Context) { o.serve(ctx) }
+
+// tell announces this node's swap to every other node, in the background, so
+// no request that found the facts moved waits on the broker — on ctx's values
+// and never its cancellation, for [operator.Listeners.Announce]'s reason. Best
+// effort, like every nudge: a publish that fails costs listeners elsewhere
+// this one swap.
+func (o *EngineOperators) tell(ctx context.Context) {
+	if o.fleet.stream == nil {
+		return
+	}
+	detached := context.WithoutCancel(ctx)
+	o.fleet.telling.Go(func() {
+		ctx, cancel := context.WithTimeout(detached, fleetTellBudget)
+		defer cancel()
+		// The ORIGIN is the queue's stamp (events.Event.Node), which is what
+		// a hearer compares with its own; Source says who, as every nudge's
+		// does.
+		ev := events.New(types.OperatorToolsChanged{}, events.TraceContext{})
+		ev.Source = o.fleet.node
+		if err := o.fleet.stream.Publish(ctx, operatorToolsTopic, ev); err != nil {
+			log.WarnContext(ctx, "operator_tools_nudge_not_published", "error", err,
+				"detail", "MCP clients listening on other nodes are not told of this "+
+					"node's new operator tools until the next rebuild anywhere")
+		}
+	})
+}
+
+// hear is a peer's swap arriving: every stream on this node is told, whichever
+// catalogue it is on — the current one too, since a client connected here
+// after this node's own swap may have listed from the peer before IT swapped.
+//
+// THIS NODE'S OWN FACTS ARE READ FIRST, so a node that has applied the same
+// revision and not yet run its apply hook swaps now rather than telling its
+// listeners to list a catalogue it is about to replace; such a swap tells them
+// itself.
+func (o *EngineOperators) hear(ctx context.Context, _ string, ev *events.Event) {
+	if ev == nil || ev.Node == o.fleet.node {
+		return
+	}
+	if _, swapped := o.serve(ctx); !swapped {
+		o.listeners.Announce(ctx)
+	}
 }
 
 // Acts names the tools the act transport serves NOW — [operator.Server.Acts]

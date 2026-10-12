@@ -493,7 +493,12 @@ tracker and knowledge base included, with their projects and spaces, and the
 and the pages' questions, takes and serves a project's files, and offers the
 tracker's and the knowledge base's tools to the dashboard's buttons and to
 your own assistant over [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
-from that revision on, with no restart:
+from that revision on, with no restart. An assistant already connected is
+told its tools changed if its MCP client listens for that (the 2026-07-28
+protocol) — on a fleet, after every ingress node has rebuilt its tools, so the
+listing it makes then is the new one whichever node answers it; one that does
+not listen sees the new tools the next time it lists them, or when it
+reconnects:
 
 ```bash
 curl -X PUT http://localhost:8000/config \
