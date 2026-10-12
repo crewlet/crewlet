@@ -1,11 +1,28 @@
 package code
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // SetPageLimits has r end every page at rows rows or bytes of encoded rows —
 // the cases that read a snapshot across several pages without seeding tens of
 // thousands of rows. The shipped limits are MaxSnapshotItems and MaxPageBytes.
 func SetPageLimits(r *Reader, rows, bytes int) { r.pageRows, r.pageBytes = rows, bytes }
+
+// SetRetentionPace has r measure and pace its steps by clock and sleep, take
+// steps for budget, and read the listing page repositories at a time, rather
+// than the monotonic clock, a timer, RetentionPassBudget and retentionPage —
+// the cases that stage a pass's budget, its pacing and a listing across pages
+// without waiting out a minute. A zero leaves that one as shipped.
+func SetRetentionPace(r *Retention, clock func() time.Time, sleep func(context.Context, time.Duration) error,
+	budget time.Duration, page int) {
+	r.clock, r.sleep, r.budget, r.page = clock, sleep, budget, page
+}
+
+// RetentionIdlePerStep is how many times a step's duration a pass waits after
+// it.
+const RetentionIdlePerStep = retentionIdlePerStep
 
 // SetCommitterIdle has c's repository goroutines exit after d with nothing
 // queued, rather than CommitterIdle — set before c's first proposal.

@@ -505,24 +505,6 @@ func keySet(ctx context.Context, tx *sql.Tx, query string, keys []string) (map[s
 	return out, rows.Err()
 }
 
-// keyList reads one column of keys a statement answers, in its order.
-func keyList(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var out []string
-	for rows.Next() {
-		var k string
-		if err := rows.Scan(&k); err != nil {
-			return nil, err
-		}
-		out = append(out, k)
-	}
-	return out, rows.Err()
-}
-
 // pushesWithin reads the push ids query answers with their row_bytes, in its
 // order, and keeps them until their bytes reach bytes — always the first,
 // whatever it weighs, so a step always advances, and so at most one row past

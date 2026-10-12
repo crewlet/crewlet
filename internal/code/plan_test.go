@@ -159,7 +159,9 @@ func registeredStatements() map[string]statement {
 		"repos":               {reposSQL, []any{`["active","archived"]`, "", 100}, []string{"code_repos_name_idx (name>?)", refsKey + " (repo_id=? AND ref=?)"}},
 		"protections of":      {protectionsOfSQL, []any{`["repo-1","repo-2"]`}, []string{protectionKey + " (repo_id=?)"}},
 		"head":                {headSQL, []any{"repo-1", "refs/heads/main"}, []string{refsKey + " (repo_id=? AND ref=?)"}},
-		"deleted":             {deletedSQL, []any{100}, []string{"code_repos_deleted_idx (deleted_at<=?)"}},
+		"due purging":         {duePurgingSQL, []any{-1, -1, "", 100}, []string{"code_repos_purging_idx (deleted_at>=?)"}},
+		"due deleted":         {dueDeletedSQL, []any{100, -1, -1, "", 100}, []string{"code_repos_deleted_idx (deleted_at>=? AND deleted_at<=?)"}},
+		"purge state":         {purgeStateSQL, []any{"repo-1", "repo-1"}, []string{repoKey + " (id=?)", deletionKey + " (repo_id=?)"}},
 		"count a gate reject": {countRejectSQL, []any{1, "repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"decide repo":         {decideRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"pushes named":        {pushesNamedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
@@ -193,9 +195,16 @@ func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 	if err := db.Tx(ctx, func(tx *sql.Tx) error {
 		for r := range 5 {
 			id := fmt.Sprintf("repo-%d", r)
+			// ONE OF EACH STATUS the retention pass lists, so both of its
+			// partial indexes hold a row.
+			status := map[int]RepoStatus{3: RepoStatusDeleted, 4: RepoStatusPurging}[r]
+			if status == "" {
+				status = RepoStatusActive
+			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO code_repos (id, name, status, managed_by,
-				owner_kind, owner, default_branch, created_at, deleted_at) VALUES (?, ?, 'active',
-				'config', 'unit', 'ENG', 'main', 0, ?)`, id, id, sql.NullInt64{Int64: int64(r), Valid: r == 4}); err != nil {
+				owner_kind, owner, default_branch, created_at, deleted_at) VALUES (?, ?, ?,
+				'config', 'unit', 'ENG', 'main', 0, ?)`, id, id, status,
+				sql.NullInt64{Int64: int64(r), Valid: r >= 3}); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO code_names (token, name, repo_id)

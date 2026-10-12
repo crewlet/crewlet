@@ -147,7 +147,21 @@
 //     until their bytes reach [PurgePartBytes] ([Store.PurgeStep]), and the
 //     final record — formed only once what is left fits a part — leaves only
 //     its deletion marker, which drops every later record about the
-//     repository on every node, for ever.
+//     repository on every node, for ever. It is the one horizon no record
+//     of the repository's own can reach, since nothing else is written to a
+//     deleted repository, so the code-retention duty's pass ([Retention])
+//     publishes its steps: every purge already begun first, whatever the
+//     retention, then the deleted oldest first. It publishes RECORDS and
+//     never touches a row, so the applier is still the estate's only
+//     writer, and it PACES them, because every data node applies every one
+//     on its single write lane: a pass waits twice a step's duration after
+//     each ([RetentionLaneShare], a third of the lane) and takes steps for
+//     [RetentionPassBudget] at most, so a node up to three times slower
+//     than the holder keeps up with no queue and one up to six times
+//     slower ends a pass at most statelog.StallGrace behind. A pass cut
+//     short leaves a repository purging that the next resumes from its
+//     rows, and a purged name is handed on only once this node's rows hold
+//     the purge.
 //
 // # Measured
 //

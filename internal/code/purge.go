@@ -11,20 +11,47 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
+// PurgeResult is what one [Store.PurgeStep] did.
+type PurgeResult struct {
+	// Done reports the purge complete ON THE LOG: this step appended its
+	// final record — the purge, which writes the deletion marker and
+	// releases the name — or found the repository already purged in this
+	// node's rows.
+	Done bool
+
+	// Outcome is the outcome of the record this step appended: applied, or
+	// pending — durable at Position and not yet applied on THIS node, whose
+	// rows then still hold the repository. Never unknown, which is the
+	// step's error. Empty when the step appended nothing.
+	Outcome statelog.Outcome
+
+	// Position is where that record landed; zero when the step appended
+	// nothing.
+	Position statelog.Position
+}
+
+// Held reports that this node's rows already hold what the step did: its
+// record applied here, or it appended none. A purge that is Done but not
+// Held has released its name on the log and not yet in this node's rows, so
+// anything this node decides about that name still finds it purging.
+func (r PurgeResult) Held() bool { return r.Outcome != statelog.OutcomePending }
+
 // PurgeStep takes ONE step of purging a deleted repository past its retention,
-// and reports whether the purge is complete. Each step is one record bounded
-// by [PurgePartRows] and, for the push rows, by [PurgePartBytes]: a part while
-// more remains than one record may delete, then the purge itself — the gate
-// that writes the deletion marker and releases the name — once what remains
-// fits both. A caller steps until done.
+// and reports what it did. Each step is one record bounded by [PurgePartRows]
+// and, for the push rows, by [PurgePartBytes]: a part while more remains than
+// one record may delete, then the purge itself — the gate that writes the
+// deletion marker and releases the name — once what remains fits both. A
+// caller steps until [PurgeResult.Done].
 //
 // Inside retention it is [ErrNotYet]; on a repository that is not deleted,
 // [ErrNotDeleted]; on one already purged, done with nothing written; on an id
-// nobody has, [ErrRepoNotFound]. retention is the caller's epoch's value, never
-// defaulted here.
-func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Duration) (bool, error) {
+// nobody has, [ErrRepoNotFound]. A PURGING repository is stepped whatever its
+// age: a purge once begun is always finished, because its rows are already
+// partly gone and nothing restores it. retention is the caller's epoch's
+// value, never defaulted here.
+func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Duration) (PurgeResult, error) {
 	if retention <= 0 {
-		return false, fmt.Errorf("%w: retention: %v is not a retention", ErrInvalid, retention)
+		return PurgeResult{}, fmt.Errorf("%w: retention: %v is not a retention", ErrInvalid, retention)
 	}
 	// THE NAME IS READ BEFORE THE DECIDE, because the request's scope is
 	// stated before the decide runs and the purge releases the name's
@@ -32,7 +59,7 @@ func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Dur
 	// changes, so the two reads agree.
 	name, found, err := s.repoName(ctx, repoID)
 	if err != nil {
-		return false, err
+		return PurgeResult{}, err
 	}
 	subject := RepoSubject(repoID)
 	scope := []string{RepoPath(repoID)}
@@ -93,12 +120,14 @@ func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Dur
 	})
 	switch {
 	case err != nil:
-		return false, fmt.Errorf("code: purge repository %s: %w", repoID, err)
-	case wrote && result.Outcome == statelog.OutcomeUnknown:
-		return false, fmt.Errorf("code: whether the purge step on %s landed is unknown "+
+		return PurgeResult{}, fmt.Errorf("code: purge repository %s: %w", repoID, err)
+	case !wrote:
+		return PurgeResult{Done: done}, nil
+	case result.Outcome == statelog.OutcomeUnknown:
+		return PurgeResult{}, fmt.Errorf("code: whether the purge step on %s landed is unknown "+
 			"(operation %s); the next pass decides it again", repoID, opID)
 	}
-	return done, nil
+	return PurgeResult{Done: done, Outcome: result.Outcome, Position: result.Position}, nil
 }
 
 // repoName is a repository's name, read outside any decision; false when this

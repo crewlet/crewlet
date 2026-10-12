@@ -229,6 +229,48 @@ const (
 	// package's types.
 	RetentionInterval = 15 * time.Minute
 
+	// RetentionLaneShare is the most of the replicated estate's one write
+	// lane a code-retention pass takes: after each purge step the pass waits
+	// (1 − share) / share times as long as that step took — twice, at a
+	// third — before the next. A step is decided, appended and APPLIED on the
+	// deciding node before it answers, so its duration is its own apply plus
+	// whatever the lane applied ahead of it, and a busy lane slows the purge
+	// by itself.
+	//
+	// A THIRD, because every data node applies every record and the holder
+	// sees only its own lane: closed-loop, a pass held the holder's lane
+	// about 82% of the time (68 ms of every 83 ms step, over parts of
+	// PurgePartRows narrow rows), and any node applying the parts even 1.2
+	// times slower than the holder queued a growing backlog in front of its
+	// own pushes. At a third a node up to three times slower than the holder
+	// keeps up with no queue at all, and the other two thirds are left for
+	// the pushes, settings and reads the lane is for — the share
+	// PurgePartBytes already sizes a part to: a third of
+	// statelog.ApplyTxTimeBudget. Measured on the whole path, a paced pass's
+	// records held 33–37% of its wall clock over five steps (five of the
+	// thirteen step-lengths five steps and their four waits take, a third
+	// over a longer pass), against all of it unpaced
+	// (TestAPassHoldsAtMostAThirdOfTheWriteLane).
+	RetentionLaneShare = 1.0 / 3
+
+	// RetentionPassBudget is how long one code-retention pass takes steps for
+	// before it stops, leaving what is due to the next pass, a
+	// RetentionInterval later. Running out is the pass's designed stop.
+	//
+	// statelog.StallGrace, A MINUTE, because a node that applies the purge
+	// more than 1/RetentionLaneShare times slower than the holder still
+	// queues, (k·share − 1) of every second the pass runs: bounded to a
+	// minute, a node up to six times slower ends a pass at most StallGrace
+	// behind — where a push it commits starts to be answered pending rather
+	// than ok — and catches up within the quarter hour before the next; a
+	// node slower still is one the lag alarm already names. What it costs is
+	// the drain: a minute at a third is twenty seconds of steps a pass, about
+	// 240 of the measured 83 ms parts — some 23 000 a day — so ten thousand
+	// repositories (CodeMaxRepos) removed at once, four parts each, are purged
+	// within two days of falling due, against a retention of a week by
+	// default. A purge is days late by design; a node's pushes are not.
+	RetentionPassBudget = statelog.StallGrace
+
 	// CommitterInbox is how many proposals one repository's committer holds
 	// queued on one node: SIXTEEN FULL RECORDS of the smallest pushes
 	// (MaxPushesPerRecord each), so a burst — a CI fan-out of tag pushes —

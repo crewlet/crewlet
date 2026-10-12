@@ -588,13 +588,13 @@ func TestAPurgeIsBoundedByWhatItsPushesWeigh(t *testing.T) {
 	var steps []int
 	for range rows {
 		before := pushes()
-		done, err := late.PurgeStep(t.Context(), id, retention)
+		res, err := late.PurgeStep(t.Context(), id, retention)
 		if err != nil {
 			t.Fatalf("PurgeStep: %v", err)
 		}
 		n.drain()
 		steps = append(steps, before-pushes())
-		if done {
+		if res.Done {
 			break
 		}
 	}
@@ -655,7 +655,7 @@ func TestAPurgeIsBoundedPerRecord(t *testing.T) {
 	var steps []int
 	for range 5 {
 		before := total()
-		done, err := late.PurgeStep(t.Context(), id, retention)
+		res, err := late.PurgeStep(t.Context(), id, retention)
 		if err != nil {
 			t.Fatalf("PurgeStep: %v", err)
 		}
@@ -665,7 +665,7 @@ func TestAPurgeIsBoundedPerRecord(t *testing.T) {
 			t.Fatalf("one purge record removed %d rows, past PurgePartRows (%d)", removed, code.PurgePartRows)
 		}
 		steps = append(steps, removed)
-		if done {
+		if res.Done {
 			break
 		}
 	}
@@ -680,9 +680,10 @@ func TestAPurgeIsBoundedPerRecord(t *testing.T) {
 		t.Fatalf("the purge left %d markers, want one", marked)
 	}
 	before := n.end()
-	if done, err := late.PurgeStep(t.Context(), id, retention); err != nil || !done || n.end() != before {
-		t.Fatalf("PurgeStep after the purge = %v, %v (log %d → %d), want done with nothing written",
-			done, err, before, n.end())
+	if res, err := late.PurgeStep(t.Context(), id, retention); err != nil || !res.Done || !res.Held() ||
+		!res.Position.IsZero() || n.end() != before {
+		t.Fatalf("PurgeStep after the purge = %+v, %v (log %d → %d), want done with nothing written",
+			res, err, before, n.end())
 	}
 	if _, err := late.PurgeStep(t.Context(), "never-was", retention); !errors.Is(err, code.ErrRepoNotFound) {
 		t.Fatalf("PurgeStep of a repository nobody made = %v, want ErrRepoNotFound", err)
