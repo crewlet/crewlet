@@ -3,14 +3,12 @@ package kv
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
@@ -21,11 +19,10 @@ import (
 // collected coding run, and a seat's by each of its own rounds, its workers'
 // and its coding runs. So the number of writers racing one record is the
 // number of rounds in flight across the company, which grows with the company
-// and which nothing in the engine bounds. The package's other compare-and-swaps
-// stop after a fixed number of attempts — [casAttempts] for a lease,
-// [claimAttempts] for a delivery claim, [fleetCASRetries] for the rest of the
-// fleet store — and this one cannot, so two rules follow, one for each kind of
-// contender.
+// and which nothing in the engine bounds. Two rules follow, one for each kind
+// of contender: a node's own writers are combined, and a race lost to another
+// node is retried by the fleet store's rule for every race (race.go), held to
+// each write.
 //
 // # A node's own writers never race each other
 //
@@ -56,14 +53,12 @@ import (
 // or is waiting to be handed it — which is what lets a holder leave early
 // (below) without stranding a write nobody will send.
 //
-// # A lost race is not an outage, so it is bounded by time
+// # A race lost to another node is retried for a time, per write
 //
-// Between nodes a write still races, and a lost race is retried after a
-// jittered wait ([counterRetryDelay]) — for as long as the write's PATIENCE
-// allows ([FleetStore.patience]), never for a number of attempts. A lost
-// compare-and-swap proves the store answered and that another node's write
-// landed, so a count of them measures how many peers wrote rather than whether
-// the store works. The sixteen attempts this replaced reported a healthy, busy
+// Between nodes a write still races, and a lost race is retried by the fleet
+// store's rule (race.go): after a jittered wait ([raceRetryDelay]), for as long
+// as the write's PATIENCE allows ([FleetStore.patience]), never for a number of
+// attempts. The sixteen attempts this replaced reported a healthy, busy
 // counter as an outage once enough writes overlapped one: 64 charges from eight
 // nodes, eight each, failed in 18 runs of 30 on idle CPUs and in every run on a
 // busy one, where nearly half of them failed. Combined and bounded by the
@@ -72,17 +67,10 @@ import (
 // round ([coord.Budgets.Charge] fails closed), and when the write that failed
 // is the company's, the round the vendor has already billed is recorded
 // nowhere: the company's counter is short of it for the rest of every window,
-// which is the fail-OPEN direction for every seat judged against it.
-//
-// The patience is the JetStream client's own request timeout. Every request
-// this package makes on a context with no deadline already waits that long for
-// a store that does not answer at all — a round's charge among them, whose
-// context outlives its caller — so a counter that answers every attempt and
-// still has not let this node's write land inside it is, to that caller,
-// exactly as unavailable, and is answered the same way: [coord.ErrUnavailable],
-// never a refusal. Only a store written faster than it can serve one key gets
-// that answer from contention, and no retry policy turns that store into one
-// that keeps up.
+// which is the fail-OPEN direction for every seat judged against it. A round's
+// charge runs on a context that outlives its caller, so the patience is also
+// all that bounds how long it waits on a counter that keeps answering; running
+// out of it is [coord.ErrUnavailable], never a refusal.
 //
 // IT IS EACH WRITE'S, AND IT DECIDES ONLY WHETHER TO START AN ATTEMPT. A
 // write's patience runs from its first attempt, and a write that has run out
@@ -327,14 +315,10 @@ func (f *FleetStore) writeCounter(ctx context.Context, scope, key string,
 	send := context.WithoutCancel(ctx)
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
-			// Cut short when own's caller hangs up, so the turn passes
-			// at once rather than after the wait.
-			wait := time.NewTimer(counterRetryDelay(attempt))
-			select {
-			case <-ctx.Done():
-			case <-wait.C:
-			}
-			wait.Stop()
+			// Cut short when own's caller hangs up — the boundary below
+			// answers it — so the turn passes at once rather than after
+			// the wait.
+			awaitRace(ctx, attempt)
 		}
 		// An attempt boundary: every attempt before it lost, so a write
 		// whose caller has hung up, or whose patience has run out, has had
@@ -441,39 +425,4 @@ func (f *FleetStore) sendCounter(ctx context.Context, key string,
 	default:
 		return nil, false, func(verb string) error { return unavailable(verb, err) }
 	}
-}
-
-// The counter's retry backoff between two attempts that lost to another node:
-// a doubling wait from counterRetryBase to counterRetryCeiling, jittered across
-// most of itself.
-//
-// A MILLISECOND TO START, because that is a compare-and-swap's own round trip
-// on a clustered broker — a shorter wait is still inside the write that beat
-// this one — and doubling to a CEILING OF 32 ms, which every wait after the
-// sixth stays at until the patience ends: small beside the model call the round
-// is about to make, and what it buys is that the nodes that lost one race do
-// not arrive together at the next. The JITTER is the widest [backoff.Jitter]
-// gives, because a counter's writers lost the same race at the same instant
-// and only the spread separates them.
-const (
-	counterRetryBase    = time.Millisecond
-	counterRetryCeiling = 32 * time.Millisecond
-	counterRetryJitter  = 0.9
-)
-
-// counterRetryDelay is the wait before the counter's attempt'th retry.
-func counterRetryDelay(attempt int) time.Duration {
-	return backoff.Jitter(backoff.Doubling(attempt, counterRetryBase, counterRetryCeiling), counterRetryJitter)
-}
-
-// outwaited reports a counter write that raced for the whole of its patience
-// without landing.
-//
-// UNKNOWN, not a refusal, for [contended]'s reason; and named as contention
-// rather than as a store that did not answer, because the store did answer,
-// every time. And a DEFINITE "did not land": a write is answered this only at
-// an attempt boundary, where every attempt it was in had completed and lost.
-func outwaited(op, scope string, patience time.Duration) error {
-	return fmt.Errorf("%w: %s(%s) did not land within %v: another node's write landed "+
-		"first at every attempt", coord.ErrUnavailable, op, scope, patience)
 }

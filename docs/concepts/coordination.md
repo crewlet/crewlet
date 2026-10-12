@@ -31,6 +31,8 @@ So every call returns `(value, error)`, never a bare bool — and **each contrac
 | Lease renew | **Holds, briefly** | Ambiguity is not loss. The watchdog is what bounds it — see [Seat Ownership](seat-ownership.md). |
 | Budget charge | **Fails closed** — stop the round | Money leaves the building for every token, and a counter that cannot be reached must not un-cap a company. An error is *not* a refusal, though: the caller fails the turn rather than telling an agent it is out of budget. |
 
+**A busy record is not an unreachable one.** A compare-and-swap that loses proves the store answered and that another writer's change landed first, so every read-modify-write of the shared state retries a lost race — after a jittered 1 ms, doubling to 32 ms — for as long as the coordination client's request timeout (5 s), never a fixed number of times. That time decides only whether another attempt starts; one already sent is answered by what the store did with it. *Unknown* therefore means a store that did not answer, or a record written faster than it can serve one key — never one that is merely busy. The notification valve needs no time at all: every race one of its callers loses is another caller's increment, so it reads a full window within its own limit of them and always answers.
+
 **A listing obeys the same rule**, and it is the place it is easiest to lose.
 Reading a whole bucket — the fleet's node statuses, the open channels, every
 node's log position — either answers every key that was live throughout the
@@ -282,10 +284,11 @@ A rate limit belongs to the **key**, at the vendor — not to the process that d
 | **Publish** | Synchronously, on the bench that caused it | That is the only moment the fact exists. Deferring it to a tick leaves a window in which every peer rediscovers it. The write is detached from the caller's context and bounded at two seconds — the call it belongs to has *already* failed and is about to be retried on another key. |
 | **Pull** | Every 15 seconds, per node | A cooldown runs for a minute at the very least (60 s is the configurable floor), so reading one a few seconds late costs nothing — while a coordination read in front of every model call would put the store's latency under every turn and its availability under the whole company. |
 
-Three properties follow from that, and each is load-bearing:
+Four properties follow from that, and each is load-bearing:
 
 - **A record is an instant, not a duration.** A peer that received "cool for an hour" would restart the hour whenever it happened to read the record, so a key benched once would stay benched as long as anyone kept pulling.
 - **A pull extends, never shortens.** A peer's record is evidence a key is refused; the *absence* of one is not evidence a key works. So a node whose own 429 no peer heard about is never talked out of it — and an unreadable store is a no-op rather than a mass un-benching.
+- **The longest cooldown wins, however many nodes publish at once.** Every call refused on one credential publishes, so a burst of refusals across a fleet races one record. A write that loses reads the record again, stops if it already runs at least as long, and otherwise tries again within the publish's two seconds — never a fixed number of times, which a burst of more than sixteen could run out of while every attempt was answered, leaving the longest cooldown unrecorded.
 - **The record is scoped by the provider entry, and carries a hint rather than the key.** One credential listed under a `fast` entry and a `smart` entry is two rate-limit buckets at the vendor; an unscoped record would turn one model's burst into a company-wide outage. And the ledger is a shared store, so what goes in it is 12 hex characters of SHA-256 — enough to tell a handful of keys apart in a log, not reversible.
 
 A node that has just started pulls **immediately** rather than waiting out its first interval: a fresh process has an empty bench, and the fleet may have a key cooling for the next hour. When one arrives that way the node says so — `credential_cooled_by_peer`, naming the provider, the key's hint and the time left — which is the only answer to the question this creates: *why is a key benched on a node that never saw a failure?*

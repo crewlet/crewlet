@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -230,33 +231,40 @@ var valveCases = []fleetCase{{
 }, {
 	// Concurrency is the whole point: the counter has to be atomic, or the
 	// fleet's combined rate is whatever the last writer happened to see.
-	name: "concurrent callers cannot exceed the limit",
+	// ACROSS FOUR NODES, and EXACTLY the limit with no error: every race a
+	// caller loses is another caller's increment, so contention ends in an
+	// answer — room, or a full window — and never in "could not say", which
+	// the notification path takes as open. A limit above sixteen, so a
+	// backend that bounds its retries by a count it guessed is found out.
+	name: "concurrent callers on every node pass exactly the limit",
 	fn: func(h *fleetHarness) {
-		const limit = 5
+		const limit, callers = 24, 64
 		at := h.now()
-		var wg sync.WaitGroup
-		passed := make(chan bool, 32)
-		for range 32 {
+		nodes := h.nodes(4)
+		var (
+			wg      sync.WaitGroup
+			allowed atomic.Int32
+		)
+		errs := make(chan error, callers)
+		for i := range callers {
 			wg.Go(func() {
-				ok, err := h.f.Allow(h.ctx, "seat:hot", limit, time.Second, at)
-				// An error under contention is the honest third
-				// answer, and it is NOT a pass.
-				passed <- err == nil && ok
+				ok, err := nodes[i%len(nodes)].Allow(h.ctx, "seat:hot", limit, time.Second, at)
+				switch {
+				case err != nil:
+					errs <- err
+				case ok:
+					allowed.Add(1)
+				}
 			})
 		}
 		wg.Wait()
-		close(passed)
-		allowed := 0
-		for ok := range passed {
-			if ok {
-				allowed++
-			}
+		close(errs)
+		for err := range errs {
+			h.t.Fatalf("a caller under contention was told the valve could not say: %v", err)
 		}
-		if allowed > limit {
-			h.t.Fatalf("%d of 32 concurrent callers passed a limit of %d", allowed, limit)
-		}
-		if allowed == 0 {
-			h.t.Fatal("no caller passed at all, so the valve is shut rather than limiting")
+		if got := allowed.Load(); got != limit {
+			h.t.Fatalf("%d of %d concurrent callers passed a limit of %d, want exactly %d",
+				got, callers, limit, limit)
 		}
 	},
 }}
