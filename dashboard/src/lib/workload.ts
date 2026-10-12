@@ -119,7 +119,7 @@ export function loadSentence(load: Load): string {
     case "idle":
       return `${load.handle} holds no open work.`;
     case "stuck":
-      return `${what}, and every one of them is waiting on something else — ${load.handle} can move none of it.`;
+      return `${what}, all blocked.`;
     default:
       return `${what}${load.blocked > 0 ? `, ${load.blocked} blocked` : ""}${
         load.overdue > 0 ? `, ${load.overdue} overdue` : ""

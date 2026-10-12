@@ -94,7 +94,7 @@ test("the phase is said as its word", () => {
 test("a working seat whose first round has not come back says so", () => {
   render(<SeatCard seat={seat()} agent={running("execute", -1)} nameOf={(k) => k} />);
   expect(screen.getByText("round 1")).toBeTruthy();
-  expect(screen.getByTitle(/first model round is in flight and has not come back/)).toBeTruthy();
+  expect(screen.getByTitle("First round in progress")).toBeTruthy();
   expect(screen.getByText("Ada Lovelace").closest("a")?.textContent).not.toContain("—");
 });
 

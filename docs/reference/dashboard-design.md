@@ -141,7 +141,7 @@ any other; its `last_error` is shown where the seat is read about, not as a
 stop.
 
 **Where a seat runs is which node holds it** — the seat's "Held by" fact:
-"this node · node-a", "another node", or "no node — not placed", read off this
+"this node · node-a", "another node", or "no node", read off this
 node's own health push (the seats it holds) and the engine's `unplaced`. It was
 the agent instance id, which exists only mid-turn, so an idle seat this very
 node held read "not running on this node". Which peer holds one held elsewhere

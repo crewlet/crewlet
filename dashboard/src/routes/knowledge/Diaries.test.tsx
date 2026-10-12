@@ -214,7 +214,7 @@ test("one agent's diary is its holder's answer, and names that node", async () =
   await settle();
   expect(asked.find((a) => a.kind === "agent_memory")?.params).toEqual({ id: "agent-3" });
   expect(screen.getByText("the release window moved to Thursday")).toBeTruthy();
-  expect(screen.getByText(/Read from node-b, the node holding this seat/)).toBeTruthy();
+  expect(screen.getByText(/From node-b\./)).toBeTruthy();
   // THE HEADER IS THE TOTAL, with the page it drew said beside it.
   expect(screen.getByText(/Latest 1 of 60/)).toBeTruthy();
   expect(screen.getByRole("link", { name: /Agent 03.s whole memory/ }).getAttribute("href")).toBe(

@@ -1657,7 +1657,7 @@ test("the memory tab's lists say they are the latest page of the whole", async (
     },
   });
   await waitFor(() => expect(screen.getByText(/Latest 50 of 142/)).toBeTruthy());
-  expect(screen.getByText(/Read from node-2, the node holding this seat/)).toBeTruthy();
+  expect(screen.getByText(/From node-2\./)).toBeTruthy();
 });
 
 // ONE RULE FOR ALL FOUR HEADERS: the skills card said its cut in a footer,
@@ -1869,9 +1869,13 @@ test("a seat no node holds says why its memory is empty", async () => {
       },
     },
   });
-  // The memory's own line, and the conversations' empty state.
-  await waitFor(() => expect(screen.getByText("No node is running this seat.")).toBeTruthy());
-  expect(screen.getAllByText(/No node holds this seat, so no copy/).length).toBe(1);
+  await waitFor(() => {
+    // The ledger's line, whole, and the memory card's longer sentence.
+    expect(screen.getByText("No node is running this seat.")).toBeTruthy();
+    expect(
+      screen.getByText(/No node is running this seat, so its memory can’t be shown\./),
+    ).toBeTruthy();
+  });
 });
 
 const THREAD = "slack:C0TEAM/1709280000.000100";
