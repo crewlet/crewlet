@@ -52,6 +52,10 @@ type node struct {
 	// for a record instead of the broker's own — how a case ages rows past
 	// a horizon without waiting out a day.
 	storedAt func(seq uint64, broker time.Time) time.Time
+
+	// applied, when set, is told the rows each record's apply reported —
+	// what the framework holds a record's transaction to.
+	applied func(seq uint64, rows int)
 }
 
 // openLog provisions the code log on an embedded broker and opens it.
@@ -225,10 +229,14 @@ func (n *node) drain() {
 			if _, gated, err := n.applier.Gated(ctx, tx, record); err != nil || gated {
 				return err
 			}
-			if _, err := n.applier.Apply(ctx, tx, record, statelog.ApplyOptions{
+			rows, err := n.applier.Apply(ctx, tx, record, statelog.ApplyOptions{
 				Now: harnessAt, StoredAt: storedAt, MaxVariables: n.db.Caps().MaxVariables,
-			}); err != nil {
+			})
+			if err != nil {
 				return err
+			}
+			if n.applied != nil {
+				n.applied(seq, rows)
 			}
 			if env.OpID != "" {
 				if _, err := tx.ExecContext(ctx, `
@@ -247,7 +255,7 @@ func (n *node) drain() {
 					return err
 				}
 			}
-			_, err := tx.ExecContext(ctx, `
+			_, err = tx.ExecContext(ctx, `
 				INSERT INTO statelog_cursor
 					(stream, generation, seq, stream_created_at, updated_at, applied_version)
 				VALUES (?,?,?,?,0,0)
@@ -291,8 +299,8 @@ func (n *node) ensure(name string, settings code.RepoSettings, at time.Time) cod
 }
 
 // push publishes one (repo, push) record carrying entries, through this node's
-// publisher, and answers the result. C3 has no committer, so this is the
-// record a committer's decide would form, built here.
+// publisher, and answers the result — a record built here rather than decided
+// by a committer, for the cases about the applier and the reader.
 func (n *node) push(repo string, entries ...code.PushEntry) statelog.Result {
 	n.t.Helper()
 	res, err := n.pushErr(repo, entries...)

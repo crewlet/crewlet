@@ -38,6 +38,24 @@ var (
 	// wrapped with the field and the reason.
 	ErrInvalid = errors.New("code: refused")
 
+	// ErrInvalidProposal is a push proposal this domain cannot decide,
+	// wrapped with the field and the reason ([Proposal.Validate]), or one
+	// whose push id names a push to another repository. Never a refusal of
+	// the push — the receiver formed it, so it is the receiver's bug.
+	ErrInvalidProposal = errors.New("code: not a push this domain can decide")
+
+	// ErrNotServing is a committer that decided nothing for this proposal
+	// and appended nothing: it is stopping, or the code log refused this
+	// NODE before anything was appended (an eviction, a record it cannot
+	// decode, a floor it is below). Another data node can commit the same
+	// push under the same push id, which collapses a repeat.
+	ErrNotServing = errors.New("code: this node's committer is not serving")
+
+	// ErrRecordCap is a decision past a record's byte or row budget — which
+	// the committer's batching keeps from ever forming; the check makes the
+	// invariant local to the record.
+	ErrRecordCap = errors.New("code: the decision exceeds a record's budget")
+
 	// ErrBadCursor is a cursor this reader did not issue.
 	ErrBadCursor = errors.New("code: not a cursor this read issued")
 

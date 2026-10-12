@@ -174,3 +174,137 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 		t.Errorf("DefaultLimits is %+v, and config's defaults differ", got)
 	}
 }
+
+// THE COMMITTER'S BOUNDS FIT A RECORD'S BUDGETS: what a batch is formed by is
+// what the record it becomes is held to, so the committer never forms a record
+// its own decide refuses, and a queue's bounds say what they claim.
+func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
+	t.Parallel()
+	const repo = "0190f3c4-0000-7000-8000-00000000b0b0"
+	nodeID := strings.Repeat("n", 64) // the longest node id config admits
+	principal := code.Principal{Kind: code.PrincipalOperator, OperatorID: strings.Repeat("o", 64),
+		Seat: strings.Repeat("s", 64)}
+	at := time.Date(2031, 4, 2, 3, 14, 0, 999_999_999, time.FixedZone("x", -(11*3600+59*60)))
+	minimal := code.Proposal{
+		PushID: "0190f3c4-0000-7000-8000-000000000001", RepoID: repo, Principal: principal,
+		Node: nodeID, ReceivedAt: at,
+		Commands: []code.Command{{Ref: "refs/heads/a", Old: code.ZeroOID, New: oidOf("a")}},
+	}
+	maximal := minimal
+	maximal.PushID = "0190f3c4-0000-7000-8000-000000000002"
+	maximal.Commands = nil
+	for c := range code.MaxCommandsPerPush {
+		ref := fmt.Sprintf("refs/heads/%08d", c)
+		maximal.Commands = append(maximal.Commands, code.Command{
+			Ref: ref + strings.Repeat("x", code.MaxRefNameBytes-len(ref)),
+			Old: oidOf(fmt.Sprint("old", c)), New: oidOf(fmt.Sprint("new", c)), Forced: true,
+		})
+	}
+	for i := range code.MaxIntroduced {
+		maximal.Introduced = append(maximal.Introduced, oidOf(fmt.Sprint("introduced", i)))
+	}
+	maximal.IntroducedCount = 1 << 30
+	maximal.Pack = suitePack("maximal")
+	maximal.Pack.PackID = maximal.PushID
+	if err := maximal.Validate(); err != nil {
+		t.Fatalf("the maximal proposal is not one: %v", err)
+	}
+	big, err := code.EntryBound(maximal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	small, err := code.EntryBound(minimal)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// TWO MAXIMAL PUSHES SHARE A RECORD'S BYTES, AND THREE DO NOT.
+	if got := code.RecordOverheadBytes + 2*big; got > code.MaxRecordBytes {
+		t.Errorf("two maximal entries (EntryBound %d each) and RecordOverheadBytes (%d) are %d bytes, "+
+			"past MaxRecordBytes (%d)", big, code.RecordOverheadBytes, got, code.MaxRecordBytes)
+	}
+	if got := code.RecordOverheadBytes + 3*big; got <= code.MaxRecordBytes {
+		t.Errorf("three maximal entries fit MaxRecordBytes (%d of %d): the bound states two",
+			got, code.MaxRecordBytes)
+	}
+	// THREE MAXIMAL PUSHES SHARE A RECORD'S ROWS, AND FOUR DO NOT.
+	if rows := code.RowBound(maximal); rows != code.MaxCommandsPerPush+2 {
+		t.Errorf("a maximal push bounds %d rows, want MaxCommandsPerPush (%d) + its row + its pack",
+			rows, code.MaxCommandsPerPush)
+	}
+	if got := code.RecordRows(3 * code.RowBound(maximal)); got > code.MaxRecordRows {
+		t.Errorf("three maximal pushes bound %d rows with the record's own (RecordRows), past "+
+			"MaxRecordRows (%d)", got, code.MaxRecordRows)
+	}
+	if got := code.RecordRows(4 * code.RowBound(maximal)); got <= code.MaxRecordRows {
+		t.Errorf("four maximal pushes bound %d rows, within MaxRecordRows (%d)", got, code.MaxRecordRows)
+	}
+	// A FULL BATCH OF THE SMALLEST PUSHES FITS BOTH.
+	if got := code.RecordOverheadBytes + code.MaxPushesPerRecord*small; got > code.MaxRecordBytes {
+		t.Errorf("MaxPushesPerRecord (%d) minimal entries are %d bytes, past MaxRecordBytes (%d)",
+			code.MaxPushesPerRecord, got, code.MaxRecordBytes)
+	}
+	if got := code.RecordRows(code.MaxPushesPerRecord * code.RowBound(minimal)); got > code.MaxRecordRows {
+		t.Errorf("MaxPushesPerRecord (%d) minimal pushes bound %d rows, past MaxRecordRows (%d)",
+			code.MaxPushesPerRecord, got, code.MaxRecordRows)
+	}
+
+	// DECIDING GROWS A COMMAND BY AT MOST CommandResultBound, at the longest
+	// code a record may carry.
+	longest := code.Refusal("")
+	for _, r := range code.Refusals() {
+		if r.Recorded() && len(r) > len(longest) {
+			longest = r
+		}
+	}
+	undecided := code.Command{Ref: "refs/heads/a", Old: code.ZeroOID, New: oidOf("a")}
+	base, _ := json.Marshal(undecided)
+	for _, decided := range []code.Command{
+		{Ref: undecided.Ref, Old: undecided.Old, New: undecided.New, Result: code.ResultNoop},
+		{Ref: undecided.Ref, Old: undecided.Old, New: undecided.New, Result: code.ResultNG, Reason: longest},
+	} {
+		grown, _ := json.Marshal(decided)
+		if growth := len(grown) - len(base); growth > code.CommandResultBound {
+			t.Errorf("deciding a command %s %s grows it %d bytes, past CommandResultBound (%d)",
+				decided.Result, decided.Reason, growth, code.CommandResultBound)
+		}
+	}
+
+	// A RECORD'S OWN BYTES FIT RecordOverheadBytes: a real encoded record of
+	// one entry, with the longest node id, the widest generation and an
+	// authored instant in a zone, less its entry.
+	entry, err := json.Marshal(code.EntryOf(minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(code.PushBatch{RepoID: repo, Pushes: []code.PushEntry{code.EntryOf(minimal)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := code.Encode(code.MutationRecord{
+		RecordEnvelope: code.RecordEnvelope{
+			OpID: statelog.NewOpID(at, "code.push"), Subject: code.RepoSubject(repo), Op: code.OpPush,
+			CreatedAt: at, Gen: 1<<32 - 1, Writer: nodeID, Scope: code.Scope{code.RepoPath(repo)},
+		},
+		Expect: 1 << 63, Mutation: payload, Actor: nodeID, ActorKind: code.ActorSystem,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overhead := len(record) - len(entry); overhead > code.RecordOverheadBytes {
+		t.Errorf("a one-entry record carries %d bytes beside its entry, past RecordOverheadBytes (%d)",
+			overhead, code.RecordOverheadBytes)
+	}
+
+	// A QUEUE'S BYTES HOLD A FULL RECORD BEHIND ONE IN FLIGHT, and a queue
+	// of the smallest pushes meets its count before its bytes.
+	if code.CommitterInboxBytes < 2*code.MaxRecordBytes {
+		t.Errorf("CommitterInboxBytes (%d) is under two records (MaxRecordBytes %d)",
+			code.CommitterInboxBytes, code.MaxRecordBytes)
+	}
+	if got := code.CommitterInbox * small; got > code.CommitterInboxBytes {
+		t.Errorf("CommitterInbox (%d) minimal pushes weigh %d bytes, past CommitterInboxBytes (%d), "+
+			"so small pushes meet the byte bound rather than the count", code.CommitterInbox, got,
+			code.CommitterInboxBytes)
+	}
+}

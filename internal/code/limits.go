@@ -229,6 +229,58 @@ const (
 	// package's types.
 	RetentionInterval = 15 * time.Minute
 
+	// CommitterInbox is how many proposals one repository's committer holds
+	// queued on one node: SIXTEEN FULL RECORDS of the smallest pushes
+	// (MaxPushesPerRecord each), so a burst — a CI fan-out of tag pushes —
+	// queues whole behind an in-flight record and is committed in a few
+	// appends. Past it a push is refused busy AT ONCE and the client runs
+	// git push again, rather than the queue growing without bound in a
+	// process that may die holding it. CommitterInboxBytes bounds the same
+	// queue by what it weighs. NEITHER BOUNDS HOW LONG a push waits — sixteen
+	// healthy batches drain in well under a second, sixteen slow ones in
+	// minutes — so the queue is bounded in TIME too: a push still queued a
+	// whole CommitBudget after it arrived is answered busy rather than
+	// decided (committer.go).
+	CommitterInbox = 1_024
+
+	// CommitterInboxBytes is the most one repository's queue may weigh, by
+	// the bytes each proposal's entry can reach in its record: SIXTEEN
+	// RECORDS' BYTES, which makes CommitterInbox's own reason exact for
+	// large pushes as well as small ones. A count alone held 1 024 maximal
+	// proposals — about 400 MiB for ONE repository — where a burst of large
+	// pushes (an import, a fan-out of wide tag pushes) now queues sixteen
+	// records' worth and is refused busy past it. The limits test holds it
+	// to at least two records — a full record always queues behind an
+	// in-flight one — and holds a queue of CommitterInbox minimal pushes
+	// under it, so small pushes meet the count and only large ones meet the
+	// bytes.
+	CommitterInboxBytes = 16 * MaxRecordBytes
+
+	// CommitterIdle is how long a repository's committer goroutine waits
+	// with nothing queued before it exits and forgets the repository. A
+	// goroutine and its queue cost a few kilobytes and restarting one costs
+	// microseconds, so the value bounds only how many repositories a node
+	// keeps one for — those pushed to in the last half minute — while a
+	// burst, whose pushes arrive seconds apart, keeps the one it started.
+	CommitterIdle = 30 * time.Second
+
+	// CommitBudget bounds ONE batch's publish and the read that answers it,
+	// and how long a push may WAIT in its repository's queue before its own
+	// batch starts: HALF the estate router's write attempt (sixty seconds),
+	// because a decided push's answer is those two halves — a wait of less
+	// than one budget, then a batch of at most another — and the committer
+	// must answer inside the ONE attempt its asker gives it, or the asker
+	// hands the same push id to the runner-up and two committers contend on
+	// the repository's subject. A push still queued a whole budget after it
+	// arrived, behind however many batches, is answered busy undecided; one
+	// whose caller has gone is never decided. internal/estate holds
+	// 2 × CommitBudget within its attempt (estate imports this package,
+	// never the reverse). A healthy batch takes milliseconds; thirty seconds
+	// is a broker election and its compare-and-set rounds with room to
+	// spare, and past it the publisher's own resolution answers unknown,
+	// naming the operation.
+	CommitBudget = 30 * time.Second
+
 	// MaxPackBytes is the largest OBJECT one push stores — its pack bundle
 	// (bundle.go): the pack receive-pack stored, then its index and its
 	// reverse index.

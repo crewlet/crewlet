@@ -574,6 +574,27 @@ func Catalogue() []Instrument {
 				"budget: every second here is a second in which reads are " +
 				"behind and writes are pending on every node.",
 		},
+		// ---- code -----------------------------------------------------
+		{
+			Name: CodeCommitBatchSize, Kind: KindHistogram, Unit: UnitCount,
+			Shows: "Pushes per code record: group commit working, or not. The " +
+				"committer takes everything already queued behind an in-flight " +
+				"record — without lingering for more — so an idle repository's " +
+				"records stay at one push and a busy one's grow, up to 64. A busy " +
+				"repository whose batches stay at one is one whose pushes arrive " +
+				"more slowly than a record commits.",
+		},
+		{
+			Name: CodeCommitBusy, Kind: KindCounter, Unit: UnitCount,
+			Shows: "Pushes refused `busy`: a repository taking pushes faster " +
+				"than one node's committer commits them (its queue of 1 024 " +
+				"pushes, or sixteen records' bytes, is full, or a push waited " +
+				"the whole 30-second commit budget behind earlier ones), or a " +
+				"record that lost every compare-and-set round it may take. The " +
+				"client runs `git push` again. No repository is an attribute — " +
+				"which one is hot is a question for its rows, not a time series " +
+				"a repository.",
+		},
 		// ---- git ------------------------------------------------------
 		{
 			Name: CodeGitWait, Kind: KindHistogram, Unit: UnitMilliseconds,
