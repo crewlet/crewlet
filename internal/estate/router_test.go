@@ -43,7 +43,7 @@ type fakeNode struct {
 	opIDs     []string
 	patches   []tracker.TaskPatch
 	turns     []tracker.TurnRecord
-	keys      []pages.CallKey
+	keys      []statelog.CallKey
 	queries   []knowledge.Query
 	units     tracker.Units
 	notReady  bool

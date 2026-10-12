@@ -27,11 +27,11 @@ var keyedSince = time.Now().Add(-time.Hour).UTC().Truncate(time.Millisecond)
 // is a different operation every time.
 func TestAKeyedWriteDerivesItsOperationFromTheKey(t *testing.T) {
 	t.Parallel()
-	key := pages.CallKey{Seed: "req-7c1d4e2a-5b3f-4a6c-9d8e-0f1a2b3c4d5e", Since: keyedSince}
+	key := statelog.CallKey{Seed: "req-7c1d4e2a-5b3f-4a6c-9d8e-0f1a2b3c4d5e", Since: keyedSince}
 
 	// One run of every keyed write against one node, answering the change
 	// id each one wrote under and the id of the page it created.
-	run := func(t *testing.T, key pages.CallKey) (string, []string) {
+	run := func(t *testing.T, key statelog.CallKey) (string, []string) {
 		t.Helper()
 		r := newRoundTrip(t)
 		created, err := r.store.Create(t.Context(), author("jane"), pages.NewPage{
@@ -72,21 +72,21 @@ func TestAKeyedWriteDerivesItsOperationFromTheKey(t *testing.T) {
 	// EACH PAIR ON ITS OWN two nodes, in parallel: a pair is two runs, each
 	// standing up its own broker and estate.
 	for name, pair := range map[string]struct {
-		a, b pages.CallKey
+		a, b statelog.CallKey
 		same bool
 	}{
 		"one key on two nodes is one operation": {key, key, true},
 		"another key is another operation": {key,
-			pages.CallKey{Seed: "req-other", Since: keyedSince}, false},
-		"no key is another operation": {key, pages.CallKey{}, false},
+			statelog.CallKey{Seed: "req-other", Since: keyedSince}, false},
+		"no key is another operation": {key, statelog.CallKey{}, false},
 		// AND WITH NO KEY, TWICE, is two operations: nothing will repeat
 		// a call that named none, and a stable id would collapse every
 		// later write into the first.
-		"no key twice is two operations": {pages.CallKey{}, pages.CallKey{}, false},
+		"no key twice is two operations": {statelog.CallKey{}, statelog.CallKey{}, false},
 		// A REPEAT COUNT IS PART OF THE IDENTITY: the same seed's second
 		// call after a different one is not the first call's retry.
 		"another repeat is another operation": {key,
-			pages.CallKey{Seed: key.Seed, Since: key.Since, Repeat: 1}, false},
+			statelog.CallKey{Seed: key.Seed, Since: key.Since, Repeat: 1}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -121,7 +121,7 @@ func TestAKeyedWriteDerivesItsOperationFromTheKey(t *testing.T) {
 func TestAKeyedWriteCarriesItsKeysInstant(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	key := pages.CallKey{Seed: "wk-instant", Since: keyedSince}
+	key := statelog.CallKey{Seed: "wk-instant", Since: keyedSince}
 	created, err := r.store.Create(t.Context(), author("jane"), pages.NewPage{
 		Container: "ENG", Title: "Runbook", Body: "step one", CallKey: key,
 	})
@@ -190,13 +190,13 @@ func TestAnEditMadeAgainAfterAnotherChangesTheComment(t *testing.T) {
 		t.Fatalf("comment: %v", err)
 	}
 	r.drain()
-	first := pages.CallKey{Seed: "wk-edit", Since: keyedSince}
-	later := pages.CallKey{Seed: "wk-edit", Since: keyedSince, Repeat: 1}
+	first := statelog.CallKey{Seed: "wk-edit", Since: keyedSince}
+	later := statelog.CallKey{Seed: "wk-edit", Since: keyedSince, Repeat: 1}
 
 	var ids []string
 	for _, step := range []struct {
 		body string
-		key  pages.CallKey
+		key  statelog.CallKey
 	}{
 		{"blocked", first},
 		{"unblocked", later},

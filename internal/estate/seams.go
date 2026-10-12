@@ -453,7 +453,7 @@ func (p Pages) SavePage(ctx context.Context, actor pages.Actor, pageID string,
 
 // Rename moves a page to a new title. Never repeated when unanswered.
 func (p Pages) Rename(ctx context.Context, actor pages.Actor, pageID, title string,
-	quiet bool, key pages.CallKey) (pages.Written, error) {
+	quiet bool, key statelog.CallKey) (pages.Written, error) {
 	out, err := call(ctx, p.r, opRenamePage, nil, renamePageArgs{
 		Actor: actor, PageID: pageID, Title: title, Quiet: quiet, Key: key,
 	})
@@ -471,7 +471,7 @@ func (p Pages) Comment(ctx context.Context, actor pages.Actor, pageID string,
 
 // EditComment rewrites a comment. Never repeated when unanswered.
 func (p Pages) EditComment(ctx context.Context, actor pages.Actor, pageID, commentID,
-	body string, key pages.CallKey) (pages.Comment, pages.Written, error) {
+	body string, key statelog.CallKey) (pages.Comment, pages.Written, error) {
 	out, err := call(ctx, p.r, opEditComment, nil, editCommentArgs{
 		Actor: actor, PageID: pageID, CommentID: commentID, Body: body, Key: key,
 	})

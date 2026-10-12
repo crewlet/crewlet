@@ -133,11 +133,11 @@ type PageWriter interface {
 	Create(ctx context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error)
 	SavePage(ctx context.Context, actor pages.Actor, pageID string, save pages.Save) (pages.Written, error)
 	Rename(ctx context.Context, actor pages.Actor, pageID, title string, quiet bool,
-		key pages.CallKey) (pages.Written, error)
+		key statelog.CallKey) (pages.Written, error)
 	Comment(ctx context.Context, actor pages.Actor, pageID string,
 		in pages.NewComment) (pages.Comment, pages.Written, error)
 	EditComment(ctx context.Context, actor pages.Actor, pageID, commentID,
-		body string, key pages.CallKey) (pages.Comment, pages.Written, error)
+		body string, key statelog.CallKey) (pages.Comment, pages.Written, error)
 }
 
 // KnowledgeSearcher is the native knowledge search over this node's corpus,
@@ -1156,7 +1156,7 @@ type renamePageArgs struct {
 	PageID string
 	Title  string
 	Quiet  bool
-	Key    pages.CallKey
+	Key    statelog.CallKey
 }
 
 var opRenamePage = define("pages.rename", opOnceWrite, pagesDomain, false,
@@ -1193,7 +1193,7 @@ type editCommentArgs struct {
 	PageID    string
 	CommentID string
 	Body      string
-	Key       pages.CallKey
+	Key       statelog.CallKey
 }
 
 var opEditComment = define("pages.edit_comment", opOnceWrite, pagesDomain, false,

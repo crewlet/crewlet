@@ -32,7 +32,7 @@ type fakeKB struct {
 	// keys is the call key every write arrived with, in order, so a tool
 	// that derived its operation from something other than the caller's
 	// own key — or forgot to pass one — is visible.
-	keys []pages.CallKey
+	keys []statelog.CallKey
 
 	readErr  error
 	writeErr error
@@ -138,7 +138,7 @@ type renamed struct {
 }
 
 func (f *fakeKB) Rename(_ context.Context, actor pages.Actor, pageID, title string,
-	_ bool, key pages.CallKey) (pages.Written, error) {
+	_ bool, key statelog.CallKey) (pages.Written, error) {
 
 	if f.writeErr != nil {
 		return pages.Written{}, f.writeErr
@@ -170,7 +170,7 @@ func (f *fakeKB) Comment(_ context.Context, actor pages.Actor, _ string, in page
 type commentEdit struct{ commentID, body string }
 
 func (f *fakeKB) EditComment(_ context.Context, actor pages.Actor, _, commentID, body string,
-	key pages.CallKey) (pages.Comment, pages.Written, error) {
+	key statelog.CallKey) (pages.Comment, pages.Written, error) {
 	if f.writeErr != nil {
 		return pages.Comment{}, pages.Written{}, f.writeErr
 	}
@@ -849,7 +849,7 @@ func TestAPageBodyIsToldTheLinkTheBacklinksRead(t *testing.T) {
 // remark repeated with nothing between carries the same count and stays one.
 // And every key carries the digest of the arguments its count compared,
 // because the store's parts are what the arguments resolved to — see
-// pages.CallKey, and the end-to-end case in internal/pages.
+// statelog.CallKey, and the end-to-end case in internal/pages.
 func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()

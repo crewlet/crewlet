@@ -54,9 +54,9 @@ type PageReader interface {
 type PageWriter interface {
 	Create(ctx context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error)
 	SavePage(ctx context.Context, actor pages.Actor, pageID string, save pages.Save) (pages.Written, error)
-	Rename(ctx context.Context, actor pages.Actor, pageID, title string, quiet bool, key pages.CallKey) (pages.Written, error)
+	Rename(ctx context.Context, actor pages.Actor, pageID, title string, quiet bool, key statelog.CallKey) (pages.Written, error)
 	Comment(ctx context.Context, actor pages.Actor, pageID string, in pages.NewComment) (pages.Comment, pages.Written, error)
-	EditComment(ctx context.Context, actor pages.Actor, pageID, commentID, body string, key pages.CallKey) (pages.Comment, pages.Written, error)
+	EditComment(ctx context.Context, actor pages.Actor, pageID, commentID, body string, key statelog.CallKey) (pages.Comment, pages.Written, error)
 }
 
 // PageDeps are the knowledge base's halves plus what a write needs.
@@ -119,7 +119,7 @@ func (d PageDeps) operation(ctx context.Context) string {
 
 // callKey is the key every page write this call makes is derived from — the
 // package doc's one rule, "How a write is made once", typed for the store
-// ([pages.CallKey]):
+// ([statelog.CallKey]):
 //
 //   - IN A TURN, the turn's seed ([turnKey]), the instant it began
 //     ([turnSince]), this call's repeat count in the run
@@ -138,20 +138,20 @@ func (d PageDeps) operation(ctx context.Context) string {
 // as typed and the store's parts are what they resolved to: a page named by
 // its id once and by "CONTAINER/Title" the next time is two calls to one and
 // one page to the other, and without the digest a count two such calls share
-// hands the later one the earlier one's id — see [pages.CallKey].
+// hands the later one the earlier one's id — see [statelog.CallKey].
 func (d PageDeps) callKey(ctx context.Context, turn *turnctx.Turn, tool string,
-	args map[string]any) pages.CallKey {
+	args map[string]any) statelog.CallKey {
 
 	if seed := turnKey(turn); seed != "" {
-		return pages.CallKey{Seed: seed, Since: turnSince(turn),
+		return statelog.CallKey{Seed: seed, Since: turnSince(turn),
 			Repeat: turn.CallLog().Ordinal(tool, args),
 			Args:   turnctx.ArgsDigest(args)}
 	}
 	if op := d.operation(ctx); op != "" {
 		at, _ := statelog.OpMintedAt(op)
-		return pages.CallKey{Seed: op, Since: at}
+		return statelog.CallKey{Seed: op, Since: at}
 	}
-	return pages.CallKey{}
+	return statelog.CallKey{}
 }
 
 // foreignOperation refuses a page write whose transport named an operation
@@ -193,7 +193,7 @@ func (k pageCaller) sameCall(tool string) string {
 // or a caller whose transport named its operation, or neither.
 type pageCaller struct {
 	turn bool
-	key  pages.CallKey
+	key  statelog.CallKey
 }
 
 // settle hands a page write's position to [PageDeps.Await], so the next read

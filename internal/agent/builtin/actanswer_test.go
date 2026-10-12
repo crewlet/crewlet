@@ -617,7 +617,7 @@ func (f *ledgerFake) EnsureTags(_ context.Context, opID, _ string, tags []string
 // from the call key, so the key is what is recorded — keyed with the verb, so
 // a save and its rename under one key are still two entries.
 
-func (f *ledgerFake) pageWrite(verb string, key pages.CallKey) (pages.Written, error) {
+func (f *ledgerFake) pageWrite(verb string, key statelog.CallKey) (pages.Written, error) {
 	r, err := f.record(verb + ":" + key.String())
 	return pages.Written{Page: pages.Page{ID: "p1", Version: 5}, Revision: uint64(r.Position.Packed()),
 		ChangeID: r.OpID, Outcome: r}, err
@@ -632,12 +632,12 @@ func (f *ledgerFake) SavePage(_ context.Context, _ pages.Actor, _ string, save p
 }
 
 func (f *ledgerFake) Rename(_ context.Context, _ pages.Actor, _, _ string, _ bool,
-	key pages.CallKey) (pages.Written, error) {
+	key statelog.CallKey) (pages.Written, error) {
 	return f.pageWrite("rename", key)
 }
 
 func (f *ledgerFake) EditComment(_ context.Context, _ pages.Actor, _, commentID, _ string,
-	key pages.CallKey) (pages.Comment, pages.Written, error) {
+	key statelog.CallKey) (pages.Comment, pages.Written, error) {
 	w, err := f.pageWrite("edit", key)
 	return pages.Comment{ID: commentID}, w, err
 }

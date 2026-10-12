@@ -45,10 +45,10 @@ type NewPage struct {
 	Quiet bool
 
 	// CallKey makes the create idempotent across a repetition its caller
-	// can produce — see [CallKey]. It derives the new page's id as well as
+	// can produce — see [statelog.CallKey]. It derives the new page's id as well as
 	// the operation's, so a retry that the broker collapses into the first
 	// attempt answers with the page that attempt made.
-	CallKey CallKey
+	CallKey statelog.CallKey
 }
 
 // Written is what a write reports back.
@@ -215,8 +215,8 @@ type Save struct {
 	Quiet bool
 
 	// CallKey makes the save idempotent across a repetition its caller can
-	// produce — see [CallKey].
-	CallKey CallKey
+	// produce — see [statelog.CallKey].
+	CallKey statelog.CallKey
 }
 
 // SavePage applies an edit to a page, arbitrated on the page's own subject.
@@ -344,7 +344,7 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 // operation from the key, the page and the title asked for
 // ([Store.callOpID]), so a retried rename is one record.
 func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
-	title string, quiet bool, key CallKey) (Written, error) {
+	title string, quiet bool, key statelog.CallKey) (Written, error) {
 
 	if err := actor.validate(); err != nil {
 		return Written{}, err

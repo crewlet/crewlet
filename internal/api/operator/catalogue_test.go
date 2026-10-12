@@ -243,7 +243,7 @@ func textOf(res *mcp.CallToolResult) string {
 type recordingPages struct {
 	stubPageWriter
 	mu       sync.Mutex
-	callKeys []pages.CallKey
+	callKeys []statelog.CallKey
 }
 
 func (*recordingPages) List(context.Context, pages.Filter,
@@ -265,8 +265,8 @@ func (p *recordingPages) Comment(_ context.Context, _ pages.Actor, _ string,
 	return pages.Comment{ID: "c-1"}, pages.Written{}, nil
 }
 
-func (p *recordingPages) keys() []pages.CallKey {
+func (p *recordingPages) keys() []statelog.CallKey {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]pages.CallKey(nil), p.callKeys...)
+	return append([]statelog.CallKey(nil), p.callKeys...)
 }

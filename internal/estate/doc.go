@@ -41,7 +41,7 @@
 // lost-acknowledgement case that id exists for; and so is one a node answered
 // UNVOUCHED, whose ledger cannot say whether it landed while another node's
 // may. A PAGE write's operation is derived from the caller's key where the
-// call carries one ([pages.CallKey]), and a repeat under that key is the same
+// call carries one ([statelog.CallKey]), and a repeat under that key is the same
 // operation, asked again as a tracker write is. Where it carries none the store
 // mints an id per call, so a repeat is a second write (a second comment) or a
 // refusal of its own first copy (a create whose title is now taken): an

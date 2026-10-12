@@ -270,7 +270,7 @@ func (o op[A, R]) ungated() op[A, R] {
 
 // repeatableWhen declares a once-write that is IDEMPOTENT for the calls whose
 // arguments say so: a page write that carries the caller's own key
-// ([pages.CallKey]) derives its operation id — and a create its page's id —
+// ([statelog.CallKey]) derives its operation id — and a create its page's id —
 // from that key rather than minting one per call, so a repeat under it is the
 // same operation and the ledger answers it with the first copy's outcome. Such
 // a call fails over as an [opIdempotentWrite] does; one without a key is still

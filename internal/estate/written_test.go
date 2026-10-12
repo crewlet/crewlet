@@ -55,7 +55,7 @@ func (s *turnSet) keys() []string {
 }
 
 // keyed records the call key a page write arrived with.
-func (f *fakeNode) keyed(key pages.CallKey) {
+func (f *fakeNode) keyed(key statelog.CallKey) {
 	f.mu.Lock()
 	f.keys = append(f.keys, key)
 	f.mu.Unlock()
@@ -86,14 +86,14 @@ func (f *fakeNode) SavePage(_ context.Context, _ pages.Actor, _ string,
 }
 
 func (f *fakeNode) Rename(_ context.Context, _ pages.Actor, _, _ string, _ bool,
-	key pages.CallKey) (pages.Written, error) {
+	key statelog.CallKey) (pages.Written, error) {
 	f.note("page_rename")
 	f.keyed(key)
 	return pages.Written{}, nil
 }
 
 func (f *fakeNode) EditComment(_ context.Context, _ pages.Actor, _, _, _ string,
-	key pages.CallKey) (pages.Comment, pages.Written, error) {
+	key statelog.CallKey) (pages.Comment, pages.Written, error) {
 	f.note("comment_edit")
 	f.keyed(key)
 	return pages.Comment{}, pages.Written{}, nil
@@ -215,28 +215,28 @@ func TestAKeyedPageWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		asked string
-		write func(ctx context.Context, p Pages, key pages.CallKey) error
+		write func(ctx context.Context, p Pages, key statelog.CallKey) error
 	}{
-		{"create", "page_create", func(ctx context.Context, p Pages, key pages.CallKey) error {
+		{"create", "page_create", func(ctx context.Context, p Pages, key statelog.CallKey) error {
 			_, err := p.Create(ctx, pages.Actor{}, pages.NewPage{Container: "ENG", Title: "Runbook",
 				CallKey: key})
 			return err
 		}},
-		{"save", "page_save", func(ctx context.Context, p Pages, key pages.CallKey) error {
+		{"save", "page_save", func(ctx context.Context, p Pages, key statelog.CallKey) error {
 			body := "v2"
 			_, err := p.SavePage(ctx, pages.Actor{}, "p1", pages.Save{BaseVersion: 1, Body: &body,
 				CallKey: key})
 			return err
 		}},
-		{"rename", "page_rename", func(ctx context.Context, p Pages, key pages.CallKey) error {
+		{"rename", "page_rename", func(ctx context.Context, p Pages, key statelog.CallKey) error {
 			_, err := p.Rename(ctx, pages.Actor{}, "p1", "Runbook v2", false, key)
 			return err
 		}},
-		{"comment", "comment", func(ctx context.Context, p Pages, key pages.CallKey) error {
+		{"comment", "comment", func(ctx context.Context, p Pages, key statelog.CallKey) error {
 			_, _, err := p.Comment(ctx, pages.Actor{}, "p1", pages.NewComment{Body: "hi", CallKey: key})
 			return err
 		}},
-		{"edit comment", "comment_edit", func(ctx context.Context, p Pages, key pages.CallKey) error {
+		{"edit comment", "comment_edit", func(ctx context.Context, p Pages, key statelog.CallKey) error {
 			_, _, err := p.EditComment(ctx, pages.Actor{}, "p1", "c1", "hello", key)
 			return err
 		}},
@@ -254,7 +254,7 @@ func TestAKeyedPageWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 			}
 
 			f, second := silentFirst(t)
-			key := pages.CallKey{Seed: "run-7", Since: since}
+			key := statelog.CallKey{Seed: "run-7", Since: since}
 			if err := tc.write(t.Context(), f.client.Pages(), key); err != nil {
 				t.Fatalf("a keyed %s with its first holder silent = %v, want it written "+
 					"by the next", tc.name, err)
@@ -265,7 +265,7 @@ func TestAKeyedPageWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 			}
 
 			f, second = silentFirst(t)
-			err := tc.write(t.Context(), f.client.Pages(), pages.CallKey{})
+			err := tc.write(t.Context(), f.client.Pages(), statelog.CallKey{})
 			if !errors.Is(err, ErrOutcomeUnknown) {
 				t.Fatalf("an unkeyed %s with its first holder silent = %v, want ErrOutcomeUnknown",
 					tc.name, err)
