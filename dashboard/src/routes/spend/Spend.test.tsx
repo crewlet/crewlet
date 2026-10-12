@@ -572,6 +572,41 @@ test("by model names the top seats and keeps the count of the rest apart", async
   expect(more.previousElementSibling!.textContent).toBe("CEO, SWE");
 });
 
+// THE CHART TAKES ITS ROW'S HEIGHT. Drawn at a fixed 12rem beside a taller
+// hero, the plot stopped short and the split control stood 34 to 68px under
+// the dates. The kit's chart is asked to fill its card instead: the head and
+// the dates keep their heights, the plot's row takes the rest, and the plot
+// is never shorter than the 12rem it was drawn at. jsdom lays nothing out, so
+// what is held is what the chart was asked to draw.
+test("the daily chart fills its card, and its plot is never under 12rem", async () => {
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(100),
+    token_series: {
+      ...series(100),
+      series: [
+        {
+          ...bucket(100),
+          at: "2026-09-01T00:00:00Z",
+          window: "2026-09-01",
+          days: 1,
+          groups: { execute: bucket(100) },
+          other: bucket(0),
+        },
+      ],
+    },
+    viewer: VIEWER,
+  });
+  await settle();
+  const figure = document.querySelector<HTMLElement>(".spend-chart > .crewlet-stacked-columns")!;
+  expect(figure.classList.contains("crewlet-stacked-columns--fill")).toBe(true);
+  expect(figure.style.gridTemplateRows).toBe("auto minmax(12rem, 1fr) auto");
+  const plot = figure.querySelector<HTMLElement>(".crewlet-stacked-columns__plot")!;
+  expect(plot.style.height).toBe("100%");
+  // The split control follows the figure in the same column, so it stands
+  // right under the dates once the plot has taken the spare height.
+  expect(figure.nextElementSibling?.classList.contains("spend-chart-foot")).toBe(true);
+});
+
 // THE FOUR PHASE BANDS ARE ALWAYS THE LEGEND. The engine answers all four by
 // phase, a band the window never spent in at zero, and the chart keeps it: the
 // sentence under the title names review, workers and auxiliary, and a legend

@@ -9322,7 +9322,9 @@ a.live-row:focus-visible {
 
 /* The chart. The group control and the gap sentence sit UNDER the plot: six
    dimensions do not fit beside a title and a four-band legend at a laptop
-   width, and the kit's head row is where the design draws the legend. */
+   width, and the kit's head row is where the design draws the legend. The
+   card is a column, which is what lets the kit's figure flex into the height
+   the row gives it. */
 .spend-chart {
   display: flex;
   flex-direction: column;
@@ -9351,8 +9353,10 @@ a.live-row:focus-visible {
 }
 /* THE SPLIT CONTROL STANDS ON THE CARD'S FLOOR, level with the hero's tiles,
    where the hero is the taller of the two (a refusal or a long comparison
-   under its figure). The plot cannot take the spare height: its height is a
-   fixed length the kit's chart is handed. */
+   under its figure). With the chart drawn, its plot takes that spare height
+   (`height="fill"`), so the control stands right under the dates; the margin
+   keeps it on the floor while there is no chart to grow (loading, an empty
+   window, a refusal). */
 .spend-chart-foot {
   margin-top: auto;
   display: flex;

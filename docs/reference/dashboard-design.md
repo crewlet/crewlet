@@ -5856,8 +5856,11 @@ and a card whose partner is absent (no task spend to rank on a tracker that is
 not the engine's) takes the whole row. In the top row the hero's figure stays
 at its top while the budget and the tiles stand on its floor, level with the
 chart's split control; a tile with nothing to say is not drawn, and the other
-takes the tiles' whole row. Below a page column of 900px every row stacks, the
-table first; the width is the page column's, not the window's.
+takes the tiles' whole row. Where the hero is the taller card, the chart's plot
+takes the spare height (the kit's `height="fill"`, never under 12rem), so the
+split control stands right under the dates rather than below a band of nothing.
+Below a page column of 900px every row stacks, the table first; the width is
+the page column's, not the window's.
 
 - **The hero** is the window's tokens, the change against the window before it
   (the engine's `previous=true`, cut on the company's calendar, and "nothing
@@ -5885,7 +5888,9 @@ table first; the width is the page column's, not the window's.
   contract's six `GROUPS`, and any split but phase draws the engine's top four
   and a residual. A seat band is labelled with the seat's name, as the table
   under it names it, and a team band with the unit's. The comparison is the
-  hero's; the chart draws no ghost of the window before.
+  hero's; the chart draws no ghost of the window before. The legend stands at
+  the end of the title's row, and on a card too narrow for both (a phone) it
+  takes a row of its own under the title, still at the end.
 - **By agent** — turns, tokens, share, **budget today** (the seat's daily window
   from its overlay, `exhausted` where the engine says `refusing`) and tokens per
   ended turn. A PERSON the auxiliary model spent for (`person: true` — their

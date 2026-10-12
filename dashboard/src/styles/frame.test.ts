@@ -1695,6 +1695,29 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".spend-chart-foot")).toMatch(/margin-top:\s*auto/);
   });
 
+  // AND THE PLOT TAKES THE SPARE HEIGHT, NOT A BAND UNDER THE DATES. Where the
+  // hero was the taller, the split control stood 34 to 68px under the dates,
+  // because the plot was a fixed length. The chart fills its card now, which
+  // takes two rules in two sheets: the card is a column, and the kit's fill
+  // figure flexes in it.
+  test("the daily chart's card is a column its kit figure grows in", () => {
+    const chart = block(css, ".spend-chart");
+    expect(chart).toMatch(/display:\s*flex/);
+    expect(chart).toMatch(/flex-direction:\s*column/);
+    expect(block(kitSheet(), ".crewlet-stacked-columns--fill")).toMatch(/flex:\s*1 1 auto/);
+  });
+
+  // ON A PHONE THE LEGEND TAKES A ROW OF ITS OWN under the chart's title. The
+  // kit's head held the two on one line, so the legend stood beside the title
+  // as a column of one band a line, four rows tall at 390px.
+  test("the daily chart's legend wraps under its title where the two do not fit", () => {
+    const head = block(kitSheet(), ".crewlet-stacked-columns__head");
+    expect(head).toMatch(/flex-wrap:\s*wrap/);
+    expect(block(kitSheet(), ".crewlet-stacked-columns__legend--head")).toMatch(
+      /margin-inline-start:\s*auto/,
+    );
+  });
+
   // A LONE TILE TAKES THE ROW. A tile with nothing to say is not drawn, and
   // the one left in a two-column row stood beside half a row of nothing.
   test("the hero's tiles take one column each, and with none the row is not drawn", () => {

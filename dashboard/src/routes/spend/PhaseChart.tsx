@@ -118,7 +118,12 @@ export function PhaseChart({
             // nothing. Any other split lists only what spent.
             series={bands.map((b) => ({ id: b.key, name: b.label, color: b.color }))}
             buckets={buckets}
-            height="12rem"
+            // THE PLOT TAKES THE ROW'S HEIGHT. Drawn at a fixed 12rem beside a
+            // taller hero, it stopped short and the split control stood up to
+            // 68px under the dates; filling, the figure flexes in this card and
+            // the plot grows into the spare height, never under that 12rem.
+            height="fill"
+            minHeight="12rem"
             format={(v) => fmtCount(v)}
             formatTime={(at) => labels.get(at) ?? ""}
           />
