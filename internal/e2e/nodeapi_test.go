@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
@@ -28,10 +29,11 @@ import (
 // goroutine. A fleet member is built on a goroutine of its own and may have to
 // be torn down before the test ends, so it calls [wireAPI] directly.
 func serveAPI(
-	t *testing.T, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
+	t *testing.T, e *engine.Engine, boot *config.Bootstrap, chatLive *stream.ChatHub,
+	amend func(*api.Options),
 ) (*api.App, *httptest.Server) {
 	t.Helper()
-	app, srv, stops, err := wireAPI(t.Context(), e, boot, amend)
+	app, srv, stops, err := wireAPI(t.Context(), e, boot, chatLive, amend)
 	// REGISTERED BEFORE THE ERROR IS RAISED, so a wiring that failed halfway
 	// still stops the half that came up.
 	t.Cleanup(func() { stopInReverse(stops) })
@@ -63,12 +65,24 @@ func serveAPI(
 // constructor `crewlet run` calls — so `/operator/act` here is the route a
 // person's dashboard writes through, and the viewer names the same verbs.
 // AND THE NATIVE TRACKER'S READS, so a read that names the floor an act
-// answered with is asked of the route the dashboard asks. The file byte routes
-// are IN too, because a file's bytes crossing between members is something
-// only a fleet here can exercise. What it leaves out is what a case here never
-// reaches: the knowledge readers, which have their own suite.
+// answered with is asked of the route the dashboard asks — and the native
+// CHAT, its reads, its read state, its two destructions and its live arm,
+// from [api.EngineChat], the constructor `crewlet run` fills its own with.
+// The file byte routes are IN too, because a file's bytes crossing between
+// members is something only a fleet here can exercise. What it leaves out is
+// what a case here never reaches: the knowledge readers, which have their own
+// suite.
+//
+// chatLive is the hub [api.NewEngineWithChat] built beside the engine, before
+// it, because the chat applier takes its observer when the state log comes up
+// and that is inside the engine's construction. Every boot path here goes
+// through that constructor, as `crewlet run` does, so every node has a hub —
+// a company off native chat included, whose hub simply serves no chat frames
+// because its applier has nothing to announce. Nil is a cluster member alone,
+// the one path here not booted through it ([buildMember] says why).
 func wireAPI(
-	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
+	ctx context.Context, e *engine.Engine, boot *config.Bootstrap,
+	chatLive *stream.ChatHub, amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
 	var stops []func()
 	fail := func(what string, err error) (*api.App, *httptest.Server, []func(), error) {
@@ -128,7 +142,7 @@ func wireAPI(
 	if err != nil {
 		return fail("setup surface", err)
 	}
-	operators, err := api.NewEngineOperator(e, nil)
+	operators, err := api.NewEngineOperator(e, chatLive)
 	if err != nil {
 		return fail("operator surface", err)
 	}
@@ -214,6 +228,14 @@ func wireAPI(
 		// the snapshot alone while the push path went unexercised.
 		HealthInterval: tickInterval,
 	}
+	// THE COMPANY'S OWN CHAT — its reads and the ranking over them, each
+	// person's read state, the two destructions and the live arm — through
+	// the constructor cmd/crewlet fills its own with, so the seams a case
+	// here exercises are the ones `crewlet run` serves. Without them every
+	// chat question is unregistered, which answers `unknown_query` and looks
+	// from a test exactly like a company with nothing to say; cmd/crewlet's
+	// gate on a served node is TestANativeChatCompanyServesItsChatSurface.
+	api.EngineChat(&opts, e, chatLive)
 	if amend != nil {
 		amend(&opts)
 	}

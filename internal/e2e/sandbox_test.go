@@ -262,7 +262,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	boot.Stream.StoreDir = streamDir
 	seedStore(t, &boot)
 
-	e, err := engine.New(t.Context(), engine.Options{
+	e, chatLive := bootEngine(t, engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(env),
 		// The completion poll, sped up. It is sized in production against
@@ -270,26 +270,17 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 		// job finishes in a moment would wait out a real tick to see it.
 		SandboxPollInterval: 100 * time.Millisecond,
 	})
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
-	stopped := false
-	t.Cleanup(func() {
-		if !stopped {
-			e.Stop(context.Background())
-		}
-	})
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("engine.Start: %v", err)
 	}
 
-	app, srv := serveAPI(t, e, &boot, func(opts *api.Options) {
+	app, srv := serveAPI(t, e, &boot, chatLive.Hub(), func(opts *api.Options) {
 		// The DURABLE record, which is what the board must read: a run
 		// parked on a question waits days, and the live projection sweeps
 		// long before that.
 		opts.Sources.Sandbox = sandbox.NewCoordStore(e.Backends().Fleet)
 	})
-	return &node{engine: e, app: app, server: srv, model: model}
+	return &node{engine: e, app: app, server: srv, model: model, chat: chatLive}
 }
 
 // sandboxModel is the scripted endpoint for a coding turn.
