@@ -53,14 +53,26 @@ func TestANodesConnectionStaysOnItsOwnMember(t *testing.T) {
 	// LONGER THAN THE NODE'S OWN RECONNECT WAIT, several times over: a dial
 	// that took the peers moves within one wait of the control, and one that
 	// did not stays down for its member's whole reconnect span.
+	//
+	// ON ANOTHER MEMBER is the failure, never "connected": the client learns
+	// its socket closed on its own reader goroutine, so for a moment after
+	// the shutdown it still reports itself connected to its own member's
+	// URL. Under a loaded runner that moment outlasted the first poll, and
+	// a check of IsConnected alone failed with the node's own URL named as
+	// "a peer". ConnectedUrl is empty while the connection is down, so this
+	// fails exactly when the connection is up somewhere it must not be.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if q.Conn().IsConnected() {
+		if at := q.Conn().ConnectedUrl(); at != "" && at != own {
 			t.Fatalf("the node's connection is on %s, a peer, with its own "+
-				"member stopped: it would never run its reconnects out",
-				q.Conn().ConnectedUrl())
+				"member %s stopped: it would never run its reconnects out",
+				at, own)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+	if q.Conn().IsConnected() {
+		t.Fatalf("the node's connection is still up on %s, %v after its own "+
+			"member stopped", q.Conn().ConnectedUrl(), 5*time.Second)
 	}
 }
 
