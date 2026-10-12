@@ -118,7 +118,7 @@ func TestEveryWriteRefusalIsMarked(t *testing.T) {
 // TestNoRefusalSpellsThePackagePrefix walks EVERY file of the package, not
 // only [writeFiles] — a read's parameter check is built with [invalid] too —
 // for a refusal whose sentence opens with "tracker:". The prefix is the
-// refusal's own to add ([refusal.Error]): spelled again, the log reads
+// refusal's own to add ([Refusal.Error]): spelled again, the log reads
 // "tracker: tracker: …" and [Sentence] hands a person the package's name.
 func TestNoRefusalSpellsThePackagePrefix(t *testing.T) {
 	t.Parallel()

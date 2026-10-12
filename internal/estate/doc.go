@@ -128,4 +128,12 @@
 // cross — this one's included — is a build failure until it is registered or
 // exempted by name. An operation answered in-process returns its own error,
 // which answers every question without the wire's help.
+//
+// AN UNEXPORTED ERROR TYPE IS A BUILD FAILURE TOO, because the far side
+// rebuilds a type from its exported fields and so cannot rebuild one of those
+// at all: it arrives as its message alone. That is not only a lost errors.As.
+// Each package's Sentence — the words a PERSON is shown for a refusal — finds
+// them by unwrapping the package's refusal type, and the tracker's and the
+// pages log's were both unexported, so every refusal decided on another data
+// node reached a person with "tracker:" or "pages: invalid:" in front of it.
 package estate

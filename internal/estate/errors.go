@@ -110,12 +110,14 @@ var typedKinds = []typedKind{
 	{"tracker.ErrAmbiguous", reflect.TypeFor[*tracker.ErrAmbiguous]()},
 	{"tracker.ErrAmbiguousAnswer", reflect.TypeFor[*tracker.ErrAmbiguousAnswer]()},
 	{"tracker.ErrFutureVersion", reflect.TypeFor[*tracker.ErrFutureVersion]()},
+	{"tracker.Refusal", reflect.TypeFor[*tracker.Refusal]()},
 	{"tracker.SubtreeStopped", reflect.TypeFor[*tracker.SubtreeStopped]()},
 	{"tracker.TagClash", reflect.TypeFor[*tracker.TagClash]()},
 	{"tracker.TagsFull", reflect.TypeFor[*tracker.TagsFull]()},
 	{"tracker.TextCapError", reflect.TypeFor[*tracker.TextCapError]()},
 
 	{"pages.ErrFutureVersion", reflect.TypeFor[*pages.ErrFutureVersion]()},
+	{"pages.InvalidError", reflect.TypeFor[*pages.InvalidError]()},
 	{"pages.ErrUnknownVersion", reflect.TypeFor[pages.ErrUnknownVersion]()},
 
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},

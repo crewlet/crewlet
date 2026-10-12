@@ -89,11 +89,11 @@ var ErrInvalid = errors.New("tracker: invalid")
 // exists, and the useful move is to read it.
 var ErrAlreadyAnswered = errors.New("tracker: that question is already answered")
 
-// refusal is a write this package refuses on what was asked or on who asked
-// it: the writer's own SENTENCE, and the sentinel that classes it beside that
-// sentence's own %w chain.
+// Refusal is a write this package refuses on what was asked or on who asked
+// it: the writer's own SENTENCE ([Refusal.Err]), and the sentinel that classes
+// it ([Refusal.Mark]) beside that sentence's own %w chain.
 //
-// THE SENTENCE IS HELD WITHOUT THE PACKAGE PREFIX, and [refusal.Error] adds
+// THE SENTENCE IS HELD WITHOUT THE PACKAGE PREFIX, and [Refusal.Error] adds
 // it, so the Go error reads exactly as every error here does
 // ("tracker: …") while [Sentence] has the words a PERSON is shown. Both
 // classes built here — [ErrInvalid] and [ErrForbidden] — are the two a
@@ -104,16 +104,26 @@ var ErrAlreadyAnswered = errors.New("tracker: that question is already answered"
 // class used to be built with fmt.Errorf wrapping the sentinel, which also
 // appended the sentinel's own words — ": tracker: not this actor's to write"
 // — after a sentence that had already said whose it was.
-type refusal struct {
-	mark error
-	err  error
+//
+// EXPORTED, FIELDS AND ALL, because a refusal crosses the estate router's wire
+// (internal/estate) whenever the node that decided it is not the node whose
+// caller is told: the wire rebuilds an error TYPE from its exported fields,
+// and an unexported one arrived as its message alone — so [Sentence] on the
+// asking node found no refusal and handed a person the whole "tracker: …".
+// Only this package builds one ([invalid], [forbidden]).
+type Refusal struct {
+	// Mark is the sentinel that classes the refusal: [ErrInvalid] or
+	// [ErrForbidden].
+	Mark error
+	// Err is the sentence, without the package prefix, and its %w chain.
+	Err error
 }
 
-func (e *refusal) Error() string    { return "tracker: " + e.err.Error() }
-func (e *refusal) Unwrap() []error  { return []error{e.mark, e.err} }
-func (e *refusal) sentence() string { return e.err.Error() }
+func (e *Refusal) Error() string    { return "tracker: " + e.Err.Error() }
+func (e *Refusal) Unwrap() []error  { return []error{e.Mark, e.Err} }
+func (e *Refusal) sentence() string { return e.Err.Error() }
 
-// sentenced is a refusal this package wrote, whatever its type: [refusal]
+// sentenced is a refusal this package wrote, whatever its type: [Refusal]
 // itself, and the typed refusals a caller several steps away has to take
 // apart ([TagClash], [TagsFull]). Each holds its sentence without the prefix
 // its Error adds.
@@ -123,16 +133,16 @@ type sentenced interface {
 }
 
 // invalid is fmt.Errorf for a content refusal: the sentence — written WITHOUT
-// the package prefix, which [refusal.Error] adds — and its %w chain, marked
+// the package prefix, which [Refusal.Error] adds — and its %w chain, marked
 // [ErrInvalid].
 func invalid(format string, args ...any) error {
-	return &refusal{mark: ErrInvalid, err: fmt.Errorf(format, args...)}
+	return &Refusal{Mark: ErrInvalid, Err: fmt.Errorf(format, args...)}
 }
 
 // forbidden is [invalid] for a write that is not this actor's to make, marked
 // [ErrForbidden]. The sentence names who may.
 func forbidden(format string, args ...any) error {
-	return &refusal{mark: ErrForbidden, err: fmt.Errorf(format, args...)}
+	return &Refusal{Mark: ErrForbidden, Err: fmt.Errorf(format, args...)}
 }
 
 // Sentence is a refusal this package wrote, as a person reads it: the
