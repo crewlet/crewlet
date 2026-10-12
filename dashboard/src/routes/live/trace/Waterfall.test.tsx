@@ -191,10 +191,8 @@ describe("a running coding run's live output", () => {
       { outcome: "owner_silent", turn_id: "turn-1", launch_id: "L1", node: "node-b" },
       { selected: "run:L1" },
     );
-    expect(
-      await screen.findByText(/node-b, the node that owns this run, did not answer/),
-    ).toBeTruthy();
-    expect(screen.queryByText(/has not written anything/)).toBeNull();
+    expect(await screen.findByText("node-b didn’t answer. Retrying.")).toBeTruthy();
+    expect(screen.queryByText("No output yet.")).toBeNull();
   });
 
   test("a run that has written nothing says so, which is not a silent owner", async () => {
@@ -203,7 +201,7 @@ describe("a running coding run's live output", () => {
       { ...RUNNING, output: { ...RUNNING.output!, text: "", source: "none" } },
       { selected: "run:L1" },
     );
-    expect(await screen.findByText(/has not written anything it can show yet/)).toBeTruthy();
+    expect(await screen.findByText("No output yet.")).toBeTruthy();
   });
 
   // IT HOLDS WHAT IT IS SENT AND FOLLOWS THE END. Each answer adds what was
@@ -279,7 +277,7 @@ describe("a running coding run's live output", () => {
       { selected: "run:L1" },
     );
     await flush();
-    expect(screen.getByText(/its box made and provisioned/)).toBeTruthy();
+    expect(screen.getByText("Setting up. Output appears when the agent starts.")).toBeTruthy();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 2);
     });
@@ -299,7 +297,7 @@ describe("a running coding run's live output", () => {
       { selected: "run:L1" },
     );
     await flush();
-    expect(screen.getByText(/stopped to ask a person something/)).toBeTruthy();
+    expect(screen.getByText("Waiting for an answer.")).toBeTruthy();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 3);
     });

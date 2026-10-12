@@ -3833,9 +3833,9 @@ be read at a glance:
   how long it has waited and how long its box is still held, and **Answer**,
   which sends `answer_run{turn_id, answer}` as the person reading.
 - **In a box** — the rest of the detached runs in flight, eight before it
-  says how many more. Empty, it says *No coding run is in flight. A finished
-  run's record is its turn's trace* — a settled run's row is deleted, so the
-  sentence it replaced, promising every finished run under Runs, was false.
+  says how many more. Empty, it says *Finished runs are on their turn’s
+  trace*: a settled run's row is deleted, so the sentence it replaced,
+  promising every finished run under Runs, was false.
 - **Activity** — the engine's own count of events over the window
   (`event_series`, minute bars summed exactly into the strip's cells) and the
   latest seven events, each the time and ONE line: the actor, then what
@@ -5475,8 +5475,8 @@ that can.
   - Bytes the owner holds back until their redaction is settled — a line not
     finished, a private key whose end has not been written — are counted
     under the block rather than shown.
-  - *Nothing to show yet* and *the node that owns this run did not answer*
-    are different sentences, and the second names the node. A screen reader
+  - *No output yet* and *node-b didn’t answer* are different sentences, and
+    the second names the node. A screen reader
     is told the tail's STATE — one sentence in a status region, which changes
     only when the state does — never the output or the "read 3s ago" clock,
     which change every poll.

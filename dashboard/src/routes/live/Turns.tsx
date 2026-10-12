@@ -282,15 +282,15 @@ export function Turns() {
           icon={<ChartNoAxesGanttGlyph size="sm" />}
           // UNDER THE TITLE, the chart key's place on every chart card (the
           // seat's own turns chart included): beside the title a phone left the
-          // subtitle about thirty characters and cut it at the failed count —
-          // the one number the red stack encodes. The count comes first and
-          // the explanatory tail last, so what gives way is the hint.
+          // subtitle about thirty characters and cut it at the failed count,
+          // the one number the red stack encodes. The count comes first, so
+          // what gives way is the tail.
           className="card-head-stacked"
           subtitle={`${
             series.data
               ? `${plural(total, "turn")} ended over ${spanWords(since, until)}${failedTotal > 0 ? `, ${failedTotal.toLocaleString()} failed` : ""}`
               : `over ${spanWords(since, until)}`
-          }${failed ? AXIS_UNFILTERED : ""} · one bar per ${bucket}, click one to narrow the window`}
+          }${failed ? AXIS_UNFILTERED : ""}`}
         >
           <Card.Title>Turns that ended</Card.Title>
         </Card.Header>
@@ -367,7 +367,7 @@ export function Turns() {
             ? undefined
             : {
                 title: "No turns in this window",
-                hint: "A turn is recorded when a seat is woken and does something. Widen the range, or clear the seat and failure filters — a company whose seats have not been triggered has none.",
+                hint: "Widen the range, or clear the filters.",
               }
         }
       >
@@ -445,11 +445,7 @@ export function Turns() {
               key: "iterations",
               // SELF-ITERATE ROUNDS, and the word says so — a phase's TOOL
               // rounds are on its own record, under another word.
-              header: (
-                <span title="self-iterate rounds — the tool rounds each phase used are on the turn's own page">
-                  Iterations
-                </span>
-              ),
+              header: <span title="Self-iterate rounds">Iterations</span>,
               label: "Iterations",
               shrink: true,
               align: "right",
@@ -535,19 +531,13 @@ function TurnState({
       {rerun && (
         <Tag
           appearance="outline"
-          title={
-            `one of ${reruns.get(t.work_key!)} runs of the same trigger listed here — ` +
-            `a turn that fails without acting is redelivered and runs again`
-          }
+          title={`One of ${reruns.get(t.work_key!)} runs of the same trigger`}
         >
           re-run
         </Tag>
       )}
       {t.parked && (
-        <Tag
-          appearance="outline"
-          title="waiting on a coding run it launched — it completes again when the run is collected"
-        >
+        <Tag appearance="outline" title="Waiting on its coding run">
           parked
         </Tag>
       )}

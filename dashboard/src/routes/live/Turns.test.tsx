@@ -231,15 +231,15 @@ test("a row draws the seat's badge and its item key as one token", async () => {
   expect(key?.classList.contains("item-key")).toBe(true);
 });
 
-// THE CHART'S HINT GIVES WAY BEFORE ITS TITLE. It sat in the header's
-// actions, which never shrink, so on a phone the title read "W" beside a
-// whole sentence; the subtitle is the part the kit lets give way first.
-test("the chart's hint is in the header's subtitle, not its actions", async () => {
+// THE CHART'S SUBTITLE IS ITS COUNT AND ITS SPAN. The hint that followed
+// them ("one bar per day, click one to narrow the window") is gone, from the
+// subtitle and from the header's actions alike.
+test("the chart's subtitle is its count and span, with no hint", async () => {
   const { container } = mount([row("t-1", "one turn", { complete: true })]);
   await screen.findByText("one turn");
   const subtitle = container.querySelector(".crewlet-card__subtitle");
-  expect(subtitle?.textContent).toMatch(/click one to narrow the window/);
-  expect(container.querySelector(".crewlet-card__header-actions")?.textContent ?? "").not.toMatch(
+  expect(subtitle?.textContent).toBe("1 turn ended over 7 days");
+  expect(container.querySelector(".crewlet-card__header")?.textContent ?? "").not.toMatch(
     /narrow the window/,
   );
 });

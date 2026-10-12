@@ -281,7 +281,7 @@ export function RecentPhases({
       />
       {settled.pending > 0 && (
         <button type="button" className="new-rows" onClick={settled.flush}>
-          {plural(settled.pending, "new phase")} finished while you were reading — show
+          {plural(settled.pending, "new phase")}. Show
         </button>
       )}
       {first.loading && !first.data ? (
@@ -294,9 +294,7 @@ export function RecentPhases({
           icon={<BrainGlyph size={32} />}
           title={filtering ? "No phase matches these filters" : "No phase has finished yet"}
           description={
-            filtering
-              ? "Clear the phase and failure filters to see every phase this list holds."
-              : "A phase is recorded when it completes. If every seat is idle and no schedule has fired, there is nothing here yet."
+            filtering ? "Clear the filters to see every phase." : "Finished phases appear here."
           }
         />
       ) : (
@@ -318,7 +316,7 @@ export function RecentPhases({
         {pageError ? (
           <QueryState error={pageError} loading={false} />
         ) : exhausted ? (
-          <span className="t-caption">That is the beginning of the retained record.</span>
+          <span className="t-caption">Start of the record.</span>
         ) : (
           <>
             <Button
