@@ -39,6 +39,7 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { PageContainer, PageDetail, PageSummary } from "~/protocol/index.ts";
 import { PageTags, drawnBy, usePeople, type Who } from "./parts.tsx";
+import { firstLines } from "./page/body.ts";
 import { PAGES_WINDOW } from "./usePagedPages.ts";
 import { ownerSentence, useSpaceOwners, type SpaceOwners } from "./spaceOwners.ts";
 
@@ -357,16 +358,6 @@ function SpaceWriters({
 // ---------------------------------------------------------------------------
 // A page
 // ---------------------------------------------------------------------------
-
-/**
- * The head of a body, cut on a LINE boundary so every markdown block it keeps
- * is whole; a fence the cut leaves open is rendered as what it opened.
- */
-function firstLines(body: string, max: number): { head: string; more: number } {
-  const lines = body.split("\n");
-  if (lines.length <= max) return { head: body, more: 0 };
-  return { head: lines.slice(0, max).join("\n"), more: lines.length - max };
-}
 
 /**
  * The facts a page is read by, in the order its own page draws them: where it

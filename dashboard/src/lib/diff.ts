@@ -229,3 +229,35 @@ export function collapse(diff: DiffLine[], context = 3): DiffSection[] {
   });
   return out;
 }
+
+/**
+ * The first `max` changed lines of a collapsed diff, and how many changed
+ * lines are left out: what a preview of a save shows, with the count that
+ * says it is one. An unchanged line a section keeps for context is drawn and
+ * not counted, and nothing after the cut is drawn.
+ *
+ * A COUNT, never a quiet cut: a preview ending at its sixth line reads as a
+ * save that changed six lines.
+ */
+export function firstChanged(
+  sections: readonly DiffSection[],
+  max: number,
+): { sections: DiffSection[]; more: number } {
+  const out: DiffSection[] = [];
+  let shown = 0;
+  let more = 0;
+  for (const section of sections) {
+    const kept: DiffLine[] = [];
+    for (const line of section.lines) {
+      const changed = line.kind !== "same";
+      if (shown >= max) {
+        if (changed) more++;
+        continue;
+      }
+      if (changed) shown++;
+      kept.push(line);
+    }
+    if (kept.length > 0) out.push({ lines: kept, skipped: section.skipped });
+  }
+  return { sections: out, more };
+}

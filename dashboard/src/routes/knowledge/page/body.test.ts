@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { repeatsTitle, withoutRepeatedTitle } from "./body.ts";
+import { openingOf, repeatsTitle, withoutRepeatedTitle } from "./body.ts";
 
 describe("what repeats a page's title", () => {
   test.each([
@@ -47,5 +47,40 @@ describe("the body without its repeated title", () => {
   test("keeps a title that is not on the first line", () => {
     const body = "Intro.\n\n# Split modes";
     expect(withoutRepeatedTitle(body, "Split modes")).toBe(body);
+  });
+});
+
+describe("a page's opening", () => {
+  const body = [
+    "# Split modes",
+    "",
+    "Equal, exact amounts and percentages.",
+    "",
+    "## Equal",
+    "",
+    "The total is divided by the members.",
+    "",
+    "## Exact",
+    "",
+    "Each share is entered in cents.",
+  ].join("\n");
+
+  test("is the first lines, the title said once", () => {
+    expect(openingOf(body, "Split modes", 5)).toBe(
+      "Equal, exact amounts and percentages.\n\n## Equal\n\nThe total is divided by the members.",
+    );
+  });
+
+  // A CUT ON A LINE starts a section at the budget's end as often as not, and
+  // a heading with nothing under it is not an opening.
+  test("never ends on a heading with nothing under it", () => {
+    expect(openingOf(body, "Split modes", 7)).toBe(
+      "Equal, exact amounts and percentages.\n\n## Equal\n\nThe total is divided by the members.",
+    );
+    expect(openingOf(body, "Split modes", 3)).toBe("Equal, exact amounts and percentages.");
+  });
+
+  test("is nothing for a page of headings alone", () => {
+    expect(openingOf("# Split modes\n\n## Equal\n", "Split modes", 8)).toBe("");
   });
 });

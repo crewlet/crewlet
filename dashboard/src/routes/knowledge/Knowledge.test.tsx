@@ -30,6 +30,7 @@ import { ContainerPeek } from "./peeks.tsx";
 import { Router } from "~/app/router.tsx";
 import { FrameReadings, Shell } from "~/app/Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { resetForTest as resetRecents } from "~/lib/recents.ts";
 import { resetForTest as resetStars } from "~/lib/starred.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
@@ -57,6 +58,7 @@ afterEach(() => {
     // no storage in this environment is fine
   }
   resetStars();
+  resetRecents();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   location.hash = "#/";
@@ -430,47 +432,345 @@ test("the spaces row links every space, with its key, its count and its purpose"
   ).toBe("Product: 0 pages");
 });
 
-test("recently written draws the person behind a token, grouped by the company's day", async () => {
+/** The landing at 09:00 on the 25th in Tokyo, answering `answers`. */
+function landing(answers: Record<string, Answer>) {
   location.hash = "#/knowledge";
-  // 09:00 on the 25th in Tokyo, which is still the 24th in UTC.
   vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-25T00:00:00Z"));
-  mount({ ...ran, hits: [], served_mode: "" }, [{ key: "ENG", name: "Engineering", pages: 2 }], {
+  return mount(
+    { ...ran, hits: [], served_mode: "" },
+    [{ key: "ENG", name: "Engineering", pages: 3 }],
+    answers,
+  );
+}
+
+/** One change to page `page_id`, a save by Crewlet-SWE unless `over` says otherwise. */
+function written(id: string, at: string, over: Record<string, unknown> = {}) {
+  return {
+    id,
+    page_id: "p-1",
+    title: "Settlement algorithm",
+    container: "ENG",
+    kind: "saved",
+    actor: "swe",
+    at,
+    log_seq: 0,
+    ...over,
+  };
+}
+
+/** A page's detail as the `page` question answers it. */
+function detailOf(id: string, title: string, body: string, history: unknown[] = []) {
+  return {
+    page: {
+      id,
+      container: "ENG",
+      title,
+      status: "published",
+      version: history.length,
+      author: "swe",
+      updated_at: "2026-09-24T23:00:00Z",
+      revision: 9,
+      body,
+    },
+    revision: 9,
+    skill: false,
+    onboarding: false,
+    history,
+  };
+}
+
+// THE NEWEST CHANGE LEADS, and the person behind a token is who it names; the
+// feed beside it holds the rest under the COMPANY's days.
+test("the newest change leads in its own tile, and the feed holds the rest", async () => {
+  landing({
     page_activity: {
       changes: [
-        {
-          id: "c-1",
-          page_id: "p-1",
+        written("c-1", "2026-09-24T23:00:00Z", {
           title: "Provisioner runbook",
-          container: "ENG",
-          kind: "saved",
           actor: "founder",
           actor_seat: "jane",
-          // 08:00 on the 25th in Tokyo: today, though it is the 24th in UTC.
-          at: "2026-09-24T23:00:00Z",
-        },
-        {
-          id: "c-2",
+        }),
+        written("c-2", "2026-09-24T13:00:00Z", {
           page_id: "p-2",
           title: "Deploy notes",
-          container: "ENG",
           kind: "comment",
-          actor: "swe",
-          // 22:00 on the 24th in Tokyo: yesterday.
-          at: "2026-09-24T13:00:00Z",
-        },
+        }),
       ],
     },
   });
-  const written = await screen.findByRole("region", { name: /Recently written/ });
-  await waitFor(() => expect(within(written).getByText("Jane Founder")).toBeTruthy());
-  expect(within(written).queryByText("founder")).toBeNull();
-  const days = within(written)
-    .getAllByRole("heading", { level: 3 })
-    .map((h) => h.textContent);
-  expect(days).toEqual(["Today", "Yesterday"]);
-  const rows = within(written).getAllByRole("listitem");
-  expect(rows[0]?.textContent).toMatch(/Jane Founder saved Provisioner runbook/);
-  expect(rows[1]?.textContent).toMatch(/Crewlet-SWE commented on Deploy notes/);
+  const latest = await screen.findByRole("article", { name: "Newest change" });
+  await waitFor(() => expect(within(latest).getByText("Jane Founder")).toBeTruthy());
+  expect(within(latest).getByRole("heading", { level: 2 }).textContent).toBe("Provisioner runbook");
+  expect(within(latest).queryByText("founder")).toBeNull();
+  // 08:00 on the 25th in Tokyo: today, though it is the 24th in UTC.
+  expect(latest.querySelector(".knowledge-latest-who time")?.textContent).toBe("Today 08:00");
+  expect(
+    within(latest)
+      .getByRole("link", { name: /Open page/ })
+      .getAttribute("href"),
+  ).toBe("#/knowledge/pages/p-1");
+
+  const feed = screen.getByRole("region", { name: /Recently written/ });
+  expect(
+    within(feed)
+      .getAllByRole("heading", { level: 3 })
+      .map((h) => h.textContent),
+  ).toEqual(["Yesterday"]);
+  const rows = within(feed).getAllByRole("listitem");
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.textContent).toMatch(/Deploy notes.*Crewlet-SWE commented/);
+  // THE LEAD IS NEVER LISTED AGAIN beside itself.
+  expect(feed.textContent).not.toContain("Provisioner runbook");
+  // EVERY CHANGE is the audit log, narrowed to the knowledge base.
+  expect(within(feed).getByRole("link", { name: "Every change" }).getAttribute("href")).toBe(
+    "#/settings/audit?kind=knowledge",
+  );
+});
+
+// OPEN TO READ: what each save said, the lines the newest save changed as the
+// page's History draws them, and the page's opening, its title said once.
+test("the newest saves are open to read: each note, the lines changed, and the opening", async () => {
+  const asked = landing({
+    page_activity: {
+      changes: [
+        written("c-2", "2026-09-24T23:00:00Z", { excerpt: "Breaks ties by join order" }),
+        written("c-1", "2026-09-24T22:10:00Z", { excerpt: "Adds a worked example" }),
+        written("c-0", "2026-09-24T13:00:00Z", {
+          page_id: "p-2",
+          title: "Split modes",
+          kind: "created",
+          excerpt: "Split modes",
+        }),
+      ],
+    },
+    page: (params: Record<string, unknown>) =>
+      params.id === "p-1"
+        ? detailOf(
+            "p-1",
+            "Settlement algorithm",
+            "# Settlement algorithm\n\nNets every balance first.\n\n## Ties\n\nEqual balances are ordered by join order.\n",
+            [
+              { version: 3, author: "swe", created_at: "2026-09-24T23:00:00Z" },
+              { version: 2, author: "swe", created_at: "2026-09-24T22:10:00Z" },
+              { version: 1, author: "swe", created_at: "2026-09-20T09:00:00Z" },
+            ],
+          )
+        : {},
+    page_revision: (params: Record<string, unknown>) => ({
+      page_id: "p-1",
+      version: params.version,
+      title: "Settlement algorithm",
+      body: "# Settlement algorithm\n\nNets every balance first.\n\n## Ties\n\nEqual balances are paid in any order.\n",
+      created_at: "2026-09-24T22:10:00Z",
+    }),
+  });
+  const latest = await screen.findByRole("article", { name: "Newest change" });
+  await waitFor(() => expect(latest.querySelector(".diff")).not.toBeNull());
+  expect(latest.textContent).toContain("Crewlet-SWE saved it twice");
+  const notes = [...latest.querySelectorAll(".knowledge-latest-note")].map((n) => n.textContent);
+  expect(notes).toEqual(["08:00Breaks ties by join order", "07:10Adds a worked example"]);
+  const lines = (kind: string) =>
+    [...latest.querySelectorAll(`.diff-line.${kind} .diff-text`)].map((l) => l.textContent);
+  expect(lines("is-remove")).toEqual(["Equal balances are paid in any order."]);
+  expect(lines("is-add")).toEqual(["Equal balances are ordered by join order."]);
+  // THE PAGE'S OWN BODY IS THE SAVE'S, so only the revision before it is read.
+  expect(asked.filter((a) => a.what === "page_revision").map((a) => a.params.version)).toEqual([2]);
+  const opening = latest.querySelector(".knowledge-latest-opening");
+  expect(opening?.textContent).toContain("Nets every balance first.");
+  expect(latest.textContent?.match(/Settlement algorithm/g)).toHaveLength(1);
+  // THE TWO SAVES ARE ONE ROW, and it leads: the feed holds only the new page.
+  const feed = screen.getByRole("region", { name: /Recently written/ });
+  expect(within(feed).getAllByRole("listitem")).toHaveLength(1);
+  expect(feed.textContent).not.toContain("Settlement algorithm");
+});
+
+// A PREVIEW SAYS IT IS ONE: a save that changed more than the tile shows
+// counts the rest and links the whole save in the page's History.
+test("a long save's lines are a preview that counts the rest and opens the save", async () => {
+  const before = Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n");
+  const after = before.replace(/line (\d+)/g, "LINE $1");
+  landing({
+    page_activity: { changes: [written("c-1", "2026-09-24T23:00:00Z")] },
+    page: detailOf("p-1", "Settlement algorithm", after, [
+      { version: 5, author: "swe", created_at: "2026-09-24T23:00:00Z" },
+      { version: 4, author: "swe", created_at: "2026-09-20T09:00:00Z" },
+    ]),
+    page_revision: { page_id: "p-1", version: 4, title: "Settlement algorithm", body: before },
+  });
+  const latest = await screen.findByRole("article", { name: "Newest change" });
+  await waitFor(() => expect(latest.querySelector(".diff")).not.toBeNull());
+  expect(latest.querySelectorAll(".diff-line")).toHaveLength(6);
+  // TWENTY-FOUR CHANGED LINES, twelve out and twelve in, and six drawn.
+  expect(latest.textContent).toContain("18 more changed lines in this save");
+  expect(within(latest).getByRole("link", { name: "this save" }).getAttribute("href")).toBe(
+    "#/knowledge/pages/p-1?version=5",
+  );
+});
+
+// A DIFF IS OF ONE PAIR OF VERSIONS: a read keeps its last answer while the
+// next one is asked, so an answer for another version is never diffed.
+test("a revision answered for another version is not diffed against the save", async () => {
+  landing({
+    page_activity: { changes: [written("c-1", "2026-09-24T23:00:00Z")] },
+    page: detailOf("p-1", "Settlement algorithm", "Equal balances are ordered by join order.", [
+      { version: 5, author: "swe", created_at: "2026-09-24T23:00:00Z" },
+      { version: 4, author: "swe", created_at: "2026-09-20T09:00:00Z" },
+    ]),
+    page_revision: { page_id: "p-1", version: 3, title: "Settlement algorithm", body: "Older." },
+  });
+  const latest = await screen.findByRole("article", { name: "Newest change" });
+  await waitFor(() => expect(latest.querySelector(".knowledge-latest-opening")).not.toBeNull());
+  expect(latest.querySelector(".diff")).toBeNull();
+});
+
+// A NEW PAGE leads with what it says: no note to repeat its title or its
+// first line, and its opening under it.
+test("a new page leads with its opening, and no note repeats its title", async () => {
+  landing({
+    page_activity: {
+      changes: [
+        written("c-1", "2026-09-24T23:00:00Z", {
+          title: "Split modes",
+          kind: "created",
+          excerpt: "Split modes",
+        }),
+      ],
+    },
+    page: detailOf(
+      "p-1",
+      "Split modes",
+      "# Split modes\n\nEqual, exact amounts and percentages.\n",
+      [{ version: 1, author: "swe", created_at: "2026-09-24T23:00:00Z" }],
+    ),
+  });
+  const latest = await screen.findByRole("article", { name: "Newest change" });
+  await waitFor(() =>
+    expect(latest.querySelector(".knowledge-latest-opening")?.textContent).toContain(
+      "Equal, exact amounts and percentages.",
+    ),
+  );
+  expect(latest.textContent).toContain("Crewlet-SWE wrote it");
+  expect(latest.querySelector(".knowledge-latest-notes")).toBeNull();
+  expect(latest.querySelector(".diff")).toBeNull();
+  expect(latest.textContent?.match(/Split modes/g)).toHaveLength(1);
+  // NOTHING ELSE was written, and the feed says so in one line.
+  const feed = screen.getByRole("region", { name: /Recently written/ });
+  expect(within(feed).getByText("Nothing else has been written yet.")).toBeTruthy();
+});
+
+// A PURGED PAGE keeps its changes and no title: the record that it existed,
+// never the lead, and never a link to nowhere.
+test("a change to a page that is gone never leads and links nowhere", async () => {
+  landing({
+    page_activity: {
+      changes: [
+        written("c-2", "2026-09-24T23:30:00Z", { page_id: "gone", title: "", container: "" }),
+        written("c-1", "2026-09-24T23:00:00Z", { title: "Provisioner runbook" }),
+      ],
+    },
+  });
+  const latest = await screen.findByRole("article", { name: "Newest change" });
+  await waitFor(() =>
+    expect(within(latest).getByRole("heading", { level: 2 }).textContent).toBe(
+      "Provisioner runbook",
+    ),
+  );
+  const feed = screen.getByRole("region", { name: /Recently written/ });
+  const gone = within(feed).getByRole("listitem");
+  expect(gone.textContent).toContain("A page that is gone");
+  expect(within(gone).queryByRole("link")).toBeNull();
+});
+
+test("an empty landing says so once, and each small tile in one line", async () => {
+  landing({ page_activity: { changes: [] } });
+  const latest = await screen.findByRole("article", { name: "Newest change" });
+  await waitFor(() =>
+    expect(within(latest).getByText("Nothing has been written yet")).toBeTruthy(),
+  );
+  const tile = (name: RegExp) => screen.getByRole("region", { name });
+  expect(within(tile(/Recently written/)).getByText("Nothing has been written yet.")).toBeTruthy();
+  expect(
+    within(tile(/Continue reading/)).getByText("The pages you open are listed here."),
+  ).toBeTruthy();
+  expect(
+    within(tile(/Pinned/)).getByText("Star a page from its More menu to pin it here."),
+  ).toBeTruthy();
+  await waitFor(() =>
+    expect(
+      within(tile(/Watching/)).getByText("Watch a page with the eye in its bar to follow it."),
+    ).toBeTruthy(),
+  );
+  expect(within(tile(/For the agents/)).getByRole("link", { name: /Agent skills/ })).toBeTruthy();
+});
+
+// A KEPT PAGE IS READ FOR WHAT IT IS NOW: a recent carries the label the page
+// had when it was opened, and a rename since is drawn by the new title.
+test("continue reading draws each page by its title now, and who last saved it", async () => {
+  localStorage.setItem(
+    "crewlet_recents",
+    JSON.stringify([
+      {
+        // A page's address is its id, and a recent whose path resolves to no
+        // route is dropped on read.
+        path: ["knowledge", "pages", "0b6f5a4e-6a41-4b6e-9d8c-3f1e2d4c5b6a"],
+        label: "Old title",
+        workspace: "knowledge",
+      },
+      { path: ["work", "ENG-4"], label: "ENG-4", workspace: "work" },
+    ]),
+  );
+  resetRecents();
+  landing({
+    page_activity: { changes: [] },
+    page: detailOf("p-1", "Settlement algorithm", "Nets every balance.", [
+      { version: 2, author: "founder", author_seat: "jane", created_at: "2026-09-24T22:00:00Z" },
+    ]),
+  });
+  const reading = await screen.findByRole("region", { name: /Continue reading/ });
+  await waitFor(() => expect(within(reading).getByText("Settlement algorithm")).toBeTruthy());
+  expect(within(reading).queryByText("Old title")).toBeNull();
+  expect(within(reading).queryByText("ENG-4")).toBeNull();
+  expect(within(reading).getByText("Last saved 2h ago by Jane Founder")).toBeTruthy();
+});
+
+test("watching draws who last saved each page, and nothing where no save is named", async () => {
+  landing({
+    page_activity: { changes: [] },
+    pages: {
+      pages: [
+        {
+          id: "p-1",
+          title: "Settlement algorithm",
+          container: "ENG",
+          status: "published",
+          version: 3,
+          updated_at: "2026-09-24T23:00:00Z",
+          revision: 3,
+          saved_by: "swe",
+          saved_at: "2026-09-24T23:00:00Z",
+        },
+        {
+          id: "p-2",
+          title: "Split modes",
+          container: "ENG",
+          status: "published",
+          version: 1,
+          updated_at: "2026-09-24T23:00:00Z",
+          revision: 1,
+          saved_at: "0001-01-01T00:00:00Z",
+        },
+      ],
+      limit: 3,
+      total: 2,
+    },
+  });
+  const watching = await screen.findByRole("region", { name: /Watching/ });
+  await waitFor(() => expect(within(watching).getByText("Settlement algorithm")).toBeTruthy());
+  expect(within(watching).getByText("Last saved 1h ago by Crewlet-SWE")).toBeTruthy();
+  const split = within(watching)
+    .getAllByRole("listitem")
+    .find((row) => row.textContent?.includes("Split modes"));
+  expect(split?.textContent).not.toMatch(/Last saved/);
 });
 
 // AN AGE IS NOT A DAY: a row under "Oct 09" said "1d ago", the same as the

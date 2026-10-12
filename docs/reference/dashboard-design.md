@@ -916,7 +916,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** — a channel's own page draws the channel and what crossed it | |
 | `#/live/traces/{id}` | **Trace** — one distributed trace. NO LIST: nothing enumerates traces, so a bare traces address is Not Found, saying a trace is opened from a turn, a run or an event | |
 | `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `seat=` · `trace=` · `channel=` · `q=` · `failed=true` |
-| `#/knowledge` | **Knowledge**: with no phrase, the landing (Pinned, Recently written, Continue reading, Watching, For the agents); with one, the ranked answer grouped by space beside a preview. The spaces row and the search sit on every Knowledge screen | `q=` · `mode=hybrid\|keyword\|semantic` (Hybrid, Keyword, Meaning) · `by=space\|rank` · `space=` (narrows what is shown of the answer) |
+| `#/knowledge` | **Knowledge**: with no phrase, the landing (the newest change open to read, Recently written, Continue reading, Pinned, Watching, For the agents); with one, the ranked answer grouped by space beside a preview. The spaces row and the search sit on every Knowledge screen | `q=` · `mode=hybrid\|keyword\|semantic` (Hybrid, Keyword, Meaning) · `by=space\|rank` · `space=` (narrows what is shown of the answer) |
 | `#/knowledge/{CONTAINER}` | **Space** (a knowledge container, by its key): its head, and its pages as an outline read one level at a time, with Create (a document or a folder) at the end of every open level | |
 | `#/knowledge/new` | **New page**: the composer, filed where it was opened from | `space=` · `parent=` (a page id) |
 | `#/knowledge/pages/{id}` | **Page**: addressed by its id, which a rename does not change. The document with its outline, its properties, its comments and what it is connected to; edited as you | `edit=1` · `version=` (History: one revision in the document's place) · `lens=diff\|full` |
@@ -5611,18 +5611,35 @@ palette and the trail.
   running Hybrid first and reporting "asked for Hybrid, served Keyword" about
   a choice nobody made. A mode the reader named in the address is theirs and
   is kept, and the answer says what served it.
-- **The landing** (no phrase) is what is worth coming back to, in two columns:
-  **Pinned**, the pages this reader starred from a page's More menu, three to a
-  row with each page's space, its title and who last saved it; **Recently
-  written**, every save, comment, rename and new page across the company
-  (`page_activity`), under the COMPANY's days, Today and Yesterday cut at the
-  company's midnight; **Continue reading**, the pages this browser opened last;
-  **Watching**, the pages this person follows (`pages{watcher}`); and **For the
-  agents**, Agent skills with the engine's count of published tool skills and
-  Agent diaries with how many agents keep one and when the newest reflection
-  was written. On a company whose knowledge lives in a vendor's wiki there is
-  nothing on the engine to browse, and the landing says so rather than drawing
-  an error.
+- **The landing** (no phrase) is TILES SIZED BY WHAT EACH IS WORTH, on one
+  screen (the approved Bento layout). The newest save, comment, rename or new
+  page across the company takes the big tile, OPEN TO READ: the page's space
+  and the way into it, its title, who changed it and when, what each save said
+  (back-to-back saves of one page by one writer on one company day are one
+  row, "saved it twice"), the lines the newest save changed as the page's
+  History draws them (six at most, with the count of the rest and a link to
+  that save), and the page's opening, never ending on a heading with nothing
+  under it. That costs ONE `page` read, of the featured page alone, and the
+  `page_revision` before the save; a change to a page since purged never
+  leads. **Recently written** runs down the right with the rest of the same
+  `page_activity` read, never the featured change again, under the COMPANY's
+  days, Today and Yesterday cut at the company's midnight. Each row says its
+  time of day on that same clock (its age is the time's title, since an age
+  under a date heading contradicted it) and its note: a save's own, a
+  comment's words or a new page's first line, never the title again. **Every
+  change** opens the audit log narrowed to the knowledge base. Four small
+  tiles list three pages each and say one line when empty: **Continue
+  reading**, the pages this browser opened last, and **Pinned**, the pages
+  this reader starred from a page's More menu, each page read for its title
+  now and who last saved it; **Watching**, the pages this person follows
+  (`pages{watcher}`); and **For the agents**, Agent skills with the engine's
+  count of published tool skills and Agent diaries with how many agents keep
+  one and when the newest reflection was written. The grid places each tile by
+  a named area, so the markup keeps the reading order at every width: below
+  928px the feed moves under the newest change and the small tiles pair up,
+  and below 640px everything is one column. On a company whose knowledge lives
+  in a vendor's wiki there is nothing on the engine to browse, and the landing
+  says so rather than drawing an error.
 - **The results** are the ranked answer GROUPED BY SPACE beside a PREVIEW of
   the chosen result. Grouping never reorders the engine's rank: a group is one
   space's hits in the engine's order, the groups follow their best hit, and

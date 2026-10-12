@@ -2655,25 +2655,127 @@ a.prof-row:hover {
   color: var(--color-text-tertiary);
 }
 
-/* THE LANDING: what is worth returning to, in two columns. */
-.knowledge-home-grid {
+/* THE LANDING: tiles sized by what each is worth, on one screen. The newest
+   change takes the big tile, Recently written runs down the right, and the
+   four small tiles share the rest, each one line when it has nothing to list.
+   Every tile is placed by a named area, so the markup keeps the reading order
+   at every width: below 928px the feed moves under the newest change and the
+   small tiles pair up, and below 640px everything is one column. */
+.knowledge-tiles {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
-  gap: var(--spacing-5);
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.1fr);
+  grid-template-areas:
+    "latest latest written"
+    "reading pinned written"
+    "watching agents written";
+  gap: var(--spacing-4);
+  align-items: stretch;
 }
-.knowledge-home-column {
+@container page (width < 928px) {
+  .knowledge-tiles {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "latest latest"
+      "written written"
+      "reading pinned"
+      "watching agents";
+  }
+}
+@container page (width < 640px) {
+  .knowledge-tiles {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "latest" "written" "reading" "pinned" "watching" "agents";
+  }
+}
+.knowledge-written {
+  grid-area: written;
+}
+.knowledge-reading {
+  grid-area: reading;
+}
+.knowledge-pinned {
+  grid-area: pinned;
+}
+.knowledge-watching {
+  grid-area: watching;
+}
+.knowledge-agents {
+  grid-area: agents;
+}
+
+/* A SMALL TILE'S ROWS, set in by the one step that puts each row's glyph
+   under the tile's own: the head is inset by --spacing-4, a row by
+   --spacing-3. */
+.knowledge-tile-rows {
+  padding: 0 var(--spacing-1) var(--spacing-2);
+}
+/* Anything else a tile holds (the line an empty one says, a reading, a
+   refusal), at the tile's own inset under its head. */
+.knowledge-tile-body {
+  padding: 0 var(--spacing-4) var(--spacing-3);
+}
+/* A ROW'S WORDS: the page, then one quiet line about it. */
+.knowledge-tile-text {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-6);
   min-width: 0;
 }
-.knowledge-section {
-  display: flex;
-  flex-direction: column;
+.knowledge-tile-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* THE NEWEST CHANGE: the page's head and title, who changed it and when, what
+   each save said, the lines it changed, and the page's opening under a rule. */
+.knowledge-latest {
+  grid-area: latest;
   gap: var(--spacing-3);
-  min-width: 0;
 }
+.knowledge-latest-who {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  min-width: 0;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+.knowledge-latest-who b {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.knowledge-latest-who > time {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.knowledge-latest-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.knowledge-latest-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--spacing-3);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-primary);
+}
+.knowledge-latest-note > time {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.knowledge-latest-opening {
+  padding-top: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+}
+
 .knowledge-section-title {
   display: flex;
   align-items: baseline;
@@ -2685,11 +2787,6 @@ a.prof-row:hover {
 }
 .knowledge-section-title > svg {
   align-self: center;
-  color: var(--color-text-tertiary);
-}
-.knowledge-section-hint {
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-regular);
   color: var(--color-text-tertiary);
 }
 .knowledge-count {
@@ -2704,91 +2801,21 @@ a.prof-row:hover {
   color: var(--color-text-tertiary);
 }
 
-/* PINNED: three cards to a row, the page's place above its title. */
-.knowledge-pins {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--spacing-3);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.knowledge-pin {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  height: 100%;
-}
-.knowledge-pin-head {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  color: var(--color-text-tertiary);
-}
-.knowledge-pin-title {
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-}
-.knowledge-row-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  margin-top: auto;
-  min-width: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.knowledge-row-trail {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-}
-
-/* RECENTLY WRITTEN: the company's day, then who did what to which page. */
+/* RECENTLY WRITTEN: the company's day, then the rows under it. A row's note
+   is prose, so it is cut at a line rather than a pixel. */
 .knowledge-day {
   margin: 0;
-  padding: var(--spacing-3) var(--spacing-4) var(--spacing-1);
+  padding: var(--spacing-2) var(--spacing-4) var(--spacing-1);
   font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-medium);
   letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
   color: var(--color-text-tertiary);
 }
-.knowledge-written-rows {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.knowledge-written-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: var(--spacing-3);
-  align-items: start;
-  padding: var(--spacing-2) var(--spacing-4);
-}
-.knowledge-written-text {
-  margin: 0;
-  font-size: var(--font-size-compact);
-  color: var(--color-text-secondary);
-}
-.knowledge-written-text b {
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
 .knowledge-written-note {
-  display: block;
-  margin-top: var(--spacing-1);
+  --clamp-lines: 2;
   font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.knowledge-written-row > time {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
+  color: var(--color-text-secondary);
 }
 
 /* ---- A space ------------------------------------------------------------ */
