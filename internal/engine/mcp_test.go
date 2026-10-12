@@ -84,14 +84,36 @@ func claimed(t *testing.T, e *engine.Engine, seats int) {
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	waitEstablished(t, e, seats)
+}
+
+// waitEstablished waits for this node to hold seats seats, every one of them
+// ESTABLISHED.
+//
+// Established, not merely held: a seat enters the held set the moment its
+// lease is taken, BEFORE its acquisition has started its children, so a case
+// that read a seat's tools as soon as the seat was held was reading them while
+// they were still starting — and failed whenever the last claim was slower
+// than the read. [seat.Host.MayStart] admits a turn only once the acquisition
+// has returned, which is the moment the seat's surface is complete.
+func waitEstablished(t *testing.T, e *engine.Engine, seats int) {
+	t.Helper()
+	host := e.Node().Host()
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(e.Node().Host().Held()) >= seats {
+		held := host.Held()
+		established := len(held) >= seats
+		for _, handle := range held {
+			if _, ok := host.MayStart(handle); !ok {
+				established = false
+			}
+		}
+		if established {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("held %v after 10s, want %d seats", e.Node().Host().Held(), seats)
+	t.Fatalf("held %v after 30s, want %d seats established", host.Held(), seats)
 }
 
 // surfaceOf is the tool names one seat's turns would be built against.
@@ -323,13 +345,13 @@ func TestAHeldSeatsPerRoleToolsSurviveAConfigApply(t *testing.T) {
 	}
 }
 
-// AND THE PER-ROLE CHILD IS NOT RESTARTED BY THE REBUILD.
+// AND THE PER-ROLE CHILD IS NOT RESTARTED BY AN APPLY THAT DID NOT MOVE IT.
 //
-// A per-role child belongs to the seat's LEASE rather than to the epoch, so
-// an apply must leave it alone: restarting one would re-handshake every
-// seat's vendor credentials on every config edit, and the control-plane doc
-// states the rule. The registry is rebuilt; the process never learns an
-// apply happened.
+// Every apply reconciles a held seat's children, so that a credential it seals
+// or rotates reaches them — but a child whose resolved spec is unchanged must
+// be left alone: restarting it would re-handshake every seat's vendor
+// credentials on every config edit, and the control-plane doc states the rule.
+// The registry is rebuilt; the process never learns an apply happened.
 func TestAnApplyDoesNotRestartAHeldSeatsChild(t *testing.T) {
 	t.Parallel()
 	doc := mcpCompany(false, "SEAT_TOKEN")
@@ -345,6 +367,9 @@ func TestAnApplyDoesNotRestartAHeldSeatsChild(t *testing.T) {
 	if _, _, err := e.Apply(t.Context(), parsedCompany(t, doc), time.Now()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
+	// The apply's reconcile of the children runs after it returns, so a
+	// restart would show only once that reconcile is over.
+	engine.SettleSeatServers(e)
 	second, ok := e.ToolsFor("ceo").Lookup("tracker_probe")
 	if !ok {
 		t.Fatal("the applied epoch has no per-role tool")

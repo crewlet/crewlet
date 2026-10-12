@@ -1963,10 +1963,10 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 	// opens. A seat that started consuming before its per-role children
 	// were up would run its first turn with a surface missing exactly the
 	// tools it acts through.
-	company := e.Company()
 	// startSeatServers files the registry alongside the bridge, so the two
-	// cannot disagree about which children this seat has.
-	e.startSeatServers(ctx, company, handle)
+	// cannot disagree about which children this seat has — and returns only
+	// once an apply that landed while they were starting has been folded in.
+	e.startSeatServers(ctx, handle)
 
 	// THE SEAT'S MEMORY, before it can take a turn. Its diary, episodes,
 	// counterparties and skills were written on whichever nodes ran it

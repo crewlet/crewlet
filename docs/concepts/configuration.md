@@ -377,7 +377,7 @@ log whose first restart leaves the node unable to serve.
    The native tracker's **org chart** is reconciled at this stage too. Its projects are stamped with the activation being applied (the pointer's own instant, to the millisecond and identical on every node), never with the time of the apply. So a re-apply or a restart on the same activation writes nothing, and when several nodes apply one activation at once they contend per project and exactly one writes it (see [Work tracker](../guides/work-tracker.md#projects-and-keys)).
 10. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
 11. **`maintenance`** — rebuild the retention sweep, on a node's **first** company (or the apply that started the native runtime). Its job list is read once, and on a node that booted unconfigured once was before there was a runtime to contribute the operation ledgers, the tracker's repairs and the inbox sweep, or a company to state the conversation horizon — so it swept none of those until a restart. **After** the swap, because it reads those horizons off the current company. The old sweep stops, its in-flight tick waited out, before the new one starts. **Conditional:** only on that first apply, and only on a node that publishes.
-12. **`seat_tools`**: rebuild the registry each seat this node *holds* runs against. **After** the swap, because that registry is a clone of the current epoch's surface: a seat's per-role children are filed into a copy of the builtins plus the shared servers, so a new epoch leaves the copy stale. The children themselves are deliberately untouched (they belong to the seat's lease, not to the epoch; see below), so what is rebuilt is the catalogue a turn is built against, never a process. Reported on every apply, including one where this node holds no seat with per-role children and there is nothing to rebuild.
+12. **`seat_tools`**: rebuild the registry each seat this node *holds* runs against, then hand that seat's per-role children their reconcile. **After** the swap, because that registry is a clone of the current epoch's surface: a seat's per-role children are filed into a copy of the builtins plus the shared servers, so a new epoch leaves the copy stale. The children are then reconciled against this epoch and the snapshot `secrets` re-read, each seat's on its own and every seat at once: a child whose resolved spec moved (an `mcp_env` edit, a credential sealed or rotated since it started) is restarted, one that is not running is started, and every other child is left running (see below). The apply **does not wait** for that reconcile, and each seat refiles its registry again when its own is done. A start is a subprocess handshake that can take a whole `startup_timeout_seconds`, and with the new epoch already current every stage below would otherwise wait behind it. Reported on every apply, including one where this node holds no seat with per-role children and there is nothing to rebuild.
 13. **`mailboxes`**: ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. When the new epoch has a model provider, this stage also releases every seat inbox the node paused while the company had none, after the seat tools are rebuilt, because the first thing a released inbox does is run a turn. In the same place and for the same reason it re-judges every seat parked on its [token budget](../guides/budgets-and-spend.md) against the ceilings this revision states, and drops the pause of any seat the revision removed, so a seat later added under the same handle does not arrive paused by somebody who paused a different role. **Conditional:** only where the engine has a node, because `crewlet validate` applies to nothing.
 14. **`learning_passes`**: hand the background learning loops (episode compaction, the skill curator, clustered synthesis and promotion) the passes this revision turns on, built from its models, credentials and knobs. **After** the swap, because the loops walk the current company's seats: handed over earlier they would run the new revision's passes over the previous company's roster, and a refusal later in the same apply would leave them there for a revision this node never served. The loops themselves are armed once per process and keep their clocks across an apply (see [Agent Learning](agent-learning.md#trigger-threshold-gated-on-a-slow-loop)), so this is also where a node that booted with no company, or a company that gained its first provider, starts running them. Reported on every apply, including one on a node with no store or no worker role, which has no loops to hand anything to.
 15. **`scheduler`**: re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
@@ -478,22 +478,35 @@ published before the replacement files its own. Taking a leaking integration
 offline by deleting its `mcp_servers` entry therefore takes effect on the next
 turn, which is what the rest of this section already promised.
 
-**Per-role children are not on this path.** They belong to a seat's *lease*
-rather than to the epoch: the apply-time reconcile skips every non-shared
-server, and a role's `mcp_env` — which carries the per-agent Slack/GitHub
-credentials — is never part of a spec an apply compares. Such a child is
-spawned when its seat is claimed and torn down when it is released, so an
-`mcp_env` change reaches it when the seat next changes hands, not on the apply
-that carried it.
+**Per-role children are reconciled too, but by the seat rather than by the
+epoch.** They belong to a seat's *lease*: spawned when the seat is claimed and
+torn down when it is released, and only ever on the node holding it — so this
+reconcile over the epoch's specs skips every non-shared server, and each node
+instead reconciles the children of the seats it holds, in the `seat_tools`
+stage above, once the new epoch is current. The spec compared there is the
+template with the seat's `mcp_env` laid over it — which carries the per-agent
+Slack, GitHub or Mattermost credential — resolved through the snapshot this
+apply re-read. So an `mcp_env` edit, or a credential sealed or rotated since
+the child started, restarts **only that seat's child**, on the apply that
+carried it, and every other child keeps running.
 
-What an apply *does* rebuild for a held seat is that seat's **registry** — the
-`seat_tools` stage above. The two are separate on purpose: the registry is a
-clone of the epoch's surface and goes stale the moment a new epoch is
-published, while the child is a running process holding that seat's
-credentials and must not be restarted for a config edit that did not name it.
-So an apply re-files the live children's catalogue into a fresh clone of the
-new epoch's builtins and shared servers, and the child never learns it
-happened.
+The same stage rebuilds each held seat's **registry**. The registry is a clone
+of the epoch's surface and goes stale the moment a new epoch is published,
+while a child is a running process holding that seat's credentials and must
+not be restarted for a config edit that did not name it. So an apply re-files
+each seat's live children into a fresh clone of the new epoch's builtins and
+shared servers first, and only then reconciles the children themselves; a
+child whose resolved spec did not move never learns the apply happened.
+
+Unlike the shared servers, which are reconciled *before* the swap and so hold
+the apply until each has started, a seat's children are reconciled after it
+and the apply does not wait for them. A turn that starts in between runs on
+the seat's refiled registry, which still lists the children as the apply found
+them, and a call to one being restarted comes back as a tool error the model
+can read; the seat refiles its registry again once its reconcile is done, so
+its next turn sees the restarted children. A child that would not start is retried on its
+own as well, while the seat is held. See
+[Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
 
 ### The API half
 

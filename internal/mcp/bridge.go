@@ -308,6 +308,27 @@ func (b *Bridge) Reconcile(ctx context.Context, spec Spec) (Change, error) {
 	}
 }
 
+// Runs reports whether the bridge is serving a server started from exactly
+// this spec: running under its name, from a spec equal to it in every field.
+//
+// The question a caller asks BEFORE Reconcile, when what it needs to know is
+// whether reconciling would touch a process at all — to leave a healthy
+// child out of a pass that restarts its neighbours, and to tell the operator
+// which servers it actually started rather than claiming all of them. It is
+// the same comparison Reconcile makes, so a spec this answers true for is one
+// Reconcile leaves alone, and the values compared are the RESOLVED ones: a
+// rotated credential, the config entry byte-identical, answers false.
+//
+// A server still starting is not running ([Bridge.Has]), and a server whose
+// start failed is not in the bridge at all, so both answer false — which is
+// what lets a caller retry them through the same call.
+func (b *Bridge) Runs(spec Spec) bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	entry, ok := b.servers[spec.Name]
+	return ok && entry.spec.equal(spec)
+}
+
 // liveToolsOf is one server's contribution to the LIVE catalogue — its tools
 // minus any that another server currently wins the name for.
 func (b *Bridge) liveToolsOf(name string) []*Tool {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A REAL MCP server, run as a REAL child process, for the ENGINE's wiring.
@@ -33,6 +34,27 @@ const (
 	// toolServerEchoEnv names an environment variable whose value is
 	// reported back in the tool's description.
 	toolServerEchoEnv = "CREWLET_ENGINE_TEST_ECHO"
+
+	// toolServerRequireEnv names an environment variable the server
+	// REFUSES TO START without: empty, it says so on stderr and exits
+	// non-zero before speaking MCP, which is what a vendor's server does
+	// when the token it authenticates with is empty.
+	toolServerRequireEnv = "CREWLET_ENGINE_TEST_REQUIRE"
+
+	// toolServerHoldEnv is a path. A server about to refuse for want of its
+	// required variable first writes <path>.started and then waits for
+	// <path> to exist, so a case can land an apply while the start that is
+	// going to fail is still in flight.
+	toolServerHoldEnv = "CREWLET_ENGINE_TEST_HOLD"
+
+	// toolServerReadyEnv is a path the server refuses to start without,
+	// standing for a vendor that is not up yet: the failure passes when
+	// the file appears, with nothing about the server's spec changing.
+	toolServerReadyEnv = "CREWLET_ENGINE_TEST_READY"
+
+	// toolServerLaunchesEnv is a directory every launch records itself in,
+	// before anything else, so a case can count the starts the engine made.
+	toolServerLaunchesEnv = "CREWLET_ENGINE_TEST_LAUNCHES"
 )
 
 func TestMain(m *testing.M) {
@@ -42,8 +64,27 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// runToolServer speaks newline-delimited JSON-RPC until stdin closes.
+// runToolServer speaks newline-delimited JSON-RPC until stdin closes, or
+// refuses to start the way the environment asks it to.
 func runToolServer() int {
+	if dir := os.Getenv(toolServerLaunchesEnv); dir != "" {
+		if f, err := os.CreateTemp(dir, "launch-*"); err == nil {
+			_ = f.Close()
+		}
+	}
+	if key := os.Getenv(toolServerRequireEnv); key != "" && os.Getenv(key) == "" {
+		if hold := os.Getenv(toolServerHoldEnv); hold != "" {
+			holdUntil(hold)
+		}
+		fmt.Fprintf(os.Stderr, "%s is required and is empty\n", key)
+		return 1
+	}
+	if ready := os.Getenv(toolServerReadyEnv); ready != "" {
+		if _, err := os.Stat(ready); err != nil {
+			fmt.Fprintln(os.Stderr, "the service this server fronts is not up")
+			return 1
+		}
+	}
 	in := bufio.NewReaderSize(os.Stdin, 1<<20)
 	for {
 		line, err := in.ReadString('\n')
@@ -53,6 +94,20 @@ func runToolServer() int {
 		if err != nil {
 			return 0
 		}
+	}
+}
+
+// holdUntil announces that this start is in flight and waits for the case to
+// let it go. Bounded, so a case that never does cannot strand a child.
+func holdUntil(path string) {
+	if err := os.WriteFile(path+".started", nil, 0o600); err != nil {
+		return
+	}
+	for deadline := time.Now().Add(time.Minute); time.Now().Before(deadline); {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

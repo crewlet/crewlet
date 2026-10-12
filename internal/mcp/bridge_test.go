@@ -309,6 +309,56 @@ func TestRestartOfAnUnknownServerJustStartsIt(t *testing.T) {
 	}
 }
 
+// RUNS IS THE QUESTION "WOULD RECONCILE TOUCH A PROCESS?", over the RESOLVED
+// spec. A caller that asks it to leave a healthy child alone must still be
+// told no for a rotated credential — the config entry is byte-identical there
+// and only the value moved — and for a server whose start failed, which the
+// bridge keeps nothing of, or the caller would never try it again.
+func TestRunsAnswersForTheExactSpecTheChildWasStartedFrom(t *testing.T) {
+	t.Parallel()
+	b := newTestBridge(t)
+	spec := helperSpec(t, "jira", "serve", map[string]string{"SEAT_TOKEN": "first"})
+	if b.Runs(spec) {
+		t.Fatal("Runs says yes before anything was started")
+	}
+	if _, err := b.Add(t.Context(), spec); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if !b.Runs(spec) {
+		t.Fatal("Runs says no for the spec the server is running")
+	}
+	// A COPY, rebuilt the way a later apply rebuilds it: equal values in
+	// fresh maps must still read as the same server, or every apply would
+	// restart every child.
+	again := helperSpec(t, "jira", "serve", map[string]string{"SEAT_TOKEN": "first"})
+	if !b.Runs(again) {
+		t.Fatal("an equal spec in fresh maps reads as a different server")
+	}
+	rotated := helperSpec(t, "jira", "serve", map[string]string{"SEAT_TOKEN": "second"})
+	if b.Runs(rotated) {
+		t.Fatal("a rotated credential reads as the running server, so nothing would restart it")
+	}
+	other := helperSpec(t, "confluence", "serve", map[string]string{"SEAT_TOKEN": "first"})
+	if b.Runs(other) {
+		t.Fatal("a spec under another name reads as running")
+	}
+	if _, err := b.Stop(t.Context(), "jira"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if b.Runs(spec) {
+		t.Fatal("Runs says yes for a server the bridge stopped")
+	}
+
+	broken := helperSpec(t, "broken", "serve", map[string]string{helperExitEnv: "3"})
+	broken.StartupTimeout = 5 * time.Second
+	if _, err := b.Add(t.Context(), broken); err == nil {
+		t.Fatal("a server that exits at once was reported started")
+	}
+	if b.Runs(broken) {
+		t.Fatal("a server whose start failed reads as running, so a retry would skip it")
+	}
+}
+
 func TestStopAllDoesNotStrandServersBehindASlowOne(t *testing.T) {
 	t.Parallel()
 	// The recorder has to be the bridge's logger from the START: a client

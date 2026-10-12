@@ -2507,6 +2507,14 @@ func TestAnOverloadInsideAStreamIsAServerFailure(t *testing.T) {
 	}
 }
 
+// talkingStreamTimeout is the idle bound of the cases where a stream outlasts
+// it without ever going silent for as long. A SECOND, so the quarter of it the
+// server waits between events leaves three quarters of a second for the
+// reading goroutine to be scheduled. At 200 ms the slack was 150 ms, and a
+// full `make test` under the race detector on four CPUs has starved that
+// goroutine for longer, failing the round as a stall it never was.
+const talkingStreamTimeout = time.Second
+
 // writeSlowStream answers as a Messages stream, pausing before every event.
 func writeSlowStream(w http.ResponseWriter, gap time.Duration, events ...sseEvent) {
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -2526,7 +2534,7 @@ func writeSlowStream(w http.ResponseWriter, gap time.Duration, events ...sseEven
 // deadline used to cover the whole body and cut such a round off half-way.
 func TestALongStreamedRoundIsNotCutOffByTheTimeout(t *testing.T) {
 	t.Parallel()
-	const timeout = 200 * time.Millisecond
+	const timeout = talkingStreamTimeout
 	_, url := serve(t, func(w http.ResponseWriter, _ int) {
 		writeSlowStream(w, timeout/4, streamOf(
 			streamStart(), textBlock(0, "a", "b", "c", "d", "e", "f"), streamEnd("end_turn"))...)
@@ -2600,7 +2608,7 @@ func TestASilentStreamIsATimeout(t *testing.T) {
 // timeout long and never silent for as long as it, answers.
 func TestACallNobodyWatchesStillStreams(t *testing.T) {
 	t.Parallel()
-	const timeout = 200 * time.Millisecond
+	const timeout = talkingStreamTimeout
 	api, url := serve(t, func(w http.ResponseWriter, _ int) {
 		writeSlowStream(w, timeout/4, streamOf(
 			streamStart(), textBlock(0, "a", "b", "c", "d", "e", "f"), streamEnd("end_turn"))...)
