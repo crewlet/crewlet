@@ -211,7 +211,8 @@ mcp_servers:
     shared: false
     command: npm
     args: ["exec", "--yes", "--", "slack-mcp-server@1.3.0", "--transport", "stdio"]
-    # without these the server registers no tool that posts or reacts
+    # without these the server registers no tool that posts or reacts; each
+    # seat's mcp_env.slack adds its token and its own SLACK_MCP_CHANNELS_CACHE
     env: { SLACK_MCP_ADD_MESSAGE_TOOL: "true", SLACK_MCP_REACTION_TOOL: "true" }
     tool_annotations:
       conversations_add_message: { read_only: false, open_world: true }
