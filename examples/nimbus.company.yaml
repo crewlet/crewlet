@@ -570,8 +570,11 @@ mcp_servers:
     command: glab
     args: ["mcp", "serve"]
   - name: tavily
+    # Pinned like the Mattermost server above, for the same reason: a
+    # floating tag makes a working run a claim about a build nobody can
+    # name afterwards.
     command: npm
-    args: ["exec", "--yes", "--", "tavily-mcp@latest"]
+    args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"
     shared: true
