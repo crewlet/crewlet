@@ -266,10 +266,16 @@ type Reading struct {
 	// the trim runs once, and every node whose domain declares no ceiling.
 	HeadroomFraction *float64
 
-	// BackupAge is how old the newest verified backup is, and BackupMaxAge
-	// what the operator asked for. A zero BackupMaxAge is a node with no
-	// backup policy, which is not an alarm — it is a deployment that has
-	// said it does not want one.
+	// BackupAge is how old the backup one log's trim counts is — the
+	// newest verified point the policy counts that covers the log — and
+	// BackupMaxAge what the operator asked for. A zero BackupMaxAge is a
+	// node with no backup policy, which is not an alarm — it is a
+	// deployment that has said it does not want one.
+	//
+	// A PER-DOMAIN CONDITION, evaluated once per log from the report's
+	// rows ([ReportInputs.BackupMaxAge]) for the reason the headroom is:
+	// the logs' backups have one age each, and the one a node-wide
+	// reading carried was the newest point's, whatever it covered.
 	//
 	// BackupAge IS A POINTER, for the reason HeadroomFraction is one: zero
 	// is a real and reassuring value here — a copy verified this second —
@@ -413,9 +419,8 @@ type Alarm struct {
 
 	// Domains is every log this alarm stands on, for a condition that is a
 	// property of a log rather than of the node: the logs nearing their
-	// ceiling, the logs whose trim is held, and under [KindBackupAge] the
-	// logs whose trim the missing or stale backup is holding. Empty for a
-	// node-wide condition.
+	// ceiling, the logs whose trim is held, and the logs whose backup is
+	// missing or older than the policy. Empty for a node-wide condition.
 	//
 	// ONE ALARM PER KIND, WITH ITS LOGS IN IT, rather than one alarm per log.
 	// The kind is the alarm's identity on every other surface: the gauge
@@ -437,13 +442,16 @@ type AlarmDomain struct {
 	Detail string `json:"detail"`
 
 	// Term is the trim term holding this log, where the alarm is about its
-	// trim. It is the term's own name, which is what `crewlet retention
-	// status` prints and the retention guide is indexed by.
+	// trim: under [KindTrimBlocked], and under [KindBackupAge] for a log
+	// whose trim the backup term is holding, which raises no
+	// [KindTrimBlocked] of its own. It is the term's own name, which is what
+	// `crewlet retention status` prints and the retention guide is indexed
+	// by.
 	Term TermName `json:"term,omitempty"`
 
-	// Since is when this log's trim stopped advancing, where the alarm is
-	// about its trim. An instant rather than an age, so a reader renders
-	// the age against its own clock instead of trusting one frozen at the
+	// Since is when this log's trim stopped advancing, wherever Term is
+	// set. An instant rather than an age, so a reader renders the age
+	// against its own clock instead of trusting one frozen at the
 	// evaluation.
 	Since time.Time `json:"since,omitzero"`
 }
@@ -543,17 +551,21 @@ var table = []rule{
 				return "", false
 			}
 			if r.BackupAge == nil {
-				return fmt.Sprintf("no verified backup has been recorded, and "+
-					"the policy asks for one every %s", spoken(r.BackupMaxAge)), true
+				return fmt.Sprintf("no verified backup of this log has been "+
+					"recorded, and the policy asks for one every %s",
+					spoken(r.BackupMaxAge)), true
 			}
-			return fmt.Sprintf("the newest verified backup is %s old, and the "+
-					"policy asks for %s", spoken(*r.BackupAge), spoken(r.BackupMaxAge)),
+			return fmt.Sprintf("the newest verified backup of this log is %s "+
+					"old, and the policy asks for %s", spoken(*r.BackupAge),
+					spoken(r.BackupMaxAge)),
 				*r.BackupAge > r.BackupMaxAge
 		},
 		remedy: "Run `crewlet backup` against any node, whatever its roles, " +
-			"and check whatever was meant to run it. The trim does not " +
-			"advance past a backup older than the policy, and does not " +
-			"advance at all until there is one.",
+			"and check whatever was meant to run it; under `backup_floor: " +
+			"operator`, acknowledge the named log's off-host copy with " +
+			"`crewlet retention ack -stream <log>`. The trim does not " +
+			"advance a log past a backup older than the policy, and does " +
+			"not advance it at all until there is one.",
 	},
 	{
 		// THE TERM IS NOT IN THE SENTENCE. It is a field of the log the

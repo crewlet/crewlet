@@ -194,10 +194,16 @@ func (f *FleetStore) ForgetFloor(ctx context.Context, domain string) error {
 	return nil
 }
 
-// PutBackupPoint writes one owner's newest backup.
+// PutBackupPoint writes one node's newest backup, or the operator's newest
+// acknowledgement of one log, at the point's own key ([coord.BackupPointKey]).
 //
 // IN THE POSITIONS BUCKET, under a fourth key class — see [coord.BackupPoint]
 // for why an expiring row here would silently become a retention policy.
+//
+// A PLAIN PUT, with no compare-and-set: every row has one writer whose newest
+// value is the whole of it. A node's next backup supersedes its last, and an
+// acknowledgement of one log is keyed by that log, so acknowledging another
+// writes another row rather than racing this one.
 func (f *FleetStore) PutBackupPoint(ctx context.Context, p coord.BackupPoint) error {
 	if err := p.Validate(); err != nil {
 		return err
@@ -206,13 +212,13 @@ func (f *FleetStore) PutBackupPoint(ctx context.Context, p coord.BackupPoint) er
 	if err != nil {
 		return fmt.Errorf("coord: encode the backup point held by %s: %w", p.Owner, err)
 	}
-	if _, err := f.positions.Put(ctx, coord.BackupPointKey(p.Owner), body); err != nil {
+	if _, err := f.positions.Put(ctx, coord.BackupPointKey(p), body); err != nil {
 		return unavailable("write a backup point", err)
 	}
 	return nil
 }
 
-// BackupPoints reads every owner's row.
+// BackupPoints reads every row: one per node, one per acknowledged log.
 //
 // A DECODE FAILURE IS RAISED, for the reason its three neighbours give with
 // the sign of the hold's: a point silently dropped LOWERS the newest backup
@@ -236,14 +242,25 @@ func (f *FleetStore) BackupPoints(ctx context.Context) ([]coord.BackupPoint, err
 	return out, err
 }
 
-// ForgetBackupPoint removes one owner's row.
+// ForgetBackupPoint removes every row one owner holds: its own key, and each
+// per-log key beneath it — which is where the operator's acknowledgements are.
 //
 // PURGED, on this estate's standing rule (markers.go, "Every removal is a
 // purge").
 func (f *FleetStore) ForgetBackupPoint(ctx context.Context, owner string) error {
-	if err := f.positions.Purge(ctx, coord.BackupPointKey(owner)); err != nil &&
-		!errors.Is(err, jetstream.ErrKeyNotFound) {
-		return unavailable("forget a backup point", err)
+	keys := []string{coord.BackupPointKey(coord.BackupPoint{Owner: owner})}
+	if err := f.eachUnder(ctx, f.positions, coord.DocumentFilter("backup", owner),
+		"an owner's backup points", func(kve jetstream.KeyValueEntry) error {
+			keys = append(keys, kve.Key())
+			return nil
+		}); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if err := f.positions.Purge(ctx, key); err != nil &&
+			!errors.Is(err, jetstream.ErrKeyNotFound) {
+			return unavailable("forget a backup point", err)
+		}
 	}
 	return nil
 }

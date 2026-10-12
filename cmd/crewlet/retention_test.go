@@ -397,11 +397,11 @@ func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
 	report.Alarms = []statelog.Alarm{
 		{
 			Kind:   statelog.KindBackupAge,
-			Detail: "no verified backup has been recorded, and the policy asks for one every 24h",
+			Detail: "no verified backup of this log has been recorded, and the policy asks for one every 24h",
 			Remedy: "Run `crewlet backup` against any node.",
 			Domains: []statelog.AlarmDomain{
-				{Domain: "tracker", Detail: "the trim has not advanced for 46h", Term: statelog.TermBackupFloor},
-				{Domain: "pages", Detail: "the trim has not advanced for 46h", Term: statelog.TermBackupFloor},
+				{Domain: "tracker", Detail: "no verified backup of this log has been recorded, and the policy asks for one every 24h", Term: statelog.TermBackupFloor},
+				{Domain: "pages", Detail: "the newest verified backup of this log is 46h old, and the policy asks for 24h", Term: statelog.TermBackupFloor},
 			},
 		},
 		{
@@ -418,9 +418,9 @@ func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
 		t.Fatal("two active alarms exited zero")
 	}
 	for _, want := range []string{
-		"backup_age: no verified backup has been recorded",
-		"  tracker (backup_floor): the trim has not advanced for 46h",
-		"  pages (backup_floor): the trim has not advanced for 46h",
+		"backup_age: no verified backup of this log has been recorded",
+		"  tracker (backup_floor): no verified backup of this log has been recorded",
+		"  pages (backup_floor): the newest verified backup of this log is 46h old",
 		"log_headroom on vectors: 3% of the log's byte ceiling for ordinary writes is left",
 	} {
 		if !strings.Contains(stderr, want) {

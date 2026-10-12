@@ -45,14 +45,16 @@ var alarmMeaning = map[Kind]string{
 		"leading with the one with the least room. A full log refuses writes " +
 		"rather than dropping records; on the tracker and pages logs an " +
 		"eviction still lands in the gate reserve above that ceiling.",
-	KindBackupAge: "No verified backup has been recorded, or the newest is " +
-		"older than the policy asks for. The trim does not advance either way, " +
-		"and the alarm names every log whose trim the backup term is holding, " +
-		"so those logs raise no `trim_blocked` of their own.",
+	KindBackupAge: "No verified backup of a log has been recorded, or the " +
+		"newest one covering it is older than the policy asks for. The trim " +
+		"does not advance that log either way. One alarm names every such " +
+		"log, leading with the one whose backup is missing or oldest, and a " +
+		"log it names whose trim the backup term is holding raises no " +
+		"`trim_blocked` of its own.",
 	KindTrimBlocked: "A log's trim has a term it cannot satisfy, so the log " +
 		"is growing toward its ceiling. One alarm names every held log and " +
 		"the term holding each, leading with the one held longest. A log the " +
-		"backup term holds while `backup_age` fires is named there instead.",
+		"backup term holds while `backup_age` names it is named there instead.",
 	KindDeferredOld: "This node has been holding records it cannot apply for " +
 		"longer than the deferral grace. It no longer serves its copy of the " +
 		"estate; its seats read the estate from the other data nodes.",

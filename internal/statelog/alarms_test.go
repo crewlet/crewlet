@@ -60,7 +60,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"no backup at all": {
 			statelog.KindBackupAge,
 			statelog.Reading{BackupMaxAge: 24 * time.Hour},
-			"no verified backup has been recorded",
+			"no verified backup of this log has been recorded",
 		},
 		// THE TERM IS NOT THE MEASUREMENT: it rides on the log the alarm
 		// stands on (AlarmDomain.Term), and the sentence says how long.
@@ -313,8 +313,8 @@ func TestNoBackupAtAllFiresAndSaysSoRatherThanNamingAnAge(t *testing.T) {
 		t.Fatalf("a company with no backup raised %v — the trim will not "+
 			"advance until one exists", kindsOf(got))
 	}
-	if want := "no verified backup has been recorded, and the policy asks for " +
-		"one every 24h"; alarm.Detail != want {
+	if want := "no verified backup of this log has been recorded, and the " +
+		"policy asks for one every 24h"; alarm.Detail != want {
 		t.Errorf("detail = %q, want %q", alarm.Detail, want)
 	}
 	// AND IT NAMES NO AGE. The word the fabricated sentence turned on was

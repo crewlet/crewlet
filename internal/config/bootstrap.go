@@ -1658,13 +1658,15 @@ type TrackerRetention struct {
 
 	// BackupFloor is whose word the trim takes for what is backed up.
 	//
-	// `engine` follows the newest backup the engine itself wrote and
-	// verified. `operator` follows an explicit acknowledgement, for a
-	// company whose policy is "trim only what is off-site" — which the
-	// engine cannot see for itself, because a backup is not a backup until
-	// it leaves the host. Under `operator` the trim does not advance until
-	// that acknowledgement has been given at least once, which is a state
-	// worth being warned about rather than discovering.
+	// PER LOG, under either value: each log's trim follows the newest
+	// counted backup that covers THAT log. `engine` counts the backups the
+	// engine itself wrote and verified. `operator` counts an explicit
+	// acknowledgement, for a company whose policy is "trim only what is
+	// off-site" — which the engine cannot see for itself, because a backup
+	// is not a backup until it leaves the host — and an acknowledgement
+	// names one log and is kept per log. Under `operator` a log's trim
+	// does not advance until that log has been acknowledged at least once,
+	// which is a state worth being warned about rather than discovering.
 	BackupFloor BackupFloor `yaml:"backup_floor,omitempty" json:"backup_floor,omitempty" js:"enum=engine|operator" desc:"Whose word the trim takes for what is backed up: engine (default) or operator."`
 
 	// SnapshotInterval is how stale a node's newest snapshot may be before
@@ -1689,12 +1691,13 @@ type TrackerRetention struct {
 type BackupFloor string
 
 const (
-	// BackupFloorEngine follows the newest backup the engine wrote and
-	// verified itself.
+	// BackupFloorEngine follows, for each log, the newest backup of it
+	// the engine wrote and verified itself.
 	BackupFloorEngine BackupFloor = "engine"
 
-	// BackupFloorOperator follows an explicit acknowledgement, for a
-	// company that trims only what has left the host.
+	// BackupFloorOperator follows, for each log, an explicit
+	// acknowledgement of that log, for a company that trims only what has
+	// left the host.
 	BackupFloorOperator BackupFloor = "operator"
 )
 

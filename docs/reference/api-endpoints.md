@@ -141,7 +141,7 @@ node means nothing was done.
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/access` | Who can reach the company through this engine and as whom: the API token LABELS the guard accepts (never a value), the person each one acts as, every human seat with its contacts and the state of its binding, and the auth posture — including `company_writers`, the tokens that alone may change a managed company document. **Always needs a token** (see [below](#get-access)) |
 | `GET` | `/credential-pool` | Every `providers.llm` entry, each key it rotates through by variable name, and which of them a vendor is refusing and until when — this node's pools beside the fleet's cooldown ledger (never a value). **Always needs a token** (see [below](#get-credential-pool)) |
-| `GET` | `/backups` | What the fleet has backed up: each owner's newest point as the trim reads it, and every backup a person asked a node for, failures included. **Always needs a token** (see [below](#get-backups)) |
+| `GET` | `/backups` | What the fleet has backed up: each node's newest point and the operator's newest acknowledgement of each log, as each log's trim reads them, and every backup a person asked a node for, failures included. **Always needs a token** (see [below](#get-backups)) |
 | `GET` | `/mcp-servers` | What each configured MCP server did on each live node — started, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Always needs a token** (see [below](#get-mcp-servers)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
 | `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Operator-only, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
@@ -2346,7 +2346,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Operator-only** |
 | `access` | `{}` | `GET /access`: the token labels, the people and the posture (`auth.company_writers` included) the Settings › People & access screen draws. **Operator-only**. See [below](#get-access) |
 | `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Operator-only**. See [below](#get-credential-pool) |
-| `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Operator-only**. See [below](#get-backups) |
+| `backups` | `{}` | `GET /backups`: each node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Operator-only**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › Tools & MCP screen's Servers section. **Operator-only**. See [below](#get-mcp-servers) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Operator-only**, like the rest of Settings. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by |
@@ -3554,6 +3554,7 @@ is three per-node facts attributed to a fleet.
       "trim_to": 0,
       "blocked_by": "backup_floor",
       "blocked_since": "2031-03-30T02:00:00Z",
+      "backup_at": "2031-03-29T02:00:00Z",
       "prose": "Nothing is being trimmed on tracker: ...",
       "terms": [{"name": "applied", "state": "ok", "seq": 918279004, "detail": "..."}]
     }
@@ -3563,7 +3564,7 @@ is three per-node facts attributed to a fleet.
   "replica": {"store_bytes": 10415140864, "projected_join_seconds": 308,
               "rejoin_window_seconds": 1800},
   "alarms": [{"kind": "backup_age", "detail": "...", "remedy": "...",
-              "domains": [{"domain": "tracker", "detail": "the trim has not advanced for 46h 33m",
+              "domains": [{"domain": "tracker", "detail": "the newest verified backup of this log is 97h 14m old, and the policy asks for 24h",
                            "term": "backup_floor", "since": "2031-03-30T02:00:00Z"}]}]
 }
 ```
@@ -3573,10 +3574,10 @@ measurement, in the units of the thing measured) and `remedy`. A condition that
 is a property of a log names every log it stands on in **`domains`**, each with
 its own `detail`, and for a held trim the `term` holding it and `since`, when it
 stopped advancing; `detail` is then the most pressing log's. A log whose trim the
-backup term holds while `backup_age` fires is listed under `backup_age` rather
-than as a `trim_blocked` of its own, because the backup is its remedy. So
-`alarms` has one entry per kind, and its length is the health envelope's
-`alarms.count`.
+backup term holds while `backup_age` names that log carries the `term` and
+`since` on its entry there rather than raising a `trim_blocked` of its own,
+because the backup is its remedy. So `alarms` has one entry per kind, and its
+length is the health envelope's `alarms.count`.
 
 `trim_floor` and `trim_to` are two different numbers, and a blocked domain is
 where they part. `trim_floor` is the floor the fleet has published: everything
@@ -3647,6 +3648,15 @@ retention status` and **Settings › Backups & retention** say so above the node
 block, and that screen keeps an eviction it just made on the row until a report
 whose evictions were read.
 
+**`backup_at`** is when the backup this log's trim counts was taken: the newest
+verified point the `backup_floor` policy takes the word of that covers this
+log's stream — a node's copy under `engine`, the operator's acknowledgement of
+this log under `operator`. It is **absent** where no counted backup covers the
+log, which is the state the `backup_floor` term blocks on. The `backup_age`
+alarm is evaluated per log from it and lists each log in its `domains` with its
+own age, because the logs' backups have one age each: under `operator` every
+log is acknowledged on its own.
+
 `headroom_fraction` is a **pointer** and is absent when the broker could not be
 asked. A fraction of an unknown ceiling is not zero headroom, and zero is what
 the one alarm an operator cannot ignore fires on. It is a fraction of the
@@ -3667,7 +3677,7 @@ letting it write again are not reads, whatever a laptop deployment allows.
 
 | Route | What it does |
 |---|---|
-| `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
+| `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. It is **filed under that stream**: acknowledging another log writes another point and leaves this one standing, and each log's trim reads its own — under `backup_floor: operator` that is one acknowledgement per log. |
 | `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate on every identity-claiming log — the tracker's and the pages log; the vector log counts no node and gets none. **Refused `409 eviction_refused`**, with nothing written to either log, while the node still holds a live presence lease: it is still reaching the fleet, and an eviction would drop everything it writes. The body carries `detail`, `hint`, `op_id` and `actions` — `["wait", "force"]`: stop the node and let its lease lapse, or force it. `force=true` overrides that refusal for a node wedged in a way that still renews its lease. A node that cannot read the presence leases at all answers **`503 eviction_unjudged`** — a judgement nobody could make is not one that came back clear — with a `hint` and `actions` `["retry_same_op", "force"]`; `force=true` takes the eviction past that too, since the leases are the judgement's only input, and the node logs `retention_eviction_forced_unjudged`. A node in a [capacity window](../guides/retention.md#changing-a-logs-ceiling) answers **`409 not_publishing`**, before anything is judged, with `detail`, `hint` and `actions` `["wait"]`: a gate record is an append, and the window's mode appends nothing; readmission answers the same. |
 | `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit, on every one of those logs. **Refused `409 readmission_refused`**, with nothing written to either log, when in the tracker's or the pages log the node has not applied every record up to the one just before the higher of that log's published floor (at the log's current generation) and its first surviving sequence — its last published position is more than one below that bound — or its last published position is from a generation the log has since left. The body carries the sentence (`detail`), what to do (`hint`, and `actions` `["wait"]`), and the numbers: `domain`, `position`, `generation`, `floor`, `first_seq`, `floor_generation`, and `published` — false for a node that has never published a position and is judged as holding nothing. A judgement that could not be made at all refuses too, with nothing written, as **`503 readmission_unjudged`**: the register or a floor unreadable, a log's first surviving sequence unreadable, or this node behind a reanchor the fleet has made. The body carries `detail`, `hint`, `actions` `["retry_same_op", "other_node"]` and, where one log could not be judged, that `log`. `force` has no effect here and nothing overrides this refusal: the floor is a fact about what the node holds, not a lease it might be wedged into renewing. |
 
@@ -4757,12 +4767,15 @@ does not open it.
 
 Two records, because they answer two questions:
 
-- **`points`** — each owner's NEWEST backup, from the fleet's backup register:
+- **`points`** — each node's NEWEST backup, from the fleet's backup register:
   what each node announced when its manifest was written, plus the operator's
-  acknowledgement (`crewlet retention ack`, `kind: "operator"`). `counted`
-  says the trim may count it — the `backup_floor` policy (`policy`) takes this
-  owner's word and the copy was verified — and exactly one counted point is
-  `newest`: the one the trim's backup term reads. `bytes` is the whole
+  newest acknowledgement of each log (`crewlet retention ack`, `kind:
+  "operator"`), one point per log acknowledged, each covering that log alone.
+  `counted` says the trim may count it — the `backup_floor` policy (`policy`)
+  takes this owner's word and the copy was verified — and a point is `newest`
+  where some log's backup term reads it: for at least one log it covers, the
+  newest counted point covering that log. Several can be — under `operator`,
+  one per log acknowledged. `bytes` is the whole
   artefact (every database copy and stream snapshot) and is absent on an
   acknowledgement, which asserts a copy the engine never saw. `covers` is how
   far the copy reaches in each state-log stream.

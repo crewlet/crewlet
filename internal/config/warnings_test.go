@@ -65,7 +65,7 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 			func(b *config.Bootstrap) {
 				b.Stream.TrackerRetention.BackupFloor = config.BackupFloorOperator
 			},
-			"stream.tracker_retention.backup_floor", "never trimmed",
+			"stream.tracker_retention.backup_floor", "a backup of that log has been acknowledged",
 		},
 		"nobody owns the backup": {
 			func(b *config.Bootstrap) {},
@@ -337,6 +337,69 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// AN OPERATOR FLOOR NAMES EVERY CEILING THAT WILL REFUSE, not the mutation
+// log's alone.
+//
+// Until somebody acknowledges a backup of it nothing trims either of the two
+// ordered logs, and neither carries an age bound, so each grows until its own
+// ceiling refuses an append. Which one fills first depends on the volume and
+// the company rather than on the configuration this advisory reads, so a
+// message naming one field sends the operator to the wrong ceiling whenever
+// the other log won.
+//
+// AND THE ACKNOWLEDGEMENT IS PER LOG — every log. It names one stream, and the
+// backup term blocks every log the counted point does not cover, so a message
+// saying the first acknowledgement unblocks the trim told an operator who
+// acknowledged the mutation log that the knowledge base's would trim as well;
+// and the two compacted logs, which never refuse a write, raise their
+// `backup_age` alarm without one, so a message naming only the ordered two
+// left two alarms firing for ever.
+func TestAnOperatorFloorNamesEveryCeilingThatWillRefuse(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Stream.TrackerRetention.BackupFloor = config.BackupFloorOperator
+	if err := b.Validate(); err != nil {
+		t.Fatalf("the fixture does not validate: %v", err)
+	}
+	var message string
+	for _, w := range b.Warnings() {
+		if w.Path == "stream.tracker_retention.backup_floor" {
+			message = w.Message
+		}
+	}
+	if message == "" {
+		t.Fatalf("no warning about the operator floor: %v", b.Warnings())
+	}
+	for _, ceiling := range []string{
+		"`stream.tracker_log_max_bytes`",
+		"`stream.pages_log_max_bytes`",
+		// AND THE TWO COMPACTED LOGS, which never refuse a write but
+		// wait on an acknowledgement all the same: their backup_age
+		// alarm fires without one.
+		"`stream.tracker_vectors_max_bytes`",
+		"`stream.usage_log_max_bytes`",
+		"`backup_age`",
+	} {
+		if !strings.Contains(message, ceiling) {
+			t.Errorf("warning = %q, want it to name %s", message, ceiling)
+		}
+	}
+	if strings.Contains(message, "each ordered log is trimmed") {
+		t.Errorf("warning = %q says only the ordered logs wait on an "+
+			"acknowledgement; every log does", message)
+	}
+	for _, perLog := range []string{"once per log", "-stream <log>"} {
+		if !strings.Contains(message, perLog) {
+			t.Errorf("warning = %q, want it to say the acknowledgement is per "+
+				"log (%q)", message, perLog)
+		}
+	}
+	if strings.Contains(message, "first acknowledgement") {
+		t.Errorf("warning = %q reads as though one acknowledgement unblocks "+
+			"every log", message)
 	}
 }
 

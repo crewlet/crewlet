@@ -139,19 +139,31 @@ Two policies decide which copies count:
   crewlet retention ack -stream CREWLET_TRACKER_LOG -position 918100000
   ```
 
-  Under this policy the trim does not advance until that acknowledgement has
-  been given at least once, and `crewlet validate` warns about it on every
-  node that holds data — the nodes that run the trim. A node without `data`
-  runs no trim and reads none of `stream.tracker_retention`, so it is not
-  warned.
+  An acknowledgement names ONE stream and is kept per stream: acknowledging
+  the next log leaves the last one's acknowledgement standing. Under this
+  policy every log is trimmed only as far as an acknowledgement of that log
+  says, so the procedure is one acknowledgement per log. A log never
+  acknowledged is never trimmed: `CREWLET_TRACKER_LOG` and `CREWLET_PAGES_LOG`
+  each grow until their own ceiling refuses writes, while the two compacted
+  logs, `CREWLET_TRACKER_VECTORS` and `CREWLET_USAGE_LOG`, age their records
+  out on the broker whatever the trim decides — their trim and its alarms wait
+  on an acknowledgement just the same.
+  `crewlet validate` warns about this policy on every node that holds data —
+  the nodes that run the trim. A node without `data` runs no trim and reads
+  none of `stream.tracker_retention`, so it is not warned.
 
-The **backup-age alarm** (`backup_age`) ages the same point the trim reads,
-under the same policy: under `operator` a node's nightly copies are fresh
-while the trim waits on an acknowledgement, and the alarm fires on the missing
+Each log's trim reads **the newest counted backup that covers that log**:
+under `engine`, a node's copy that leaves a log out does not stand in for it,
+and an older copy of another node's that covers it does. The **backup-age
+alarm** (`backup_age`) ages the same point per log, under the same policy:
+under `operator` a node's nightly copies are fresh while each trim waits on
+its acknowledgement, and the alarm fires on each log's own missing or stale
 acknowledgement rather than staying green beside a log that cannot be trimmed.
-It names every log whose trim it is holding, and those logs raise no
-`trim_blocked` of their own: the backup is the one thing to do about all of
-them. **Settings › Backups & retention** marks that point **counted · newest**.
+It is one alarm naming every such log, and a log it names whose trim the
+backup term is holding raises no `trim_blocked` of its own: the backup is the
+one thing to do about it. The retention report carries the point as each
+domain's `backup_at`, and **Settings › Backups & retention** marks every point
+some log's trim reads **counted · newest**.
 
 An **unverified** copy satisfies neither. A file that exists and was never
 opened is not a backup, and deleting the log's only copy of a record against

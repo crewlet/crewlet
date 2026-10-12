@@ -573,9 +573,31 @@ func (b *Bootstrap) Warnings() []Warning {
 	}
 
 	// A FLEET THAT TRIMS ONLY WHAT IT HAS BEEN TOLD IS OFF-SITE does not
-	// trim until somebody tells it, and the log grows until its ceiling
+	// trim until somebody tells it, and each log grows until its ceiling
 	// refuses writes. That is the configuration working as asked; it is
 	// also a state nobody discovers until the refusal.
+	//
+	// AND IT IS TOLD PER LOG. An acknowledgement names one stream
+	// (`crewlet retention ack -stream`), and the backup term blocks any log
+	// the counted point does not cover, so an operator who acknowledged the
+	// mutation log and read "until the first acknowledgement" as the whole
+	// gate would expect the knowledge base's log to trim too, and it does
+	// not.
+	//
+	// EVERY CEILING THE TRIM IS ALL THAT HOLDS BACK, rather than the
+	// mutation log's alone: the backup term is evaluated per log, and the
+	// two ordered logs — the tracker's and the knowledge base's — carry no
+	// age bound, so nothing else ever removes a record from them. Naming one
+	// field sent an operator to the wrong ceiling whenever the other log
+	// filled first.
+	//
+	// AND EVERY LOG, the two compacted ones included. They age their
+	// records out on the broker whatever the trim decides, so they never
+	// refuse a write — but the backup term and the `backup_age` alarm are
+	// evaluated on every running log alike, so a log nobody acknowledged
+	// raises that alarm once `backup_max_age` passes. An advisory that
+	// named the ordered two sent an operator to acknowledge two logs and
+	// leave two alarms firing for ever.
 	//
 	// ONLY WHERE THE FLOOR IS READ, which is a node holding the estate. Two
 	// readers decide which backups count under it, and both are armed with
@@ -596,10 +618,19 @@ func (b *Bootstrap) Warnings() []Warning {
 	if b.Profile("").HoldsData() &&
 		b.Stream.TrackerRetention.Floor() == BackupFloorOperator {
 		out = append(out, advisory(field("stream.tracker_retention.backup_floor"),
-			"`operator` means the trim advances only as far as somebody "+
-				"has acknowledged a backup. Until the first acknowledgement the log "+
-				"is never trimmed, and it grows until `stream.tracker_log_max_bytes` "+
-				"starts refusing writes"))
+			"`operator` means every state log is trimmed only as far as a "+
+				"backup of that log has been acknowledged, once per log "+
+				"(`crewlet retention ack -stream <log> -position <n>`; "+
+				"`crewlet retention status` names all four). Until its own "+
+				"acknowledgement a log is never trimmed. The two ordered logs "+
+				"grow until their own ceiling starts refusing writes: "+
+				"`stream.tracker_log_max_bytes` and `stream.pages_log_max_bytes`. "+
+				"The two compacted logs "+
+				"(`stream.tracker_vectors_max_bytes`, "+
+				"`stream.usage_log_max_bytes`) age their records out on the "+
+				"broker regardless, but wait on an acknowledgement just the "+
+				"same: without one, each log's `backup_age` alarm fires once "+
+				"`backup_max_age` has passed"))
 	}
 
 	// NOBODY OWNS THE BACKUP. A company that never backs up never trims,
