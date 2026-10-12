@@ -1,12 +1,12 @@
 package config
 
 import (
-	"net/url"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/whsec"
@@ -275,13 +275,13 @@ func (i *Integrations) validate(path Path) error {
 		}
 	}
 	if i.Jira != nil {
-		p.wrap(i.Jira.validate(at(path, "jira"), i.DiscoversAtlassianSite()))
+		p.wrap(i.Jira.validate(at(path, "jira"), i.DiscoversAtlassianSite(), i.Atlassian.Declared()))
 	}
 	if i.Datadog != nil {
 		p.wrap(i.Datadog.validate(at(path, "datadog")))
 	}
 	if i.Confluence != nil {
-		p.wrap(i.Confluence.validate(at(path, "confluence"), i.DiscoversAtlassianSite()))
+		p.wrap(i.Confluence.validate(at(path, "confluence"), i.DiscoversAtlassianSite(), i.Atlassian.Declared()))
 	}
 	if i.Mattermost != nil {
 		p.wrap(i.Mattermost.validate(at(path, "mattermost")))
@@ -298,11 +298,18 @@ func (i *Integrations) validate(path Path) error {
 	return p.err()
 }
 
-// The Atlassian Cloud gateways a cloud id resolves against.
-const (
-	atlassianJiraGateway       = "https://api.atlassian.com/ex/jira"
-	atlassianConfluenceGateway = "https://api.atlassian.com/ex/confluence"
-)
+// atlassianGatewayURL is the REST base a cloud id is read through, for one
+// product: https://<gateway>/ex/<product>/<cloudid>.
+//
+// THE GATEWAY FOLLOWS THE SITE ([atlassianhost.Gateway]). A cloud id says
+// nothing about which of Atlassian's Clouds issued it, and the commercial
+// gateway does not serve a Government Cloud site, so the site address beside
+// the id is what places it; with none, it is the commercial gateway. Built on
+// the hosts [atlassianhost.IsGateway] recognises, so an address made here is
+// never one the deployment rule reads as Data Center.
+func atlassianGatewayURL(site, product, cloudID string) string {
+	return "https://" + atlassianhost.Gateway(site) + "/ex/" + product + "/" + cloudID
+}
 
 // Jira is the org-level Jira admin account.
 //
@@ -363,13 +370,26 @@ func (j *Jira) WebhookNameOrDefault() string {
 	return "crewlet"
 }
 
-// BaseURL is the REST base: the gateway for a cloud id, the instance URL
-// otherwise.
+// BaseURL is the REST base: the gateway of the site's environment for a
+// cloud id, the instance URL otherwise.
 func (j *Jira) BaseURL() string {
 	if j.CloudID != "" {
-		return atlassianJiraGateway + "/" + j.CloudID
+		return atlassianGatewayURL(j.SiteURL, "jira", j.CloudID)
 	}
 	return j.URL
+}
+
+// ResolvedBaseURL is [Jira.BaseURL] over the block's addresses resolved
+// through value: each half's ${VAR} first, because a cloud id and a site are
+// as deployment-specific as a hostname and companies do reference them — and
+// the site with them, since it is what places a cloud id's gateway.
+func (j *Jira) ResolvedBaseURL(value func(string) string) string {
+	resolved := Jira{
+		URL:     strings.TrimSpace(value(j.URL)),
+		CloudID: strings.TrimSpace(value(j.CloudID)),
+		SiteURL: strings.TrimSpace(value(j.SiteURL)),
+	}
+	return resolved.BaseURL()
 }
 
 // ShareableBaseURL is the base for links handed to a person.
@@ -393,7 +413,7 @@ func (j *Jira) ShareableBaseURL() string {
 // moved from Data Center to Cloud and left the old url behind would keep
 // looking correct while every read went to the new place and every link to
 // the old one.
-func (j *Jira) validate(path Path, discovers bool) error {
+func (j *Jira) validate(path Path, discovers bool, declared atlassianhost.Deployment) error {
 	var probs problems
 	noSpaces(&probs, at(path, "url"), j.URL)
 	noSpaces(&probs, at(path, "cloud_id"), j.CloudID)
@@ -439,9 +459,10 @@ func (j *Jira) validate(path Path, discovers bool) error {
 	// instance". Two problems where there is one, and the second one asking
 	// for a field Cloud is explicitly exempt from, on a form that offers
 	// neither. Naming the deployment is the only thing outstanding until it is
-	// named.
-	if strings.TrimSpace(j.WebhookSecret) == "" && url != "" && cloud == "" &&
-		!IsAtlassianCloud(url) {
+	// named — and a url whose host is a ${VAR}, in a company that declared
+	// nothing, has not named it either.
+	deploy := atlassianDeployment(&probs, path, url, cloud, declared)
+	if strings.TrimSpace(j.WebhookSecret) == "" && deploy == atlassianhost.DataCenter {
 		// CLOUD IS EXEMPT, and stays exempt now that it can register an
 		// admin webhook of its own. The reason changed rather than
 		// disappearing: a Cloud company may take EITHER route, and one
@@ -494,12 +515,24 @@ type Confluence struct {
 	WebhookToken string `secret:"true" yaml:"webhook_token,omitempty" json:"webhook_token,omitempty" desc:"Shared token for Confluence Cloud webhooks, carried in the registered URL; minted by crewlet confluence provision."`
 }
 
-// BaseURL is the REST base.
+// BaseURL is the REST base: the gateway of the site's environment for a
+// cloud id, the instance URL otherwise.
 func (c *Confluence) BaseURL() string {
 	if c.CloudID != "" {
-		return atlassianConfluenceGateway + "/" + c.CloudID
+		return atlassianGatewayURL(c.SiteURL, "confluence", c.CloudID)
 	}
 	return c.URL
+}
+
+// ResolvedBaseURL is [Confluence.BaseURL] over the block's addresses resolved
+// through value — see [Jira.ResolvedBaseURL].
+func (c *Confluence) ResolvedBaseURL(value func(string) string) string {
+	resolved := Confluence{
+		URL:     strings.TrimSpace(value(c.URL)),
+		CloudID: strings.TrimSpace(value(c.CloudID)),
+		SiteURL: strings.TrimSpace(value(c.SiteURL)),
+	}
+	return resolved.BaseURL()
 }
 
 // ShareableBaseURL is the base for links handed to a person. With a cloud
@@ -519,7 +552,7 @@ func (c *Confluence) ShareableBaseURL() string {
 // ambiguity silently would let a company that moved from Data Center to
 // Cloud keep looking correct while every read went to one place and every
 // link to the other.
-func (c *Confluence) validate(path Path, discovers bool) error {
+func (c *Confluence) validate(path Path, discovers bool, declared atlassianhost.Deployment) error {
 	var probs problems
 	noSpaces(&probs, at(path, "url"), c.URL)
 	noSpaces(&probs, at(path, "cloud_id"), c.CloudID)
@@ -556,8 +589,8 @@ func (c *Confluence) validate(path Path, discovers bool) error {
 	sharedToken(&probs, at(path, "webhook_token"), c.WebhookToken)
 	// AN UNIDENTIFIED INSTANCE IS NOT A DATA CENTER ONE — see the same guard
 	// on [Jira.validate], which had the same bug for the same reason.
-	if strings.TrimSpace(c.WebhookSecret) == "" && url != "" && cloud == "" &&
-		!IsAtlassianCloud(url) {
+	deploy := atlassianDeployment(&probs, path, url, cloud, declared)
+	if strings.TrimSpace(c.WebhookSecret) == "" && deploy == atlassianhost.DataCenter {
 		// CLOUD IS EXEMPT, on either of its routes. The Forge relay is
 		// verified by the app's invocation token and the token-bearing
 		// hook by webhook_token, and neither carries an HMAC, so requiring
@@ -809,26 +842,43 @@ func (m *Mattermost) validate(path Path) error {
 	return p.err()
 }
 
-// IsAtlassianCloud reports an address that is an Atlassian-hosted site.
+// atlassianDeployment is the deployment a Jira or Confluence block is on as
+// far as validation can tell, by [atlassianhost.Of] — the rule both vendor
+// clients read, handed the same declaration — so a block is never admitted as
+// one deployment and served as the other. It refuses the one combination no
+// answer can serve: an address Atlassian's Cloud hosts, in a company that
+// declared Data Center.
 //
-// The SAME rule the vendor clients apply (jira.DeploymentOf and
-// confluence.DeploymentOf), restated here because config is a leaf they
-// depend on. It exists because the validators used to decide "Cloud" from
-// cloud_id alone, and a Cloud site given by URL, which is how most companies
-// write one, was treated as Data Center and refused for lacking a signing
-// secret it cannot use. The two rules are held equal by a test.
-func IsAtlassianCloud(raw string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return false
-	}
-	host := strings.ToLower(parsed.Hostname())
-	for _, suffix := range []string{".atlassian.net", ".jira.com"} {
-		if strings.HasSuffix(host, suffix) {
-			return true
+// A cloud id is Cloud by construction: it is read through a gateway. A url
+// whose host is a ${VAR} is what the company declared, and unknown when it
+// declared nothing — Tier B holds the reference verbatim and the engine
+// resolves it where the client is built, so here `${JIRA_URL}` has no host,
+// and reading that as Data Center refused the Cloud company the integration
+// guide's own example describes (`url: "${JIRA_URL}"` on the Forge relay, no
+// signing secret to give). A reference in the path leaves a written host
+// judged by that host.
+func atlassianDeployment(p *problems, path Path, url, cloudID string, declared atlassianhost.Deployment) atlassianhost.Deployment {
+	switch {
+	case cloudID != "":
+		if declared == atlassianhost.DataCenter {
+			p.add(at(path, "cloud_id"), ErrConflict,
+				"a cloud id is read through Atlassian Cloud's gateway, and "+
+					"integrations.atlassian.deployment declares %s: give the "+
+					"instance's url, or declare %s", AtlassianDataCenter, AtlassianCloud)
 		}
+		return atlassianhost.Cloud
+	case url == "":
+		return atlassianhost.Unknown
 	}
-	return strings.Contains(strings.ToLower(raw), "api.atlassian.com/ex/")
+	deploy := atlassianhost.Of(url, declared)
+	if deploy == atlassianhost.Cloud && declared == atlassianhost.DataCenter {
+		p.add(at(path, "url"), ErrConflict,
+			"%q is an Atlassian Cloud address, and integrations.atlassian.deployment "+
+				"declares %s: no Data Center instance is served there, so one "+
+				"of the two is wrong — declare %s, or give the instance's own address",
+			url, AtlassianDataCenter, AtlassianCloud)
+	}
+	return deploy
 }
 
 // noSpaces refuses a value that cannot hold whitespace.
@@ -1375,8 +1425,8 @@ var mattermostUsername = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 // The two Atlassian deployments, as [Atlassian.Deployment] spells them.
 const (
-	AtlassianCloud      = "cloud"
-	AtlassianDataCenter = "data_center"
+	AtlassianCloud      = string(atlassianhost.Cloud)
+	AtlassianDataCenter = string(atlassianhost.DataCenter)
 )
 
 // AtlassianDeployments is the closed set, for a form's picker and for
@@ -1403,6 +1453,28 @@ func (a *Atlassian) DeploymentOrDefault() string {
 
 // IsCloud reports the deployment this engine can provision.
 func (a *Atlassian) IsCloud() bool { return a.DeploymentOrDefault() == AtlassianCloud }
+
+// Declared is the deployment this company STATED, or [atlassianhost.Unknown]
+// when it stated none — the input [atlassianhost.Of] decides an address's
+// deployment with, wherever a Jira or Confluence address is read.
+//
+// NOT [Atlassian.DeploymentOrDefault]. Cloud is the default a FORM opens on,
+// before anybody has answered; read as a declaration, it would tell a company
+// that never mentioned Atlassian's deployment that its self-hosted Jira is on
+// Cloud. Only a company that said so has its unrecognised hosts read as
+// Cloud — an Isolated Cloud site, at a base domain of its own.
+func (a *Atlassian) Declared() atlassianhost.Deployment {
+	if a == nil {
+		return atlassianhost.Unknown
+	}
+	switch strings.ToLower(strings.TrimSpace(a.Deployment)) {
+	case AtlassianCloud:
+		return atlassianhost.Cloud
+	case AtlassianDataCenter:
+		return atlassianhost.DataCenter
+	}
+	return atlassianhost.Unknown
+}
 
 // DiscoversAtlassianSite reports whether this company's Atlassian organization
 // will supply the Jira and Confluence site addresses, so nobody has to give one.
@@ -1476,7 +1548,16 @@ type Atlassian struct {
 	// already reading. Data Center has no organization, no cloud id and no
 	// service accounts, so there the address is the only way in and it is
 	// required.
-	Deployment string `yaml:"deployment,omitempty" json:"deployment,omitempty" desc:"Which Atlassian this company runs: cloud or data_center. Default cloud."`
+	//
+	// And once an address exists, a WRITTEN value decides what its host
+	// cannot ([Atlassian.Declared], [atlassianhost.Of]): a Jira or
+	// Confluence url at a host that is not one of Atlassian's own is on the
+	// deployment declared here. That is the only way an Atlassian Isolated
+	// Cloud site — at a base domain of its own, which no host list names —
+	// is read as Cloud, and the way a Data Center url written as a ${VAR}
+	// is asked for its signing secret at validation. Unset, it is Cloud for
+	// the form and nothing for an address.
+	Deployment string `yaml:"deployment,omitempty" json:"deployment,omitempty" desc:"Which Atlassian this company runs: cloud or data_center. The form opens on cloud; a value written here also decides a Jira or Confluence url whose host is not Atlassian's own."`
 
 	// OrgID is the organization the admin APIs take as their subject. It is
 	// in the admin console's own URL.

@@ -76,11 +76,7 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 	}
 	defer closeEnv()
 
-	resolved := config.Jira{
-		URL:     strings.TrimSpace(env.Value(cfg.URL)),
-		CloudID: strings.TrimSpace(env.Value(cfg.CloudID)),
-	}
-	base := resolved.BaseURL()
+	base := cfg.ResolvedBaseURL(env.Value)
 	if base == "" {
 		return fmt.Errorf(
 			"jira: neither integrations.jira.url (%q) nor cloud_id (%q) "+
@@ -94,6 +90,7 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 	}
 	client, err := jira.NewClient(jira.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
+		Declared: company.Integrations.Atlassian.Declared(),
 	})
 	if err != nil {
 		return err

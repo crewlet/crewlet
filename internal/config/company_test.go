@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 )
@@ -824,8 +825,8 @@ func TestAnUnknownSurfaceIsTreatedAsDeclared(t *testing.T) {
 //
 // A block with neither `url` nor `cloud_id` has an unknown deployment, and the
 // problem that says so is the only one outstanding. The signing-secret rule
-// fired on it anyway, because "not Cloud" was tested as `cloud == "" &&
-// !IsAtlassianCloud(url)` and an empty url is not a Cloud url.
+// fired on it anyway, because "not Cloud" was tested as "no cloud_id and a
+// url that is not a Cloud host", and an empty url is not one.
 //
 // What that produced is worse than a redundant line. An operator connecting
 // Atlassian — having chosen Atlassian Cloud in the dialog, which is exempt
@@ -852,9 +853,9 @@ func TestAnUnidentifiedAtlassianInstanceAsksOnlyToBeNamed(t *testing.T) {
 			t.Parallel()
 			var err error
 			if tc.in.Jira != nil {
-				err = tc.in.Jira.validate(field(tc.path), false)
+				err = tc.in.Jira.validate(field(tc.path), false, atlassianhost.Unknown)
 			} else {
-				err = tc.in.Confluence.validate(field(tc.path), false)
+				err = tc.in.Confluence.validate(field(tc.path), false, atlassianhost.Unknown)
 			}
 			if err == nil {
 				t.Fatal("a block naming no instance was accepted")
@@ -880,7 +881,7 @@ func TestAnUnidentifiedAtlassianInstanceAsksOnlyToBeNamed(t *testing.T) {
 func TestANamedDataCentreInstanceStillNeedsASigningSecret(t *testing.T) {
 	t.Parallel()
 	jira := &Jira{URL: "https://jira.example.com", Token: "${JIRA_TOKEN}"}
-	err := jira.validate(field("integrations.jira"), false)
+	err := jira.validate(field("integrations.jira"), false, atlassianhost.Unknown)
 	if err == nil || !strings.Contains(err.Error(), "required for a Data Center instance") {
 		t.Fatalf("a Data Center instance was not asked for a signing secret: %v", err)
 	}
@@ -890,7 +891,7 @@ func TestANamedDataCentreInstanceStillNeedsASigningSecret(t *testing.T) {
 func TestACloudSiteIsNotAskedForASigningSecret(t *testing.T) {
 	t.Parallel()
 	jira := &Jira{URL: "https://acme.atlassian.net", Token: "${JIRA_TOKEN}"}
-	if err := jira.validate(field("integrations.jira"), false); err != nil {
+	if err := jira.validate(field("integrations.jira"), false, atlassianhost.Unknown); err != nil {
 		t.Fatalf("a Cloud site was refused: %v", err)
 	}
 }

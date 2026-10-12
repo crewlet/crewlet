@@ -101,17 +101,26 @@ type EnvLookup func(name string) (string, bool)
 // permanently unresolvable.
 type HumanContact struct {
 	// SlackUserID is a Slack member id (U0123456789) — <@…> mentions and
-	// DM delivery.
+	// DM delivery. Kept in the case it was written: an id is opaque, and
+	// Slack tells a developer to assume nothing about its characters.
 	SlackUserID string `yaml:"slack_user_id,omitempty" json:"slack_user_id,omitempty"`
 
 	// MattermostUserID is a Mattermost USERNAME, not the 26-character user
 	// id: Mattermost mentions address a person by name, and the name is
 	// what an agent has to write into a message for it to render.
+	//
+	// Literal values are lowercased, because Mattermost's own are: the
+	// server lowercases a username on every save, admits only lowercase
+	// characters in one, and looks one up as `Username = lower(?)`, so
+	// "Jane" and "jane" are one account there and must be one here — the
+	// party registry keys exactly, and two seats spelling one person
+	// differently would otherwise both validate and split their mail.
 	MattermostUserID string `yaml:"mattermost_user_id,omitempty" json:"mattermost_user_id,omitempty"`
 
 	// AtlassianAccountID is an Atlassian Cloud account id — one id covers
 	// both Jira and Confluence: assignments, <ri:user> mention markup, and
-	// sender attribution on inbound webhooks.
+	// sender attribution on inbound webhooks. Kept in the case it was
+	// written, as the opaque id Atlassian issues.
 	AtlassianAccountID string `yaml:"atlassian_account_id,omitempty" json:"atlassian_account_id,omitempty"`
 
 	// GitHubLogin is a GitHub username — review requests and sender
@@ -172,11 +181,31 @@ type contactField struct {
 	// rather than a Go field name they have never seen.
 	key string
 
-	// lowercase marks a field whose LITERAL values are canonically
-	// lowercase. Both sides of the match lowercase — the webhook parser and
-	// the boot-time identity lookup — so a mixed-case literal here would
-	// never resolve. A ${VAR} reference is exempt and is lowercased after
-	// resolution instead.
+	// lowercase marks a field whose LITERAL values are lowercased, because
+	// two spellings differing only in case are one account. The reason
+	// differs per field, and each is a fact about somebody else's code:
+	//
+	//   - github_login and gitlab_username: both platforms compare logins
+	//     without case, and both sides of the engine's own match lowercase —
+	//     the webhook parser and the boot-time identity lookup — so a
+	//     mixed-case literal here would never resolve.
+	//   - mattermost_user_id: nothing inbound is matched against it (a post
+	//     carries the sender's user id, not their username); it is folded
+	//     because Mattermost folds it — the server lowercases a username on
+	//     every save (NormalizeUsername), admits only lowercase characters
+	//     in one, and finds one by `Username = lower(?)` — so "Jane" and
+	//     "jane" are one person there and the duplicate check must say so.
+	//   - crewlet_operator_id: lowercase by Tier A's own rule, which refuses
+	//     a token id with an upper-case letter; it is matched against that
+	//     id lowercased (SeatByOperatorID).
+	//
+	// A ${VAR} reference is exempt and is lowercased after resolution
+	// instead.
+	//
+	// Unset for the OPAQUE ids, a Slack member id and an Atlassian account
+	// id: the platform issues them and nothing says two that differ in case
+	// are one account, so folding them would make the duplicate check
+	// refuse two people it cannot know are one.
 	lowercase bool
 
 	// value addresses the field, so normalisation and validation write
@@ -200,7 +229,7 @@ const (
 // Treat as immutable.
 var contactFields = []contactField{
 	{key: "slack_user_id", value: func(c *HumanContact) *string { return &c.SlackUserID }},
-	{key: "mattermost_user_id", value: func(c *HumanContact) *string { return &c.MattermostUserID }},
+	{key: "mattermost_user_id", lowercase: true, value: func(c *HumanContact) *string { return &c.MattermostUserID }},
 	{key: "atlassian_account_id", value: func(c *HumanContact) *string { return &c.AtlassianAccountID }},
 	{key: "github_login", lowercase: true, value: func(c *HumanContact) *string { return &c.GitHubLogin }},
 	{key: "gitlab_username", lowercase: true, value: func(c *HumanContact) *string { return &c.GitLabUsername }},

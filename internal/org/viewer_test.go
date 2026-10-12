@@ -258,6 +258,34 @@ func TestTwoSeatsMayNotClaimOneExternalAccount(t *testing.T) {
 		t.Errorf("two distinct Slack ids were refused as a duplicate: %v", err)
 	}
 
+	// CASE COUNTS EXACTLY WHERE THE PLATFORM COUNTS IT. A Mattermost
+	// username, a GitHub login and a GitLab username name one account
+	// however they are capitalised, so two spellings are one collision;
+	// a Slack member id and an Atlassian account id are opaque, and two
+	// that differ in case are two accounts as far as anything here knows.
+	for _, tc := range []struct {
+		field string
+		a, b  *org.HumanContact
+		same  bool
+	}{
+		{"mattermost_user_id", &org.HumanContact{MattermostUserID: "Jane.Doe"},
+			&org.HumanContact{MattermostUserID: "jane.doe"}, true},
+		{"github_login", &org.HumanContact{GitHubLogin: "Ada"},
+			&org.HumanContact{GitHubLogin: "ada"}, true},
+		{"gitlab_username", &org.HumanContact{GitLabUsername: "Ada"},
+			&org.HumanContact{GitLabUsername: "ada"}, true},
+		{"slack_user_id", &org.HumanContact{SlackUserID: "U0ABC"},
+			&org.HumanContact{SlackUserID: "u0abc"}, false},
+		{"atlassian_account_id", &org.HumanContact{AtlassianAccountID: "5b10ac8d82e05b22cc7d4ef5"},
+			&org.HumanContact{AtlassianAccountID: "5B10AC8D82E05B22CC7D4EF5"}, false},
+	} {
+		err := two(tc.a, tc.b)
+		if got := errors.Is(err, org.ErrDuplicateIdentity); got != tc.same {
+			t.Errorf("%s spelled in two cases: duplicate = %v, want %v (%v)",
+				tc.field, got, tc.same, err)
+		}
+	}
+
 	// NOR IS ONE VALUE IN TWO DIFFERENT FIELDS. A GitHub login and a
 	// GitLab username are different namespaces and routinely the same word.
 	if err := two(

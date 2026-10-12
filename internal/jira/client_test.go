@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/jira"
 )
 
@@ -65,19 +66,33 @@ func newRecorder(t *testing.T, reply func(path string) (int, string)) *recorder 
 
 // THE DEPLOYMENT IS DERIVED FROM THE ADDRESS, because the honest answer is
 // already in the address an operator gave — a knob for it would be a second
-// place to get it wrong.
+// place to get it wrong. The company's declaration answers only what the
+// address cannot: a host no rule names, such as an Isolated Cloud site's.
 func TestTheDeploymentIsDerivedFromTheAddress(t *testing.T) {
 	t.Parallel()
-	for address, want := range map[string]jira.Deployment{
-		"https://acme.atlassian.net":              jira.Cloud,
-		"https://api.atlassian.com/ex/jira/cloud": jira.Cloud,
-		"https://ACME.ATLASSIAN.NET/browse":       jira.Cloud,
-		"https://jira.example.com":                jira.DataCenter,
-		"https://jira.internal:8443":              jira.DataCenter,
-		"not a url at all":                        jira.DataCenter,
+	for _, tc := range []struct {
+		address  string
+		declared atlassianhost.Deployment
+		want     jira.Deployment
+	}{
+		{"https://acme.atlassian.net", atlassianhost.Unknown, jira.Cloud},
+		{"https://api.atlassian.com/ex/jira/cloud", atlassianhost.Unknown, jira.Cloud},
+		{"https://api.atlassian-us-gov-mod.com/ex/jira/cloud", atlassianhost.Unknown, jira.Cloud},
+		{"https://ACME.ATLASSIAN.NET/browse", atlassianhost.Unknown, jira.Cloud},
+		{"https://jira.example.com", atlassianhost.Unknown, jira.DataCenter},
+		// Atlassian's own tracker is a self-hosted Jira on atlassian.com,
+		// which is not a Cloud site domain: v3 is not served there.
+		{"https://jira.atlassian.com", atlassianhost.Unknown, jira.DataCenter},
+		{"https://jira.internal:8443", atlassianhost.Unknown, jira.DataCenter},
+		{"not a url at all", atlassianhost.Unknown, jira.DataCenter},
+		// A host no rule names is what the company declared.
+		{"https://acme.example-org.atlassian-isolated.net", atlassianhost.Cloud, jira.Cloud},
+		{"https://jira.example.com", atlassianhost.DataCenter, jira.DataCenter},
+		// And a host the rule does name is never overruled.
+		{"https://acme.atlassian.net", atlassianhost.DataCenter, jira.Cloud},
 	} {
-		if got := jira.DeploymentOf(address); got != want {
-			t.Errorf("%s → %s, want %s", address, got, want)
+		if got := jira.DeploymentOf(tc.address, tc.declared); got != tc.want {
+			t.Errorf("%s declared %q → %s, want %s", tc.address, tc.declared, got, tc.want)
 		}
 	}
 }
@@ -88,20 +103,24 @@ func TestTheDeploymentIsDerivedFromTheAddress(t *testing.T) {
 func TestEachDeploymentCallsItsOwnRESTVersion(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		deploy jira.Deployment
-		want   string
+		declared atlassianhost.Deployment
+		deploy   jira.Deployment
+		want     string
 	}{
-		{jira.Cloud, "/rest/api/3/myself"},
-		{jira.DataCenter, "/rest/api/2/myself"},
+		{atlassianhost.Cloud, jira.Cloud, "/rest/api/3/myself"},
+		{atlassianhost.DataCenter, jira.DataCenter, "/rest/api/2/myself"},
 	} {
 		srv := newRecorder(t, func(string) (int, string) {
 			return 200, `{"accountId":"acct-1"}`
 		})
 		client, err := jira.NewClient(jira.ClientOptions{
-			URL: srv.URL, Token: "t", Deployment: tc.deploy,
+			URL: srv.URL, Token: "t", Declared: tc.declared,
 		})
 		if err != nil {
 			t.Fatal(err)
+		}
+		if got := client.Deployment(); got != tc.deploy {
+			t.Errorf("declared %q at a loopback host: %s, want %s", tc.declared, got, tc.deploy)
 		}
 		if _, err := client.Me(context.Background()); err != nil {
 			t.Fatal(err)

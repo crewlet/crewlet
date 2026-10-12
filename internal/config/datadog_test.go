@@ -6,9 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
-	"github.com/crewlet/crewlet/internal/jira"
 )
 
 // THE ROUTING FLOOR. An alert whose monitor names no owner has to go
@@ -346,20 +344,76 @@ func TestADataCenterURLStillNeedsASigningSecret(t *testing.T) {
 	}
 }
 
-// The host rule here and the vendor clients' own must agree, or a site the
-// validator calls Cloud is one the client registers a Data Center hook on.
-func TestTheCloudHostRuleMatchesTheVendorClients(t *testing.T) {
+// A URL WHOSE HOST IS A REFERENCE IS UNKNOWN, NOT DATA CENTER, in a company
+// that declared nothing. Tier B keeps `${JIRA_URL}` verbatim, so validation
+// sees no host at all; reading that as Data Center refused the guide's own
+// example on the Forge relay for lacking a secret that route has no use for.
+// A reference after a literal Cloud host is still Cloud, and one after a
+// literal Data Center host is still asked (below).
+func TestAReferencedAtlassianURLIsNotAskedForASigningSecret(t *testing.T) {
 	t.Parallel()
-	for _, addr := range []string{
-		"https://acme.atlassian.net", "https://acme.atlassian.net/wiki",
-		"https://acme.jira.com", "https://api.atlassian.com/ex/confluence/abc",
-		"https://wiki.corp.example.com", "http://localhost:8090",
+	for _, block := range []string{"jira", "confluence"} {
+		for _, url := range []string{`"${ATLASSIAN_URL}"`, `"https://acme.atlassian.net/${CONTEXT}"`} {
+			t.Run(block+" "+url, func(t *testing.T) {
+				t.Parallel()
+				err := validateIntegrationDoc(t, block, "    url: "+url+"\n    token: t")
+				if err != nil {
+					t.Fatalf("a url whose deployment is unknown here was refused: %v", err)
+				}
+			})
+		}
+	}
+}
+
+// WHAT THE DOCUMENT SAYS IS NOT UNKNOWN. The branch that first exempted a
+// referenced url exempted every url carrying a reference anywhere, so a Data
+// Center company that said so in integrations.atlassian.deployment, or wrote
+// its instance's host out and referenced only the context path, validated
+// with no signing secret and was told nothing until the reconcile. The
+// declaration decides what the host cannot, in both directions: Data Center
+// is asked, and Cloud — an Isolated Cloud site at a base domain of its own
+// included — is not. And a declaration of Data Center beside a host only
+// Atlassian's Cloud answers on is refused, since no answer serves both.
+func TestTheDeclaredDeploymentDecidesWhatTheURLCannot(t *testing.T) {
+	t.Parallel()
+	const (
+		dataCenter = "    deployment: data_center"
+		cloud      = "    deployment: cloud"
+		// An organization block that says nothing about the deployment:
+		// the form's default of Cloud is not a declaration, or every
+		// company that wrote an organization id would have its
+		// self-hosted Jira read as Cloud.
+		silent = "    org_id: o-1"
+	)
+	for _, tc := range []struct {
+		name, atlassian, url, wantErr string
+	}{
+		{"declared data center, referenced url", dataCenter, `"${ATLASSIAN_URL}"`, "webhook_secret"},
+		{"nothing declared, referenced path", "", `"https://jira.corp.example.com/${CONTEXT}"`, "webhook_secret"},
+		{"declared data center, referenced path", dataCenter, `"https://jira.corp.example.com/${CONTEXT}"`, "webhook_secret"},
+		{"declared cloud, referenced url", cloud, `"${ATLASSIAN_URL}"`, ""},
+		{"declared cloud, isolated cloud site", cloud, "https://acme.example-org.atlassian-isolated.net", ""},
+		{"declared data center, cloud site", dataCenter, "https://acme.atlassian.net", "is an Atlassian Cloud address"},
+		{"organization silent, self-hosted url", silent, "https://jira.corp.example.com", "webhook_secret"},
 	} {
-		fromConfig := config.IsAtlassianCloud(addr)
-		fromConfluence := confluence.DeploymentOf(addr) == confluence.Cloud
-		fromJira := jira.DeploymentOf(addr) == jira.Cloud
-		if fromConfig != fromConfluence || fromConfig != fromJira {
-			t.Errorf("%s: config=%v confluence=%v jira=%v", addr, fromConfig, fromConfluence, fromJira)
+		for _, block := range []string{"jira", "confluence"} {
+			t.Run(block+" "+tc.name, func(t *testing.T) {
+				t.Parallel()
+				body := "    url: " + tc.url + "\n    token: t"
+				name := block
+				if tc.atlassian != "" {
+					// The organization block sits beside the product's.
+					name = "atlassian"
+					body = tc.atlassian + "\n  " + block + ":\n" + body
+				}
+				err := validateIntegrationDoc(t, name, body)
+				switch {
+				case tc.wantErr == "" && err != nil:
+					t.Fatalf("refused: %v", err)
+				case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+					t.Fatalf("want a refusal naming %q, got %v", tc.wantErr, err)
+				}
+			})
 		}
 	}
 }

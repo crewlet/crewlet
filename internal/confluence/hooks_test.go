@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -351,12 +352,14 @@ func (s *recordingSink) NextStep() string { return "restart the test" }
 
 // cloudClient builds a client the site will classify as Cloud, which is
 // decided by the HOST rather than by anything the test server can answer.
-// The httptest address is 127.0.0.1, so the deployment is forced.
+// The httptest address is 127.0.0.1, a host no rule recognises, so the
+// company's declaration decides it — exactly as it does an Isolated Cloud
+// site's.
 func cloudClient(t *testing.T, site *cloudSite) *confluence.Client {
 	t.Helper()
 	c, err := confluence.NewClient(confluence.ClientOptions{
 		URL: site.URL + "/wiki", Email: "org@example.com", Token: "org-token",
-		Deployment: confluence.Cloud,
+		Declared: atlassianhost.Cloud,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -670,7 +673,7 @@ func TestOneRefusedCloudEventDoesNotStopTheOthers(t *testing.T) {
 func dataCenterClient(t *testing.T, site *cloudSite) *confluence.Client {
 	t.Helper()
 	c, err := confluence.NewClient(confluence.ClientOptions{
-		URL: site.URL, Token: "org-token", Deployment: confluence.DataCenter,
+		URL: site.URL, Token: "org-token", Declared: atlassianhost.DataCenter,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -889,8 +892,12 @@ func cuttingClient(
 	if deployment == confluence.Cloud {
 		base, email = site.URL+"/wiki", "org@example.com"
 	}
+	declared := atlassianhost.DataCenter
+	if deployment == confluence.Cloud {
+		declared = atlassianhost.Cloud
+	}
 	c, err := confluence.NewClient(confluence.ClientOptions{
-		URL: base, Email: email, Token: "org-token", Deployment: deployment,
+		URL: base, Email: email, Token: "org-token", Declared: declared,
 		HTTP: &http.Client{Transport: transport},
 	})
 	if err != nil {
