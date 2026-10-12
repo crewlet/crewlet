@@ -7,9 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -19,6 +21,7 @@ import (
 type peerCopy struct {
 	mu     sync.Mutex
 	purged []estate.Actor
+	erased []chat.Actor
 }
 
 func (p *peerCopy) For(context.Context) (estate.Backend, bool) {
@@ -27,7 +30,42 @@ func (p *peerCopy) For(context.Context) (estate.Backend, bool) {
 		Writer: func(a estate.Actor) estate.TrackerWriter {
 			return &peerWriter{peer: p, actor: a}
 		},
+		Chat: peerRooms{}, ChatWriter: &peerRoomsWriter{peer: p}, ChatSearch: peerRooms{},
 	}, true
+}
+
+// peerRooms is the peer's chat reads and index.
+type peerRooms struct{ estate.ChatReader }
+
+func (peerRooms) Channels(_ context.Context, viewer string, _ chat.ChannelsQuery,
+	_ statelog.Freshness) (chat.ChannelListing, error) {
+	return chat.ChannelListing{Channels: []chat.ChannelSummary{{
+		Channel: chat.Channel{ID: "room-of-" + viewer}}}}, nil
+}
+
+func (peerRooms) Readable(_ context.Context, viewer string, _ statelog.Freshness) ([]string, error) {
+	return []string{"room-of-" + viewer}, nil
+}
+
+func (peerRooms) At() statelog.Position { return statelog.Position{} }
+
+func (peerRooms) SearchMessages(_ context.Context, q search.ChatQuery) ([]search.ChatHit, error) {
+	return []search.ChatHit{{ChannelID: q.Channels[0], Excerpt: q.Text}}, nil
+}
+
+// peerRoomsWriter is the peer's chat writes.
+type peerRoomsWriter struct {
+	estate.ChatWriter
+	peer *peerCopy
+}
+
+func (w *peerRoomsWriter) Erase(_ context.Context, actor chat.Actor, opID, _ string, _ []string,
+	_ string) (chat.Written, error) {
+	w.peer.mu.Lock()
+	w.peer.erased = append(w.peer.erased, actor)
+	w.peer.mu.Unlock()
+	return chat.Written{ChangeID: opID,
+		Outcome: statelog.Result{Outcome: statelog.OutcomeApplied, OpID: opID}}, nil
 }
 
 // peerBoard is the peer's tracker reads.
@@ -97,7 +135,8 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	var faulted atomic.Bool
 	e := &Engine{backends: &Backends{}, mode: statelog.ModeNormal}
 	e.native.Store(&native{trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{},
-		writer: &tracker.Writer{}, pages: &pages.Store{}})
+		writer: &tracker.Writer{}, pages: &pages.Store{},
+		chatReader: &chat.Reader{}, chat: &chat.Store{}})
 	e.local = localWith(e, time.Now, func(context.Context, *native) copyVerdict {
 		if faulted.Load() {
 			return copyVerdict{fault: "tracker", answers: true}
@@ -154,6 +193,42 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 		t.Fatalf("the peer purged as %+v, want the operator", purged)
 	}
 
+	// AND CHAT, on the same terms: the rooms read, searched and erased from
+	// the peer's copy, the erase attributed to the person who made it.
+	rooms, ok := OperatorChat(e)
+	if !ok {
+		t.Fatal("a data node running native chat hands its operator no rooms")
+	}
+	if listing, err := rooms.Channels(t.Context(), "ana", chat.ChannelsQuery{},
+		statelog.Freshness{}); err != nil || len(listing.Channels) != 1 ||
+		listing.Channels[0].Channel.ID != "room-of-ana" {
+		t.Fatalf("the rooms read (%+v, %v), want the peer's answer for ana", listing, err)
+	}
+	search, ok := OperatorChatSearch(e)
+	if !ok {
+		t.Fatal("a data node running native chat hands its operator no chat search")
+	}
+	if found, err := search.Search(t.Context(), estate.ChatQuery{Viewer: "ana", Text: "deploy"}); err != nil ||
+		len(found.Hits) != 1 || found.Hits[0].ChannelID != "room-of-ana" {
+		t.Fatalf("the chat search (%+v, %v), want the peer's index over ana's rooms", found, err)
+	}
+	roomsWriter, ok := OperatorChatWriter(e)
+	if !ok {
+		t.Fatal("a publishing data node hands its operator no chat writer")
+	}
+	person := chat.Actor{Handle: "ana", Kind: chat.AuthorOperator, OperatorID: "founder"}
+	if _, err := roomsWriter.Erase(t.Context(), person, "op-erase", "room-of-ana",
+		[]string{"m-1"}, "a leaked key"); err != nil {
+		t.Fatalf("an operator's erase on a node whose copy is wrong: %v", err)
+	}
+	peer.mu.Lock()
+	erased := peer.erased
+	peer.mu.Unlock()
+	if len(erased) != 1 || erased[0].Handle != person.Handle || erased[0].Kind != person.Kind ||
+		erased[0].OperatorID != person.OperatorID {
+		t.Fatalf("the peer erased as %+v, want %+v", erased, person)
+	}
+
 	// IN A MAINTENANCE MODE this node hands out no writer, as it hands its
 	// seats none: the mode is the evidence nothing here publishes.
 	e.mode = statelog.ModeMaintenance
@@ -162,6 +237,12 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	}
 	if _, ok := OperatorPageWriter(e); ok {
 		t.Error("a node in a maintenance mode handed its operator a knowledge-base writer")
+	}
+	if _, ok := OperatorChatWriter(e); ok {
+		t.Error("a node in a maintenance mode handed its operator a chat writer")
+	}
+	if _, ok := OperatorChat(e); !ok {
+		t.Error("a node in a maintenance mode stopped answering its operator's chat reads")
 	}
 	if _, ok := OperatorWork(e); !ok {
 		t.Error("a node in a maintenance mode stopped answering its operator's reads")
@@ -175,5 +256,11 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	}
 	if _, ok := OperatorPages(vendors); ok {
 		t.Error("a company on a vendor knowledge base was handed the native one")
+	}
+	if _, ok := OperatorChat(vendors); ok {
+		t.Error("a company on a vendor's chat was handed the native one")
+	}
+	if _, ok := OperatorChatSearch(vendors); ok {
+		t.Error("a company on a vendor's chat was handed the native chat search")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -790,12 +791,20 @@ func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 // asked here with a floor one past its next record and a log that has lost
 // nothing, which the floor alone refuses, and then with the floor AT its next
 // record, which clears — the boundary [statelog.Replayable] draws.
+//
+// EVERY IDENTITY-CLAIMING LOG THE NODE RUNS, read off the running set: a
+// domain whose fence is wired and has no zero write here fails the case, so a
+// log added to the register is held to its own floor the day it is added —
+// a fence bound to ANOTHER log's floor reads a number in the wrong sequence
+// space, refuses nothing this log needs refused, and is caught by nothing but
+// this case.
 func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.Load().log
-	if e.native.Load().writer == nil || e.native.Load().pages == nil {
-		t.Fatal("the node runs no tracker writer or no page store")
+	n := e.native.Load()
+	s := n.log
+	if n.writer == nil || n.pages == nil || n.chat == nil {
+		t.Fatal("the node runs no tracker writer, page store or chat store")
 	}
 	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a node below a
 	// published floor may ask the fleet for a snapshot, and an adoption
@@ -804,66 +813,86 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	s.rejoin = func(context.Context) error { return nil }
 	s.rejoinMu.Unlock()
 
-	for _, tc := range []struct {
-		domain string
-		// zero is a write on a subject nobody has written, which is a
-		// write at an expectation of zero.
-		zero func(ctx context.Context, key string) error
-	}{
-		{domain: tracker.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
-			_, err := e.native.Load().writer.EvictNode(ctx, "op-"+key, "node-"+key)
+	// zero is, per domain, a write on a subject nobody has written, which
+	// is a write at an expectation of zero.
+	zero := map[string]func(ctx context.Context, key string) error{
+		tracker.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := n.writer.EvictNode(ctx, "op-"+key, "node-"+key)
 			return err
-		}},
-		{domain: pages.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
-			_, _, err := e.native.Load().pages.EnsureContainer(ctx, testActivation, key, key, "")
+		},
+		pages.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, _, err := n.pages.EnsureContainer(ctx, testActivation, key, key, "")
 			return err
-		}},
-	} {
-		running := s.Domain(tc.domain)
+		},
+		// A ROOM'S NAME IS ITS ADDRESS, so a create on a name nobody holds
+		// arbitrates on a subject nobody has written.
+		chat.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := n.chat.CreateChannel(ctx,
+				chat.Actor{Handle: "ceo", Kind: chat.AuthorAgent},
+				chat.NewChannel{Name: "floor-" + strings.ToLower(key), Kind: chat.KindPublic})
+			return err
+		},
+	}
+	var cases []string
+	for _, running := range s.running() {
+		if !running.domain.ClaimsIdentity() {
+			continue
+		}
+		name := running.domain.Name()
+		if zero[name] == nil {
+			t.Fatalf("%s claims identity and this case holds no zero write for it, "+
+				"so the floor its write fence reads is certified by nothing: add "+
+				"its row", name)
+		}
+		cases = append(cases, name)
+	}
+	for _, domain := range cases {
+		write := zero[domain]
+		running := s.Domain(domain)
 		if running == nil {
-			t.Fatalf("the %s domain is not running", tc.domain)
+			t.Fatalf("the %s domain is not running", domain)
 		}
 		// CAUGHT UP, so the checkpoint a write's snapshot reads is the
 		// log's end, and a floor one past it is one record ahead.
 		first, last, err := running.log.Bounds(t.Context())
 		if err != nil {
-			t.Fatalf("read %s's bounds: %v", tc.domain, err)
+			t.Fatalf("read %s's bounds: %v", domain, err)
 		}
-		waitUntil(t, 20*time.Second, tc.domain+" to apply its whole log", func() bool {
+		waitUntil(t, 20*time.Second, domain+" to apply its whole log", func() bool {
 			return running.runner.Committed().Seq >= last
 		})
 		at := running.runner.Committed()
 		if !statelog.Replayable(at.Seq, first) {
 			t.Fatalf("%s's log starts at %d past this node's %d, so the stream "+
 				"would refuse on its own and this case would not show the floor",
-				tc.domain, first, at.Seq)
+				domain, first, at.Seq)
 		}
 		publish := func(floor uint64) {
 			t.Helper()
 			if err := back.Fleet.PutFloor(t.Context(), coord.TrimFloor{
-				Domain: tc.domain, Generation: at.Generation,
+				Domain: domain, Generation: at.Generation,
 				TrimTo: floor, Floor: floor, At: time.Now().UTC(), By: "peer",
 			}); err != nil {
-				t.Fatalf("publish %s's floor: %v", tc.domain, err)
+				t.Fatalf("publish %s's floor: %v", domain, err)
 			}
 		}
 
 		publish(at.Seq + 2)
-		if err := tc.zero(t.Context(), "REFUSED"); !errors.Is(err, statelog.ErrUnavailable) {
+		if err := write(t.Context(), "REFUSED"); !errors.Is(err, statelog.ErrUnavailable) {
 			t.Fatalf("%s: a write at zero from a node one record short of the "+
 				"published floor answered %v, want %v — the log still holds that "+
-				"record, so the floor is the only witness", tc.domain, err,
+				"record, so the floor is the only witness", domain, err,
 				statelog.ErrUnavailable)
 		}
 		if _, after, err := running.log.Bounds(t.Context()); err != nil || after != last {
 			t.Fatalf("%s's log ends at %d (err %v), want %d — the refused write "+
-				"was appended", tc.domain, after, err, last)
+				"was appended", domain, after, err, last)
 		}
 
 		publish(at.Seq + 1)
-		if err := tc.zero(t.Context(), "CLEARED"); err != nil {
+		if err := write(t.Context(), "CLEARED"); err != nil {
 			t.Fatalf("%s: a write at zero from a node holding everything the "+
-				"published floor licenses removing was refused: %v", tc.domain, err)
+				"published floor licenses removing was refused: %v", domain, err)
 		}
 	}
 }

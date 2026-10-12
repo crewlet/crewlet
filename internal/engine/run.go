@@ -83,7 +83,8 @@ type Engine struct {
 	metrics *metrics.Recorder
 
 	// chatLive is [Options.ChatLive], held so startStateLog can hand it to
-	// the chat applier. Nil is a documented no-op.
+	// the chat applier and the native working indicator can be raised on
+	// it ([Engine.applyChatStatus]). Nil is a documented no-op.
 	chatLive ChatLive
 
 	// searching is how many knowledge scans this node is running right
@@ -577,6 +578,15 @@ type Engine struct {
 	// chart per tick instead.
 	usage *usageLoop
 
+	// chatPrune is the chat domain's retention duty: the fleet singleton
+	// that publishes the cutoff every node deletes below. On the ENGINE
+	// for the reason the trim and the embedding pass are — it is a loop
+	// this process runs, and rebuilding it on an apply would leave two
+	// loops publishing one company's ladder of cutoffs. It reads the
+	// current epoch's horizon per tick instead, so a retention change
+	// lands without a restart.
+	chatPrune *chatPrune
+
 	// usageEvery is Options.usageEvery.
 	usageEvery time.Duration
 
@@ -846,9 +856,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 	// THE CROSS-TIER RULES, before anything is opened. Each tier validated
 	// alone on its way in; what neither could see is the other, and the one
-	// rule that needs both (a native tracker or knowledge base whose log
-	// would live on an in-memory stream) produces a node that refuses to
-	// serve permanently rather than one that fails on the way up.
+	// rule that needs both (a native tracker, knowledge base or chat whose
+	// log would live on an in-memory stream) produces a node that refuses
+	// to serve permanently rather than one that fails on the way up.
 	if err := config.CheckTiers(opts.Bootstrap, opts.Company); err != nil {
 		return nil, fmt.Errorf("engine: %w", err)
 	}
@@ -1191,8 +1201,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		if err := e.startSandboxFor(ctx, company); err != nil {
 			return nil, fmt.Errorf("engine: sandbox: %w", err)
 		}
-		// BEFORE equip too, and for exactly the same reason: the ten
-		// native tracker and knowledge tools are registered only where
+		// BEFORE equip too, and for exactly the same reason: the native
+		// tracker, knowledge-base and chat tools are registered only where
 		// their halves exist, so a node that equipped first would run a
 		// company on the native backends whose seats have no way to read
 		// or write them.
@@ -1216,6 +1226,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// AND THE CONTAINERS, for the same reason and on the same terms —
 		// see [Engine.applyContainers], and the bug it fixes.
 		e.applyContainers(ctx, company, opts.ActivatedAt)
+		// AND THE UNIT ROOMS, which are the same projection into chat: a
+		// unit that declares a `channel` gets it, with its subtree in it.
+		// Same terms again — stamped with the activation, best effort, per
+		// unit, retried by the next apply.
+		e.applyUnitRooms(ctx, company, opts.ActivatedAt)
 		// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the
 		// epoch is current, and one that found an empty registry would run
 		// a seat with no tools at all — a company that boots cleanly and
@@ -1980,6 +1995,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopSeatPauses()
 	e.stopEmbedding()
 	e.stopUsage()
+	e.stopChatRetention()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing
 	// it while a seat was still finishing a turn would tell a coordinator

@@ -5,16 +5,19 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // AN EVICTED NODE'S OWN WRITES, MADE THROUGH ITS REAL WRITERS, ARE DROPPED BY
-// THE APPLIER — in both identity-claiming domains, on real streams.
+// THE APPLIER — on every identity-claiming log, on real streams.
 //
 // The eviction gate is clause (iii) of the floor theorem: the one that holds
 // when the other two are defeated, because it depends on nothing but the log's
@@ -27,97 +30,189 @@ import (
 //
 // So the evictions here land on each log first — as a peer would publish them
 // — while this node's appliers are halted, which is what a node that has not
-// yet noticed its own eviction is. Its own writes then go through the tracker
-// writer and the page store it serves every seat with, land above the
-// eviction, and the appliers, once running, must drop them.
+// yet noticed its own eviction is. Its own writes then go through the writer it
+// serves every seat with, land above the eviction, and the appliers, once
+// running, must drop them.
+//
+// EVERY LOG THE NODE RUNS THAT CLAIMS IDENTITY, read off the running set: a
+// domain that claims identity and has no write here fails the case, so a log
+// added to the register is held to the gate the day it is added rather than
+// certified by a list of the two that came first.
 func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
 	s := e.native.Load().log
 	self := s.nodeID
-	if e.native.Load().writer == nil || e.native.Load().pages == nil {
-		t.Fatal("the node runs no tracker writer or no page store")
-	}
 	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: halted appliers look
 	// like a node below the log, and an adoption racing the writes below
 	// would be what they measured.
 	s.rejoinMu.Lock()
 	s.rejoin = func(context.Context) error { return nil }
 	s.rejoinMu.Unlock()
-	trackerLog := s.Domain(tracker.Domain{}.Name())
-	pagesLog := s.Domain(pages.Domain{}.Name())
 
-	// THE CONTROL: the same two writes, made before any eviction, apply.
+	var logs []*runningLog
+	for _, running := range s.running() {
+		if !running.domain.ClaimsIdentity() {
+			continue
+		}
+		if _, written := evictedWriters[running.domain.Name()]; !written {
+			t.Fatalf("%s claims identity and this case holds no write for it, so its "+
+				"eviction gate is certified by nothing: add its row to evictedWriters",
+				running.domain.Name())
+		}
+		logs = append(logs, running)
+	}
+
+	// THE CONTROL: the same writes, made before any eviction, apply.
 	// Without it a harness that applied nothing of this node's would pass
 	// the case below.
-	if _, err := e.native.Load().writer.WriteView(t.Context(), "op-view-before",
-		evictedView("v-before")); err != nil {
-		t.Fatalf("the control view write: %v", err)
+	for _, running := range logs {
+		w := evictedWriters[running.domain.Name()]
+		if _, _, err := w.write(t.Context(), e, "before"); err != nil {
+			t.Fatalf("the control write on %s: %v", running.domain.Name(), err)
+		}
+		waitApplied(t, running)
+		table, column := w.row()
+		requireRow(t, back, table, column, w.key("before"), true)
 	}
-	if _, _, err := e.native.Load().pages.EnsureContainer(t.Context(), testActivation, "BEFORE",
-		"Before", ""); err != nil {
-		t.Fatalf("the control container write: %v", err)
-	}
-	waitApplied(t, trackerLog)
-	waitApplied(t, pagesLog)
-	requireRow(t, back, "tracker_views", "id", "v-before", true)
-	requireRow(t, back, "pages_containers", "key", "BEFORE", true)
 
-	// THE NODE STOPS APPLYING, and the fleet evicts it on both logs.
+	// THE NODE STOPS APPLYING, and the fleet evicts it on every log.
 	s.haltAppliers()
-	appendRecord(t, trackerLog, tracker.EvictionSubject(self).String(), trackerEviction(t, self))
-	appendRecord(t, pagesLog, pages.EvictionSubject(self).String(), pagesEviction(t, self))
+	for _, running := range logs {
+		w := evictedWriters[running.domain.Name()]
+		appendRecord(t, running, w.evictionSubject(self), w.eviction(t, self))
+	}
 
 	// ITS OWN WRITES, THROUGH ITS REAL WRITERS: its fence reads its own
-	// applied rows, which do not hold the eviction yet, so both land.
-	// Neither can resolve — the appliers are halted — so each answers
-	// pending, which is the honest answer and the one asserted, after
-	// [haltedWriteBudget] rather than the publisher's whole default.
+	// applied rows, which do not hold the eviction yet, so each lands.
+	// None can resolve — the appliers are halted — so a writer that reports
+	// an outcome answers pending, which is the honest answer and the one
+	// asserted, after [haltedWriteBudget] rather than the publisher's whole
+	// default.
 	halted := statelog.WithResolveBudget(t.Context(), haltedWriteBudget)
-	res, err := e.native.Load().writer.WriteView(halted, "op-view-evicted", evictedView("v-evicted"))
-	if err != nil || res.Outcome != statelog.OutcomePending {
-		t.Fatalf("the evicted node's view write answered %q (err %v), want "+
-			"pending — it has to LAND for the gate to have anything to drop",
-			res.Outcome, err)
+	landed := map[string]statelog.Position{}
+	for _, running := range logs {
+		name := running.domain.Name()
+		at, outcome, err := evictedWriters[name].write(halted, e, "evicted")
+		if err != nil || (outcome != "" && outcome != statelog.OutcomePending) {
+			t.Fatalf("the evicted node's %s write answered %q (err %v), want "+
+				"pending — it has to LAND for the gate to have anything to drop",
+				name, outcome, err)
+		}
+		landed[name] = at
+		// THE RECORD NAMES THIS NODE — the one fact the gate reads.
+		requireWriter(t, running, at.Seq, self)
 	}
-	viewAt := res.Position
-	if _, _, err := e.native.Load().pages.EnsureContainer(halted, testActivation, "EVICTED",
-		"Evicted", ""); err != nil {
-		t.Fatalf("the evicted node's container write: %v", err)
-	}
-	_, pageSeq, err := pagesLog.log.Bounds(t.Context())
-	if err != nil {
-		t.Fatalf("read the pages log's end: %v", err)
-	}
-	pageAt := pagesLog.runner.Committed().At(pageSeq)
-
-	// BOTH RECORDS NAME THIS NODE — the one fact the gate reads.
-	requireWriter(t, trackerLog, viewAt.Seq, self)
-	requireWriter(t, pagesLog, pageSeq, self)
 
 	relaunch(t, s)
-	waitApplied(t, trackerLog)
-	waitApplied(t, pagesLog)
+	for _, running := range logs {
+		name := running.domain.Name()
+		w := evictedWriters[name]
+		waitApplied(t, running)
+		table, column := w.row()
+		requireRow(t, back, table, column, w.key("evicted"), false)
 
-	requireRow(t, back, "tracker_views", "id", "v-evicted", false)
-	requireRow(t, back, "pages_containers", "key", "EVICTED", false)
+		// AND THE PUBLISHER'S OWN READING OF THE GATE AGREES, so a write
+		// resolved later is told `evicted` rather than "somebody else won".
+		at := landed[name]
+		env := envelopeAt(t, running, at.Seq)
+		reason, gated, err := w.gates(back.Store.Replicated().Reader()).GatedAt(t.Context(),
+			env.Subject, self, env.OpID, at)
+		if err != nil || !gated || reason != statelog.ReasonEvicted {
+			t.Fatalf("%s's gate reads (%q, %v, %v) for the evicted node's record, "+
+				"want evicted", name, reason, gated, err)
+		}
+	}
+}
 
-	// AND THE PUBLISHER'S OWN READING OF THE GATE AGREES, so a write
-	// resolved later is told `evicted` rather than "somebody else won".
-	if reason, gated, err := tracker.NewGates(back.Store.Replicated().Reader()).GatedAt(t.Context(),
-		statelog.Subject{Kind: string(tracker.KindView), ID: "v-evicted"},
-		self, "op-view-evicted", viewAt); err != nil || !gated ||
-		reason != statelog.ReasonEvicted {
-		t.Fatalf("the tracker's gate reads (%q, %v, %v) for the evicted node's "+
-			"record, want evicted", reason, gated, err)
+// evictedWriter is one identity-claiming log as the case above drives it: a
+// real write of this node's, the row it leaves, the record a peer evicts the
+// node with, and the log's own reading of its gates.
+type evictedWriter struct {
+	// write makes one write through the node's own writer on ctx, named by
+	// tag, and answers the position it landed at and the outcome the writer
+	// reported — empty for a writer that reports none.
+	write func(ctx context.Context, e *Engine, tag string) (statelog.Position, statelog.Outcome, error)
+
+	// key is the row a write named tag leaves, and row the table and the
+	// column it is found by.
+	key func(tag string) string
+	row func() (table, column string)
+
+	// evictionSubject and eviction are a peer's eviction of node.
+	evictionSubject func(node string) string
+	eviction        func(t *testing.T, node string) []byte
+
+	// gates is the log's gate reader over the replicated estate.
+	gates func(db store.ReplicatedReader) statelog.Gates
+}
+
+// evictedWriters is every identity-claiming domain's row for the case above.
+var evictedWriters = map[string]evictedWriter{
+	tracker.Domain{}.Name(): {
+		write: func(ctx context.Context, e *Engine, tag string) (statelog.Position, statelog.Outcome, error) {
+			res, err := e.native.Load().writer.WriteView(ctx, "op-view-"+tag,
+				evictedView("v-"+tag))
+			return res.Position, res.Outcome, err
+		},
+		key:             func(tag string) string { return "v-" + tag },
+		row:             func() (string, string) { return "tracker_views", "id" },
+		evictionSubject: func(node string) string { return tracker.EvictionSubject(node).String() },
+		eviction:        trackerEviction,
+		gates: func(db store.ReplicatedReader) statelog.Gates {
+			return tracker.NewGates(db)
+		},
+	},
+	pages.Domain{}.Name(): {
+		write: func(ctx context.Context, e *Engine, tag string) (statelog.Position, statelog.Outcome, error) {
+			// THE CHART'S CONTAINER APPLY, which answers no outcome: the
+			// record it landed is the log's last.
+			if _, _, err := e.native.Load().pages.EnsureContainer(ctx,
+				testActivation, strings.ToUpper(tag), tag, ""); err != nil {
+				return statelog.Position{}, "", err
+			}
+			running := e.native.Load().log.Domain(pages.Domain{}.Name())
+			_, last, err := running.log.Bounds(ctx)
+			return running.runner.Committed().At(last), "", err
+		},
+		key:             strings.ToUpper,
+		row:             func() (string, string) { return "pages_containers", "key" },
+		evictionSubject: func(node string) string { return pages.EvictionSubject(node).String() },
+		eviction:        pagesEviction,
+		gates: func(db store.ReplicatedReader) statelog.Gates {
+			return pages.NewGates(db)
+		},
+	},
+	chat.Domain{}.Name(): {
+		write: func(ctx context.Context, e *Engine, tag string) (statelog.Position, statelog.Outcome, error) {
+			// THE COMPANY'S OWN SEAT, as a seat's tool would make it.
+			written, err := e.native.Load().chat.CreateChannel(ctx,
+				chat.Actor{Handle: "ceo", Kind: chat.AuthorAgent},
+				chat.NewChannel{Name: "room-" + tag, Kind: chat.KindPublic})
+			return written.Outcome.Position, written.Outcome.Outcome, err
+		},
+		key:             func(tag string) string { return "room-" + tag },
+		row:             func() (string, string) { return "chat_channels", "name" },
+		evictionSubject: func(node string) string { return chat.EvictionSubject(node).String() },
+		eviction:        chatEviction,
+		gates: func(db store.ReplicatedReader) statelog.Gates {
+			return chat.NewGates(db)
+		},
+	},
+}
+
+// envelopeAt is the envelope of the record at seq on a domain's log.
+func envelopeAt(t *testing.T, running *runningLog, seq uint64) statelog.Envelope {
+	t.Helper()
+	_, payload, _, ok, err := running.log.At(t.Context(), seq)
+	if err != nil || !ok {
+		t.Fatalf("read %s at %d: ok %v, err %v", running.domain.Name(), seq, ok, err)
 	}
-	if reason, gated, err := pages.NewGates(back.Store.Replicated().Reader()).GatedAt(t.Context(),
-		statelog.Subject{Kind: string(pages.KindContainer), ID: "EVICTED"},
-		self, "", pageAt); err != nil || !gated ||
-		reason != statelog.ReasonEvicted {
-		t.Fatalf("the pages gate reads (%q, %v, %v) for the evicted node's "+
-			"record, want evicted", reason, gated, err)
+	env, err := running.domain.Envelope(payload)
+	if err != nil {
+		t.Fatalf("decode %s at %d: %v", running.domain.Name(), seq, err)
 	}
+	return env
 }
 
 // haltedWriteBudget is the resolution budget a case hands the writes it makes
@@ -183,6 +278,31 @@ func pagesEviction(t *testing.T, node string) []byte {
 			Writer: "node-peer", Scope: pages.ScopeSet{Subject: true},
 		},
 		Mutation: body, Actor: "node-peer", ActorKind: pages.AuthorOperator,
+	})
+	if err != nil {
+		t.Fatalf("encode the eviction record: %v", err)
+	}
+	return payload
+}
+
+// chatEviction is the same for chat's log.
+func chatEviction(t *testing.T, node string) []byte {
+	t.Helper()
+	body, err := json.Marshal(chat.Eviction{
+		V: chat.GateRecordVersion, NodeID: node, EvictedBy: "operator",
+		EvictedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("encode the eviction: %v", err)
+	}
+	payload, err := chat.Encode(chat.MutationRecord{
+		RecordEnvelope: chat.RecordEnvelope{
+			V: chat.GateRecordVersion, OpID: "op-evict-" + node,
+			Subject: chat.EvictionSubject(node), Op: chat.OpEviction,
+			Writer: "node-peer", Scope: chat.ScopeSet{Subject: true},
+		},
+		Mutation: body, Actor: "operator", ActorKind: chat.AuthorOperator,
+		OperatorID: "operator",
 	})
 	if err != nil {
 		t.Fatalf("encode the eviction record: %v", err)

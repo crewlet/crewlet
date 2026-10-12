@@ -33,12 +33,40 @@ func (f *rosterFleet) Target(ctx context.Context) (coord.Activation, bool, error
 	return f.memoryFleet.Target(ctx)
 }
 
-// THE ROSTER A MAILBOX IS RETIRED AGAINST IS THE FLEET'S CURRENT REVISION, and
-// only that. Every other answer is unknown, because a retirement deletes mail
-// that cannot be recovered and a seat judged absent against a stale revision
-// may be one the fleet has just added back.
-func TestTheMailboxRosterIsKnownOnlyOnANodeServingTheFleetsRevision(t *testing.T) {
+// THE ROSTERS A SWEEP JUDGES ABSENCE AGAINST ARE THE FLEET'S CURRENT REVISION,
+// and only that. Every other answer is unknown, because what a sweep then
+// removes — a seat's mail, a person's place in every room — cannot be
+// recovered, and a handle judged absent against a stale revision may be one
+// the fleet has just added back.
+//
+// TWO ROSTERS, one rule: the mailbox retirement's names the AGENT seats, which
+// are the ones with mail; the chat read-state reconcile's names EVERY seat,
+// because the people are who read, and a roster of agents would find every
+// person missing and forget them all.
+func TestTheSweepRostersAreKnownOnlyOnANodeServingTheFleetsRevision(t *testing.T) {
 	t.Parallel()
+	for name, tc := range map[string]struct {
+		read func(*Engine) func(context.Context) ([]string, error)
+		want []string
+	}{
+		"the mailbox roster, agent seats": {
+			read: func(e *Engine) func(context.Context) ([]string, error) { return e.activeSeatHandles },
+			want: []string{"ceo", "swe"},
+		},
+		"the read-state roster, every seat": {
+			read: func(e *Engine) func(context.Context) ([]string, error) { return e.activeOrgHandles },
+			want: []string{"ceo", "founder", "swe"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			testASweepRoster(t, tc.read, tc.want)
+		})
+	}
+}
+
+func testASweepRoster(t *testing.T, read func(*Engine) func(context.Context) ([]string, error), want []string) {
+	t.Helper()
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
@@ -70,9 +98,10 @@ roles:
 	fleet := &rosterFleet{memoryFleet: coordmem.NewFleet()}
 	e := &Engine{backends: &Backends{Fleet: fleet}}
 	e.epoch.current.Store(company)
+	roster := read(e)
 
 	// Nothing activated: not a fault, and not a roster of nobody either.
-	if _, err := e.activeSeatHandles(t.Context()); !errors.Is(err, maintenance.ErrNoActiveRevision) {
+	if _, err := roster(t.Context()); !errors.Is(err, maintenance.ErrNoActiveRevision) {
 		t.Fatalf("roster with no activation = %v, want ErrNoActiveRevision", err)
 	}
 
@@ -82,7 +111,7 @@ roles:
 	}
 
 	// A node with no reconciler cannot say which activation it serves.
-	if handles, err := e.activeSeatHandles(t.Context()); err == nil {
+	if handles, err := roster(t.Context()); err == nil {
 		t.Fatalf("a node with no reconciler produced a roster %v", handles)
 	}
 
@@ -95,23 +124,22 @@ roles:
 		t.Fatalf("NewReconciler: %v", err)
 	}
 	r.publish(applyProgress{applied: activation.Epoch - 1, target: activation.Epoch})
-	if handles, err := e.activeSeatHandles(t.Context()); err == nil {
+	if handles, err := roster(t.Context()); err == nil {
 		t.Fatalf("a node behind the fleet's epoch produced a roster %v; its seats may be stale", handles)
 	}
 
 	r.publish(applyProgress{applied: activation.Epoch, target: activation.Epoch})
-	handles, err := e.activeSeatHandles(t.Context())
+	handles, err := roster(t.Context())
 	if err != nil {
 		t.Fatalf("a node serving the fleet's epoch: %v", err)
 	}
-	// Agent seats only: a human seat has no mailbox to retire or keep.
-	if !slices.Equal(handles, []string{"ceo", "swe"}) {
-		t.Fatalf("roster = %v, want the agent seats", handles)
+	if !slices.Equal(handles, want) {
+		t.Fatalf("roster = %v, want %v", handles, want)
 	}
 
 	// An unreadable pointer is unknown, never the last roster it produced.
 	fleet.down = true
-	if handles, err := e.activeSeatHandles(t.Context()); !errors.Is(err, coord.ErrUnavailable) {
+	if handles, err := roster(t.Context()); !errors.Is(err, coord.ErrUnavailable) {
 		t.Fatalf("roster with an unreadable pointer = (%v, %v), want the store's error", handles, err)
 	}
 }

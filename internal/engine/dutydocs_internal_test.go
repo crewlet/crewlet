@@ -28,6 +28,7 @@ var dutyNames = map[string]string{
 	"retentionDutyName":   retentionDutyName,
 	"embedDutyName":       embedDutyName,
 	"objectCollectorDuty": objectCollectorDuty,
+	"chatPruneDutyName":   chatPruneDutyName,
 }
 
 // EVERY DUTY CLAIMED IS IN THE NAME TABLE, and every name in it is claimed.
@@ -60,7 +61,8 @@ func TestEveryClaimedDutyIsInTheNameTable(t *testing.T) {
 //
 // architecture.md's workers table names each `worker:DUTY` lease and
 // seat-ownership.md's singleton table says why each runs once — and the first
-// listed five of eight while nothing noticed. Both directions: a duty the
+// listed five of eight while nothing noticed, then gained a ninth (chat's
+// prune) only because somebody remembered both. Both directions: a duty the
 // engine claims and a page omits is a lease an operator finds in `crewlet
 // fleet` with nothing to say what it is, and a row naming no duty sends them
 // looking for one that does not run.

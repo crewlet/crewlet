@@ -164,8 +164,9 @@ back what it wrote.
 |---|---|
 | `/webhooks/slack/HANDLE` · `/webhooks/github` · `/webhooks/github/HANDLE` · `/webhooks/gitlab` · `/webhooks/jira` · `/webhooks/confluence` · `/webhooks/confluence/EVENT` · `/webhooks/datadog` · `/webhooks/forge` | The webhook routes. A delivery is verified, then claimed once per fleet, then handed to the notification service. Slack's OAuth landing and the GitHub App return live beside them. |
 | `/config` · `/secrets` · `/setup` · `/agents` · `/org` · `/tools` · `/query` · `/backup` | The REST and config plane. It reads and writes the coordination KV and the store directly. |
-| `/ws/stream` | The dashboard's only read channel: live pushes plus a query channel. The observability edge's projector is what pushes onto it. It carries no write. |
-| `/operator/mcp` · `/operator/act` | The operator catalogue — the tracker and knowledge tools a seat holds — served to a person's own assistant over MCP, and to the dashboard as the person the token is bound to. Always guarded. |
+| `/ws/stream` | The dashboard's only read channel: live pushes plus a query channel. The observability edge's projector is what pushes onto it, and native chat's hub pushes each committed message to the sockets entitled to see it. It carries no write: besides a query and the `ping` keepalive, its one inbound frame is `chat_focus` — where a tab is looking and whether its person is typing, presence that is never written anywhere. |
+| `/operator/mcp` · `/operator/act` | The operator catalogue — the tracker, knowledge-base and chat tools a seat holds, and the chat gestures only a person makes — served to a person's own assistant over MCP, and to the dashboard as the person the token is bound to. Every write the dashboard makes goes through it. Always guarded. |
+| `/chat/channels/{id}/erase` · `/chat/channels/{id}/prune` | Native chat's two destructions, beside the tracker's purge: typed confirmation, the caller's own operation id, recorded as an operator's act. Every other chat route reads. |
 | `/otlp/{token}/v1/{signal}` | Signed-token trace ingest. |
 | `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. The exception on this list: a session lives in the process that opened it, so this route belongs to the node that runs the seat, and a `seats` node without `ingress` binds its listener for this route alone. |
 | `/health` · `/ready` | The two probes — [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
@@ -178,12 +179,13 @@ read and write this node's own copy of the replicated estate.
 |---|---|
 | `worker:scheduler` | Role- and unit-scoped cron; a fire is published to the stream. |
 | `worker:sandbox-waiter` | Polls detached runs and resumes the turns waiting on them, over the stream. The same tick is the box keepalive. |
-| `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", and the retirement of a removed seat's mailbox and coding runs. |
+| `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", the retirement of a removed seat's mailbox and coding runs, and forgetting the chat read state of a person who left the org chart. |
 | `worker:integration-reconcile` | The [integration reconcile](integration-reconcile.md) loop: every connected third-party app's pass, on a cadence set by who has to act. |
 | `worker:learning` | Every learning background pass: skill ageing, episode compaction, clustering and cross-agent promotion. |
 | `worker:retention` | The state-log trim: every 15 minutes it takes each log's floor across every data node's position, the backups and the holds, purges what they all permit, and publishes what it concluded. |
 | `worker:embeddings` | Embeds every page and task whose vector is missing or stale and publishes it to the vectors log, so the fleet pays the provider once and every data node applies the answer. |
 | `worker:object-collector` | The [object store](object-store.md)'s collector: hourly, deletes the objects no row names; daily, audits that every object a row names is in the store and whole. |
+| `worker:chat-prune` | Native chat's message horizon: hourly, publishes to the chat log the cutoff each room's horizon has reached, which every data node applies as the same delete. A record rather than a sweep, because the rows are replicated and a node's own clock would delete a different set on each. |
 
 **Five more services run on every node, whatever the roles say.**
 

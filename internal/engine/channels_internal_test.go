@@ -2,6 +2,7 @@ package engine
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -64,5 +65,55 @@ units:
 	}
 	if got := (liveChannels{engine: &Engine{}}).ChatSurfaces("dev"); got != nil {
 		t.Errorf("a node with no company can post on %v", got)
+	}
+}
+
+// THE ENGINE'S OWN CHAT IS A SURFACE EVERY AGENT SEAT CAN POST ON, with no bot
+// to hold: on a company whose chat is native, a seat posts as itself, and the
+// inform it promises is discharged by its own chat tools. It was left out, so
+// every inform a native-chat company's seat promised was refused as a surface
+// it could not post on. A person has no turn to hold open, and a company whose
+// chat is a vendor's has no native surface at all.
+func TestTheEnginesOwnChatIsEveryAgentSeatsSurface(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+providers:
+  llm:
+    gateway:
+      type: openai
+      model: gpt-4o
+      api_keys: ["${OPENAI_API_KEY}"]
+chat:
+  backend: CHAT
+units:
+  - name: Engineering
+    channel: engineering
+    roles:
+      - name: Dev
+        handle: dev
+      - name: Ana
+        handle: ana
+        kind: human
+        contact:
+          crewlet_operator_id: ana
+`
+	native := &Engine{}
+	native.epoch.current.Store(companyFor(t, strings.Replace(doc, "CHAT", "native", 1)))
+	directory := liveChannels{engine: native}
+	if got := directory.ChatSurfaces("dev"); !slices.Equal(got,
+		[]tracker.InformSurface{tracker.InformChat}) {
+		t.Errorf("an agent seat of a native-chat company can post on %v, want "+
+			"the engine's own chat", got)
+	}
+	if got := directory.ChatSurfaces("ana"); len(got) != 0 {
+		t.Errorf("a person can promise an inform on %v — a person has no turn "+
+			"to hold open until the post is made", got)
+	}
+
+	none := &Engine{}
+	none.epoch.current.Store(companyFor(t, strings.Replace(doc, "CHAT", "none", 1)))
+	if got := (liveChannels{engine: none}).ChatSurfaces("dev"); len(got) != 0 {
+		t.Errorf("a company with no chat surface offers %v", got)
 	}
 }

@@ -52,9 +52,10 @@ const (
 	// on purpose: both blocks are frozen into the same system prompt and
 	// re-sent on every round of every phase, and this one must not
 	// dominate the one carrying the seat's own cross-turn history. A third
-	// is roughly 2k tokens — thirty chat messages, which is the item cap
-	// above, and the ceiling bites only on a thread whose messages are
-	// documents rather than replies.
+	// is roughly 2k tokens — some thirty chat replies of ordinary length,
+	// so a thread of replies is handed over whole up to about that many
+	// and condensed past it, and one whose messages are documents reaches
+	// the bound sooner.
 	//
 	// NOT A CONFIG FIELD. config.ConversationSession's doc records what
 	// happened the last time a render bound here was exposed: two knobs
@@ -72,11 +73,28 @@ const (
 	//
 	// ITS OWN, and deliberately NOT [AuxTimeout]: thirty seconds is
 	// justified for an LLM round trip and is nowhere near justified here.
-	// Five seconds is under the self-hosted client's own 10s retry budget,
-	// so that client's automatic 429 retry cannot turn a prefetch into a
-	// ten-second stall at the start of every chat turn — and the
-	// prefetch's wall clock is its SLOWEST block, which is latency a
-	// person is sitting through.
+	// The prefetch's wall clock is its SLOWEST block, which is latency a
+	// person is sitting through, so five seconds is decided against what
+	// each backend's read can cost:
+	//
+	//   - A VENDOR read is one HTTP call, and five seconds is under the
+	//     self-hosted client's own 10s retry budget, so that client's
+	//     automatic 429 retry cannot turn a prefetch into a ten-second
+	//     stall at the start of every chat turn.
+	//   - The ENGINE'S OWN chat is a linearizable estate read, routed to a
+	//     data node where this one holds none. The serving node may wait a
+	//     statelog.ReadBudget (2s) for the floor and another for the level,
+	//     then runs one indexed query — so a holder that is answering at
+	//     all answers inside four seconds, and the second that remains is
+	//     the query and the round trip. A test holds the two together.
+	//     What it does NOT cover is a FAILOVER: the router gives one node
+	//     ten seconds (estate.ReadAttempt) before asking the next, so a
+	//     first holder that is gone renders the unreadable hint — which
+	//     sends the seat to read the thread with its own tools — rather
+	//     than holding the turn a person is waiting on for the ten-plus
+	//     seconds a failover takes. Every other read the turn makes goes
+	//     through the same router with its own budget, so the thread is
+	//     still one tool call away.
 	ThreadTimeout = 5 * time.Second
 )
 

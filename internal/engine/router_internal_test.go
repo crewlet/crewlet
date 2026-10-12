@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -489,44 +490,53 @@ func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 	}
 }
 
-// BOTH HALVES THE COMPANY RUNS NATIVELY MUST BE SERVED BY THE COPY THAT WILL
-// SERVE THE SEAT, because a seat's tools reach both: a node holding no data
-// that admitted a seat on a data node running only the tracker would hand that
-// seat a wiki whose every call is answered "not here" — and a node admitting
-// on the wiki alone, a tracker the same. And a half the company runs on a
-// vendor is not asked for at all, or a company with its pages on Confluence
-// would never admit a seat anywhere.
+// EVERY HALF THE COMPANY RUNS NATIVELY MUST BE SERVED BY THE COPY THAT WILL
+// SERVE THE SEAT, because a seat's tools reach each of them: a node holding no
+// data that admitted a seat on a data node running only the tracker would hand
+// that seat a wiki and rooms whose every call is answered "not here" — and a
+// node admitting on the wiki alone, a tracker the same. A half the company runs
+// on a vendor is not asked for at all, or a company with its pages on
+// Confluence would never admit a seat anywhere. And a company whose ONLY native
+// half is chat — its tracker and its wiki both a vendor's — gates on chat
+// rather than admitting every seat unconditionally.
 //
 // Each step moves the clock past the window [estate.Router.Serves] trusts a
 // data node's answer for, so every step is a fresh ask of the fleet.
-func TestASeatIsAdmittedOnlyWhereBothHalvesItRunsAreServed(t *testing.T) {
+func TestASeatIsAdmittedOnlyWhereEveryHalfItRunsIsServed(t *testing.T) {
 	t.Parallel()
+	all := remoteNative{tracker: true, wiki: true, chat: true}
 	for _, step := range []struct {
-		name           string
-		runs           remoteNative
-		tracker, pages bool
-		want           bool
+		name   string
+		runs   remoteNative
+		served estate.Served
+		want   bool
 	}{
-		{name: "the data node runs the wiki and not the tracker",
-			runs: remoteNative{tracker: true, wiki: true}, tracker: false, pages: true},
-		{name: "the data node runs the tracker and not the wiki",
-			runs: remoteNative{tracker: true, wiki: true}, tracker: true, pages: false},
-		{name: "the data node runs both",
-			runs: remoteNative{tracker: true, wiki: true}, tracker: true, pages: true, want: true},
-		{name: "the company's wiki is on a vendor",
-			runs: remoteNative{tracker: true}, tracker: true, pages: false, want: true},
+		{name: "the data node runs the wiki and chat and not the tracker",
+			runs: all, served: estate.Served{Pages: true, Chat: true}},
+		{name: "the data node runs the tracker and chat and not the wiki",
+			runs: all, served: estate.Served{Tracker: true, Chat: true}},
+		{name: "the data node runs the tracker and the wiki and not chat",
+			runs: all, served: estate.Served{Tracker: true, Pages: true}},
+		{name: "the data node runs every half",
+			runs: all, served: estate.Served{Tracker: true, Pages: true, Chat: true}, want: true},
+		{name: "the company's wiki and chat are on vendors",
+			runs: remoteNative{tracker: true}, served: estate.Served{Tracker: true}, want: true},
 		{name: "the company's tracker is on a vendor",
-			runs: remoteNative{wiki: true}, tracker: false, pages: true, want: true},
+			runs:   remoteNative{wiki: true, chat: true},
+			served: estate.Served{Pages: true, Chat: true}, want: true},
+		{name: "only chat is native, and the data node serves it",
+			runs: remoteNative{chat: true}, served: estate.Served{Chat: true}, want: true},
+		{name: "only chat is native, and the data node does not serve it",
+			runs: remoteNative{chat: true}, served: estate.Served{Tracker: true, Pages: true}},
 	} {
 		t.Run(step.name, func(t *testing.T) {
 			t.Parallel()
 			e, answer := statelessOver(t)
 			e.remote.Store(&step.runs)
-			answer(step.tracker, step.pages)
+			answer(step.served)
 			if got := e.NativeHydrated(t.Context()); got != step.want {
-				t.Fatalf("a node running tracker=%v wiki=%v, asking a data node serving "+
-					"tracker=%v pages=%v, admitted a seat: %v, want %v",
-					step.runs.tracker, step.runs.wiki, step.tracker, step.pages, got, step.want)
+				t.Fatalf("a node running %+v, asking a data node serving %+v, admitted "+
+					"a seat: %v, want %v", step.runs, step.served, got, step.want)
 			}
 		})
 	}
@@ -534,21 +544,21 @@ func TestASeatIsAdmittedOnlyWhereBothHalvesItRunsAreServed(t *testing.T) {
 	// AND THE ANSWER IS ASKED AGAIN once its trust has run out: a data node
 	// that comes to serve the half it lacked admits the next sweep's seat.
 	e, answer := statelessOver(t)
-	e.remote.Store(&remoteNative{tracker: true, wiki: true})
-	answer(true, false)
+	e.remote.Store(&all)
+	answer(estate.Served{Tracker: true, Pages: true})
 	if e.NativeHydrated(t.Context()) {
-		t.Fatal("a seat was admitted on a data node that does not run the wiki the company runs")
+		t.Fatal("a seat was admitted on a data node that does not run the chat the company runs")
 	}
-	answer(true, true)
+	answer(estate.Served{Tracker: true, Pages: true, Chat: true})
 	if !e.NativeHydrated(t.Context()) {
-		t.Fatal("a seat was withheld after the data node came to serve both halves")
+		t.Fatal("a seat was withheld after the data node came to serve every half")
 	}
 }
 
 // statelessOver is a node holding no data whose router asks one data node,
 // and a function that sets what that data node answers admission's ping with
 // and moves the router's clock past the trust it holds an answer for.
-func statelessOver(t *testing.T) (*Engine, func(tracker, pages bool)) {
+func statelessOver(t *testing.T) (*Engine, func(estate.Served)) {
 	t.Helper()
 	var clock atomic.Int64
 	clock.Store(time.Unix(1_700_000_000, 0).UnixNano())
@@ -561,8 +571,8 @@ func statelessOver(t *testing.T) (*Engine, func(tracker, pages bool)) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Engine{router: router}, func(tracker, pages bool) {
-		asker.set(tracker, pages)
+	return &Engine{router: router}, func(served estate.Served) {
+		asker.set(served)
 		clock.Add(int64(time.Minute))
 	}
 }
@@ -580,11 +590,14 @@ type pingAnswerer struct {
 	answer []byte
 }
 
-func (p *pingAnswerer) set(tracker, pages bool) {
+func (p *pingAnswerer) set(served estate.Served) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.answer = fmt.Appendf(nil, `{"node":"data-1","result":{"Tracker":%t,"Pages":%t}}`,
-		tracker, pages)
+	result, err := json.Marshal(served)
+	if err != nil {
+		panic(err)
+	}
+	p.answer = fmt.Appendf(nil, `{"node":"data-1","result":%s}`, result)
 }
 
 func (p *pingAnswerer) Ask(context.Context, string, []byte, int) ([][]byte, error) {

@@ -257,9 +257,9 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	startedNative, err := e.startNativeFor(ctx, next)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
-			"detail", "the native tracker and knowledge base could not be "+
-				"started for this node's first company on them; the previous "+
-				"epoch is still current")
+			"detail", "the native runtime (the company's own tracker, "+
+				"knowledge base or chat) could not be started for this node's "+
+				"first company on it; the previous epoch is still current")
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	if startedNative {
@@ -348,6 +348,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		// unconditionally and the other does not.
 		e.reconcileSlack(ctx, next)
 		e.reconcileMattermost(ctx, next)
+		// AND THE ENGINE'S OWN CHAT'S INDICATOR, whose mode is founder
+		// policy edited live and whose surface a revision can switch
+		// on or off. See [Engine.applyChatStatus].
+		e.applyChatStatus(ctx, next)
 	} else if err := e.startInbound(ctx, next); err != nil {
 		// A NODE THAT BOOTED WITH NO COMPANY has no inbound edge for
 		// the reconcilers above to rebuild, and each of them returns

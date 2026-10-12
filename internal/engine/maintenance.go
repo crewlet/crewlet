@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/a2a"
@@ -87,7 +88,7 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 			ledgerstore.NewConversations(db), e.ConversationRetention)...)
 	}
 	if fleet := e.backends.Fleet; fleet != nil {
-		// The one shared surface swept here, and the exception the
+		// A shared surface swept here, and the exception the
 		// coordination store's own retention rule makes room for: its
 		// buckets expire on age, and a bucket's age cannot tell an OPEN
 		// channel from a closed one. Closing an idle ask and deleting a
@@ -121,6 +122,15 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// every listing that meets one pays a leader read for it. See
 		// [maintenance.MarkerJobs].
 		jobs = append(jobs, maintenance.MarkerJobs(fleet)...)
+		// AND A PERSON'S CHAT READ STATE, for the mailboxes' reason: its
+		// bucket has no age, so the record of somebody who left the org
+		// chart is forgotten only by a decision taken against the active
+		// revision — a grace after a sweep first saw them gone. Registered
+		// whatever chat backend the company runs, because the records
+		// outlive a move off native chat and the job costs one listing of
+		// an empty bucket where there are none. See
+		// [maintenance.ChatReadJobs].
+		jobs = append(jobs, maintenance.ChatReadJobs(fleet, e.activeOrgHandles)...)
 		// The NATIVE backends' own records, on the same edge and for a
 		// related reason: their family holds several classes under one
 		// grammar, and only some of them age out — so no bucket age can
@@ -201,7 +211,7 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		}
 	}
 	if e.mailboxes != nil {
-		// The second shared record swept here, and for the channels'
+		// Another shared record swept here, and for the channels'
 		// reason: a mailbox record has no age that could tell a seat in
 		// the company from one that left, so retiring a removed seat's
 		// mailbox is a decision taken against the active revision.
@@ -343,21 +353,64 @@ func (e *Engine) mailboxRegistry() node.MailboxRegistry {
 // activeSeatHandles is the mailbox sweep's roster: the agent seats of the
 // revision the fleet is pointed at, or an error saying why that is unknown.
 //
+// Agent seats only: a human seat runs no turn, so it has no mailbox to retire
+// or to keep. See [Engine.activeCompany] for when the answer is unknown.
+func (e *Engine) activeSeatHandles(ctx context.Context) ([]string, error) {
+	company, err := e.activeCompany(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seats := company.Seats()
+	handles := make([]string, 0, len(seats))
+	for _, seat := range seats {
+		handles = append(handles, seat.Handle)
+	}
+	return handles, nil
+}
+
+// activeOrgHandles is the chat read-state reconcile's roster: EVERY seat of the
+// revision the fleet is pointed at, human and agent alike, or an error saying
+// why that is unknown.
+//
+// Every seat rather than the agent ones, because the people are who read: a
+// person's cursors are written as the human seat their token is bound to, so a
+// roster of agent seats would find every person in the company missing and
+// forget them all a grace later. See [Engine.activeCompany] for when the
+// answer is unknown.
+func (e *Engine) activeOrgHandles(ctx context.Context) ([]string, error) {
+	company, err := e.activeCompany(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var handles []string
+	for role := range company.Org.AllRoles() {
+		handles = append(handles, role.Handle())
+	}
+	slices.Sort(handles)
+	return handles, nil
+}
+
+// activeCompany is the company of the revision the fleet is pointed at, or an
+// error saying why that is unknown: the one answer both rosters a sweep judges
+// absence against are read from.
+//
 // # Only when this node serves that revision
 //
-// The sweep judges a seat absent from the roster, and a retirement deletes mail
-// that cannot be recovered, so the roster must be the FLEET's current revision
-// rather than whatever this node happens to be running. A node that has not yet
-// applied the pointer's epoch (propagation, a refused apply, a node stuck on an
-// older revision) answers unknown, and the tick stamps and retires nothing. The
-// next holder of the duty, or this node once it catches up, judges instead.
+// A sweep judges a handle absent from the roster, and what it then removes —
+// a seat's mail, a person's place in every room — cannot be recovered, so the
+// roster must be the FLEET's current revision rather than whatever this node
+// happens to be running. A node that has not yet applied the pointer's epoch
+// (propagation, a refused apply, a node stuck on an older revision) answers
+// unknown, and the tick stamps and removes nothing. The next holder of the
+// duty, or this node once it catches up, judges instead.
 //
-// The three reads are ordered so the roster can only be NEWER than the epoch it
-// is checked against, never older. The pointer is read first; the applied epoch
-// next; the company last. An apply installs its company before the reconciler
-// records its epoch, so a company read after a matching epoch is that
-// revision's or a later one, and a later revision is only ever a truer roster.
-func (e *Engine) activeSeatHandles(ctx context.Context) ([]string, error) {
+// The three reads are ordered so the company can only be NEWER than the epoch
+// it is checked against, never older. The pointer is read first; the applied
+// epoch next; the company last. An apply installs its company before the
+// reconciler records its epoch, so a company read after a matching epoch is
+// that revision's or a later one, and a later revision is only ever a truer
+// roster.
+func (e *Engine) activeCompany(ctx context.Context) (*Company, error) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil, fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")
 	}
@@ -377,14 +430,9 @@ func (e *Engine) activeSeatHandles(ctx context.Context) ([]string, error) {
 	company := e.Company()
 	if applied != target.Epoch || company == nil {
 		return nil, fmt.Errorf("engine: this node serves activation epoch %d and the fleet is on %d; "+
-			"seats are judged once this node has applied it", applied, target.Epoch)
+			"absence from it is judged once this node has applied it", applied, target.Epoch)
 	}
-	seats := company.Seats()
-	handles := make([]string, 0, len(seats))
-	for _, seat := range seats {
-		handles = append(handles, seat.Handle)
-	}
-	return handles, nil
+	return company, nil
 }
 
 // Maintenance exposes the retention sweep.
