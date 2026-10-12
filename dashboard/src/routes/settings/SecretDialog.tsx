@@ -107,8 +107,7 @@ export function SecretDialog({
     >
       {editing ? (
         <p className="t-body secondary" style={{ margin: 0 }}>
-          The value replaces what the fleet holds under <InlineCode>{editing}</InlineCode>. Every
-          node reads the same row, so nothing has to be copied anywhere.
+          Replaces <InlineCode>{editing}</InlineCode> on every node.
         </p>
       ) : (
         <Field
@@ -120,7 +119,7 @@ export function SecretDialog({
           // already typed: an upper-case identifier in the tertiary tone
           // still looked like a pre-filled field at a glance.
           placeholder="e.g. GITLAB_TOKEN_SWE"
-          help="The name a ${VAR} in the company configuration points at. Letters, digits and underscores, starting with a letter or an underscore."
+          help="Letters, digits and underscores. Can’t start with a digit."
         />
       )}
 
@@ -130,26 +129,16 @@ export function SecretDialog({
         value={value}
         onChange={setValue}
         autoFocus={Boolean(editing)}
-        help="Sealed with this node's keyring before it leaves the browser's request. This page never reads a value back."
+        help="Encrypted when saved. It can’t be viewed later."
       />
 
       {editing && readers.length > 0 && (
         <Callout variant="neutral">
-          <span className="col" style={{ gap: 4 }}>
-            <span>
-              {readers.length === 1
-                ? "One config field reads"
-                : `${readers.length} config fields read`}{" "}
-              this name. The pointer keeps pointing at it, so nothing breaks.
-            </span>
-            {/* WHEN it takes effect, because a rotation that appears to
-                succeed and quietly does not is the failure the store exists
-                to remove. A provider holds the value it was built with. */}
-            <span className="t-caption">
-              A running seat keeps the value it was built with until the configuration is
-              re-activated or the node restarts.
-            </span>
-          </span>
+          {/* WHEN it takes effect, because a rotation that appears to succeed
+              and quietly does not is the failure the store exists to remove.
+              A provider holds the value it was built with. */}
+          {readers.length === 1 ? "One field uses it." : `${readers.length} fields use it.`} Running
+          seats pick it up after a re-activation or restart.
         </Callout>
       )}
 

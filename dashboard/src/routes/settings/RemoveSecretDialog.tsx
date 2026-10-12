@@ -93,8 +93,7 @@ export function RemoveSecretDialog({
       }
     >
       <p className="t-body secondary" style={{ margin: 0 }}>
-        The sealed value is deleted from the fleet&apos;s store. Nothing can read it back
-        afterwards, and rotating it later means supplying the credential again.
+        The value is deleted and can’t be recovered.
       </p>
 
       {referenced && (
@@ -102,10 +101,8 @@ export function RemoveSecretDialog({
           <span className="col" style={{ gap: 6 }}>
             <span>
               {paths.length === 1
-                ? "One field in the active configuration points at this name."
-                : `${paths.length} fields in the active configuration point at this name.`}{" "}
-              Removing it leaves each of them resolving to nothing, and the surfaces holding one
-              start refusing deliveries.
+                ? "One field uses it and will stop working:"
+                : `${paths.length} fields use it and will stop working:`}
             </span>
             <span className="col" style={{ gap: 2 }}>
               {paths.map((path) => (
@@ -113,7 +110,7 @@ export function RemoveSecretDialog({
               ))}
             </span>
             <span className="t-caption">
-              Point those fields somewhere else, or remove them, before removing this.
+              {paths.length === 1 ? "Repoint it first." : "Repoint them first."}
             </span>
           </span>
         </Callout>
@@ -122,10 +119,7 @@ export function RemoveSecretDialog({
       {unchecked && (
         <Callout variant="warning">
           <span className="col" style={{ gap: 4 }}>
-            <span>
-              The active configuration could not be read, so it is not known whether anything points
-              at this name.
-            </span>
+            <span>Couldn’t check whether anything uses it.</span>
             {unknown && <span className="t-caption">{unknown}</span>}
           </span>
         </Callout>
@@ -137,10 +131,7 @@ export function RemoveSecretDialog({
           is passed rather than taking Callout's neutral info glyph. */}
       {!referenced && !unchecked && (
         <Callout variant="neutral" icon={<CheckGlyph size="md" />}>
-          <span>
-            No field in the active configuration names this. Removing it changes nothing the company
-            is running.
-          </span>
+          <span>Nothing uses it.</span>
         </Callout>
       )}
 
@@ -151,11 +142,7 @@ export function RemoveSecretDialog({
           checked={acknowledged}
           disabled={busy}
           onCheckedChange={setAcknowledged}
-          label={
-            referenced
-              ? "Remove it anyway, and leave those fields pointing at nothing"
-              : "Remove it without knowing what points at it"
-          }
+          label={referenced ? "Remove it anyway" : "Remove it without knowing what points at it"}
         />
       )}
 

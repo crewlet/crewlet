@@ -315,8 +315,8 @@ export function PeopleAndAccess() {
 /**
  * Where tokens are declared, and the read posture beside them.
  *
- * THE KEY, NOT THE TONE'S OWN INFO MARK, as Secrets' strip does: this is about
- * where a credential lives and who can hold one.
+ * THE KEY, NOT THE TONE'S OWN INFO MARK: this is about where a credential
+ * lives and who can hold one.
  *
  * WHO MAY CHANGE THE COMPANY is part of that posture (ADR-0030): a managed
  * document names its writers in Tier A beside the tokens, and this is the
