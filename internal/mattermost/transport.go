@@ -378,7 +378,7 @@ func (t *Transport) Reregister(reg *notify.Registry) {
 
 // readInstance reads the facts that belong to the server rather than to a
 // bot: the typing cadence it enforces, and the Site URL it believes it is
-// served at.
+// served at — judged by [JudgeSiteURL].
 //
 // THE NEXT SEAT'S TOKEN IS TRIED ONLY WHEN THE SERVER REFUSED THIS ONE'S
 // ([refusesToken]), because only that is a fact about a token. Every other
@@ -406,24 +406,26 @@ func (t *Transport) readInstance(ctx context.Context) {
 			log.WarnContext(ctx, "mattermost_instance_unread", "error", err.Error(),
 				"detail", "the server's typing cadence and Site URL could not be "+
 					"read, so indicators run at Mattermost's default cadence and a "+
-					"Site URL mismatch goes unreported until the next start")
+					"Site URL the server cannot use goes unreported until the next "+
+					"start")
 			return
 		}
 		t.mu.Lock()
 		t.throttle = TypingThrottle(conf)
 		t.mu.Unlock()
 
-		// THE SILENT FAILURE THIS EXISTS FOR: Mattermost accepts a
-		// websocket only from a browser whose Origin matches its Site
-		// URL, so a mismatch blinds every HUMAN in the workspace while
-		// the agents — which send no Origin the server checks the same
-		// way — keep working perfectly. Nothing else reports it.
-		if reported := SiteURL(conf); reported != "" && !OriginMatches(t.cfg.URL, reported) {
-			log.WarnContext(ctx, "mattermost_site_url_mismatch",
-				"configured", t.cfg.URL, "reported", reported,
-				"detail", "the server accepts a websocket only from an origin "+
-					"matching its own SiteURL, so browsers will fail to connect "+
-					"while agents keep working")
+		// WHAT THE SERVER ITSELF DOES WITH ITS SITE URL, judged by the
+		// one function the doctor prints from ([JudgeSiteURL]) — never by
+		// comparing it with the address this engine dials. People browse
+		// the Site URL, not the engine's address, and the engine's own
+		// sockets carry no Origin, so the origin check never applies to
+		// them: an in-cluster Service dialled while people browse a
+		// public name is the ordinary deployment, and a warning that it
+		// blinds browsers fired on every one of them.
+		reported := SiteURL(conf)
+		if fault, ok := JudgeSiteURL(t.cfg.URL, reported); ok {
+			log.WarnContext(ctx, fault.Event,
+				"url", t.cfg.URL, "reported", reported, "detail", fault.Detail)
 		}
 		return
 	}

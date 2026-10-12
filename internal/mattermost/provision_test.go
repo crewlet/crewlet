@@ -117,8 +117,9 @@ type chatServer struct {
 	// token, which is "cannot tell" rather than "this token is bad".
 	identityFails bool
 	// siteURL is what the server reports as its own address. Empty makes
-	// it echo the address it is actually served at, which is the healthy
-	// case; a value is the misconfiguration the doctor exists to find.
+	// it echo the address it is actually served at; a value is either the
+	// address people browse while the engine dials another — healthy — or
+	// a Site URL the doctor exists to find.
 	siteURL string
 	// refuseIdentity makes /users/me 401 for every token, which is what
 	// a revoked operator credential does.

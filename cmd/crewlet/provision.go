@@ -704,9 +704,9 @@ func runMattermostDoctor(args []string, stdout, stderr io.Writer) error {
 	// and asking an operator to mint an admin token to find out whether
 	// their company works is a step that exists only to be skipped.
 	//
-	// THE CONFIGURED URL, resolved but NOT normalised away: the whole
-	// point is comparing what this company believes against what the
-	// server reports, so the check has to see the operator's own value.
+	// THE CONFIGURED URL, resolved but NOT normalised away: the checks
+	// dial it and hold its path to the one the server reports, so they
+	// have to see the operator's own value.
 	resolved := *cfg
 	resolved.URL = env.Value(cfg.URL)
 	resolved.Team = env.Value(cfg.Team)

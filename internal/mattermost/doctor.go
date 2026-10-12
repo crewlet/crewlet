@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -24,21 +25,31 @@ import (
 // token 401s, a missing team 404s, a channel that is not there is a note in
 // the provisioning report. What has no symptom is the Site URL.
 //
-// Mattermost accepts a websocket only from a client whose Origin matches
-// ServiceSettings.SiteURL. The engine sends the Origin a browser at the
-// CONFIGURED url would send — so when the two disagree, agents keep working
-// (their sockets are refused, they reconnect, and the REST side is fine)
-// while every human's browser silently loses its live feed. Nobody files a
-// bug about a chat client that just seems slow.
+// Mattermost admits a BROWSER's websocket only when its Origin matches the
+// server's own ServiceSettings.SiteURL (or an AllowCorsFrom entry), so a
+// Site URL no browser can match costs every person their live feed while
+// the agents keep working — their sockets carry no Origin, and the check
+// admits an upgrade with none. Nobody files a bug about a chat client that
+// just seems slow.
 //
-// # So it dials, rather than only comparing strings
+// # The Site URL is judged on its own, never against this company's url
 //
-// A string comparison catches the common case and gets the rest wrong: a
-// reverse proxy, a subpath deployment, an allowed-origins override. The
-// only answer that means anything is a real upgrade, shaped exactly as a
-// browser's, against the real server — and then a real authenticated socket
-// per seat, because "the server accepts sockets" and "this bot's token
-// opens one" are different questions and only the second one wakes an agent.
+// People browse the Site URL; the engine may reach the same server by any
+// route, and an in-cluster Service dialled while people browse a public
+// name is the ordinary deployment on Kubernetes. So the "site url" check is
+// [JudgeSiteURL] — the one sentence the running transport logs too — and
+// the only thing it holds the configured url to is the PATH, which the
+// server routes on whatever host a request arrives at.
+//
+// # So it dials, rather than only reading settings
+//
+// A setting can be read; what the server DOES with an Origin cannot,
+// because AllowCorsFrom is not in its public configuration. The only answer
+// that means anything is a real upgrade carrying the Origin a browser at the
+// Site URL sends — and then a real authenticated socket per seat, shaped
+// exactly as the engine's own, because "the server accepts sockets" and
+// "this bot's token opens one" are different questions and only the second
+// one wakes an agent.
 
 // Finding is one thing the doctor checked.
 type Finding struct {
@@ -93,7 +104,8 @@ func (r *Report) fatal(check string, format string, args ...any) {
 	})
 }
 
-// Dialer opens a websocket the way the fleet does.
+// Dialer opens a websocket: the way the fleet does when origin is empty, and
+// the way a browser does when it is not.
 //
 // Injected so the suite can drive the refusals a real server produces
 // without one — an origin check is exactly the behaviour a fake HTTP server
@@ -173,7 +185,7 @@ func Doctor(ctx context.Context, opts DoctorOptions) (*Report, error) {
 		return report, nil
 	}
 	team := checkTeam(ctx, report, opts, reader)
-	checkBrowserSocket(ctx, report, opts, dial, reader.Token())
+	checkBrowserSocket(ctx, report, opts, dial, reader.Token(), SiteURL(conf))
 	checkSeats(ctx, report, opts, dial, seats, team)
 	return report, nil
 }
@@ -253,42 +265,27 @@ func resolveSeats(opts DoctorOptions) []seatCredential {
 	return out
 }
 
-// checkSiteURL compares what the server thinks it is against what the
-// company config says.
+// checkSiteURL judges the address the server believes it is served at.
 //
-// TWO FINDINGS, not one, because the consequences differ and so do the
-// fixes: an origin mismatch blinds every browser's live feed, while a path
-// mismatch breaks the absolute links the server builds and leaves the
-// socket working. Reporting them together would send an operator to fix a
-// socket that is fine.
+// THE SAME JUDGEMENT THE TRANSPORT LOGS ([JudgeSiteURL]), so a doctor run and
+// a running node never disagree about one server. A Site URL whose ORIGIN
+// differs from this company's url is not a finding: people browse the one
+// and the engine dials the other, and only their paths have to agree.
 func checkSiteURL(report *Report, configured string, conf map[string]string) {
 	reported := SiteURL(conf)
-	if reported == "" {
-		report.add("site url", false,
-			"ServiceSettings.SiteURL is unset. Mattermost refuses every "+
-				"websocket whose Origin does not match it, so with no value "+
-				"set every browser loses its live feed while agents keep "+
-				"working. Set it in System Console → Environment → Web Server")
+	if fault, ok := JudgeSiteURL(configured, reported); ok {
+		report.add("site url", false, "%s", fault.Detail)
 		return
 	}
-	switch {
-	case !OriginMatches(configured, reported):
-		report.add("site url", false,
-			"the server reports SiteURL %s and this company is configured "+
-				"for %s. Mattermost accepts a websocket only from an Origin "+
-				"matching its SiteURL, so every human's live feed fails while "+
-				"agents keep working — the failure has no symptom anyone "+
-				"reports. Make the two agree", reported, NormalizeURL(configured))
-	case !PathMatches(configured, reported):
-		report.add("site url", false,
-			"the server reports SiteURL %s and this company is configured "+
-				"for %s. The origin matches, so websockets work — but the "+
-				"paths differ, and the server builds its absolute links and "+
-				"plugin URLs from its own value",
-			reported, NormalizeURL(configured))
-	default:
+	if BrowserOrigin(configured) == BrowserOrigin(reported) {
 		report.add("site url", true, "the server agrees it is served at %s", reported)
+		return
 	}
+	report.add("site url", true,
+		"people browse the server at %s, and this company reaches it at %s — "+
+			"which is fine: the engine's sockets carry no Origin, and nothing a "+
+			"person opens is built from the address it dials",
+		reported, NormalizeURL(configured))
 }
 
 // checkTeam resolves the configured team.
@@ -314,31 +311,65 @@ func checkTeam(ctx context.Context, report *Report, opts DoctorOptions, reader *
 	return ""
 }
 
-// checkBrowserSocket proves the upgrade a browser performs.
+// checkBrowserSocket proves the upgrade a person's browser performs.
 //
-// SHAPED EXACTLY AS A BROWSER'S — a credential and the Origin a browser at
-// the configured url would send — because that is the request whose refusal
-// nobody sees. A probe that sent no Origin, or one carrying a path, would
-// pass a check every real browser fails.
-func checkBrowserSocket(ctx context.Context, report *Report, opts DoctorOptions, dial Dialer, token string) {
-	origin := BrowserOrigin(opts.Config.URL)
+// CARRYING THE ORIGIN A BROWSER AT THE SITE URL SENDS — the address people
+// browse, never the one this company dials, which nobody may browse at all —
+// and sent to the address this company dials, which this run already knows
+// it reaches. That asks the server's own origin rule, with whatever
+// AllowCorsFrom it holds, exactly the question a browser asks it: the rule
+// compares the Origin with the Site URL or with AllowCorsFrom, never with the
+// host the upgrade arrived at, while a Site URL is set. With none set it
+// compares against that host, so the probe carries the Origin of the address
+// it dials — a browser there is the only one this run can name.
+//
+// UNDER THE SITE URL'S PATH, as a browser's upgrade is, rather than wherever
+// this company's url points: the server routes on the path whatever host a
+// request arrives at, and a url under another path — the site url finding's
+// to report — would make this probe's answer hang on how the server
+// redirects it rather than on the Origin alone.
+//
+// What it cannot see is anything standing in front of the Site URL: a proxy
+// that drops the Upgrade header fails a browser and never this probe.
+func checkBrowserSocket(ctx context.Context, report *Report, opts DoctorOptions,
+	dial Dialer, token, reported string,
+) {
+	browsedAt := reported
+	if NormalizeURL(browsedAt) == "" {
+		browsedAt = opts.Config.URL
+	}
+	origin := BrowserOrigin(browsedAt)
 	if origin == "" {
 		report.add("browser socket", false,
-			"%q is not a usable base URL, so no Origin can be derived from it",
-			opts.Config.URL)
+			"no browser can be at %q, so there is no Origin to send — the "+
+				"server refuses every person's websocket that AllowCorsFrom "+
+				"does not admit; see the site url finding", NormalizeURL(browsedAt))
 		return
 	}
-	target := WebsocketURL(opts.Config.URL)
+	target := WebsocketURL(underPath(opts.Config.URL, browsedAt))
 	if err := dial(ctx, target, origin, token); err != nil {
 		report.add("browser socket", false,
-			"a browser-shaped upgrade to %s with Origin %s was refused: %v. "+
-				"This is what every human's live feed does, and its failure "+
-				"is silent — the client simply stops updating",
-			target, origin, err)
+			"an upgrade carrying Origin %s — what a browser at %s sends — was "+
+				"refused at %s: %v. This is every person's live feed, and its "+
+				"failure is silent: the web app simply stops updating. The "+
+				"server admits that Origin when its host and scheme are the "+
+				"Site URL's, or when AllowCorsFrom lists it exactly",
+			origin, NormalizeURL(browsedAt), target, err)
 		return
 	}
 	report.add("browser socket", true,
-		"a browser-shaped upgrade to %s was accepted", target)
+		"an upgrade carrying Origin %s, as a browser at %s sends, was accepted",
+		origin, NormalizeURL(browsedAt))
+}
+
+// underPath is the address base names, moved under the path of site.
+func underPath(base, site string) string {
+	u, err := url.Parse(NormalizeURL(base))
+	if err != nil {
+		return base
+	}
+	u.Path, u.RawPath = urlPath(site), ""
+	return u.String()
 }
 
 // checkSeats asks, per agent seat, whether that seat would actually wake.
@@ -361,7 +392,6 @@ func checkSeats(ctx context.Context, report *Report, opts DoctorOptions, dial Di
 	seats []seatCredential, teamID string,
 ) {
 	target := WebsocketURL(opts.Config.URL)
-	origin := BrowserOrigin(opts.Config.URL)
 	for _, seat := range seats {
 		check := "seat " + seat.handle
 		if seat.token == "" {
@@ -386,7 +416,10 @@ func checkSeats(ctx context.Context, report *Report, opts DoctorOptions, dial Di
 					"company looks healthy", err)
 			continue
 		}
-		if err = dial(ctx, target, origin, seat.token); err != nil {
+		// NO ORIGIN, as the engine's own dial sends none ([socketHeader]):
+		// a seat probe carrying one would be judged by the browser rule
+		// the engine is not subject to.
+		if err = dial(ctx, target, "", seat.token); err != nil {
 			report.add(check, false,
 				"this seat authenticates but cannot open a socket: %v. A token "+
 					"valid for REST can still fail here, and the socket is the "+
@@ -454,6 +487,9 @@ func SeatTokens(env *config.Resolver) func(*org.Role) (string, bool) {
 
 // RealDial opens a websocket against the instance and closes it.
 //
+// With an empty origin the handshake is exactly the engine's own
+// ([socketHeader]); with one, it is a browser's.
+//
 // The connection is made and dropped: what is being asked is whether the
 // upgrade is accepted and the credential authenticates, and holding it open
 // would only add ways for the check itself to fail.
@@ -462,7 +498,7 @@ func RealDial(ctx context.Context, target, origin, token string) error {
 	defer cancel()
 	header := http.Header{}
 	if token != "" {
-		header.Set("Authorization", "Bearer "+token)
+		header = socketHeader(token)
 	}
 	if origin != "" {
 		header.Set("Origin", origin)

@@ -154,11 +154,14 @@ services:
       # scripts/mattermost-dev-bootstrap.sh settles it: it derives the
       # address (this variable, else the one you reached the host on over
       # SSH, else localhost), recreates this service when the running
-      # server disagrees, and refuses to finish until it matches. Keep it
-      # in lock-step with the company config's ${MATTERMOST_URL} — same
-      # rule as the GitLab external URL above. An MM_* variable is authoritative
-      # over stored config, so this cannot be corrected in the System
-      # Console or over the API; the container has to be recreated.
+      # server disagrees, and refuses to finish until it matches. It writes
+      # the same address to the company config's ${MATTERMOST_URL}, because
+      # here the engine reaches the server the way people do; that is a
+      # convenience, not a rule — the engine sends no Origin, so any route
+      # to the server under the same path works for it. An MM_* variable
+      # is authoritative over stored config, so this cannot be corrected in
+      # the System Console or over the API; the container has to be
+      # recreated.
       # See docs/integrations/mattermost.md § The Site URL.
       MM_SERVICESETTINGS_SITEURL: ${MATTERMOST_PUBLIC_URL:-http://localhost:${MATTERMOST_LISTEN_PORT:-8065}}
       # Required by `crewlet mattermost provision` (see the note above).

@@ -714,6 +714,12 @@ type Mattermost struct {
 
 	// URL is the instance base URL. Required when enabled: the websocket
 	// endpoint, the REST calls and provisioning all derive from it.
+	//
+	// It is the address the ENGINE reaches the server at, which need not be
+	// the Site URL people browse: any route to the same server works (an
+	// in-cluster Service, a private name), because the engine's sockets
+	// carry no Origin and nothing a person opens is built from this value.
+	// Only its path is held to the Site URL's, which the server routes on.
 	URL string `yaml:"url,omitempty" json:"url,omitempty" desc:"Instance base URL, e.g. https://chat.example.com."`
 
 	// Team is the team slug agents belong to. Required when enabled —
@@ -790,8 +796,8 @@ func (m *Mattermost) validate(path Path) error {
 		// reference resolves later, and rejecting it here would forbid
 		// configuring the URL from the environment.
 		p.add(at(path, "url"), ErrUnknownValue,
-			"%q must start with http:// or https://: it is the instance URL "+
-				"browsers use", m.URL)
+			"%q must start with http:// or https://: it is the address the "+
+				"engine dials for its websockets and REST calls", m.URL)
 	}
 	if strings.TrimSpace(m.Team) == "" {
 		p.add(at(path, "team"), ErrMissing,
