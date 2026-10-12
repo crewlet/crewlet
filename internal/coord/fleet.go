@@ -265,10 +265,15 @@ type Counter interface {
 	// Allow increments the bucket's count for the window containing now
 	// and reports whether it stayed within limit.
 	//
-	// FAILS CLOSED: an error means "not allowed", because the valve exists
-	// to stop a loop and a store outage is exactly when a loop is most
-	// likely to be what is wrong. The caller logs and drops the
-	// notification; nothing here retries.
+	// THREE ANSWERS: within the limit, over it, and — as an error — the
+	// store could not say, whatever the bool beside it. CONTENTION IS
+	// NEVER THE THIRD: every race a caller loses is another caller's
+	// increment, so however many callers share a bucket each is answered
+	// with room or with a full window. What the third answer means is the
+	// caller's, and the notification path FAILS OPEN on it (notify.Valve):
+	// a refused notification is dropped, not delayed, so a valve that shut
+	// whenever its store could not be read dropped every seat's
+	// notifications for as long as the store was away.
 	Allow(ctx context.Context, bucket string, limit int, window time.Duration, now time.Time) (bool, error)
 }
 

@@ -25,7 +25,7 @@ So every call returns `(value, error)`, never a bare bool — and **each contrac
 
 | Contract | On an unreachable store | Why that direction |
 |---|---|---|
-| Rate valve | **Fails closed** — refuse | A valve that opens when it cannot be read is not a valve. The cost of refusing is a delayed notification. |
+| Rate valve | **Fails open** — deliver | A refused notification is dropped, not delayed: nothing redelivers it. A valve that shut whenever its store could not be read dropped every seat's notifications for as long as the store was away, and the valve exists to catch a loop, which an outage is not. A *busy* valve is never unknown — it always answers (below). |
 | Delivery dedupe | **Fails open** — do not suppress | A claim that cannot be read has not suppressed anything. Suppressing on a read failure drops the delivery entirely, and nothing redelivers it. |
 | Completion ledger | **Fails open** — do the work | The pre-ledger answer. Failing closed parks real work during an outage; the redundant turn is bounded and visible. |
 | Lease renew | **Holds, briefly** | Ambiguity is not loss. The watchdog is what bounds it — see [Seat Ownership](seat-ownership.md). |
