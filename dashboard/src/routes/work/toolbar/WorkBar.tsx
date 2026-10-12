@@ -317,8 +317,7 @@ export const SCOPE_OPTIONS: { value: Scope; label: string; description: string }
  * the manual order, so any other order is one a drag cannot change. Said
  * where the order is chosen, and on the board only.
  */
-export const MANUAL_ORDER_HINT =
-  "Cards move by drag only in the manual order — choose it here to drag them.";
+export const MANUAL_ORDER_HINT = "Choose this to drag cards.";
 
 /** What the order is when nobody chose one, in the words the options use. */
 export function defaultOrderLabel(shape: Shape, workspace: boolean): string {

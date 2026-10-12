@@ -2247,7 +2247,7 @@ only down to the newest point any of them with more pages stopped at, so a
 stretch it draws is complete in all three; **Earlier activity** reads the
 history that stopped there. All | Comments | Agent turns | Changes narrows it.
 A change is a sentence about the task ("Jane Founder filed this in ENG",
-"CTO assigned it to SWE — “owns the provisioner”", "Jane Founder ticked 1 on
+"CTO assigned it to SWE: “owns the provisioner”", "Jane Founder ticked 1 on
 Acceptance — 1 of 4 done"), with a quiet **· Who this reached ›** at the end of
 its line opening its routing: the reason each person was woken, whether it asked
 anything, and the three different empty answers in three sentences. A comment
@@ -2256,7 +2256,7 @@ artboard's card: "SWE ran turn 1", its phases as checked steps — the one a fai
 turn broke in wears a cross in the danger tone, and its pill says "failed in
 review" — a pill for a send-back ("sent back for another pass") or a park, what
 it did in the agent's own words (a turn that failed or parked before it wrote an
-account of itself says "No summary recorded — see the trace" in one quiet line), the reviewer's request on the raised rung with the
+account of itself says "No summary. See the trace." in one quiet line), the reviewer's request on the raised rung with the
 caution ink on its mark, the tools it called as chips ("run_sandbox ×4"), and under them, on
 a line of its own read from the left, its wall time and tokens and **Trace**. The number is the TASK's count of turns,
 so the newest card and the cost panel agree. While a seat's turn is running on
@@ -3147,13 +3147,11 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   matches these filters. Widen them", with no filter set: a claim about a
   narrowing that did not exist, on the day-one state of every project. It is
   drawn from the project's own maintained counts now, names the project, and
-  says how work gets filed (a seat's `create_work_item`, an inbound webhook, a
-  schedule, or your own assistant at `/operator/mcp`). "Nothing matches" is
-  reserved for a query that genuinely narrowed. The same rule sorts the two
-  empty pages apart: the work list's empty state is about ITEMS and the
-  projects directory's is about PROJECTS, so a company with no projects is told
-  what a project is and that a unit's `project` key in the company
-  configuration is what mints one.
+  offers New task to file the first one. "Nothing matches" is reserved for a
+  query that genuinely narrowed. The same rule sorts the two empty pages apart:
+  the work list's empty state is about ITEMS and the projects directory's is
+  about PROJECTS, so a company with no projects is pointed at New project,
+  which starts one.
 - **An empty SEGMENT is not an empty company — so the answer carries the
   census.** The projects directory's three segments each ask the engine for
   their own set, which is what makes the listing honest and is also what makes
@@ -3163,10 +3161,10 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   the Active segment the archived projects have no row on screen to be derived
   from. So `work_projects` answers with a `census` of BOTH sets under the same
   narrowing, and the page never guesses: `active + archived === 0` is the
-  company having nothing and draws "No project has been created yet" on
+  company having nothing and draws "No projects yet" on
   **whichever segment the reader is on** — which matters, because they land on
-  Active; an empty Active answer with archived projects behind it says how many
-  and links to them; and Archived says nothing is archived. The counts also sit
+  Active; an empty Active answer with archived projects behind it links to
+  them; and Archived says nothing is archived. The counts sit
   on the segment control itself, so the switch says what is behind each option
   before it is pressed. A screen that hedges — one sentence naming both ways a
   state happens — is a screen missing a number, and the fix is to send the
@@ -3183,7 +3181,7 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   four had been archived, and both false about a company holding every item it
   ever filed. `active + archived === 0` is the only thing that draws the
   first-run panel now; `active === 0 && archived > 0` keeps the ordinary list
-  and gives it an empty state naming the count with the way to
+  and gives it an empty state with the way to
   `#/work?shown=archived`, the same sentence the directory's own
   Active state writes, because it is the same fact. An answer carrying no
   census concludes neither, on the rule its rows already followed.
@@ -5284,8 +5282,8 @@ is one of the rules on this page applied to a tracker.
   with the project's NAME and confirmed with the day as the Target fact writes
   it ("Set Core's target to 30 Oct 2026", never the wire's ISO form) — and
   **New task**, filed into this project. A project that declares no purpose
-  says so in a sentence for a person ("No purpose is set for it — add one to
-  Core in the company configuration…"), not a configuration key in backticks.
+  says so in a sentence for a person ("Add a purpose in Edit org."), not a
+  configuration key in backticks.
 - **A lens keeps its filters.** The lenses over a project (Tasks, About,
   History and Files) are readings of ONE container, not separate screens,
   so switching keeps the narrowing AND the arrangement: `lens=` is written

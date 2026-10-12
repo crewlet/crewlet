@@ -149,7 +149,7 @@ test("a project with no purpose says whose it is, and whether anything is in it"
   const { container } = mount();
   await waitFor(() => expect(container.querySelector(".page-note")).toBeTruthy());
   expect(container.querySelector(".page-note")?.textContent).toBe(
-    "ENG is Platform's project. Nothing has been filed in it yet.",
+    "ENG is Platform’s project. Nothing has been filed in it yet.",
   );
   cleanup();
 
@@ -162,9 +162,7 @@ test("a project with no purpose says whose it is, and whether anything is in it"
   const filled = mount();
   await waitFor(() => expect(filled.container.querySelector(".page-note")).toBeTruthy());
   const lede = filled.container.querySelector(".page-note")?.textContent ?? "";
-  expect(lede).toBe(
-    "ENG is Platform's project. No purpose is set for it — add one to Platform in the company configuration and this line will say it.",
-  );
+  expect(lede).toBe("ENG is Platform’s project. Add a purpose in Edit org.");
   // A SENTENCE, not a configuration key in backticks.
   expect(lede).not.toContain("`");
 });
@@ -182,7 +180,7 @@ test("an empty project says so instead of running the list", async () => {
   await waitFor(() =>
     expect(screen.getByText("No work has been filed in Engineering yet")).toBeTruthy(),
   );
-  expect(screen.getByText(/create_work_item/)).toBeTruthy();
+  expect(screen.getByText("File the first task with New task.")).toBeTruthy();
   // AND THE WAY IN, in the state itself rather than only in the page bar: a
   // reader looking at an empty project is looking for how to file into it.
   const state = screen
@@ -353,7 +351,7 @@ test("a project naming a unit the chart lost says what that costs", async () => 
     work_items: { items: [], groups: [], complete: true },
   });
   mount();
-  await waitFor(() => expect(screen.getByText(/routes to nobody/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/New work here reaches nobody/)).toBeTruthy());
 });
 
 // NOT THE GENERIC "there is no such record". A project key reaches this from a
@@ -388,7 +386,7 @@ test("the rail draws the page's own facts, in the page's own order", async () =>
   expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
   const head = container.querySelector(".object-head");
   const note = container.querySelector(".page-note");
-  const banner = screen.getByText(/routes to nobody/).closest(".crewlet-callout");
+  const banner = screen.getByText(/New work here reaches nobody/).closest(".crewlet-callout");
   expect(precedes(head, note)).toBe(true);
   expect(precedes(note, banner)).toBe(true);
   expect(precedes(banner, container.querySelector(".work-census"))).toBe(true);

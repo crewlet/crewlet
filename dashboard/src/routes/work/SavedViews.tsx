@@ -118,7 +118,7 @@ function viewMarks(view: WorkView): ReactNode[] {
   // two are facts about the view itself.
   if (view.pinned) {
     marks.push(
-      <Tag key="pinned" variant="brand" title="pinned by you — pins are per reader">
+      <Tag key="pinned" variant="brand" title="Pinned by you">
         pinned
       </Tag>,
     );
@@ -169,7 +169,7 @@ export function SavedViews({ id }: { id?: string }) {
         <EmptyState
           icon={<LayoutDashboardGlyph size="xl" />}
           title="No saved view with that id"
-          description="A view that was deleted, or one saved against a different container. The inventory lists what this company has."
+          description="It may have been deleted."
         />
       );
     }
@@ -190,10 +190,7 @@ export function SavedViews({ id }: { id?: string }) {
     return (
       <>
         <PageNote>
-          {owner
-            ? `A personal view owned by ${owner.name}.`
-            : "A shared view — everybody in this company sees it."}{" "}
-          Running it hands its saved parameters to the board, where any one of them can be changed.
+          {owner ? `A personal view owned by ${owner.name}.` : "Shared with everyone."}
         </PageNote>
         {/* A SAVED VIEW IS AN OBJECT, and this screen never printed its name:
             the only place it appeared was the breadcrumb `usePageLabels`
@@ -247,7 +244,7 @@ export function SavedViews({ id }: { id?: string }) {
             ? undefined
             : {
                 title: "Nobody has saved a view yet",
-                hint: "A view is a list's filters, grouping and shape kept under a name. Save one from any list or board with + View — it appears in that list's strip and here, where you can pin it to your sidebar.",
+                hint: "Save one from any list with + View.",
               }
         }
       >
@@ -388,9 +385,7 @@ function ViewFacts({ view }: { view: WorkView }) {
   return (
     <div className="col gap-2">
       {params.length === 0 ? (
-        <p className="t-caption">
-          This view saves no filters — it is the container's whole list in this shape.
-        </p>
+        <p className="t-caption">No filters saved.</p>
       ) : (
         <div className="list">
           {params.map(([key, value]) => (
@@ -403,11 +398,6 @@ function ViewFacts({ view }: { view: WorkView }) {
           ))}
         </div>
       )}
-      <p className="t-caption">
-        These are the board's own parameter names, not the tool's — a caller hands them straight
-        back, or passes the key as <code className="inline">view=</code> and lets the engine expand
-        them.
-      </p>
     </div>
   );
 }

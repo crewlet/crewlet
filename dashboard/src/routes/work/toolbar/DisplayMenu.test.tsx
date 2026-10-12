@@ -269,7 +269,7 @@ test("the calendar offers neither a grouping nor an order, because it spends bot
   // opening on an empty panel.
   openDisplay({ shape: "calendar" });
   expect(screen.queryByText("Columns")).toBeNull();
-  expect(screen.getByText(/Nothing more to arrange on this shape/)).toBeTruthy();
+  expect(screen.getByText("Grouping and order are in the bar.")).toBeTruthy();
 });
 
 // ---------------------------------------------------------------------------
@@ -345,7 +345,7 @@ test("the lanes put away are named, and each comes back on its own or all at onc
 // hands back the set with that one fact moved.
 test("the board offers what its cards show, and a tick moves exactly that fact", () => {
   const { onCardHidden } = openDisplay({ shape: "board", cardHidden: new Set(["labels"]) });
-  expect(screen.queryByText(/Nothing more to arrange/)).toBeNull();
+  expect(screen.queryByText(/Grouping and order are in the bar/)).toBeNull();
   const boxes = [...document.querySelectorAll("[data-card-facts] .grid-cols-choice")];
   expect(boxes.map((b) => b.textContent)).toEqual(CARD_FACTS.map((f) => f.label));
   expect((screen.getByLabelText("Labels") as HTMLInputElement).checked).toBe(false);

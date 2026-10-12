@@ -120,10 +120,7 @@ describe("the dialog", () => {
 
   test("an owner and a free key continue in Edit org, holding the key for that owner", async () => {
     mount();
-    const dialog = await screen.findByRole("dialog", { name: "New project" });
-    expect(dialog.textContent).toContain(
-      "A project belongs to a team or a seat in the org. Give one a tracker project key in Edit org",
-    );
+    await screen.findByRole("dialog", { name: "New project" });
     await screen.findByText("Choose a key, such as DES.", {
       selector: ".crewlet-form-field__helper",
     });

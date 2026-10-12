@@ -284,7 +284,7 @@ test("the assignee's and the labels' help lines describe their controls", async 
   );
   const labels = document.getElementById("new-task-labels")!;
   expect(describedBy(labels.matches("input") ? labels : labels.querySelector("input")!)).toContain(
-    "The project's own labels",
+    "Only this project’s labels.",
   );
 });
 
@@ -502,9 +502,7 @@ test("a title past the cap is marked on its field and Create is held, visibly", 
 test("an empty title says so beside Create, and Enter takes the reader to it", async () => {
   mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={() => {}} />);
   await settle();
-  expect(document.querySelector(".new-task-hold")?.textContent).toBe(
-    "Give the task a title — one line saying what the work is.",
-  );
+  expect(document.querySelector(".new-task-hold")?.textContent).toBe("Add a title.");
   const title = screen.getByLabelText("Title");
   // ENTER IN ANOTHER SINGLE-LINE FIELD — the due date — is the press.
   const due = screen.getByLabelText(/Due/);
@@ -592,7 +590,7 @@ test("an assignee typed and not chosen holds Create until a seat is taken", asyn
     .split(/\s+/)
     .map((id) => document.getElementById(id)?.textContent ?? "")
     .join(" ");
-  expect(described).toContain("Not chosen yet");
+  expect(described).toContain("Pick a seat from the list.");
   expect(described).not.toContain("Left empty");
   // CREATE IS HELD, visibly, and a press sends nothing.
   expect(document.querySelector(".new-task-hold")?.textContent).toBe(
@@ -734,7 +732,7 @@ test("the engine's match leads the list by its name, and says why once taken", a
       .map((id) => document.getElementById(id)?.textContent ?? "")
       .join(" ");
   expect(described()).toBe(
-    "Agent SWE is woken with it and follows it. The engine's match for “sw”: part of the name matches.",
+    "Agent SWE is notified and follows it. The engine's match for “sw”: part of the name matches.",
   );
   // A SEAT TAKEN FROM THE CHART'S OWN ROWS is told no engine's tier.
   fireEvent.change(field, { target: { value: "Jane" } });
@@ -745,7 +743,7 @@ test("the engine's match leads the list by its name, and says why once taken", a
     }),
   );
   await settle();
-  expect(described()).toBe("Jane Founder is woken with it and follows it.");
+  expect(described()).toBe("Jane Founder is notified and follows it.");
 });
 
 // THE CLEAR CONTROL IS INSIDE THE FIELD, so the completion list — anchored to
@@ -786,9 +784,8 @@ test("an empty assignee lands where the engine will file it", async () => {
     project: { ...ENG, default_assignee: "ana" } as WorkProjectDetail,
   });
   await settle();
-  expect(helpOfAssignee()).toContain("it lands in triage");
-  expect(helpOfAssignee()).toContain("ana, is no longer on the org chart");
-  expect(helpOfAssignee()).not.toContain("it goes to");
+  expect(helpOfAssignee()).toContain("Left empty, it goes to triage. ana has left the org.");
+  expect(helpOfAssignee()).not.toContain("default assignee");
 });
 
 // AND AN APPLIED CREATE THAT CAME BACK WITH A CAVEAT SAYS IT: "Filed" over a
