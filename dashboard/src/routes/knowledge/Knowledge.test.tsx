@@ -8,8 +8,8 @@
  *  - THE MODE ON THE WIRE IS THE ENGINE'S WORD: "Meaning" is read, `semantic`
  *    is sent.
  *  - A PARTIAL SEARCH SAYS SO, naming the node that did not answer.
- *  - THE COPY IS TRUE OF THE BACKEND: a native search reads this node's own
- *    copy of the pages, and says so.
+ *  - THE COPY IS TRUE OF THE BACKEND: it never claims a native search has no
+ *    copy of its own to read.
  *  - AN ADDRESS NAMING NO MODE RUNS IN ONE THE ENGINE SERVES, waiting for the
  *    probe rather than running Hybrid and reporting its degradation.
  *  - A PHRASE PAST THE SEARCH BOUND IS NOT ASKED, and the screen says why.
@@ -230,24 +230,41 @@ test("a complete search draws no partial callout", async () => {
   expect(screen.queryByText(/This search is partial/)).toBeNull();
 });
 
-test("a search that did not run says why, with the remedy its reason names", async () => {
-  mount({
-    ...ran,
-    hits: [],
-    served_mode: "",
-    available: false,
-    reason: "no_scope",
-    note: "the confluence backend is configured but knowledge.scope lists no container",
-  });
-  await waitFor(() => expect(screen.getByText(/Search cannot run here/)).toBeTruthy());
-  expect(screen.getByText(/The backend itself is fine/)).toBeTruthy();
-});
+test.each([
+  [
+    "no_scope",
+    "the confluence backend is configured but knowledge.scope lists no container",
+    "Search can’t run: the confluence backend is configured but knowledge.scope lists no container. Add spaces to knowledge.scope.",
+  ],
+  [
+    "no_backend",
+    "this company has no knowledge backend",
+    "Search can’t run: this company has no knowledge backend. Set knowledge.backend to native or confluence.",
+  ],
+  // NOT A MISCONFIGURATION, so no remedy and no note: the node is indexing.
+  ["building", "this node is still indexing", "Still indexing. Try again shortly."],
+])(
+  "a search that did not run (%s) says why, with the remedy its reason names",
+  async (reason, note, said) => {
+    mount({ ...ran, hits: [], served_mode: "", available: false, reason, note });
+    const callout = await waitFor(() => {
+      const found = [...document.querySelectorAll("span")].find((el) =>
+        el.textContent?.startsWith(said.slice(0, 16)),
+      );
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    expect(callout.textContent).toBe(said);
+  },
+);
 
-test("the copy says a native search reads this node's own copy, and never that there is none", async () => {
+test("the results end with how to move through them, and never claim there is no copy", async () => {
   mount(ran, [{ key: "ENG", name: "Engineering", pages: 3 }]);
   await waitFor(() => expect(document.querySelector(".knowledge-hit")).not.toBeNull());
   expect(document.body.textContent).not.toMatch(/no local copy|no staleness window/i);
-  expect(screen.getByText(/this node's own copy of the pages/)).toBeTruthy();
+  expect(document.querySelector(".knowledge-results-foot")?.textContent).toBe(
+    "j k move, Enter opens.",
+  );
 });
 
 // THE ENGINE'S RANK, KEPT INSIDE EACH SPACE: grouping orders the spaces by
@@ -692,13 +709,9 @@ test("an empty landing says so once, and each small tile in one line", async () 
   expect(
     within(tile(/Continue reading/)).getByText("The pages you open are listed here."),
   ).toBeTruthy();
-  expect(
-    within(tile(/Pinned/)).getByText("Star a page from its More menu to pin it here."),
-  ).toBeTruthy();
+  expect(within(tile(/Pinned/)).getByText("Star a page to pin it here.")).toBeTruthy();
   await waitFor(() =>
-    expect(
-      within(tile(/Watching/)).getByText("Watch a page with the eye in its bar to follow it."),
-    ).toBeTruthy(),
+    expect(within(tile(/Watching/)).getByText("Watch a page to follow it.")).toBeTruthy(),
   );
   expect(within(tile(/For the agents/)).getByRole("link", { name: /Agent skills/ })).toBeTruthy();
 });

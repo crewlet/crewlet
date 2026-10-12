@@ -5655,9 +5655,12 @@ palette and the trail.
   PARTIAL, naming the buckets nobody scanned and the node that did not answer
   (`coverage`), because a short list from two thirds of the corpus is
   otherwise indistinguishable from a small corpus. On the native backend the
-  search reads this node's own copy of the pages, and the screen says so.
+  search reads this node's own copy of the pages. The results end with how to
+  move through them (`j` and `k` move, Enter opens).
 - **A search that did not run** says which of `no_company`, `no_backend`,
-  `no_scope` or `building` it was, with the remedy that reason names.
+  `no_scope` or `building` it was, with the remedy that reason names: a
+  backend to set, spaces to add to `knowledge.scope`, or, while a node that
+  joined recently is still indexing, to try again shortly.
 - **A space's peek** (opened from a list elsewhere) reads one window of 500
   and COUNTS off the listing's `total`: Recent pages and "n more pages in this
   space" are the space's, never the window's. When the space outgrows the

@@ -169,20 +169,12 @@ export function PageTags({
         </Tag>
       )}
       {status === "trashed" && (
-        <Tag
-          size="xs"
-          variant="neutral"
-          title="In the trash: listed nowhere and found by no search"
-        >
+        <Tag size="xs" variant="neutral" title="In the trash, hidden from search">
           Trashed
         </Tag>
       )}
       {skill && (
-        <Tag
-          size="xs"
-          appearance="outline"
-          title="Machinery the engine offers a phase, not prose to read"
-        >
+        <Tag size="xs" appearance="outline" title="Instructions for agents">
           Tool skill
         </Tag>
       )}

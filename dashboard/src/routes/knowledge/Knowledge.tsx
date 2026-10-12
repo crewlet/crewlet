@@ -169,12 +169,13 @@ function KnowledgeLanding() {
   const { spaces, loading } = useSpaces();
   if (probe.data?.available === false) return <Unavailable answer={probe.data} />;
   if (probe.data && probe.data.backend !== "native" && probe.data.backend !== "") {
-    // A VENDOR WIKI: nothing on this node to browse, by design.
+    // A VENDOR WIKI: nothing on this node to browse, by design. Confluence is
+    // the one wiki `knowledge.backend` admits beside the engine's own.
     return (
       <EmptyState
         icon={<SearchGlyph size="xl" />}
         title="Search your wiki from the search box"
-        description={`This company's pages live in ${probe.data.backend}, so there is nothing on this engine to browse. The search reaches the wiki live, as the engine's own account.`}
+        description="Pages live in Confluence. Search reaches them live."
       />
     );
   }
@@ -185,7 +186,7 @@ function KnowledgeLanding() {
         <EmptyState
           icon={<BookOpenGlyph size="xl" />}
           title="Nothing has been written down yet"
-          description="A space is created the first time somebody writes into it. Give a unit a space, and its agents have somewhere to file what they learn."
+          description="Give a team a space, and its agents file what they learn there."
         />
       ) : (
         <Tiles />
@@ -262,7 +263,7 @@ function Latest({ run, state }: { run: Run | undefined; state: FeedState }) {
               ? undefined
               : {
                   title: "Nothing has been written yet",
-                  hint: "Every save, comment and new page is listed here as it lands.",
+                  hint: "New saves, comments and pages appear here.",
                 }
           }
         >
@@ -552,7 +553,7 @@ function Pinned() {
   return (
     <Tile className="knowledge-pinned" title="Pinned" icon={<PinGlyph size="sm" />}>
       {pinned.length === 0 ? (
-        <TileNote>Star a page from its More menu to pin it here.</TileNote>
+        <TileNote>Star a page to pin it here.</TileNote>
       ) : (
         <TileRows>
           {pinned.map((star) => (
@@ -583,13 +584,13 @@ function Watching() {
   return (
     <Tile className="knowledge-watching" title="Watching" icon={<EyeGlyph size="sm" />}>
       {viewer.handle === "" ? (
-        <TileNote>Pages you follow are listed here once your token is bound to your seat.</TileNote>
+        <TileNote>Bind your token to your seat to see pages you follow.</TileNote>
       ) : watched.error ? (
         <TileBody>
           <QueryState error={watched.error} loading={false} />
         </TileBody>
       ) : rows.length === 0 ? (
-        !watched.loading && <TileNote>Watch a page with the eye in its bar to follow it.</TileNote>
+        !watched.loading && <TileNote>Watch a page to follow it.</TileNote>
       ) : (
         <TileRows>
           {rows.map((page) => (
@@ -815,34 +816,28 @@ export function Unavailable({ answer }: { answer: KnowledgeAnswer }) {
       variant={building ? "warning" : "neutral"}
       icon={building ? <ClockGlyph size="md" /> : <BookOpenGlyph size="md" />}
     >
-      <span>
-        Search cannot run here: {answer.note || "the engine gave no reason"}.
-        {answer.reason === "no_backend" && (
-          <>
-            {" "}
-            Set <code className="inline">knowledge.backend</code> to{" "}
-            <code className="inline">native</code> to use the engine&rsquo;s own knowledge base, or
-            to <code className="inline">confluence</code> alongside an{" "}
-            <code className="inline">integrations.confluence</code> block.
-          </>
-        )}
-        {answer.reason === "no_scope" && (
-          <>
-            {" "}
-            The backend itself is fine. Add the spaces to search to{" "}
-            <code className="inline">knowledge.scope</code>.
-          </>
-        )}
-        {/* NOT A MISCONFIGURATION: this node joined recently and is still
-            indexing what it holds. Nothing is lost and nothing needs fixing. */}
-        {building && (
-          <>
-            {" "}
-            Nothing is wrong: this node joined recently and is still indexing. Pages that exist are
-            not findable from here yet; try again in a moment.
-          </>
-        )}
-      </span>
+      {/* NOT A MISCONFIGURATION: this node joined recently and is still
+          indexing what it holds. Nothing is lost and nothing needs fixing. */}
+      {building ? (
+        <span>Still indexing. Try again shortly.</span>
+      ) : (
+        <span>
+          Search can&rsquo;t run: {answer.note || "the engine gave no reason"}.
+          {answer.reason === "no_backend" && (
+            <>
+              {" "}
+              Set <code className="inline">knowledge.backend</code> to{" "}
+              <code className="inline">native</code> or <code className="inline">confluence</code>.
+            </>
+          )}
+          {answer.reason === "no_scope" && (
+            <>
+              {" "}
+              Add spaces to <code className="inline">knowledge.scope</code>.
+            </>
+          )}
+        </span>
+      )}
     </Callout>
   );
 }
@@ -1010,9 +1005,9 @@ function KnowledgeResults({ phrase }: { phrase: string }) {
                 title={`Nothing matched “${phrase}”`}
                 description={
                   space
-                    ? "Nothing in this space was among the results. Remove the filter to see the rest."
+                    ? "Remove the space filter to see the rest."
                     : native
-                      ? `Ranked by ${modeLabel(data?.served_mode ?? "")} over this node's copy of the pages. Another mode may find what these words did not.`
+                      ? "Try another search mode."
                       : "This is the wiki's own answer, taken just now."
                 }
               />
@@ -1043,10 +1038,7 @@ function KnowledgeResults({ phrase }: { phrase: string }) {
               ))
             )}
             <p className="knowledge-results-foot">
-              <kbd>j</kbd> <kbd>k</kbd> move, <kbd>Enter</kbd> opens.{" "}
-              {native
-                ? "Searched on this node's own copy of the pages, the same search an agent runs."
-                : "Searched live on the wiki at query time, as the engine's own account."}
+              <kbd>j</kbd> <kbd>k</kbd> move, <kbd>Enter</kbd> opens.
             </p>
           </section>
           <section className="knowledge-results-preview" aria-label="Preview">
@@ -1133,9 +1125,8 @@ function ResultPreview({ hit, terms }: { hit: KnowledgeHit; terms: readonly stri
   if (hit.url) {
     return (
       <Callout variant="neutral" icon={<ExternalLinkGlyph size="md" />}>
-        This result lives in the wiki.{" "}
         <a className="prose-link" href={hit.url} target="_blank" rel="noreferrer">
-          Open it there
+          Open this result in the wiki
         </a>
         .
       </Callout>
