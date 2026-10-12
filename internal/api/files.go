@@ -11,10 +11,10 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/paced"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -96,107 +96,11 @@ func servedBy[S any](seam func() (S, bool), serve func(http.ResponseWriter, *htt
 	})
 }
 
-// filePace is how long each mebibyte of a file is given to cross the
-// connection, in either direction: an upload's to arrive, a download's to be
-// taken by the client.
-//
-// [objstore.MiBPace] — THE object store's one floor, which every leg a file's
-// bytes cross is held to, the client's included, so no leg can be retuned
-// out from under another — and PER MEBIBYTE rather than per body. The
-// server's ReadTimeout and WriteTimeout are deliberately unset (cmd/crewlet's
-// apiIdleTimeout says why), so a route that streams a body bounds it itself:
-// unbounded, a client could trickle a gibibyte upload a byte at a time, or
-// open a download and never read it, and hold a handler and a connection
-// slot as long as it liked. One deadline over the whole body cannot be the
-// bound either, because a file of [tracker.MaxFileBytes] is a gibibyte and
-// any single figure is either a cap on real uploads or no bound on a trickle.
-//
-// AND CHARGED ONLY FOR THE TIME THE CLIENT IS WAITED ON, never the server's
-// own: storing what arrived can take a broker's publish acknowledgements or a
-// bucket's part upload, and fetching what a download sends can wait on the
-// store, and neither is the client's time to spend.
-const filePace = objstore.MiBPace
-
-// errFileBody is an upload whose body could not be read to its end — the
-// client's connection, not the store, so it answers 400 rather than 503.
-var errFileBody = errors.New("the file's body could not be read")
-
-// pacedBody is an upload's body, every mebibyte of it read inside a budget of
-// [filePace] — see [pacedBody.Read].
-type pacedBody struct {
-	r    io.Reader
-	rc   *http.ResponseController
-	pace time.Duration
-
-	// now is the clock the time spent inside a Read is measured on, and
-	// each read deadline is set from — the app's pace clock
-	// ([Options.PaceClock]).
-	now func() time.Time
-
-	// left is how many bytes of the current mebibyte are still to arrive,
-	// and budget how much of its pace is left to spend on them.
-	left   int64
-	budget time.Duration
-}
-
-// newPacedBody paces r at [filePace] a mebibyte, measured on now.
-func newPacedBody(r io.Reader, rc *http.ResponseController, now func() time.Time) *pacedBody {
-	return &pacedBody{r: r, rc: rc, pace: filePace, now: now}
-}
-
-// Read reads the body, inside what is left of the current mebibyte's budget.
-//
-// THE STORE DRIVES THE READS — it asks for the next piece once it has done
-// whatever it does with the last one — so the pace is kept HERE, on the time
-// spent inside Read, which is the only time the client is the one being
-// waited on. Each Read is given the rest of its mebibyte's budget as its
-// deadline, and what it took is charged against it; a mebibyte that arrives
-// opens the next one's whole budget. A deadline re-armed whole at every Read
-// would admit a byte every twenty-nine seconds for ever, and one charged by
-// the wall clock would bill the client for the store's own work.
-//
-// http.ErrNotSupported is ignored, as [httpjson.ReadBody] ignores it: a writer
-// that cannot carry a deadline has no connection to bound — and the budget is
-// still kept, so a trickle is refused here even where no deadline could be
-// set.
-//
-// A failure is tagged as the client's — a body cut short, which net/http
-// answers as io.ErrUnexpectedEOF, included. The end of the body, io.EOF
-// itself, is passed through untouched: the store ends an object only there
-// ([objstore.Fill]), and a tagged one would read as a failure.
-func (b *pacedBody) Read(p []byte) (int, error) {
-	if b.left <= 0 {
-		b.left, b.budget = objstore.MiB, b.pace
-	}
-	if b.budget <= 0 {
-		return 0, fmt.Errorf("%w: a mebibyte of it took more than %v to arrive",
-			errFileBody, b.pace)
-	}
-	start := b.now()
-	if err := b.rc.SetReadDeadline(start.Add(b.budget)); err != nil &&
-		!errors.Is(err, http.ErrNotSupported) {
-		return 0, fmt.Errorf("%w: %w", errFileBody, err)
-	}
-	n, err := b.r.Read(p)
-	b.budget -= b.now().Sub(start)
-	b.left -= int64(n)
-	if b.left <= 0 {
-		// A READ THAT CROSSED INTO THE NEXT MEBIBYTE has paid for this
-		// one; what it carried past the boundary counts toward the next,
-		// which opens with its whole budget.
-		b.left, b.budget = objstore.MiB+b.left, b.pace
-	}
-	if err == nil || err == io.EOF {
-		return n, err
-	}
-	return n, fmt.Errorf("%w: %w", errFileBody, err)
-}
-
 // fileRefusal answers a file route's failure with the status its cause
 // deserves.
 func fileRefusal(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, errFileBody):
+	case errors.Is(err, paced.ErrBody):
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeUnreadableBody,
 			map[string]string{"detail": err.Error()})
 	case errors.Is(err, tracker.ErrNoProject):
@@ -300,7 +204,7 @@ func (a *App) sendFile(w http.ResponseWriter, f tracker.File, src io.Reader) {
 	w.Header().Set("Content-Disposition",
 		mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(f.Path)}))
 	w.WriteHeader(http.StatusOK)
-	if err := sendPaced(w, src, a.pace); err != nil {
+	if err := paced.Send(w, src, a.pace); err != nil {
 		// THE STATUS IS SENT, so the one honest signal left is a body
 		// shorter than its Content-Length: aborting the handler closes
 		// the connection rather than ending the response cleanly. The
@@ -309,40 +213,6 @@ func (a *App) sendFile(w http.ResponseWriter, f tracker.File, src io.Reader) {
 		// too, never a whole response.
 		log.Warn("api_file_download_cut", "project", f.Project, "path", f.Path, "error", err)
 		panic(http.ErrAbortHandler)
-	}
-}
-
-// sendUnit is how much of a download one write hands the client, each under
-// its own [filePace] deadline: a mebibyte, the unit the pace is given per.
-const sendUnit = objstore.MiB
-
-// sendPaced writes src to the client [sendUnit] at a time, each under its own
-// [filePace] write deadline, set from now once the unit is in hand — so the
-// time spent waiting on the store for it is never the client's.
-//
-// Done only where src answers io.EOF itself ([objstore.Fill]): a source cut
-// short is a failure, which the caller turns into a cut response rather than
-// one ended as if it were whole.
-func sendPaced(w http.ResponseWriter, src io.Reader, now func() time.Time) error {
-	rc := http.NewResponseController(w)
-	buf := make([]byte, sendUnit)
-	for {
-		n, end, err := objstore.Fill(src, buf)
-		if err != nil {
-			return err
-		}
-		if n > 0 {
-			if derr := rc.SetWriteDeadline(now().Add(filePace)); derr != nil &&
-				!errors.Is(derr, http.ErrNotSupported) {
-				return derr
-			}
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				return werr
-			}
-		}
-		if end {
-			return nil
-		}
 	}
 }
 
@@ -431,7 +301,7 @@ func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request, files File
 		contentType = mime.TypeByExtension(path.Ext(filePath))
 	}
 	// THE BYTES FIRST — see the file's head — paced as they arrive.
-	object, err := files.Put(r.Context(), newPacedBody(r.Body, http.NewResponseController(w), a.pace),
+	object, err := files.Put(r.Context(), paced.Body(r.Body, http.NewResponseController(w), a.pace),
 		tracker.MaxFileBytes, objstore.PutMeta{ContentType: contentType})
 	if err != nil {
 		fileRefusal(w, err)

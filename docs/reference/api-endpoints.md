@@ -3570,10 +3570,10 @@ by sending the same request again with the `op_id` it answered.
 **Each mebibyte has 30 seconds to cross**, in either direction: an upload's
 mebibyte has 30 seconds of the time the server spends waiting on the client to
 arrive, never counting the time the server spends storing what already arrived,
-and a download's next to be
-taken by the client once it has been fetched — a floor of about 35 KB/s, far
-under any real link, and the same floor the object store holds its own
-transfers to. A whole-body deadline cannot bound a stream of up to a
+and a download's mebibyte has 30 seconds of the time the server spends waiting
+on the client to take it, never counting the time the server spends fetching it
+from the store — a floor of about 35 KB/s, far under any real link, and the
+same floor the object store holds its own transfers to. A whole-body deadline cannot bound a stream of up to a
 gibibyte without capping real uploads, and none at all let a client trickle one
 a byte at a time, or open a download and never read it, holding the handler and
 its connection for as long as it liked. An upload that stops arriving — a
