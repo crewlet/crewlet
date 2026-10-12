@@ -416,8 +416,7 @@ export function saveRules(status: CheckStatus, hasChanges: boolean): SaveRules {
         review: false,
         save: false,
         waiting: false,
-        reason:
-          "Another system manages this company's configuration, so it is not saved from here.",
+        reason: "Managed by another system.",
       };
     case "problems":
       return { review: true, save: false, waiting: false, reason: "Fix the problems above first." };

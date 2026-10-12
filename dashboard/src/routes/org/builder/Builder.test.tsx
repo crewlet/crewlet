@@ -74,9 +74,7 @@ describe("the posture table", () => {
   test("no active revision while the org names a company is a node that has not caught up", async () => {
     const engine = new Engine(null);
     mountBuilder({ engine, org: named });
-    expect(
-      await screen.findByText("This node has not caught up with the fleet's configuration yet."),
-    ).toBeDefined();
+    expect(await screen.findByText("This node is still catching up")).toBeDefined();
     expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
     // Never create mode: nothing is checked, let alone written.
     await new Promise((r) => setTimeout(r, 50));
@@ -89,9 +87,7 @@ describe("the posture table", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(engine.checks()).toHaveLength(0);
     act(() => store.applyOrg(named));
-    expect(
-      await screen.findByText("This node has not caught up with the fleet's configuration yet."),
-    ).toBeDefined();
+    expect(await screen.findByText("This node is still catching up")).toBeDefined();
   });
 
   test("a refusal with no stored token asks for one", async () => {
@@ -481,16 +477,16 @@ test("a company with no model provider is told so, and one with a provider is no
   const engine = new Engine(without);
   mountBuilder({ engine });
   // The engine applies the company and holds its agents' work, so the
-  // caution says what waits rather than claiming nothing is applied.
+  // caution says the agents cannot work rather than claiming nothing is applied.
   expect(
-    await screen.findByText(/no agent seat takes a turn: work sent to a seat waits on its inbox/),
+    await screen.findByText(/No model provider is set, so agents can’t work\. Add one with/),
   ).toBeDefined();
   cleanup();
 
   const engineWith = new Engine(company());
   mountBuilder({ engine: engineWith });
   await screen.findByText("No problems");
-  expect(screen.queryByText(/No model provider is configured/)).toBeNull();
+  expect(screen.queryByText(/No model provider is set/)).toBeNull();
 });
 
 describe("the selection in the URL", () => {
@@ -744,9 +740,7 @@ describe("a token change mid-edit", () => {
       clearToken();
     });
     expect(
-      await screen.findByText(
-        "Editing the organization needs an operator token. Your draft is kept on this page.",
-      ),
+      await screen.findByText("Set an operator token to edit. Your draft is kept."),
     ).toBeDefined();
     expect(screen.getByText("read only")).toBeDefined();
     // The status names what is missing: no token was refused, none is set.

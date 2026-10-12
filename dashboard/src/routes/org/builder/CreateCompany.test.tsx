@@ -117,9 +117,7 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
     "#/settings/integrations",
   );
   expect(screen.getByText(/crewlet config import company.yaml/)).toBeDefined();
-  expect(
-    screen.getByText(/no agent seat takes a turn, and work sent to a seat waits/),
-  ).toBeDefined();
+  expect(screen.getByText(/Agents can’t work until one is added/)).toBeDefined();
   // The first revision has no parent to differ from, so the strip opens the
   // configuration itself rather than an empty diff.
   expect(screen.queryByRole("link", { name: "View changes" })).toBeNull();
@@ -203,9 +201,7 @@ test("a create draft kept after a company appeared still offers the company", as
   });
   fireEvent.click(within(refused).getByRole("button", { name: "Keep my draft" }));
   expect(
-    screen.getByText(
-      "A company was created on this engine while this draft was being written, so this draft cannot be saved.",
-    ),
+    screen.getByText("A company was created meanwhile, so this draft can’t be saved."),
   ).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Discard it and open the company" }));
   expect(await screen.findByText("CEO")).toBeDefined();

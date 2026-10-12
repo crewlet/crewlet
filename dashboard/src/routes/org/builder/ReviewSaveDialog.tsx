@@ -76,9 +76,7 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
   }
   for (const u of changes.unitRenames) {
     const schedules =
-      u.schedules.length > 0
-        ? ` Its schedules get a new identity, so a run due this minute may fire again: ${u.schedules.join(", ")}.`
-        : "";
+      u.schedules.length > 0 ? ` A schedule due now may run twice: ${u.schedules.join(", ")}.` : "";
     follow.push(
       `Onboarding pages for ${u.before} are looked up under its new name, ${u.after}.${schedules}`,
     );
@@ -86,7 +84,7 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
   for (const r of changes.reportsTo) {
     follow.push(
       r.orderOnly
-        ? `${r.ref.name} reports first to ${who(r.after)} instead of ${who(r.before)}: the same managers, listed in a different order.`
+        ? `${r.ref.name} reports first to ${who(r.after)} instead of ${who(r.before)}.`
         : `${r.ref.name} reports to ${who(r.after)} instead of ${who(r.before)}.`,
     );
   }
@@ -102,9 +100,7 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
   }
   for (const r of changes.routing) {
     const container = r.field === "project" ? "tracker project" : "knowledge space";
-    const shared = r.shared
-      ? " More than one owner declares it, and the engine routes to the first it finds."
-      : "";
+    const shared = r.shared ? " Declared by more than one owner." : "";
     follow.push(
       `Unrouted work in the ${container} ${r.scope} goes to ${who(r.after)} instead of ${who(r.before)}.${shared}`,
     );
@@ -248,14 +244,12 @@ export function ReviewSaveDialog({
       {phase.kind === "retry" && <Callout variant="warning">{phase.message}</Callout>}
       {phase.kind === "settling" && (
         <Callout variant="warning" icon={<RotateCwGlyph />}>
-          The engine's answer did not arrive. Checking whether the save was stored.
+          Checking whether the save was stored.
         </Callout>
       )}
       {unknown && (
         <Callout variant="warning">
-          Whether the save was stored could not be confirmed. {phase.detail} Check again, or save
-          again: a save that already landed is recognized by its write id rather than stored a
-          second time.
+          Couldn’t confirm the save. {phase.detail} Check again, or save again safely.
         </Callout>
       )}
 
@@ -276,7 +270,7 @@ export function ReviewSaveDialog({
       )}
       {status === "unreachable" && (
         <Callout variant="warning" icon={<PlugGlyph />}>
-          The engine could not be reached to check this draft. Saving still validates it.
+          Couldn’t check this draft. Saving still validates it.
         </Callout>
       )}
 
@@ -308,10 +302,7 @@ export function ReviewSaveDialog({
         <section className="col gap-1" aria-label="Consequences">
           <strong>What follows</strong>
           {!changes.derivedKnown && (
-            <p className="muted">
-              The engine has not described this draft yet, so consequences that depend on its
-              hierarchy (onboarding, reporting lines, leads and routing) are not listed.
-            </p>
+            <p className="muted">Some effects aren’t listed until the check finishes.</p>
           )}
           <ul className="org-builder-list">
             {text.consequences.map((line, i) => (
@@ -358,16 +349,10 @@ export function ReviewSaveDialog({
         value={summary}
         onChange={setSummary}
         disabled={busy}
-        error={
-          summaryMissing
-            ? "Enter a summary. The engine records one with every revision."
-            : undefined
-        }
+        error={summaryMissing ? "Enter a summary." : undefined}
         help={
           <>
-            Recorded with the revision as{" "}
-            <InlineCode>{signedSummary(summary, writeId).trim()}</InlineCode>. The write id lets the
-            builder recognize this save if its answer is lost.
+            Recorded as <InlineCode>{signedSummary(summary, writeId).trim()}</InlineCode>.
           </>
         }
       />

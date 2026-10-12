@@ -135,11 +135,7 @@ export function newlyStranded(before: Draft, after: Draft): StrandedSchedule[] {
 
 /** The sentence a dialog shows for a stranded schedule. */
 export function strandedSentence(s: StrandedSchedule): string {
-  const why =
-    s.reason === "lead"
-      ? "it runs as the unit's lead, and the lead would be a human seat"
-      : "it runs on the unit's direct agent members, and the unit would have none";
-  return `Schedule ${s.schedule} on ${s.unitName} would have no runner: ${why}. The engine refuses the save until it is disabled or has a runner.`;
+  return `Schedule ${s.schedule} on ${s.unitName} would have nobody to run it. Disable it or give it a runner.`;
 }
 
 // ---------------------------------------------------------------------------

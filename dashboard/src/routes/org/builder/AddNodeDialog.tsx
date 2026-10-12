@@ -292,10 +292,7 @@ function AddNodeFields({ form }: { form: AddForm }) {
             onIdentity={form.setIdentity}
             onValue={form.setContact}
           />
-          <p className="t-caption">
-            A human seat needs one contact identity before the company can be saved. It can be added
-            here or later in the seat's editor.
-          </p>
+          <p className="t-caption">A person needs a contact identity before saving.</p>
         </>
       )}
     </>

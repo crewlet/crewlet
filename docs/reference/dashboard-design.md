@@ -2314,7 +2314,7 @@ under its primary manager, the engine's derived `manager`, the line escalation
 goes up. Both are built by `lib/orgchart.ts` from the projection this node has
 APPLIED, never the builder's draft (a test holds that it imports none of the
 builder's model), so between a save and this node applying it the chart has
-not moved, and the "still applying revision …" note says so. Every reporting
+not moved, and the "Still applying …" note says so. Every reporting
 line and every unit's seats are the engine's derived ones; the client draws no
 hierarchy of its own. **The field runs to the sheet's edges**, dotted, under
 the tabs, as the artboard draws it: the screen's padding and the canvas's own
@@ -4074,7 +4074,7 @@ Four more controls that looked like something they were not:
 
   **And then fifteen more, classified WRONG rather than not at all.** A chrome
   class on an anchor that is a word in a line passes that scan silently, which
-  is what `.t-link` on every "…so it has no channel to set. **Open
+  is what `.t-link` on every "…No Mattermost bot for this seat. **Open
   Integrations**" was. The baseline's hover underline had been standing in for
   the mark — a cue no keyboard or touch reader ever saw, so it never satisfied
   1.4.1 — and resetting it is what made the gap visible rather than what opened

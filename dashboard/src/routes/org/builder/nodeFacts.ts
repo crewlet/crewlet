@@ -419,5 +419,5 @@ export function isWorking(
 
 /** The sentence every dialog says about a seat with work in flight. */
 export function workingNote(name: string): string {
-  return `${name} is working now. Its current turn continues on the previous configuration until the engine applies this change.`;
+  return `${name} is working now. The change applies to its next turn.`;
 }

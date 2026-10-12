@@ -103,11 +103,7 @@ test("a node still serving the draft's base is not updated onto", async () => {
   engine.script = (r) =>
     r.method === "GET" && r.path === "/config" ? json(company(), 200, { ETag: '"r1"' }) : null;
   fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
-  expect(
-    await screen.findByText(
-      "This node has not caught up with the newer revision yet. Try again in a moment.",
-    ),
-  ).toBeDefined();
+  expect(await screen.findByText("Still catching up. Try again shortly.")).toBeDefined();
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
@@ -120,7 +116,7 @@ test("a draft of a configuration that is no longer active offers to discard and 
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   expect(
     await screen.findByText(
-      "The configuration this draft edits is no longer active on this engine, so the draft cannot be saved.",
+      "This draft’s configuration is no longer active, so it can’t be saved.",
     ),
   ).toBeDefined();
   engine.script = () => null;

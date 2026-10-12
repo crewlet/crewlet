@@ -125,14 +125,14 @@ test("the read sections say they still draw the previous revision; the builder d
   for (const hash of ["#/agents", "#/agents/teams"]) {
     recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
     mount(hash);
-    expect(await screen.findByText(/still applying revision/), hash).toBeDefined();
+    expect(await screen.findByText(/Still applying/), hash).toBeDefined();
     cleanup();
   }
 
   recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
   mount("#/agents/edit");
   await screen.findByRole("toolbar", { name: "Organization builder" });
-  expect(screen.queryByText(/still applying revision/)).toBeNull();
+  expect(screen.queryByText(/Still applying/)).toBeNull();
 });
 
 /*

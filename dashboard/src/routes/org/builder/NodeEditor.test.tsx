@@ -182,8 +182,8 @@ describe("applying", () => {
     tab("Work");
     expect(screen.queryByLabelText(labelled("Tracker project"))).toBeNull();
     expect(screen.queryByLabelText(labelled("Knowledge space"))).toBeNull();
-    expect(screen.getByText(/runs no work tracker/)).toBeDefined();
-    expect(screen.getByText(/runs no knowledge base/)).toBeDefined();
+    expect(screen.getByText("No work tracker is set up.")).toBeDefined();
+    expect(screen.getByText("No knowledge base is set up.")).toBeDefined();
   });
 
   test("an untouched form records nothing and closes without asking", () => {
@@ -220,7 +220,7 @@ describe("applying", () => {
   test("a read-only builder applies nothing", () => {
     const view = edit(keyedState(fixtureCompany()), "seat:dev", { readOnly: true });
     expect(applyRefuses()).toBe(true);
-    expect(screen.getByText(/cannot be changed right now/)).toBeDefined();
+    expect(screen.getByText("Read-only right now.")).toBeDefined();
     view.unmount();
   });
 
@@ -508,7 +508,7 @@ describe("the unsaved-changes prompt", () => {
     type("Goal", "Ship");
     fireEvent.click(link());
     const asked = await prompt();
-    expect(asked.textContent).toContain("you are leaving the builder");
+    expect(asked.textContent).toContain("Your edits to Dev aren’t in the draft yet.");
     // Held, and undone: the page is where it was, and so is the form.
     await waitFor(() => expect(location.hash).toBe("#/agents/edit"));
     fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
@@ -588,9 +588,7 @@ describe("seat fields", () => {
   test("an existing seat's handle is read-only with the reason; a new seat's is editable", () => {
     edit(keyedState(fixtureCompany()), "seat:dev");
     expect(screen.queryByLabelText(labelled("Handle"))).toBeNull();
-    expect(
-      screen.getByText(/keeps its handle: it is the identity its memory and mailbox attach to/),
-    ).toBeDefined();
+    expect(screen.getByText(/A seat’s handle can’t change\./)).toBeDefined();
     cleanup();
     const state = builderReducer(keyedState(fixtureCompany()), {
       type: "record",
@@ -621,23 +619,13 @@ describe("seat fields", () => {
     });
     const checked = recheck(added, { seats: { "units[1].roles[0]": { handle: "qa" } } });
     edit(checked, "new:qa");
-    expect(
-      screen.getByText("Empty uses the handle the engine derives from the name: qa."),
-    ).toBeDefined();
+    expect(screen.getByText("Leave empty for qa.")).toBeDefined();
     tab("Integrations");
     expect((field("Access level") as HTMLSelectElement).disabled).toBe(false);
-    expect(
-      screen.getByText(
-        "Kept by handle: choosing a handle for this seat carries its level with it.",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("Follows the seat’s handle.")).toBeDefined();
     tab("Profile");
     type("Name", "Quality");
-    expect(
-      screen.getByText(
-        "Empty uses the handle the engine derives from the name, shown here after the next check.",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("Leave empty to derive it from the name.")).toBeDefined();
     cleanup();
 
     // Another node edited since: the check is of an older draft, and still
@@ -663,11 +651,7 @@ describe("seat fields", () => {
     edit(renamed, "new:qa");
     tab("Integrations");
     expect((field("Access level") as HTMLSelectElement).disabled).toBe(true);
-    expect(
-      screen.getByText(
-        "Access levels are kept by handle, so this is available once the check reports this seat's handle.",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("Available once the seat’s handle is checked.")).toBeDefined();
   });
 
   // THE ORDER IS THE CHAIN, read first to last, so it is MOVED rather than
@@ -695,9 +679,7 @@ describe("seat fields", () => {
     edit(keyedState(doc), "seat:dev");
     tab("Integrations");
     expect(screen.queryByLabelText(labelled("Access level"))).toBeNull();
-    expect(
-      screen.getByText(/GitLab provisioning is not set up, so there is no access level to set./),
-    ).toBeDefined();
+    expect(screen.getByText(/GitLab isn’t set up\./)).toBeDefined();
   });
 
   test("a seat, a unit and the charter each need a name before Apply", () => {
@@ -756,9 +738,7 @@ describe("seat fields", () => {
   test("the model is a chain over the company's providers; a per-phase mapping is shown and not edited", () => {
     edit(keyedState(connected()), "seat:dev");
     tab("Model");
-    expect(
-      screen.getByText(/Runs on smart, the provider a seat that names none runs on/),
-    ).toBeDefined();
+    expect(screen.getByText("Empty runs on smart, the default.")).toBeDefined();
     cleanup();
     const doc = connected();
     doc.units![0]!.roles![1]!.llm = { default: "fast", review: ["smart", "fast"] };
@@ -777,12 +757,10 @@ describe("seat fields", () => {
     const doc = fixtureCompany();
     doc.units![0]!.roles![1]!.token_budget = { week: -5 };
     edit(keyedState(doc), "seat:dev", { readOnly: true });
-    expect(screen.getByText(/cannot be changed right now/)).toBeDefined();
+    expect(screen.getByText("Read-only right now.")).toBeDefined();
     // The foot says the posture, not the field: a form nobody can write is
     // not a form with a mistake in it.
-    expect(
-      shownReason("These fields are for reading, so there is nothing to apply."),
-    ).toBeDefined();
+    expect(shownReason("Read-only.")).toBeDefined();
     cleanup();
     edit(keyedState(doc), "seat:dev");
     expect(shownReason("Correct the token budget first.")).toBeDefined();
@@ -850,7 +828,7 @@ describe("seat fields", () => {
     expect(screen.queryByRole("button", { name: /^Change to/ })).toBeNull();
     const kind = screen.getByText("Kind").closest(".crewlet-fact-list__row")!;
     expect(kind.textContent).toContain("Agent");
-    expect(kind.textContent).toContain("delete this seat and add a new one");
+    expect(kind.textContent).toContain("To change it, delete the seat and add a new one.");
     fireEvent.click(screen.getByRole("tab", { name: "Advanced" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete seat" }));
     expect(view.onClose).toHaveBeenCalledTimes(1);
@@ -882,7 +860,7 @@ describe("seat fields", () => {
     expect(fact("Learning").textContent).toContain("Off");
     expect(fact("Datadog fallback").textContent).toContain("Another seat");
     // Each says why it is not edited here, and the section links to where it is.
-    expect(fact("Sandbox").textContent).toContain("providers.sandbox block");
+    expect(fact("Sandbox").textContent).toContain("Edit in the configuration file.");
     expect(
       within(section).getByRole("link", { name: "Open the document" }).getAttribute("href"),
     ).toBe("#/settings/config");
@@ -962,17 +940,13 @@ describe("integrations", () => {
       .closest(".crewlet-fact-list__row")!;
     expect(username.textContent).toContain("dev-bot");
     expect(username.textContent).toContain(
-      "The engine provisions this bot, because its token names a secret store entry. Changing the username would make the provisioner find or create a second bot.",
+      "Managed by the engine. Changing it would create a second bot.",
     );
     // Already enrolled: its block exists, so a tier says nothing about enrolling.
-    expect(screen.queryByText(/This enrols the seat in GitHub/)).toBeNull();
+    expect(screen.queryByText(/Create its GitHub app in Integrations/)).toBeNull();
 
     choose("Access tier", "Full access");
-    expect(
-      screen.getByText(
-        "The app's permissions were fixed when it was created. Raise them at GitHub as well.",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("Also raise the app’s permissions at GitHub.")).toBeDefined();
   });
 
   // A LITERAL TOKEN IS A BOT SOMEBODY MANAGES. The provisioner only mints into
@@ -1024,22 +998,16 @@ describe("integrations", () => {
     const username = field("Bot username") as HTMLInputElement;
     expect(username.disabled).toBe(false);
     expect(username.value).toBe("");
-    expect(
-      screen.getByText(
-        "The engine provisions a bot only where its token names a secret store entry, so this one is managed by hand. Empty uses agent-dev.",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("Managed by hand. Leave empty for agent-dev.")).toBeDefined();
   });
 
   test("a tier on a seat with no GitHub block enrols it, and says so", () => {
     const doc = connected();
     edit(keyedState(doc), "seat:sre");
     tab("Integrations");
-    expect(screen.queryByText(/This enrols the seat in GitHub/)).toBeNull();
+    expect(screen.queryByText(/Create its GitHub app in Integrations/)).toBeNull();
     choose("Access tier", "Review");
-    expect(
-      screen.getByText(/This enrols the seat in GitHub. Create its app from Integrations./),
-    ).toBeDefined();
+    expect(screen.getByText(/Create its GitHub app in Integrations\./)).toBeDefined();
     cleanup();
 
     // A repository alone writes the block as well, so it enrols the seat too.
@@ -1047,7 +1015,7 @@ describe("integrations", () => {
     tab("Integrations");
     type("New repository", "acme/api");
     fireEvent.keyDown(field("New repository"), { key: "Enter" });
-    expect(screen.getByText(/This enrols the seat in GitHub/)).toBeDefined();
+    expect(screen.getByText(/Create its GitHub app in Integrations/)).toBeDefined();
   });
 
   test("a seat with no chat app of its own says so, and the Datadog fallback is named on its seat", () => {
@@ -1057,17 +1025,13 @@ describe("integrations", () => {
     expect(screen.getByText(/has no Slack app of its own/)).toBeDefined();
     // The same for a Mattermost channel, which a bot of the seat's own carries.
     expect(screen.queryByLabelText(labelled("Channel"))).toBeNull();
-    expect(
-      screen.getByText(/This seat has no Mattermost bot of its own, so it has no channel to set./),
-    ).toBeDefined();
+    expect(screen.getByText(/No Mattermost bot for this seat\./)).toBeDefined();
     tab("Advanced");
     const fallback = () =>
       screen.getByText("Datadog fallback").closest(".crewlet-fact-list__row")!.textContent;
     expect(fallback()).toContain("This seat");
     // Where it is chosen, which is also where the builder asks for a new one.
-    expect(fallback()).toContain(
-      "It is chosen from Integrations, or when the fallback seat is deleted.",
-    );
+    expect(fallback()).toContain("Set it in Integrations.");
     cleanup();
 
     // Switched off, Datadog wakes nobody whatever its route_to names, which
@@ -1345,13 +1309,9 @@ describe("a unit", () => {
     const doc = fixtureCompany();
     doc.units![0]!.mcp_env = { tracker: { TOKEN: "__redacted__" } };
     const view = edit(keyedState(doc), "unit:Engineering");
-    expect(screen.queryByText(/stored as literals/)).toBeNull();
+    expect(screen.queryByText(/Move these credentials to Secrets/)).toBeNull();
     type("Name", "Product Engineering");
-    expect(
-      screen.getByText(
-        "These credentials are stored as literals. Move each one to the secret store and reference it as ${NAME} before renaming, or the engine will refuse the save.",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("Move these credentials to Secrets before renaming.")).toBeDefined();
     expect(screen.getByText("units[0].mcp_env.tracker.TOKEN")).toBeDefined();
     expect(screen.getByRole("link", { name: "Open Secrets" }).getAttribute("href")).toBe(
       "#/settings/secrets",

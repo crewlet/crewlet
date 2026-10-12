@@ -93,8 +93,7 @@ export interface DraftKeeping {
 
 const REFUSED: KeepNotice = {
   tone: "warning",
-  message:
-    "This browser refuses to keep a draft, so unsaved changes will not survive a reload or leaving the builder.",
+  message: "This browser can’t keep drafts. Unsaved changes are lost on reload.",
 };
 
 export function useDraftKeeping({
@@ -154,8 +153,7 @@ export function useDraftKeeping({
       case "discarded":
         setDecisionNotice({
           tone: "neutral",
-          message:
-            "A kept draft could not be read by this version of the dashboard, so it was discarded.",
+          message: "A kept draft couldn’t be read and was discarded.",
         });
         setDecided(true);
         return;
@@ -172,8 +170,8 @@ export function useDraftKeeping({
             tone: "warning",
             message:
               decision.kept === "create"
-                ? "A draft for creating a company was discarded, because this engine now has a company."
-                : "A kept draft of the previous company was discarded, because no configuration is active on this engine now.",
+                ? "Your new-company draft was discarded: a company now exists."
+                : "Your draft was discarded: no company is active now.",
           });
           setDecided(true);
           return;
@@ -232,8 +230,7 @@ export function useDraftKeeping({
         : result === "too_large"
           ? {
               tone: "warning",
-              message:
-                "This draft holds more changes than can be kept across a reload. Save it in steps, or it is lost if the tab reloads or you leave the builder.",
+              message: "This draft is too large to keep. Save in steps.",
             }
           : null,
     );

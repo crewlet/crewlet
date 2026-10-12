@@ -30,19 +30,12 @@ export function RenameUnitPreflight({ unit, stored }: { unit: NodeKey; stored: b
   return (
     <div className="col gap-2">
       {stored && (
-        <p className="t-caption">
-          Renaming a unit re-keys what is attached to its name: agent seats in it and in its units
-          onboard again, onboarding pages are looked up under the new name, and its schedules get a
-          new identity, so a run due this minute may fire again.
-        </p>
+        <p className="t-caption">Its agents onboard again, and a schedule due now may run twice.</p>
       )}
       {paths.length > 0 && (
         <Callout variant="warning">
           <div className="col gap-2">
-            <span>
-              These credentials are stored as literals. Move each one to the secret store and
-              reference it as {"${NAME}"} before renaming, or the engine will refuse the save.
-            </span>
+            <span>Move these credentials to Secrets before renaming.</span>
             <ul className="builder-list">
               {paths.map((path) => (
                 <li key={path}>

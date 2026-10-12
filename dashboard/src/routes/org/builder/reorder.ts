@@ -126,9 +126,7 @@ export function useReorder(api: BuilderApi, structure: Structure): Reorder {
     const view = structure.nodes.get(id);
     if (!view || view.type === "company" || api.readOnly) return;
     if (view.type === "seat" && view.placedByRef) {
-      announce(
-        `${view.name} is placed in this unit by its unit reference. Move it into the unit to reorder it.`,
-      );
+      announce(`Move ${view.name} into the unit to reorder it.`);
       return;
     }
     const found = locate(state.draft, id);
