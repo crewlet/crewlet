@@ -139,20 +139,16 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 		t.Fatalf("plant another log's anchor: %v", err)
 	}
 
-	// THE TRIM: purge below the floor, then sweep through the production
-	// entry point.
+	// THE TRIM: purge below the floor, then count and sweep through the
+	// production entry points.
 	log.purge(floor.Seq)
 	before := countRows(t, db, c.Domain.Tables())
-	// A BUDGET NO WAIT HERE REACHES, so an applier that never commits the
-	// record is named by the wait's own bound rather than by the budget's
-	// designed stop: the case is about what the domain does.
 	deps := statelog.SweepDeps{
 		Domain: c.Domain, Spec: spec, Log: log, Ends: log.Ends, Runner: runner,
 		Admission: admissionFor(t, c),
 		Encode:    c.EncodeTrimmed, DB: db.Reader(), Writer: suiteTrimWriter,
-		Budget: time.Minute,
 	}
-	result, err := statelog.SweepAnchors(t.Context(), deps, floor)
+	result, err := suiteSweep(t.Context(), deps, floor)
 	n := result.Records
 	switch {
 	case err != nil && n > 0:
@@ -206,7 +202,7 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 			"row here is one every node writes for a record that is about no object",
 			name, before, after)
 	}
-	again, err := statelog.SweepAnchors(t.Context(), deps, floor)
+	again, err := suiteSweep(t.Context(), deps, floor)
 	if err != nil || again.Records != 0 {
 		return fmt.Errorf("a second sweep with nothing below the floor appended %d "+
 			"(%v), want none — an idle log gains nothing", again.Records, err)
@@ -480,4 +476,17 @@ func (l *loop) waitPast(seq uint64) error {
 		time.Sleep(2 * time.Millisecond)
 	}
 	return fmt.Errorf("the applier reached %s, want sequence %d", l.runner.Committed(), seq)
+}
+
+// suiteSweep counts the anchors below floor and appends the records they call
+// for — the two steps the engine's trim takes — under a budget no wait here
+// reaches, so an applier that never commits the record is named by the wait's
+// own bound rather than by the budget's designed stop: the case is about what
+// the domain does.
+func suiteSweep(ctx context.Context, deps statelog.SweepDeps, floor statelog.Position) (statelog.Swept, error) {
+	plan, err := statelog.PlanSweep(ctx, deps, floor)
+	if err != nil {
+		return statelog.Swept{}, err
+	}
+	return plan.Sweep(ctx, time.Minute)
 }

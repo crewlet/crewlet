@@ -106,7 +106,7 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 		}
 		shared.backups = []coord.BackupPoint{point}
 		for _, running := range identity {
-			if err := r.domain(t.Context(), running, shared); err != nil {
+			if err := trimLog(t.Context(), r, running, shared); err != nil {
 				t.Fatalf("the tick on %s: %v", running.domain.Name(), err)
 			}
 		}

@@ -28,7 +28,7 @@ import (
 // deleting on its own schedule, from its own reading of a floor. So the trim
 // appends a FRAMEWORK record naming what the log no longer holds, and every
 // node's applier removes this log's anchors below it, in the transaction that
-// applies it, at the same position on every node ([SweepAnchors] writes it,
+// applies it, at the same position on every node ([SweepPlan.Sweep] writes it,
 // the applier's own step removes them).
 //
 // # Why removing one is safe at any bound
@@ -82,27 +82,28 @@ const TrimmedVersion = 1
 // transaction closes after sixteen of these records at most.
 const AnchorsPerTrimmedRecord = 250
 
-// TrimmedRecordsPerSweep bounds the trimmed records one [SweepAnchors] appends.
+// TrimmedRecordsPerSweep bounds the trimmed records one [SweepPlan] appends.
 // The trim sweeps each log once a tick — the engine's, a quarter hour — so
-// this is per log per tick. A sweep is bounded in TIME as well
-// ([SweepDeps.Budget]), and which bound binds depends on how fast a record
-// applies: each is appended only once the holder has applied the one before
-// ([SweepAnchors]), so a sweep spends a record's apply and its append per
-// record.
+// this is per log per tick. A sweep is bounded in TIME as well (the budget
+// [SweepPlan.Sweep] is handed), and which bound binds depends on how fast a
+// record applies: each is appended only once the holder has applied the one
+// before, so a sweep spends a record's apply and its append per record.
 //
 // A HUNDRED AND TWENTY-EIGHT, which is 32 000 anchors a quarter hour — about
 // three million a day — where records apply fast: at twenty thousand anchors
 // a record's median apply is 10 ms, so the cap binds well inside any budget
-// the engine sets. On a large table the budget binds first: at a million
+// the engine sets. On a large table the budget can bind first: at a million
 // anchors a record's 43 ms median apply and its append fit about seventy
-// records into the third of its ten seconds the engine gives each of today's
-// three logs that write anchors — the tracker's, the knowledge base's and the
-// code host's — which is 1.7 million anchors a day (a hundred records into
-// five seconds, two and a half million a day, when two logs shared the
-// interval). That is over twenty times the code host's modelled rate of new
-// subjects, so a backlog left by a week-long blocked trim, or by a reanchor
-// that put every anchor of the generation before below the floor, clears
-// within a day.
+// records into a third of the engine's ten seconds and the cap's 128 into the
+// whole of them. The engine shares those ten seconds among the logs that have
+// anchors below their floor THAT TICK — a log with none costs the others its
+// count and nothing more — so a log draining a backlog on its own drains at
+// the cap, three million anchors a day, and each of today's three logs that
+// write anchors (the tracker's, the knowledge base's and the code host's)
+// draining at once is given a third: 1.7 million a day each. That is over
+// twenty times the code host's modelled rate of new subjects, so a backlog
+// left by a week-long blocked trim, or by a reanchor that put every anchor of
+// the generation before below the floor, clears within a day.
 //
 // THE CAP STILL EARNS ITS PLACE beside the budget, because the budget is a
 // bound on THIS node's time and the records are applied on every node: a node
@@ -197,9 +198,9 @@ func frameworkRecord(kind string) bool { return kind == BarrierKind || kind == T
 // for one to remove.
 //
 // THE ENGINE'S GATE AND THE CONFORMANCE SUITE BOTH CALL IT, over the domain's
-// own production encoder, and [SweepAnchors] runs the same check on every body
-// before it appends one — so the framework never appends a record it would
-// not recognise.
+// own production encoder, and [PlanSweep] runs the same check on the body
+// every append of its plan carries — so the framework never appends a record
+// it would not recognise.
 func CheckTrimmed(d Domain, spec StreamSpec, encode func(Envelope) ([]byte, error)) error {
 	if !WritesAnchors(spec) {
 		return fmt.Errorf("statelog: %s's log arbitrates no kind, so it writes no "+
@@ -313,21 +314,14 @@ type SweepDeps struct {
 	// Evicted is this node's own eviction on this log. Nil for a domain
 	// with no eviction gate, which answers "not evicted".
 	Evicted func(context.Context) (bool, error)
-
-	// Budget is how long the sweep may take, from the moment it begins: it
-	// appends no record once the budget is spent, and no wait it makes
-	// outlasts it, so it holds its caller for at most Budget and the one
-	// append in flight when it ran out. Required — zero would bound nothing
-	// the caller chose.
-	Budget time.Duration
 }
 
-// errSweepBudgetSpent is the cause a sweep's context ends with when its
-// [SweepDeps.Budget] runs out — what tells the designed stop from a wait or a
-// read that failed.
+// errSweepBudgetSpent is the cause a sweep's context ends with when the budget
+// [SweepPlan.Sweep] was handed runs out — what tells the designed stop from a
+// wait or a read that failed.
 var errSweepBudgetSpent = errors.New("statelog: the anchor sweep's time budget ran out")
 
-// Swept is what one [SweepAnchors] did.
+// Swept is what one [SweepPlan.Sweep] did.
 type Swept struct {
 	// Records is how many trimmed records it appended — each landed on the
 	// log, whether or not this node had applied the last when it stopped.
@@ -339,15 +333,37 @@ type Swept struct {
 	Remain bool
 }
 
-// SweepAnchors appends the trimmed records that remove the anchors this node's
-// copy holds on the log below below, and answers how many it appended and
-// whether it left any for the next sweep.
+// SweepPlan is one log's anchor sweep COUNTED AND NOT YET APPENDED: how many
+// trimmed records the anchors this node's copy holds below a floor call for,
+// and the one record every append carries. [PlanSweep] counts it and
+// [SweepPlan.Sweep] appends it within a time budget.
 //
-// ONE RECORD PER [AnchorsPerTrimmedRecord] ANCHORS, at most
-// [TrimmedRecordsPerSweep], AND NONE WHEN THERE ARE NONE: an idle fleet, and a
-// tick whose purge removed only barriers, append nothing. A backlog the cap
-// leaves is counted again by the next sweep, without waiting for another
-// purge.
+// TWO STEPS, because a caller that sweeps several logs inside one bound — the
+// engine's trim, every log that writes anchors inside one alarm interval —
+// can share that bound only among the logs that have anything to sweep once
+// every log has been counted: a log with nothing below its floor costs its
+// count and none of the time, and a log with a backlog is handed the time
+// the idle ones did not need, wherever they sit in the order.
+type SweepPlan struct {
+	deps    SweepDeps
+	below   Position
+	records int
+	capped  bool
+	subject string
+	body    []byte
+}
+
+// Records is how many trimmed records the plan appends: one per
+// [AnchorsPerTrimmedRecord] anchors below its floor, at most
+// [TrimmedRecordsPerSweep], and none on a log with none — an idle fleet's,
+// a node evicted from the log, or a tick whose purge removed only barriers.
+func (p SweepPlan) Records() int { return p.records }
+
+// PlanSweep counts what a sweep of d's log below below appends: the anchors
+// this node's copy holds below the floor, one record per
+// [AnchorsPerTrimmedRecord] of them and at most [TrimmedRecordsPerSweep], and
+// none when there are none. A backlog the cap leaves is counted again by the
+// next plan, without waiting for another purge.
 //
 // # Counted only from a copy that has applied the whole log
 //
@@ -358,11 +374,78 @@ type Swept struct {
 // to while the last holder's records were in flight — the count includes
 // anchors those records already remove, and every tick it stayed behind would
 // append up to the cap again — records that remove nothing on a node that has
-// applied the ones before them. So the sweep first reads the log's end and
+// applied the ones before them. So the plan first reads the log's end and
 // waits for this node to commit it, and a copy that cannot within
-// [DefaultResolveBudget] — or within what is left of the sweep's own budget,
-// where that is less — appends nothing and says why: the next tick counts
-// again.
+// [DefaultResolveBudget] — or before ctx ends, where that is sooner — is a
+// plan that could not count, and an error naming why: nothing is appended,
+// the reason is the one an operator needs, and the next tick counts again.
+//
+// BOUNDED BY ctx, which is the caller's: the engine counts every log under
+// the one deadline its sweeps share, so a copy slow to catch up spends that
+// bound and never more.
+//
+// AN EVICTED NODE PLANS NOTHING and answers no error — every applier would
+// drop its records under the eviction gate and count them toward the
+// `records_gated` alarm; an eviction that cannot be read refuses, because the
+// third value blocks.
+//
+// THE RECORD IS CHECKED HERE, before anything is appended: the framework
+// never appends a record its own applier would not recognise.
+func PlanSweep(ctx context.Context, d SweepDeps, below Position) (SweepPlan, error) {
+	if err := d.check(below); err != nil {
+		return SweepPlan{}, err
+	}
+	if d.Evicted != nil {
+		evicted, err := d.Evicted(ctx)
+		if err != nil {
+			return SweepPlan{}, fmt.Errorf("statelog: read this node's eviction on %s "+
+				"before sweeping its anchors: %w", d.Spec.Name, err)
+		}
+		if evicted {
+			return SweepPlan{}, nil
+		}
+	}
+	ends, err := d.Ends(ctx)
+	if err != nil {
+		return SweepPlan{}, fmt.Errorf("statelog: read the ends of %s before sweeping "+
+			"its anchors: %w", d.Spec.Name, err)
+	}
+	if err = d.waitCommitted(ctx, below.At(ends.Last)); err != nil {
+		return SweepPlan{}, fmt.Errorf("statelog: this node's copy of %s has not "+
+			"applied the log's end, %d, so its anchors are not counted — counted, "+
+			"they would include anchors the records already on the log remove: %w",
+			d.Spec.Name, ends.Last, err)
+	}
+	t, err := newTables(d.Domain, d.Spec)
+	if err != nil {
+		return SweepPlan{}, err
+	}
+	const limit = TrimmedRecordsPerSweep * AnchorsPerTrimmedRecord
+	n, err := t.anchorsBelow(ctx, d.DB, below, limit)
+	if err != nil || n == 0 {
+		return SweepPlan{}, err
+	}
+	body, err := d.Encode(TrimmedEnvelope(below, d.Writer))
+	if err != nil {
+		return SweepPlan{}, fmt.Errorf("statelog: encode %s's trimmed record: %w",
+			d.Domain.Name(), err)
+	}
+	if err = checkTrimmed(d.Domain, d.Spec, below, d.Writer, body); err != nil {
+		return SweepPlan{}, err
+	}
+	return SweepPlan{
+		deps: d, below: below, body: body,
+		records: (n + AnchorsPerTrimmedRecord - 1) / AnchorsPerTrimmedRecord,
+		// A COUNT THAT REACHED ITS LIMIT may have more below it, which the
+		// next plan counts.
+		capped:  n == limit,
+		subject: wireSubject(d.Spec.SubjectPrefix, TrimmedSubject(below)),
+	}, nil
+}
+
+// Sweep appends the plan's trimmed records within budget, and answers how many
+// it appended and whether it left any for the next sweep. A plan with no
+// records appends nothing and answers so.
 //
 // # Paced on this node's applier, one record at a time
 //
@@ -377,10 +460,10 @@ type Swept struct {
 // record's apply, and the sweep's own pace is what this node's applier keeps
 // — the cost lands on the duty's tick rather than on anybody's request.
 //
-// [DefaultResolveBudget] is the bound for both waits because it is the same
-// quantity a write's resolution waits on: this node's applier reaching what
-// was just appended. A node that cannot inside it has a health fault waiting
-// does not fix, and the alarms name that.
+// [DefaultResolveBudget] is the bound for both waits — this one and the
+// plan's — because it is the same quantity a write's resolution waits on:
+// this node's applier reaching what was just appended. A node that cannot
+// inside it has a health fault waiting does not fix, and the alarms name that.
 //
 // # And bounded in time
 //
@@ -391,88 +474,43 @@ type Swept struct {
 // evaluates the holder's alarms on the same one). Nor does pacing on THIS node
 // bound what another node queues: one that applies the records slower than
 // this node builds the difference up in front of its own writes and barriers.
-// So the sweep is bounded in time too ([SweepDeps.Budget]) — no record is
-// appended once it is spent and no wait outlasts it — and that one bound
-// limits both costs. The caller is held for at most the budget and the append
-// in flight when it ran out; and a node that applies a record k times slower
-// than this one is left at most about k − 1 budgets of records behind when
-// the sweep ends, and never more than the cap's.
+// So the sweep is bounded in time too, by budget — no record is appended once
+// it is spent and no wait outlasts it — and that one bound limits both costs.
+// The caller is held for at most the budget and the append in flight when it
+// ran out; and a node that applies a record k times slower than this one is
+// left at most about k − 1 budgets of records behind when the sweep ends, and
+// never more than the cap's. A budget of zero or less bounds nothing the
+// caller chose, and is refused.
 //
 // RUNNING OUT IS THE DESIGNED STOP, not a failure: the sweep answers what it
 // appended and that some remain, with no error, and the next one counts what
-// is left. A budget spent BEFORE the count — the copy not caught up inside it,
-// or a read that did not answer — is a sweep that could not count, and that is
-// an error naming why, since nothing was appended and the reason is the one an
-// operator needs.
-//
-// AN EVICTED NODE APPENDS NOTHING and answers no error — every applier would
-// drop its records under the eviction gate and count them toward the
-// `records_gated` alarm; an eviction that cannot be read refuses, because the
-// third value blocks.
-func SweepAnchors(ctx context.Context, d SweepDeps, below Position) (Swept, error) {
-	if err := d.check(below); err != nil {
-		return Swept{}, err
+// is left.
+func (p SweepPlan) Sweep(ctx context.Context, budget time.Duration) (Swept, error) {
+	if p.records == 0 {
+		return Swept{}, nil
+	}
+	d := p.deps
+	if budget <= 0 {
+		return Swept{}, fmt.Errorf("statelog: the anchor sweep of %s was handed a "+
+			"time budget of %v — it needs a positive one, or nothing bounds how "+
+			"long it holds its caller", d.Domain.Name(), budget)
 	}
 	// THE APPENDS RUN UNDER THE CALLER'S CONTEXT and everything else under
 	// the budget's: an append the budget cut short would be one whose outcome
 	// nobody knows, and what this answers is how many landed. The budget is
 	// checked before each one instead.
 	appendCtx := ctx
-	ctx, cancel := context.WithTimeoutCause(ctx, d.Budget,
-		fmt.Errorf("%w after %v", errSweepBudgetSpent, d.Budget))
+	ctx, cancel := context.WithTimeoutCause(ctx, budget,
+		fmt.Errorf("%w after %v", errSweepBudgetSpent, budget))
 	defer cancel()
-	if d.Evicted != nil {
-		evicted, err := d.Evicted(ctx)
-		if err != nil {
-			return Swept{}, fmt.Errorf("statelog: read this node's eviction on %s "+
-				"before sweeping its anchors: %w", d.Spec.Name, err)
-		}
-		if evicted {
-			return Swept{}, nil
-		}
-	}
-	ends, err := d.Ends(ctx)
-	if err != nil {
-		return Swept{}, fmt.Errorf("statelog: read the ends of %s before sweeping "+
-			"its anchors: %w", d.Spec.Name, err)
-	}
-	if err = d.waitCommitted(ctx, below.At(ends.Last)); err != nil {
-		return Swept{}, fmt.Errorf("statelog: this node's copy of %s has not "+
-			"applied the log's end, %d, so its anchors are not counted — counted, "+
-			"they would include anchors the records already on the log remove: %w",
-			d.Spec.Name, ends.Last, err)
-	}
-	t, err := newTables(d.Domain, d.Spec)
-	if err != nil {
-		return Swept{}, err
-	}
-	const limit = TrimmedRecordsPerSweep * AnchorsPerTrimmedRecord
-	n, err := t.anchorsBelow(ctx, d.DB, below, limit)
-	if err != nil || n == 0 {
-		return Swept{}, err
-	}
-	records := (n + AnchorsPerTrimmedRecord - 1) / AnchorsPerTrimmedRecord
-	// A COUNT THAT REACHED ITS LIMIT may have more below it, which the
-	// next sweep counts.
-	capped := n == limit
-	body, err := d.Encode(TrimmedEnvelope(below, d.Writer))
-	if err != nil {
-		return Swept{}, fmt.Errorf("statelog: encode %s's trimmed record: %w",
-			d.Domain.Name(), err)
-	}
-	// THE BODY ABOUT TO BE APPENDED, checked before anything is: the
-	// framework never appends a record its own applier would not recognise.
-	if err = checkTrimmed(d.Domain, d.Spec, below, d.Writer, body); err != nil {
-		return Swept{}, err
-	}
-	subject := wireSubject(d.Spec.SubjectPrefix, TrimmedSubject(below))
-	for i := range records {
+	for i := range p.records {
 		if spent(ctx) {
 			return Swept{Records: i, Remain: true}, nil
 		}
 		release := func() {}
 		if d.Admission != nil {
-			if release, err = d.Admission.Admit(ctx, appendBytes(body)); err != nil {
+			var err error
+			if release, err = d.Admission.Admit(ctx, appendBytes(p.body)); err != nil {
 				if spent(ctx) {
 					return Swept{Records: i, Remain: true}, nil
 				}
@@ -482,22 +520,21 @@ func SweepAnchors(ctx context.Context, d SweepDeps, below Position) (Swept, erro
 		// NO MESSAGE ID AND NO EXPECTATION: identical records are each
 		// meant to land, and a duplicate is harmless — it removes what is
 		// left below the floor, or nothing.
-		var seq uint64
-		seq, _, err = d.Log.Append(appendCtx, subject, "", nil, body)
+		seq, _, err := d.Log.Append(appendCtx, p.subject, "", nil, p.body)
 		release()
 		if err != nil {
-			return Swept{Records: i}, frameworkAppendError(TrimmedKind, subject, err)
+			return Swept{Records: i}, frameworkAppendError(TrimmedKind, p.subject, err)
 		}
-		if err = d.waitCommitted(ctx, below.At(seq)); err != nil {
+		if err = d.waitCommitted(ctx, p.below.At(seq)); err != nil {
 			if errors.Is(err, errSweepBudgetSpent) {
-				return Swept{Records: i + 1, Remain: i+1 < records || capped}, nil
+				return Swept{Records: i + 1, Remain: i+1 < p.records || p.capped}, nil
 			}
 			return Swept{Records: i + 1}, fmt.Errorf("statelog: this node has not "+
 				"applied the trimmed record at %d on %s, so the sweep appends no "+
 				"more behind it: %w", seq, d.Spec.Name, err)
 		}
 	}
-	return Swept{Records: records, Remain: capped}, nil
+	return Swept{Records: p.records, Remain: p.capped}, nil
 }
 
 // spent reports whether a sweep's context ended because its budget ran out,
@@ -506,9 +543,10 @@ func spent(ctx context.Context) bool {
 	return errors.Is(context.Cause(ctx), errSweepBudgetSpent)
 }
 
-// waitCommitted waits, for at most [DefaultResolveBudget] and never past the
-// sweep's own budget, for this node's applier to commit through p — see
-// [SweepAnchors] for both of its callers.
+// waitCommitted waits, for at most [DefaultResolveBudget] and never past ctx —
+// the caller's bound for a plan, the budget's for a sweep — for this node's
+// applier to commit through p: see [PlanSweep] and [SweepPlan.Sweep], its two
+// callers.
 //
 // THE CAUSE IS KEPT on the error, because the two bounds mean different
 // things: the budget running out is the sweep's designed stop, and this wait's
@@ -541,10 +579,6 @@ func (d SweepDeps) check(below Position) error {
 	case d.Writer == "":
 		return fmt.Errorf("statelog: the anchor sweep of %s names no writer, so "+
 			"no eviction gate could drop its records", d.Domain.Name())
-	case d.Budget <= 0:
-		return fmt.Errorf("statelog: the anchor sweep of %s has a time budget of "+
-			"%v — it needs a positive one, or nothing bounds how long it holds "+
-			"its caller", d.Domain.Name(), d.Budget)
 	case below.Stream != d.Spec.Name:
 		return fmt.Errorf("%w: the anchor sweep of %s on %s was handed a floor on %s",
 			ErrWrongStream, d.Domain.Name(), d.Spec.Name, below.Stream)
