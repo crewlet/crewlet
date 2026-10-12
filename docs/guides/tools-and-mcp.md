@@ -83,8 +83,8 @@ the item past, when a call changes both; its `position` is likewise the call's
 last write, so waiting for it waits for all of them.
 
 Where this node's operation ledger cannot vouch for the operation — it was
-minted before the ledger may have lost rows, a seat woken by a backlog trigger
-just after its node adopted a snapshot — the answer says this node cannot
+minted before the ledger may have lost rows, a seat re-running a turn whose
+trigger predates the ledger's thirty-day sweep — the answer says this node cannot
 tell, because the same operation asked here answers the same way until the
 write reaches this node, and tells the caller to look before writing it again;
 a gesture that stopped part of the way through at such a step is not told to
