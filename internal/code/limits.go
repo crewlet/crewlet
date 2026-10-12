@@ -346,9 +346,7 @@ const (
 
 	// CommitBudget bounds ONE batch's publish and the read that answers it:
 	// HALF the estate router's write attempt (sixty seconds). A healthy batch
-	// takes milliseconds; thirty seconds is a broker election and its
-	// compare-and-set rounds with room to spare, and past it the publisher's
-	// own resolution answers unknown, naming the operation.
+	// takes milliseconds.
 	//
 	// A committer must answer inside the ONE attempt its asker gives it, or
 	// the asker hands the same push id to the runner-up and two committers
@@ -363,6 +361,37 @@ const (
 	// serving node's floor wait, to more than a budget and ReplyMargin, so a
 	// routed push can be decided at all (estate imports this package, never
 	// the reverse).
+	//
+	// WHAT A BATCH'S DECIDE CAN COST, against it. The committer forms the
+	// batch's protection verdicts once, before its publish, and the
+	// publisher then runs the decide once a compare-and-set round, up to
+	// sixteen rounds (decide.go). At rules of the shape a team writes the
+	// formation is 0.6–1.0 ms for a group commit of MaxPushesPerRecord
+	// one-command pushes and 8–12 ms for three pushes of
+	// MaxCommandsPerPush, and a round 2.6–3.8 ms and 10–11 ms. The rules a
+	// founder CAN write make the formation longer, because asking a rule
+	// about a ref is the one cost of a decide the rows do not bound:
+	// 1.8–2.0 s for the most refs of 255 bytes a record carries (2 567)
+	// against MaxProtectionsPerRepo rules of gitref's costliest shape,
+	// 11–12 µs a pair, whether no rule matches or every command is refused
+	// (BenchmarkDecideABatch's worst arms, a 2.1 GHz Xeon). Formed every
+	// round, sixteen of those were 28–30 s — the whole budget — and a round
+	// whose every command a rule refused took 3.4 s, twice that, while
+	// naming the refusing rule took a second walk over the rules. So a
+	// refusal names its rule from the one walk that found it, and the
+	// verdicts are formed once a batch and kept across its rounds while each
+	// round's snapshot holds the rules they were formed under: a round costs
+	// 13–22 ms at that worst, the first as much as any, and a publish's
+	// formation and sixteen rounds 2.0 s + 16 × 22 ms, about 2.4 s, a
+	// twelfth of the budget.
+	// A round forms the verdicts again, inside its snapshot, whenever its
+	// rules differ from those the verdicts were last formed under — a
+	// settings record changing THIS repository's protections, which only an
+	// activation writes, landing before the round; and a flip back to rules
+	// an earlier round read is a difference too — at another 1.8–2.1 s each
+	// at that worst. Thirty seconds is then a broker election and its
+	// rounds with room to spare, and past it the publisher's own resolution
+	// answers unknown, naming the operation.
 	CommitBudget = 30 * time.Second
 
 	// ReplyMargin is what a committer leaves between the end of a push's

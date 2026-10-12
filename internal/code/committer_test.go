@@ -430,6 +430,107 @@ func TestABatchIsDecidedInOrder(t *testing.T) {
 	}
 }
 
+// lockedRepoOn is a fresh repository on n whose rules let nobody push to
+// refs/heads/locked, with main at a commit.
+func lockedRepoOn(t *testing.T, n *node, name string) string {
+	t.Helper()
+	repo := n.ensure(name, lockedSettings(), t1).RepoID
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/main", code.ZeroOID, oidOf("A"))))
+	return repo
+}
+
+// lockedSettings is the suite's settings with refs/heads/locked taking no
+// direct push.
+func lockedSettings() code.RepoSettings {
+	s := suiteSettings()
+	s.Protections = append([]code.Protection{{Pattern: "refs/heads/locked", DirectPush: code.DirectNone}},
+		s.Protections...)
+	return s
+}
+
+// roundsSeen records how many protection verdicts each of c's decide rounds
+// formed inside the publisher's snapshot.
+func roundsSeen(c *code.Committer) func() []int {
+	var mu sync.Mutex
+	var rounds []int
+	code.ObserveDecideRounds(c, func(formed int) {
+		mu.Lock()
+		defer mu.Unlock()
+		rounds = append(rounds, formed)
+	})
+	return func() []int {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]int(nil), rounds...)
+	}
+}
+
+// A FIRST ROUND FORMS NO VERDICT INSIDE ITS SNAPSHOT: the verdicts are formed
+// before the publish, holding no connection of the reader pool, and a round
+// whose snapshot holds the rules they were formed under only reads — at the
+// costliest rules a repository may carry, forming them is seconds of a core,
+// and inside the snapshot each batch held a reader for all of it.
+func TestAFirstRoundFormsNoVerdictInsideItsSnapshot(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo := lockedRepoOn(t, n, "web")
+	c, _ := committerOn(t, n, n.pub)
+	rounds := roundsSeen(c)
+	res, err := c.Propose(t.Context(), proposal(repo,
+		update("refs/heads/main", oidOf("A"), oidOf("B")),
+		update("refs/heads/locked", code.ZeroOID, oidOf("L")),
+		update("refs/heads/fresh", code.ZeroOID, oidOf("N"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range res.Answer.Commands {
+		want := map[bool]code.Refusal{true: code.RefusalProtectedDirect}[cmd.Ref == "refs/heads/locked"]
+		if cmd.Reason != want || (want == "") != (cmd.Result == code.ResultOK) {
+			t.Fatalf("%s was decided %s %q, want %q", cmd.Ref, cmd.Result, cmd.Reason, want)
+		}
+	}
+	seen := rounds()
+	if len(seen) == 0 {
+		t.Fatal("the publish ran no decide round")
+	}
+	for i, formed := range seen {
+		if formed != 0 {
+			t.Fatalf("round %d formed %d protection verdicts inside its snapshot (rounds %v), want "+
+				"none: the verdicts are formed before the publish", i+1, formed, seen)
+		}
+	}
+}
+
+// A ROUND UNDER RULES CHANGED SINCE THE FORMATION FORMS THEM AGAIN: the rules
+// the formation read are this node's rows a moment before the snapshot, and
+// only the snapshot's count — a lock lifted by an activation in between is
+// lifted for the push, never answered from the verdict formed under the lock.
+func TestARoundUnderRulesChangedSinceTheFormationFormsThemAgain(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo := lockedRepoOn(t, n, "web")
+	gate := newGate(n.pub)
+	c, _ := committerOn(t, n, gate)
+	rounds := roundsSeen(c)
+	push := proposeAsync(t.Context(), c, proposal(repo,
+		update("refs/heads/main", oidOf("A"), oidOf("B")),
+		update("refs/heads/locked", code.ZeroOID, oidOf("L"))))
+	// THE FORMATION HAS READ THE LOCK once the publish reaches the gate.
+	eventually(t, "the publish reaching the gate", func() bool { return gate.calls.Load() == 1 })
+	if got := n.ensure("web", suiteSettings(), t2); !got.Changed {
+		t.Fatalf("lifting the lock changed nothing: %+v", got)
+	}
+	gate.open()
+	requireOK(t, await(t, push))
+	if seen := rounds(); len(seen) == 0 || seen[0] != 2 {
+		t.Fatalf("the rounds formed %v verdicts inside their snapshots, want the first to form "+
+			"both commands' under the rules it read", seen)
+	}
+	if got := n.target(repo, "refs/heads/locked"); got != oidOf("L") {
+		t.Fatalf("refs/heads/locked is at %q, want the push's commit", got)
+	}
+}
+
 // A CALLER THAT HANGS UP NEVER CANCELS THE BATCH: the batch is every caller's
 // in it, so it runs under the committer's own lifetime.
 func TestACallerThatHangsUpNeverCancelsTheBatch(t *testing.T) {

@@ -45,6 +45,11 @@ func CommitterHeld(c *Committer) int {
 	return c.held
 }
 
+// ObserveDecideRounds has c tell observe how many protection verdicts each
+// decide round formed inside the publisher's snapshot — set before c's first
+// proposal.
+func ObserveDecideRounds(c *Committer, observe func(formed int)) { c.formedInRound = observe }
+
 // CommitterRepos is how many repositories c holds a goroutine for.
 func CommitterRepos(c *Committer) int {
 	c.mu.Lock()
@@ -86,3 +91,15 @@ func RecordRows(rows int) int { return recordRows(rows) }
 
 // EntryOf is the record entry p becomes with its commands as decided.
 func EntryOf(p Proposal) PushEntry { return p.entryWith(p.Commands) }
+
+// CostliestRules is n distinct rules of gitref's costliest shape — the worst
+// asking a rule about a ref can be (decide_bench_test.go), for the cases that
+// pin what that worst allocates.
+func CostliestRules(n int) []Protection { return costliestRules(n) }
+
+// WidestRef is the 255-byte ref BenchmarkDecideABatch's worst arms name for a
+// push's command, the one that costs each of CostliestRules most.
+func WidestRef(push, command int) string { return widestRef(push, command) }
+
+// WidestComponent is one component of WidestRef.
+const WidestComponent = widestComponent

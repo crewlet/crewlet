@@ -15,7 +15,9 @@ import (
 
 // THE PUSH DECIDE: one round of a batch's decision, taken from the rows ONE
 // snapshot holds — re-run whole on every compare-and-set round, so it reads
-// nothing outside tx and keeps nothing between rounds.
+// nothing outside tx and keeps nothing between rounds but the protection
+// verdicts ([verdicts]), each a pure function of a command and rules the
+// round's own snapshot holds.
 //
 // # Every proposal, in order, against what the ones before it did
 //
@@ -60,6 +62,153 @@ import (
 // command, which a maximal batch makes three thousand of. (It holds no write
 // lane; the APPLY does, and reads the same way for that reason,
 // apply_push.go.)
+//
+// # The protections are asked once a batch, before its publish
+//
+// Asking every rule about every command is the decide's one cost that grows
+// with what a founder writes rather than with the rows: a rule of gitref's
+// costliest shape costs a 255-byte ref 11–12 µs, so a record's worth of
+// such refs (2 567) against [MaxProtectionsPerRepo] such rules is about two
+// seconds of a core, where a team's rules cost about what the reads do
+// (doc.go's measured section). A command's verdict is a pure function of the
+// command and the rules, so it is formed ONCE a batch and kept across the
+// rounds of its one publish ([verdicts]) — and formed BEFORE the publish, on
+// the committer goroutine, from the rules one short read of this node's rows
+// holds ([verdicts.formBefore]), because it is CPU alone, and inside the
+// snapshot it would hold one of the reader pool's few connections for all of
+// its length. Every round compares its own snapshot's rules, whole, with those
+// the verdicts were formed under, and forms them again inside the snapshot
+// only when they differ — a settings record changing THIS repository's
+// protections, which only an activation writes, landing between the read
+// and the round or between two rounds. Every other round, the first
+// included, pays the reads alone.
+
+// verdicts are one batch's protection verdicts, formed before its publish
+// ([verdicts.formBefore]) and kept across the rounds of that one publish
+// while every round's snapshot holds the rules they were formed under. The
+// zero value holds none.
+type verdicts struct {
+	// set is whether stored and rules are a round's: the zero value has
+	// read no rules, which is not the same as a repository with none.
+	set bool
+	// stored are the rules every verdict below was formed under, as the
+	// snapshot held them, and rules the same parsed.
+	stored []Protection
+	rules  Protections
+	// of is each command's verdict, by its proposal's place in the batch
+	// and its own in the proposal: a batch is the same proposals in every
+	// round of its publish.
+	of map[[2]int]verdict
+	// formed counts the verdicts formed, which is the work the rounds
+	// share — before the publish, or inside a round whose rules differ.
+	formed int
+}
+
+// verdict is one command's answer from the protections: the refusal and the
+// sentence naming the rule that refuses it, or "" for none.
+type verdict struct {
+	refusal Refusal
+	detail  string
+}
+
+// under makes stored the rules the verdicts answer from: the verdicts kept
+// from the batch's earlier rounds when stored are the rules those read, field
+// by field and in order, and none otherwise.
+func (v *verdicts) under(stored []Protection) error {
+	if v.set && slices.Equal(v.stored, stored) {
+		return nil
+	}
+	rules, err := ParseProtections(stored)
+	if err != nil {
+		return err
+	}
+	v.set, v.stored, v.rules, v.of = true, stored, rules, map[[2]int]verdict{}
+	return nil
+}
+
+// verdict is command (the place of c in the proposal at push) under the
+// rules, formed the first time a round asks and kept for the rest.
+func (v *verdicts) verdict(push, command int, c Command) (Refusal, string) {
+	key := [2]int{push, command}
+	if got, ok := v.of[key]; ok {
+		return got.refusal, got.detail
+	}
+	var got verdict
+	if r, rule := ProtectionRefusal(c, v.rules); r != "" {
+		got = verdict{refusal: r, detail: protectionDetail(c, rule, r)}
+	}
+	v.of[key] = got
+	v.formed++
+	return got.refusal, got.detail
+}
+
+// formBefore forms, before the batch's publish, the verdict of every command
+// of batch a round can ask about, under repoID's rules as this node's rows
+// hold them now — read in a transaction of their own, one statement over the
+// primary key.
+//
+// # Outside the snapshot, because forming them needs no connection
+//
+// Forming the verdicts is CPU alone — about two seconds of a core at the
+// costliest rules a repository can carry — and the publisher's snapshot is a
+// read transaction holding a connection of the replicated estate's reader
+// pool, which has four by default. Formed inside it, a batch's first round
+// held that connection for the whole formation and needed it for 13–22 ms of
+// reads (doc.go's measured section), so four repositories at those rules
+// taking maximal batches at once held every reader the node has: every
+// replicated read on the node waited behind them — the dashboard's, a peer
+// router's, every other repository's decide — and the longer round widened
+// the window in which a peer's push stales its expectation, so more rounds
+// followed. Formed here, every round on the common path holds its reader for
+// the reads alone.
+//
+// # The snapshot still decides
+//
+// These rules are this node's rows a moment before the publish takes its
+// snapshot, and only the snapshot's rules count: every round compares its own
+// with these, whole ([verdicts.under]), and a round that holds others forms
+// the verdicts again inside the snapshot. So a read or a parse that fails
+// here forms nothing and is not reported: the round reads the same rows and
+// answers for what it finds — a parse that fails there fails the batch —
+// because forming the verdicts here moves when the work is done and never
+// what is decided.
+func (v *verdicts) formBefore(ctx context.Context, db store.ReplicatedReader, repoID string,
+	batch []Proposal) {
+
+	var stored []Protection
+	if err := db.Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		stored, err = protectionsIn(ctx, tx, repoID)
+		return err
+	}); err != nil {
+		return
+	}
+	if err := v.under(stored); err != nil {
+		return
+	}
+	// EVERY COMMAND A ROUND MAY ASK ABOUT: the first proposal of each push
+	// id — a later one is answered as its first and never decided — and of
+	// it each command the receiver did not refuse and no stateless rule
+	// refuses, in the place a round keeps its verdict under. A round asks
+	// about fewer, since a noop or a stale command never reaches the rules;
+	// forming theirs costs what the round would have paid had they moved,
+	// and only here, outside every snapshot.
+	first := make(map[string]bool, len(batch))
+	for push, p := range batch {
+		if ctx.Err() != nil {
+			return // the publish ends on the same context, and a round forms what it lacks
+		}
+		if first[p.PushID] {
+			continue
+		}
+		first[p.PushID] = true
+		for command, c := range p.Commands {
+			if c.Result != ResultNG && StatelessRefusal(c) == "" {
+				v.verdict(push, command, c)
+			}
+		}
+	}
+}
 
 // decided is one proposal's answer from one round.
 type decided struct {
@@ -84,9 +233,12 @@ type decided struct {
 
 // decideBatch is one round's decision over the rows tx holds, for the batch in
 // order: the entries of the record, every proposal's answer, and the version
-// the decision read. Pure over (the rows, the batch, limits, now).
+// the decision read. Pure over (the rows, the batch, limits, now): v is the
+// protection verdicts the batch's earlier rounds formed, which this round
+// reads only where its own snapshot holds the rules they were formed under.
 func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposal,
-	limits Limits, now time.Time) (entries []PushEntry, answers []decided, version int64, err error) {
+	limits Limits, now time.Time, v *verdicts) (entries []PushEntry, answers []decided,
+	version int64, err error) {
 
 	answers = make([]decided, len(batch))
 	ids := make([]string, 0, len(batch))
@@ -152,9 +304,9 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	// PARSED ONCE A ROUND, never once a command and rule (refusal.go).
-	rules, err := ParseProtections(stored)
-	if err != nil {
+	// PARSED ONCE A BATCH, never once a command and rule (refusal.go), and
+	// again only in a round whose rules are not the ones parsed.
+	if err = v.under(stored); err != nil {
 		return nil, nil, 0, fmt.Errorf("code: read %s's protections: %w", repoID, err)
 	}
 	w, err := newWorking(ctx, tx, repoID, repo, batch, open, now)
@@ -163,7 +315,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	}
 	for _, i := range open {
 		p := batch[i]
-		cmds, err := w.decide(p, rules, limits)
+		cmds, err := w.decide(i, p, v, limits)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -329,8 +481,9 @@ func (w *working) current(ref string) (string, bool) {
 
 // decide is one push's commands with their results, judged against the
 // working state — which it does not change ([working.apply] does, for a push
-// that becomes an entry).
-func (w *working) decide(p Proposal, rules Protections, limits Limits) ([]Command, error) {
+// that becomes an entry). push is p's place in the batch, which its
+// protection verdicts are kept under.
+func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) ([]Command, error) {
 	cmds := slices.Clone(p.Commands)
 	// A PUSH'S OWN CREATES COUNT AGAINST ITS LATER ONES: a thousand
 	// creates at the bound's last free ref are one ok and the rest refused.
@@ -353,8 +506,8 @@ func (w *working) decide(p Proposal, rules Protections, limits Limits) ([]Comman
 			refuse(c, RefusalStale, fmt.Sprintf("%s is at %s; fetch first", c.Ref, short(current)))
 			continue
 		}
-		if r := ProtectionRefusal(*c, rules); r != "" {
-			refuse(c, r, protectionDetail(*c, rules, r))
+		if r, detail := v.verdict(push, i, *c); r != "" {
+			refuse(c, r, detail)
 			continue
 		}
 		if current == ZeroOID {
@@ -511,18 +664,17 @@ func statelessDetail(c Command, r Refusal) string {
 }
 
 // protectionDetail names the rule that refused c and the flag it refused it
-// by: the first matching rule, in pattern order, that holds the flag.
-func protectionDetail(c Command, rules Protections, r Refusal) string {
-	for rule := range rules.matching(c.Ref) {
-		switch {
-		case r == RefusalProtectedDirect && rule.DirectPush == DirectNone:
-			return fmt.Sprintf("%s takes no direct push (protection %s: direct_push none)",
-				c.Ref, rule.Pattern)
-		case r == RefusalProtectedDelete && !rule.AllowDelete:
-			return fmt.Sprintf("%s may not be deleted (protection %s: allow_delete)", c.Ref, rule.Pattern)
-		case r == RefusalProtectedForce && !rule.AllowForce:
-			return fmt.Sprintf("%s refuses a force-push (protection %s: allow_force)", c.Ref, rule.Pattern)
-		}
+// by — the rule [ProtectionRefusal] answered with its refusal, so naming it
+// asks no rule about the ref a second time.
+func protectionDetail(c Command, rule Protection, r Refusal) string {
+	switch r {
+	case RefusalProtectedDirect:
+		return fmt.Sprintf("%s takes no direct push (protection %s: direct_push none)",
+			c.Ref, rule.Pattern)
+	case RefusalProtectedDelete:
+		return fmt.Sprintf("%s may not be deleted (protection %s: allow_delete)", c.Ref, rule.Pattern)
+	case RefusalProtectedForce:
+		return fmt.Sprintf("%s refuses a force-push (protection %s: allow_force)", c.Ref, rule.Pattern)
 	}
 	return r.Sentence()
 }
