@@ -217,7 +217,6 @@ The single source of truth is `internal/slack` (`BotScopes` / `BotEvents`); the 
 | `im:history`, `im:read`, `im:write` | DMs, incl. escalation DMs to human seats — and the engine's own turn-start thread read, which is the case it exists for: a DM reply is the thinnest trigger there is |
 | `mpim:history`, `mpim:read` | group DMs — thread routing, the engine's own turn-start thread read, + MCP `conversations_history` / `conversations_replies`; `mpim:read` **required**, see the note below |
 | `reactions:write` | MCP `reactions_add` / `reactions_remove` |
-| `search:read.public` | the bot-token search scope (the plain `search:read` is user-token-only) |
 | `usergroups:read`, `usergroups:write` | MCP `usergroups_*` tools |
 | `users:read` | MCP `users_search`, sender attribution |
 
@@ -236,11 +235,12 @@ The single source of truth is `internal/slack` (`BotScopes` / `BotEvents`); the 
 > channel created since. The fix is always: grant the missing scope **and reinstall
 > the app** to mint a new token.
 >
-> `search:read.public` (not the user-token `search:read`) is the bot-token search
-> scope; even so, `slack-mcp-server`'s `conversations_search_messages` tool is
-> unavailable with a bot token because bots cannot call `search.messages`. Bots also
-> only see channels they have been **invited** to — granting the read scopes lets the
-> bot *list and read* those channels, but membership is still required.
+> No search scope is requested, `search:read.public` included: `slack-mcp-server`
+> registers `conversations_search_messages` only for a user token, because Slack's
+> `search.messages` refuses a bot's, and nothing else an agent's token is used for
+> searches. Bots also only see channels they have been **invited** to — granting the
+> read scopes lets the bot *list and read* those channels, but membership is still
+> required.
 
 Bot events: `app_mention`, `message.channels`, `message.groups`, `message.im`, `message.mpim` — one `message.*` event per conversation type the transport handles, so a bot invited to a private channel or group DM wakes on non-mention messages and thread replies exactly like in public channels. (The transport dedups the message/app_mention double delivery by `handle:channel:ts`.)
 
