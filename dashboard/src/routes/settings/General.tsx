@@ -21,7 +21,6 @@ import { Card, EmptyState, Skeleton } from "@crewlethq/ui";
 import { CompassGlyph, ShieldGlyph, TargetGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { PreviousRevisionNote } from "~/routes/org/builder/AfterSaveStrip.tsx";
 
@@ -34,10 +33,6 @@ export function General() {
           Edit in org →
         </a>
       </PageActions>
-      <PageNote>
-        What the company has told every seat. Policies render into every executor&rsquo;s prompt in
-        full.
-      </PageNote>
       <PreviousRevisionNote />
       {org ? (
         <Charter org={org} />
@@ -94,7 +89,7 @@ function Charter({ org }: { org: NonNullable<ReturnType<typeof useOrg>> }) {
             size="compact"
             icon={<ShieldGlyph size={32} />}
             title="No policies are set"
-            description="Policies render into every executor's prompt in full. They are the company's standing instructions."
+            description="Standing instructions for every agent."
           />
         )}
       </Card>
