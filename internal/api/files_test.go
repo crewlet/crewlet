@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -134,6 +135,16 @@ type fakeFiles struct {
 	objects   int
 	refuse    error
 	notAccept error
+
+	// written is every write recorded, with the operation it was recorded
+	// under, in order.
+	written []writtenFile
+}
+
+// writtenFile is one write the route handed the tracker.
+type writtenFile struct {
+	opID string
+	put  tracker.FilePut
 }
 
 func newFakeFiles(t *testing.T) *fakeFiles {
@@ -192,14 +203,16 @@ func (f *fakeFiles) Put(ctx context.Context, r io.Reader, limit int64,
 	return f.store.Put(ctx, working{r: r, work: f.work, clock: f.clock}, limit, m)
 }
 
-func (f *fakeFiles) PutFileAs(_ context.Context, _, _ string, put tracker.FilePut) (tracker.WriteResult, error) {
+func (f *fakeFiles) PutFileAs(_ context.Context, _, opID string, put tracker.FilePut) (tracker.WriteResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.refuse != nil {
 		return tracker.WriteResult{}, f.refuse
 	}
 	f.puts++
-	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
+	f.written = append(f.written, writtenFile{opID: opID, put: put})
+	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied,
+		OpID: opID}}, nil
 }
 
 func (f *fakeFiles) RemoveFileAs(context.Context, string, string, string, string, uint64) (tracker.WriteResult, error) {
@@ -394,6 +407,92 @@ func TestAnUploadTooOldToNameIsExpired(t *testing.T) {
 	upload(t, a, bytes.NewReader([]byte("late")), rec)
 	if rec.Code != http.StatusConflict || answerOf(t, rec)["error"] != "upload_expired" {
 		t.Fatalf("a stale upload answered %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// AN UPLOAD'S OPERATION IS HELD TO THE BYTES IT WRITES.
+//
+// The path is the write's subject, so a retry under one operation id is
+// collapsed onto the record that id already holds there, whatever that record
+// wrote. An id one upload minted, sent again with OTHER bytes, was therefore
+// answered `applied` at the first upload's position while the new content was
+// never recorded. The operation is named after the path, the type and the
+// content's hash, so the same request sent again finishes, and other content
+// under the same id is refused before anything is recorded.
+func TestAnUploadsOperationIsHeldToTheBytesItWrites(t *testing.T) {
+	t.Parallel()
+	fake := newFakeFiles(t)
+	a := filesApp(t, fake)
+	put := func(body, opID string) *httptest.ResponseRecorder {
+		target := "/work/files/ENG/reports/q3.bin"
+		if opID != "" {
+			target += "?op_id=" + url.QueryEscape(opID)
+		}
+		req := httptest.NewRequest(http.MethodPut, target, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer secret")
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, req)
+		return rec
+	}
+
+	first := put("the q3 figures", "")
+	if first.Code != http.StatusOK {
+		t.Fatalf("the first upload answered %d: %s", first.Code, first.Body.String())
+	}
+	var answered struct {
+		OpID string `json:"op_id"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &answered); err != nil {
+		t.Fatalf("the first upload's answer %q: %v", first.Body.String(), err)
+	}
+	opID := answered.OpID
+	recorded := fake.written[0]
+	name := tracker.FileWriteOpName("ENG", "reports/q3.bin", recorded.put.ContentType,
+		string(recorded.put.Object.Hash))
+	if recorded.opID != opID || !statelog.OpNamed(opID, name) {
+		t.Fatalf("the upload was recorded under %q and answered %q, want one id "+
+			"named %q after what it wrote", recorded.opID, opID, name)
+	}
+
+	// THE SAME REQUEST SENT AGAIN is the retry the id exists for.
+	if again := put("the q3 figures", opID); again.Code != http.StatusOK {
+		t.Fatalf("the same upload under its own op_id answered %d: %s",
+			again.Code, again.Body.String())
+	}
+	if got := fake.written[1].opID; got != opID {
+		t.Fatalf("the retry was recorded under %q, not the id it brought (%q)", got, opID)
+	}
+
+	// OTHER BYTES UNDER THAT ID are another write.
+	other := put("the q4 figures", opID)
+	if other.Code != http.StatusBadRequest || answerOf(t, other)["error"] != "op_id_invalid" {
+		t.Fatalf("other content under the first upload's op_id answered %d: %s — "+
+			"the log would answer it from the first upload's record with these "+
+			"bytes never recorded", other.Code, other.Body.String())
+	}
+	if len(fake.written) != 2 {
+		t.Fatalf("other content under a held op_id reached the tracker (%d writes)",
+			len(fake.written))
+	}
+}
+
+// A FILE WRITE WHOSE OP_ID NAMES A RECORD ON ANOTHER PATH IS `409 op_reused`,
+// not the `503 unavailable` every unclassified failure answers: a 503 says to
+// send it again, and every retry under that id is refused the same way.
+func TestAFileWriteWhoseOperationIsReusedIsNotARetryToOffer(t *testing.T) {
+	t.Parallel()
+	fake := newFakeFiles(t)
+	fake.refuse = &statelog.Unavailable{Reason: statelog.ReasonOpReused,
+		Detail: "the operation already names a record on another subject"}
+	a := filesApp(t, fake)
+	rec := httptest.NewRecorder()
+	upload(t, a, strings.NewReader("x"), rec)
+	answer := answerOf(t, rec)
+	if rec.Code != http.StatusConflict || answer["error"] != string(statelog.ReasonOpReused) {
+		t.Fatalf("a reused operation answered %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, named := answer["op_id"]; named {
+		t.Error("the op_reused answer names an op_id — the one id a retry can never finish under")
 	}
 }
 

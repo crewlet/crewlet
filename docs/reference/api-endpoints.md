@@ -3483,6 +3483,17 @@ person who made it in the file's history, never the process that relayed it.
 present only where the write is known to have landed. An `unknown` is retried
 by sending the same request again with the `op_id` it answered.
 
+**That `op_id` is held to what the write stores.** A write's operation is named
+after its path, its type and its content's hash, because the path is what a
+write arbitrates on and only the content tells two writes to one path apart: an
+id brought back with other bytes, another type or another path is
+`400 op_id_invalid` — refused once the body has been stored, which leaves an
+object the collector removes — rather than answered `applied` from the first
+write while the new content was never recorded. A write or removal whose
+`op_id` already names a write to another file is `409 op_reused`, with no
+`op_id` in the answer: sending it again under that id can never land, so send
+it with none.
+
 **Each mebibyte has 30 seconds to cross**, in either direction: an upload's
 mebibyte has 30 seconds of the time the server spends waiting on the client to
 arrive, never counting the time the server spends storing what already arrived,

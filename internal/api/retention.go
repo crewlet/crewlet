@@ -404,6 +404,43 @@ func callerOpID(w http.ResponseWriter, r *http.Request, name string) (string, bo
 	return opID, true
 }
 
+// heldTo reports whether an operation id the caller BROUGHT was minted under
+// exactly name, answering `400 op_id_invalid` — nothing judged or sent — where
+// it was not. carriedTo says where an id from another gesture would have been
+// taken, and lost what this gesture asked for that the first one's record
+// would have been answered in place of.
+//
+// IT TAKES THE NAME RATHER THAN THE REQUEST, because the gesture it holds is
+// one whose name is not known when the request arrives: a file write is named
+// after the content it stores ([tracker.FileWriteOpName]), and the content's
+// hash exists only once the body has been read.
+func heldTo(w http.ResponseWriter, opID, name, carriedTo, lost string) bool {
+	if statelog.OpNamed(opID, name) {
+		return true
+	}
+	writeJSON(w, http.StatusBadRequest, map[string]string{
+		"error": "op_id_invalid",
+		"detail": fmt.Sprintf("op_id %q was minted for another gesture than this "+
+			"one, whose operation is named %q — an operation id finishes only the "+
+			"gesture it was minted for, and carried to %s it would be answered "+
+			"from that gesture's record with %s: send the op_id this gesture's "+
+			"own answer returned, or omit it to start afresh",
+			opID, name, carriedTo, lost),
+	})
+	return false
+}
+
+// broughtOpID is the operation id the caller brought, checked as [callerOpID]
+// checks one, or "" where it brought none — for a gesture that names its own
+// operation only once it has read its body ([heldTo]).
+func broughtOpID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	opID := r.URL.Query().Get("op_id")
+	if opID == "" {
+		return "", true
+	}
+	return callerOpID(w, r, "")
+}
+
 // operationReused reports a write the state log refused because its operation
 // id already names a record on ANOTHER subject ([statelog.ReasonOpReused]):
 // the caller brought back an id minted for another gesture.

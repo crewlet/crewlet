@@ -166,6 +166,11 @@ func (b *pacedBody) Read(p []byte) (int, error) {
 // deserves.
 func fileRefusal(w http.ResponseWriter, err error) {
 	switch {
+	case operationReused(err):
+		// NOT A RETRY TO OFFER, which the 503 below would have been: the
+		// op_id already names a record on another path, and every retry
+		// under it is refused the same way.
+		answerReused(w, "file write", err)
 	case errors.Is(err, errFileBody):
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeUnreadableBody,
 			map[string]string{"detail": err.Error()})
@@ -374,7 +379,12 @@ func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	opID, ok := callerOpID(w, r, "file-"+project)
+	// THE ID IS CHECKED NOW AND HELD TO ITS WRITE ONCE THE BYTES ARE IN:
+	// the operation is named after the content it stores
+	// ([tracker.FileWriteOpName]), whose hash exists only after the body
+	// is read — but an id that is not one at all is refused before a byte
+	// of it is.
+	brought, ok := broughtOpID(w, r)
 	if !ok {
 		return
 	}
@@ -411,6 +421,15 @@ func (a *App) serveFileUpload(w http.ResponseWriter, r *http.Request) {
 	// operation id can be refused here after another node committed it,
 	// and the object would be that file's content. What no row names, the
 	// collector removes a day later.
+	name := tracker.FileWriteOpName(project, filePath, contentType, string(object.Hash))
+	opID := brought
+	switch {
+	case opID == "":
+		opID = statelog.NewOpID(time.Now(), name)
+	case !heldTo(w, opID, name, "other content, another type or another path",
+		"none of these bytes recorded"):
+		return
+	}
 	result, err := a.files.PutFileAs(r.Context(), operator, opID, tracker.FilePut{
 		Project: project, Path: filePath, ContentType: contentType,
 		Object: object, IfMatch: version,
