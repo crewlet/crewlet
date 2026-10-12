@@ -1469,10 +1469,17 @@ func TestAStreamIsBoundedBySilenceNotLength(t *testing.T) {
 	const timeout = 200 * time.Millisecond
 	t.Run("long but talking", func(t *testing.T) {
 		t.Parallel()
+		// A SECOND rather than the silent case's bound, so the quarter of
+		// it between chunks leaves three quarters of a second for the
+		// reading goroutine to be scheduled. At 200 ms the slack was
+		// 150 ms, and a full `make test` under the race detector on four
+		// CPUs has starved that goroutine for longer, failing the call as
+		// a stall it never was.
+		const talking = time.Second
 		_, url := serve(t, func(w http.ResponseWriter, _ int) {
-			writeChunks(w, timeout/4, true, strings.Split("abcdefghijkl", "")...)
+			writeChunks(w, talking/4, true, strings.Split("abcdefghijkl", "")...)
 		})
-		p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
+		p := newProvider(t, url, func(c *Config) { c.Timeout = talking })
 		start := time.Now()
 		out, err := p.Complete(t.Context(), llm.Request{
 			Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
@@ -1481,8 +1488,8 @@ func TestAStreamIsBoundedBySilenceNotLength(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Complete after %v: %v", time.Since(start), err)
 		}
-		if elapsed := time.Since(start); elapsed < 2*timeout || out.Content != "abcdefghijkl" {
-			t.Fatalf("took %v and answered %q; want past the %v bound, whole", elapsed, out.Content, timeout)
+		if elapsed := time.Since(start); elapsed < 2*talking || out.Content != "abcdefghijkl" {
+			t.Fatalf("took %v and answered %q; want past the %v bound, whole", elapsed, out.Content, talking)
 		}
 	})
 	t.Run("silent", func(t *testing.T) {
