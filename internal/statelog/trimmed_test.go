@@ -771,10 +771,17 @@ func TestEveryWaitASweepMakesIsBounded(t *testing.T) {
 // backlog is twenty records, so a sweep held to its budget appends a handful
 // and one held to its cap all twenty. EVERY WAIT ENDS AT ONE DEADLINE, the
 // sweep's, so no wait outlasts it whatever the resolve budget allows.
+//
+// THE BUDGET IS SECONDS, because it covers the COUNT too — a budget spent
+// before the count is an error by design — and the count reads five thousand
+// anchors: under the race detector, beside this package's other parallel
+// cases on a four-core machine, it outlasted a 250 ms budget and the sweep
+// failed before it appended anything. Two seconds keeps the count a small
+// share of the budget while a record is still a fifth of it.
 func TestASweepStopsAppendingOnceItsBudgetIsSpent(t *testing.T) {
 	t.Parallel()
 	const records = 20
-	const budget, slow = 250 * time.Millisecond, 50 * time.Millisecond
+	const budget, slow = 2 * time.Second, 400 * time.Millisecond
 	estate := sweepEstate(t)
 	seedManyAnchors(t, estate, probeStream, 0, records*statelog.AnchorsPerTrimmedRecord)
 	// THE LOG'S END IS ALREADY COMMITTED HERE, so the budget is spent on the
