@@ -61,11 +61,11 @@ import {
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateCompact, fmtDateTime, plural, relTime } from "~/lib/format.ts";
+import { fmtDateCompact, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { plainText, renderMarkdown } from "~/lib/markdown.ts";
 import { useRecents } from "~/lib/recents.ts";
 import { modeLabel, resolveSearchMode, searchCoverageNote, servedNote } from "~/lib/search.ts";
-import { companyMidnight } from "~/lib/range.ts";
+import { clockIn, companyMidnight } from "~/lib/range.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -377,7 +377,7 @@ function RecentlyWritten() {
               <h3 className="knowledge-day">{day}</h3>
               <ol className="knowledge-written-rows">
                 {rows.map((change) => (
-                  <WrittenRow key={change.id} change={change} who={who} now={now} />
+                  <WrittenRow key={change.id} change={change} who={who} now={now} zone={zone} />
                 ))}
               </ol>
             </section>
@@ -394,7 +394,23 @@ function RecentlyWritten() {
   );
 }
 
-function WrittenRow({ change, who, now }: { change: PageChange; who: Who; now: number }) {
+/**
+ * One change: who did what to which page, its note, and WHEN ON THE COMPANY'S
+ * CLOCK, the clock its day heading is cut on. An age read against the heading
+ * above it disagreed with it ("1d ago" under "Oct 09"); the age is the
+ * time's title.
+ */
+function WrittenRow({
+  change,
+  who,
+  now,
+  zone,
+}: {
+  change: PageChange;
+  who: Who;
+  now: number;
+  zone: string | undefined;
+}) {
   const by = drawnBy(change.actor, change.actor_seat);
   const note = changeNote(change);
   return (
@@ -412,8 +428,8 @@ function WrittenRow({ change, who, now }: { change: PageChange; who: Who; now: n
         {change.container && <KeyChip>{change.container}</KeyChip>}
         {note && <span className="knowledge-written-note">{note}</span>}
       </p>
-      <time dateTime={change.at} title={fmtDateTime(change.at)}>
-        {relTime(change.at, now)}
+      <time dateTime={change.at} title={`${relTime(change.at, now)}, ${fmtDateTime(change.at)}`}>
+        {clockIn(tsKey(change.at), zone)}
       </time>
     </li>
   );

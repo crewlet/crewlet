@@ -448,6 +448,65 @@ test("recently written draws the person behind a token, grouped by the company's
   expect(rows[1]?.textContent).toMatch(/Crewlet-SWE commented on Deploy notes/);
 });
 
+// AN AGE IS NOT A DAY: a row under "Oct 09" said "1d ago", the same as the
+// rows under Yesterday. A row says its time on the clock its day is cut on.
+test("a row under a company day says its time of day on the company's clock", async () => {
+  location.hash = "#/knowledge";
+  // 09:00 on the 25th in Tokyo.
+  vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-25T00:00:00Z"));
+  mount({ ...ran, hits: [], served_mode: "" }, [{ key: "ENG", name: "Engineering", pages: 3 }], {
+    page_activity: {
+      changes: [
+        {
+          id: "c-1",
+          page_id: "p-1",
+          title: "Provisioner runbook",
+          container: "ENG",
+          kind: "saved",
+          actor: "swe",
+          // 08:00 on the 25th in Tokyo: today.
+          at: "2026-09-24T23:00:00Z",
+        },
+        {
+          id: "c-2",
+          page_id: "p-2",
+          title: "Deploy notes",
+          container: "ENG",
+          kind: "comment",
+          actor: "swe",
+          // 22:00 on the 24th in Tokyo: yesterday.
+          at: "2026-09-24T13:00:00Z",
+        },
+        {
+          id: "c-3",
+          page_id: "p-3",
+          title: "Onboarding",
+          container: "ENG",
+          kind: "created",
+          actor: "swe",
+          // 10:00 on the 23rd in Tokyo, 47 hours ago: "1d ago", as Yesterday's.
+          at: "2026-09-23T01:00:00Z",
+        },
+      ],
+    },
+  });
+  const written = await screen.findByRole("region", { name: /Recently written/ });
+  await waitFor(() => expect(within(written).getByText(/Onboarding/)).toBeTruthy());
+  const days = within(written)
+    .getAllByRole("heading", { level: 3 })
+    .map((h) => h.textContent);
+  expect(days).toContain("Sep 23");
+  const timeOf = (title: string) =>
+    within(written)
+      .getAllByRole("listitem")
+      .find((row) => row.textContent?.includes(title))
+      ?.querySelector("time");
+  expect(timeOf("Deploy notes")?.textContent).toBe("22:00");
+  expect(timeOf("Onboarding")?.textContent).toBe("10:00");
+  // THE AGE IS STILL THERE, in the title beside the exact instant.
+  expect(timeOf("Onboarding")?.getAttribute("title")).toMatch(/^1d ago, /);
+});
+
 // A NEW PAGE'S EXCERPT IS ITS FIRST LINE, which is usually `# {title}`: the
 // row named the page and then named it again as its note.
 test("a new page's row never repeats its title as its note", async () => {

@@ -583,6 +583,47 @@ export function dayLabelIn(at: number, zone: string | undefined): string {
 }
 
 /**
+ * The time of day an instant reads on the company's clock: "15:52".
+ *
+ * WHAT A ROW UNDER ONE OF THE COMPANY'S DAYS SAYS, so the row and its heading
+ * are read on one clock. A list grouped under Today, Yesterday and the dates
+ * before them gave each row its age instead, and an age is not a day: a row
+ * under "Oct 09" said "1d ago", the same as the rows under Yesterday.
+ *
+ * The reader's locale spells it, as every other time on a screen is spelled;
+ * only the clock is the company's. `hourCycle: "h23"` for the reason
+ * `zoneOffset` in `format.ts` gives: `hour12: false` selects h24 in some
+ * engines and writes five past midnight as "24:05". A zone this runtime
+ * cannot read is UTC, as [companyMidnight] reads it, so a time and the day it
+ * is listed under never disagree.
+ */
+export function clockIn(at: number, zone: string | undefined): string {
+  return clockFormat(zone).format(at);
+}
+
+/** One formatter per zone: a list draws a time per row, on one clock. */
+const clocks = new Map<string, Intl.DateTimeFormat>();
+
+function clockFormat(zone: string | undefined): Intl.DateTimeFormat {
+  const key = zone || "UTC";
+  let format = clocks.get(key);
+  if (!format) {
+    const options: Intl.DateTimeFormatOptions = {
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    };
+    try {
+      format = new Intl.DateTimeFormat(undefined, { ...options, timeZone: key });
+    } catch {
+      format = new Intl.DateTimeFormat(undefined, { ...options, timeZone: "UTC" });
+    }
+    clocks.set(key, format);
+  }
+  return format;
+}
+
+/**
  * The first instant of the company date `label` in `zone`, or null for a
  * value that is not a date.
  *
