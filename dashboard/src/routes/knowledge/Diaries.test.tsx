@@ -218,9 +218,11 @@ test("one agent's diary is its holder's answer, and names that node", async () =
   expect(screen.getByText(/From node-b\./)).toBeTruthy();
   // THE HEADER IS THE TOTAL, with the page it drew said beside it.
   expect(screen.getByText(/Latest 1 of 60/)).toBeTruthy();
-  expect(screen.getByRole("link", { name: /Agent 03.s whole memory/ }).getAttribute("href")).toBe(
-    "#/agents/seats/agent-3?tab=memory",
-  );
+  expect(
+    screen
+      .getByRole("link", { name: "2 learned skills and 5 colleagues remembered" })
+      .getAttribute("href"),
+  ).toBe("#/agents/seats/agent-3?tab=memory");
 });
 
 test("one agent no node holds says why its diary is not shown", async () => {

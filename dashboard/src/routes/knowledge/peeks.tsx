@@ -117,14 +117,10 @@ function spaceFacts({
       label: "Last written",
       // A LIST THAT DID NOT ANSWER IS NOT AN EMPTY SPACE: this value is derived
       // from that read alone, and "never" would be a claim nothing was read for.
-      value: unread ? (
-        <EmptyValue label="The space's page list has not answered, so nothing here says when it last moved" />
-      ) : (
-        <DateCell at={newest} now={now} />
-      ),
+      value: unread ? <EmptyValue label="Unknown" /> : <DateCell at={newest} now={now} />,
       // A listing is ordered by title, so a capped read's newest row is a
       // floor on the answer rather than the answer, and the note says so.
-      note: capped ? "newest of the pages this read returned" : undefined,
+      note: capped ? "newest page" : undefined,
     },
     {
       // WHO FILES HERE comes from the config (a unit's `space:`), so it answers
@@ -135,7 +131,7 @@ function spaceFacts({
       ) : units.length > 0 ? (
         units.map((u) => u.name).join(", ")
       ) : (
-        <EmptyValue label="No unit names this space in its space:" />
+        <EmptyValue label="No team owns this space" />
       ),
       // A LINK ONLY WHERE THERE IS ONE PLACE TO GO: two units may share a space.
       path: units?.length === 1 && lead ? ["agents", "teams", lead.name] : undefined,
@@ -231,7 +227,7 @@ export function ContainerPeek({ id }: { id: string }) {
               size="compact"
               icon={<FolderGlyph size="xl" />}
               title={`No space called “${id}”`}
-              description="A space is created the first time somebody writes into it. Give a unit a `space` and its agents have somewhere to file what they learn. This node may also not have caught up with one that exists."
+              description="It may not exist yet, or this node is catching up."
             />
           ))}
       </QueryState>
@@ -277,7 +273,7 @@ function SpacePages({
             ? undefined
             : {
                 title: "Nothing is filed here",
-                hint: "A space is created by the first write into it. Its pages may since have been trashed, or this node's copy has not caught up.",
+                hint: "Its pages may have been trashed.",
               }
         }
       >
@@ -351,9 +347,7 @@ function SpaceWriters({
         // TWO ABSENCES, told apart: pages with no author were written by the
         // engine (the tool-skill catalogue and the syncs), which is not nobody.
         <span className="muted">
-          {recent.length > 0
-            ? "Every page here was written by the engine: the tool-skill catalogue and the syncs carry no author."
-            : "Nothing has been written here yet."}
+          {recent.length > 0 ? "Written by the engine." : "Nothing has been written here yet."}
         </span>
       )}
     </Card>
@@ -423,7 +417,7 @@ export function PagePeek({ id }: { id: string }) {
         size="compact"
         icon={<FileTextGlyph size="xl" />}
         title={`No page at “${id}”`}
-        description="A link to a page carries its id, which a rename does not change. It may have been trashed or purged, or this node's copy of the knowledge base has not caught up with it yet."
+        description="It may have been trashed."
       />
     );
   }
@@ -520,13 +514,12 @@ export function PagePeek({ id }: { id: string }) {
                     })}
                     {history.length > PEEK_SAVES && (
                       <p className="t-caption">
-                        {plural(history.length - PEEK_SAVES, "older save")} on the page, with what
-                        each one changed.
+                        {plural(history.length - PEEK_SAVES, "older save")}
                       </p>
                     )}
                   </div>
                 ) : (
-                  <span className="muted">Only this version exists. Nobody has saved over it.</span>
+                  <span className="muted">Only this version exists.</span>
                 )}
               </Card>
             </div>

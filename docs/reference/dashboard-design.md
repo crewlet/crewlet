@@ -5718,7 +5718,7 @@ page is one column and the outline is not drawn.
   on one without an index. A node that holds an index and cannot answer says
   why instead of "No page or task links here" (`linked_from_status`
   `building` or `unavailable`), and the capped-reads note is worded
-  company-wide ("this list may be missing some"), because `elided` counts what
+  company-wide ("Some reads may be missing."), because `elided` counts what
   the cap dropped on every page rather than this one.
 - **History** swaps the outline for the revisions and the comments for the
   page's changes, each drawn as the person, the change and the turn that made

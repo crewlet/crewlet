@@ -95,7 +95,7 @@ export function BodyDiff({
         size="compact"
         icon={<CheckGlyph size="xl" />}
         title="The body did not change"
-        description="A page's title, its labels and its place in the tree are saved beside its body. The prose is the same as before."
+        description="Only the title, labels or position changed."
       />
     );
   }
@@ -213,7 +213,7 @@ export function VersionView({
               size="compact"
               icon={<ClockGlyph size="xl" />}
               title="This node no longer holds that revision"
-              description="A page keeps a bounded number of revisions. The entry in its history is the record that it existed."
+              description="Only recent revisions are kept."
             />
           )
         )}
@@ -249,7 +249,7 @@ export function PageChanges({ pageID, who, now }: { pageID: string; who: Who; no
             ? undefined
             : {
                 title: "Nothing has happened to this page",
-                hint: "Every change writes an entry: a save, a comment, a rename, a move, a label. A page with none was created and left alone.",
+                hint: "Saves, comments, renames and moves appear here.",
               }
         }
       >

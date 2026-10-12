@@ -197,9 +197,7 @@ function PageBody({ detail, body }: { detail: PageDetail; body: string }) {
   return (
     <div className="knowledge-folder">
       <p className="knowledge-note">
-        A folder that groups pages.
-        {children.length === 0 &&
-          " Nothing is filed under it yet: use Create under it in its space."}
+        {children.length === 0 ? "Nothing filed here yet." : "A folder that groups pages."}
       </p>
       {children.length > 0 && (
         <ul className="knowledge-links" role="list">
@@ -361,7 +359,7 @@ export function PageView({ id }: { id: string }) {
         <EmptyState
           icon={<FileTextGlyph size="xl" />}
           title="There is no such page"
-          description="A link to a page carries its id, which a rename does not change. It may have been trashed or purged, or this node's copy of the knowledge base has not caught up with it yet."
+          description="It may have been trashed."
         />
       </>
     );

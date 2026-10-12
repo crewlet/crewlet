@@ -184,7 +184,7 @@ export function Composer() {
       : titleBudget.over
         ? titleBudget.line
         : taken
-          ? `A page called “${taken.title}” already exists in ${spaceName}. Choose another title, or extend that page.`
+          ? `“${taken.title}” already exists in ${spaceName}.`
           : !body.trim()
             ? "Write the page first."
             : bodyBytes > PAGE_BODY_MAX_BYTES
@@ -224,7 +224,7 @@ export function Composer() {
       {
         done:
           status === "draft"
-            ? `Saved “${name}” as a draft. It is listed in ${spaceName} and marked Draft.`
+            ? `Saved “${name}” as a draft in ${spaceName}.`
             : `Published “${name}” in ${spaceName}.`,
       },
     );
@@ -255,7 +255,7 @@ export function Composer() {
         <EmptyState
           icon={<BookOpenGlyph size="xl" />}
           title="There is no space to file a page in yet"
-          description="A space is created the first time somebody writes into it. Give a unit a space, and its agents have somewhere to file what they learn."
+          description="Give a team a space in Edit org."
         />
       </>
     );
@@ -387,9 +387,7 @@ export function Composer() {
               ) : undefined
             }
             helper={
-              titleBudget.over || taken
-                ? undefined
-                : (titleBudget.line ?? "Its address in the space. People and agents link by it.")
+              titleBudget.over || taken ? undefined : (titleBudget.line ?? "Also its link address.")
             }
           >
             <Input
@@ -407,7 +405,7 @@ export function Composer() {
             value={body}
             onChange={setBody}
             label="The page, in markdown"
-            placeholder="Write in markdown. Link a page by its address so the link survives a rename."
+            placeholder="Write in markdown"
             renderPreview={previewMarkdown}
             rows={18}
             invalid={bodyBytes > PAGE_BODY_MAX_BYTES}
@@ -433,13 +431,9 @@ export function Composer() {
               Similar pages
             </h2>
             {quietTitle.length < 3 ? (
-              <p className="knowledge-note">
-                Pages that already cover this appear here as you type the title.
-              </p>
+              <p className="knowledge-note">Similar pages appear as you type.</p>
             ) : similar.data && similar.data.hits.length === 0 ? (
-              <p className="knowledge-note">
-                Nothing similar yet. Agents will find this page by its title and its words.
-              </p>
+              <p className="knowledge-note">Nothing similar yet.</p>
             ) : similar.data ? (
               <>
                 <ul className="knowledge-links" role="list">
@@ -461,9 +455,7 @@ export function Composer() {
                     </li>
                   ))}
                 </ul>
-                <p className="knowledge-note">
-                  Extend a page that already answers this rather than writing a second one.
-                </p>
+                <p className="knowledge-note">Extend one of these instead of starting over.</p>
               </>
             ) : (
               <p className="knowledge-note">Searching&hellip;</p>
