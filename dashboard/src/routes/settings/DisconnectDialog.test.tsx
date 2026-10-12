@@ -109,7 +109,10 @@ test("a disconnect stuck at the app offers the way out immediately", async () =>
 
   // The app's own words, and the sentence that says what happened.
   expect(screen.getByText(/401: Client must be authenticated/)).toBeTruthy();
-  expect(screen.getByText(/has not let the engine finish it/)).toBeTruthy();
+  expect(screen.getByText("Jira hasn’t let the disconnect finish.")).toBeTruthy();
+  expect(
+    screen.getByText("Forcing it leaves anything still there for you to remove."),
+  ).toBeTruthy();
 
   const force = screen.getByRole("button", { name: /anyway/i });
   fireEvent.click(force);
@@ -285,7 +288,11 @@ test("a queued disconnect says to wait before revoking anything", async () => {
   expect(screen.getByText("Disconnecting Atlassian")).toBeTruthy();
   // AND THE ORDER IS STATED, which is the part that keeps the teardown able
   // to authenticate.
-  expect(screen.getByText(/Wait until the card stops reporting Disconnecting/)).toBeTruthy();
+  expect(
+    screen.getByText(/Wait until the card stops showing Disconnecting/).closest("p")?.textContent,
+  ).toBe(
+    "Wait until the card stops showing Disconnecting, then revoke each one and remove it with crewlet secrets unset <name>.",
+  );
 });
 
 /*
@@ -313,7 +320,7 @@ test("a forced disconnect says to revoke now", async () => {
 
   await waitFor(() => expect(screen.getByText("ORG_KEY")).toBeTruthy());
   expect(screen.getByText("Atlassian disconnected")).toBeTruthy();
-  expect(screen.queryByText(/Wait until the card stops reporting/)).toBeNull();
+  expect(screen.queryByText(/Wait until the card stops showing/)).toBeNull();
   expect(screen.getByText(/crewlet secrets unset/)).toBeTruthy();
 });
 
@@ -381,7 +388,9 @@ test("a surface that is busy is retried rather than abandoning the rest", async 
 
   // THE WAIT IS SAID, and not as an error: the disconnect has not failed, it
   // has not started.
-  await vi.waitFor(() => expect(screen.getByText(/has to wait its turn/)).toBeTruthy());
+  await vi.waitFor(() =>
+    expect(screen.getByText("Waiting for Atlassian to finish provisioning.")).toBeTruthy(),
+  );
   await vi.advanceTimersByTimeAsync(10_000);
 
   await vi.waitFor(() => expect(done).toHaveBeenCalled());
@@ -424,6 +433,6 @@ test("a refusal that is not a race stops and offers the force", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
 
   await waitFor(() => expect(screen.getByText(/status row could not be written/)).toBeTruthy());
-  expect(screen.queryByText(/has to wait its turn/)).toBeNull();
+  expect(screen.queryByText(/to finish provisioning/)).toBeNull();
   expect(sent.filter((s) => s.method === "DELETE")).toHaveLength(1);
 });

@@ -185,7 +185,7 @@ export const CATALOG: Entry[] = [
   {
     key: "slack",
     name: "Slack",
-    description: "Every agent posts as its own bot. Mentions and threads wake the right seat.",
+    description: "Each agent posts as its own bot.",
     vendor: "slack",
     surfaces: surfacesOf("slack"),
     doc: "slack",
@@ -193,7 +193,7 @@ export const CATALOG: Entry[] = [
   {
     key: "mattermost",
     name: "Mattermost",
-    description: "Self-hosted chat. Every agent posts as its own bot over an outbound socket.",
+    description: "Self-hosted chat. Each agent posts as its own bot.",
     vendor: "mattermost",
     surfaces: surfacesOf("mattermost"),
     doc: "mattermost",
@@ -201,7 +201,7 @@ export const CATALOG: Entry[] = [
   {
     key: "atlassian",
     name: "Atlassian",
-    description: "Jira and Confluence. Each agent works issues and pages with its own account.",
+    description: "Jira and Confluence, an account per agent.",
     vendor: "atlassian",
     surfaces: surfacesOf("atlassian"),
     doc: "jira",
@@ -209,7 +209,7 @@ export const CATALOG: Entry[] = [
   {
     key: "github",
     name: "GitHub",
-    description: "Agents read issues and review pull requests, each through its own GitHub App.",
+    description: "Issues and pull requests, an app per agent.",
     vendor: "github",
     surfaces: surfacesOf("github"),
     doc: "github",
@@ -217,7 +217,7 @@ export const CATALOG: Entry[] = [
   {
     key: "gitlab",
     name: "GitLab",
-    description: "Agents branch, push and review merge requests with their own tokens.",
+    description: "Merge requests and code, a token per agent.",
     vendor: "gitlab",
     surfaces: surfacesOf("gitlab"),
     doc: "gitlab",
@@ -225,7 +225,7 @@ export const CATALOG: Entry[] = [
   {
     key: "datadog",
     name: "Datadog",
-    description: "Monitors route to a seat by their tags; anything untagged goes to a fallback.",
+    description: "Alerts reach seats by tag.",
     vendor: "datadog",
     surfaces: surfacesOf("datadog"),
     doc: "datadog",
@@ -486,10 +486,7 @@ export function integrationFacts(
     {
       label: "Delivered",
       value: (
-        <NumberCell
-          value={counted((r) => r.inbound)}
-          title="deliveries that reached a seat here: verified webhooks, and chat posts read off a socket — each counted once, where it arrived"
-        />
+        <NumberCell value={counted((r) => r.inbound)} title="Deliveries that reached a seat" />
       ),
       note: covered,
     },
@@ -510,12 +507,7 @@ export function integrationFacts(
     },
     {
       label: "Coalesced",
-      value: (
-        <NumberCell
-          value={counted((r) => r.coalesced)}
-          title="folded into a wake the seat already had"
-        />
-      ),
+      value: <NumberCell value={counted((r) => r.coalesced)} title="Merged into a pending wake" />,
     },
     {
       // THE LOOP'S OWN CLOCK, which is the one thing a card never says: it
@@ -855,17 +847,13 @@ function SurfaceBadges({ row }: { row: IntegrationRow }) {
         <Tag
           variant="warning"
           appearance="outline"
-          title="the config names a secret whose ${VAR} resolved to nothing, so every delivery is refused"
+          title="A secret it needs isn’t set, so deliveries are refused"
         >
           secret unresolved
         </Tag>
       )}
       {row.routes === false && (
-        <Tag
-          variant="warning"
-          appearance="outline"
-          title="deliveries are verified and stored, and no parser turns them into work for a seat"
-        >
+        <Tag variant="warning" appearance="outline" title="Deliveries arrive but reach no seat">
           routes nowhere
         </Tag>
       )}
@@ -873,7 +861,7 @@ function SurfaceBadges({ row }: { row: IntegrationRow }) {
         <Tag
           variant="warning"
           appearance="outline"
-          title="this surface is registered at an address that is no longer this deployment's, so its deliveries go nowhere"
+          title="Registered at an old address, so deliveries are lost"
         >
           address moved
         </Tag>
@@ -947,9 +935,8 @@ function SurfaceRow({
         <div className="int-row-note">
           <span className="int-row-note-text">
             <span>
-              The event subscription was registered with <InlineCode>{row.endpoint}</InlineCode>,
-              but this engine now listens on <InlineCode>{base ?? "no public address"}</InlineCode>.
-              Update the address in {surface.name} to keep receiving events.
+              Registered at <InlineCode>{row.endpoint}</InlineCode>, now{" "}
+              <InlineCode>{base ?? "no public address"}</InlineCode>. Update it in {surface.name}.
             </span>
           </span>
         </div>
@@ -967,8 +954,7 @@ function SurfaceRow({
                 : `${(row.skipped ?? 0).toLocaleString()} deliveries were verified and dropped`}
             </span>
             <span className="int-row-note-when">
-              A drop is a delivery this surface accepted and no parser turned into work, so whatever
-              sent it is reaching the engine and reaching nobody.
+              {row.skipped === 1 ? "It reached no seat." : "They reached no seat."}
             </span>
           </span>
         </div>
@@ -1752,10 +1738,7 @@ export function EntryRow({
                 empty box under a chevron that promised something. */}
             {seats.length === 0 && !present.some((p) => surfaceFaulted(p.row)) && (
               <li className="int-row">
-                <span className="int-row-detail">
-                  Nothing to report: no surface of {entry.name} has a fault, and it keeps no roster
-                  of agents.
-                </span>
+                <span className="int-row-detail">Nothing to report.</span>
               </li>
             )}
             {seats.map((seat) => (
@@ -2071,7 +2054,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
           deliveries.data && rows.length === 0
             ? {
                 title: `Nothing has arrived on ${name}`,
-                hint: "A verified delivery writes a row here. Nothing at all means either the provider is not sending, or it is being refused before it is recorded — the engine's own log is where a refusal appears.",
+                hint: `Check that ${name} is sending. Refusals are in the engine log.`,
               }
             : undefined
         }
@@ -2170,11 +2153,11 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
         // — a rule, a quiet register and the card's own horizontal padding.
         <Card.Footer variant="meta">
           <span className="t-caption">
-            The newest {DELIVERY_PAGE}. Older deliveries are in the{" "}
+            Newest {DELIVERY_PAGE}. Older ones are in the{" "}
             <a className="prose-link" href={href(["live", "events"], { category: "webhook" })}>
               event log
             </a>
-            , which pages.
+            .
           </span>
         </Card.Footer>
       )}
@@ -2404,16 +2387,14 @@ function passState(run: SetupRun): { glyph: string; label: string; tone: Tone; t
         glyph: "◐",
         label: "running",
         tone: "info",
-        title: "this pass is still going; the engine holds the surface's lease until it ends",
+        title: "Still running",
       };
     case "failed":
       return {
         glyph: "✕",
         label: "failed",
         tone: "danger",
-        title:
-          run.error ||
-          "the third-party app refused this pass; nothing it had already done is undone",
+        title: run.error || "The app refused this pass",
       };
     case "done": {
       const phase = run.report?.phase ?? "";
@@ -2434,7 +2415,7 @@ function passState(run: SetupRun): { glyph: string; label: string; tone: Tone; t
         glyph: "○",
         label: run.state || "unknown",
         tone: "neutral",
-        title: "a state this build does not know; a newer node wrote it",
+        title: "Unknown state from a newer version",
       };
   }
 }
@@ -2498,10 +2479,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
     return (
       <Card>
         <Card.Header icon={<RotateCwGlyph size="sm" />}>Provisioning passes</Card.Header>
-        <span className="t-caption">
-          Reading what a pass found needs an operator token, so this is what the engine will not say
-          without one.
-        </span>
+        <span className="t-caption">Set an operator token to see passes.</span>
       </Card>
     );
   }
@@ -2591,7 +2569,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
       <Card.Header
         icon={<RotateCwGlyph size="sm" />}
         count={runs.length}
-        subtitle={`what ${scope || "this node"} has run — a pass another node ran is remembered there`}
+        subtitle={`on ${scope || "this node"}`}
       >
         Provisioning passes
       </Card.Header>
@@ -2619,7 +2597,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
             : {
                 title: "No pass has run on this node",
                 icon: "rotate-cw",
-                hint: "The loop runs one per surface on its own cadence, and connecting an integration runs one at once. A pass another node ran is remembered on that node.",
+                hint: "Passes run on a schedule and when you connect.",
               }
         }
         columns={columns}
@@ -2669,12 +2647,8 @@ function PassDetail({
     return (
       <div className="int-row-note">
         <span className="int-row-note-text">
-          <span className="int-note-problem">This pass is no longer remembered.</span>
-          <span className="int-row-note-when">
-            A run is kept by the node that executed it, and only for its last few passes. What it
-            concluded is folded into the surface&rsquo;s own state either way, which is what the
-            card above reports.
-          </span>
+          <span className="int-note-problem">This pass is no longer kept.</span>
+          <span className="int-row-note-when">Its result is in the card above.</span>
         </span>
       </div>
     );
@@ -2721,7 +2695,7 @@ function PassDetail({
         ) : (
           <span className="int-row-note-when">
             {run.state === "running"
-              ? "Nothing outstanding so far — a pass records what it observes as it goes."
+              ? "Nothing outstanding so far."
               : "This pass found nothing outstanding."}
           </span>
         )}
@@ -2841,7 +2815,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
         size="compact"
         icon={<PlugGlyph size="xl" />}
         title={`This build serves no integration called “${kind}”`}
-        description="The link that opened this names a surface this engine does not have. Every integration it does serve is in Settings › Integrations."
+        description="See Settings › Integrations for the ones available."
       />
     );
   }
@@ -2886,7 +2860,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
               size="compact"
               icon={<PlugGlyph size="xl" />}
               title={`${entry.name} is not connected`}
-              description={`${entry.description}. Nothing in this company is configured for it, so no delivery reaches a seat and no pass runs against it.`}
+              description={`${entry.description} Connect it to start.`}
             />
           )}
           {present.length > 0 && (
@@ -2977,7 +2951,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                         only one of them is good news. */}
                     {present.some((p) => p.row.reconcile)
                       ? "The last pass found nothing outstanding."
-                      : "Nothing has reported on this integration yet, which is not the same as nothing being wrong."}
+                      : "No status reported yet."}
                   </span>
                 )}
               </Card>
@@ -3156,10 +3130,7 @@ export function Integrations({ kind }: { kind?: string }) {
           claim that the company was counted. */}
       {!focus && (
         <div className="int-bar">
-          <PageNote>
-            Connect the tools the company already uses. Each agent gets its own identity in every
-            tool it is allowed to use, and acts there with its own credentials.
-          </PageNote>
+          <PageNote>Connect the tools the company already uses.</PageNote>
           {data && (
             <Segmented<Show>
               ariaLabel="Which integrations to show"
@@ -3186,11 +3157,10 @@ export function Integrations({ kind }: { kind?: string }) {
       {setup.base && !setup.base.present && (
         <Callout variant="warning">
           <span className="col" style={{ gap: 4 }}>
-            <span>No public address is set, so no third-party app can deliver to this engine.</span>
+            <span>No public address is set, so apps can’t deliver here.</span>
             <span className="t-caption">
-              Set <InlineCode>{setup.base.config_path}</InlineCode> to the HTTPS address third-party
-              apps reach this deployment on. Chat over an outbound socket, Mattermost, is
-              unaffected.
+              Set <InlineCode>{setup.base.config_path}</InlineCode> to this deployment’s HTTPS
+              address.
             </span>
           </span>
         </Callout>
@@ -3213,18 +3183,13 @@ export function Integrations({ kind }: { kind?: string }) {
         <Callout variant="warning">
           <span className="col" style={{ gap: 4 }}>
             <span>
-              The public address is configured as a reference that resolves to nothing, so no
-              third-party app can deliver to this engine.
-            </span>
-            <span className="t-caption">
-              <InlineCode>{setup.base.config_path}</InlineCode> is set to{" "}
+              <InlineCode>{setup.base.config_path}</InlineCode> points to{" "}
               <InlineCode>
                 {setup.base.reference ? `\${${setup.base.reference}}` : "a reference"}
               </InlineCode>
-              , which resolves to nothing. Export it, or seal it as a secret, and re-activate the
-              revision — a reference is resolved from the snapshot taken when the revision is
-              applied.
+              , which isn’t set, so apps can’t deliver here.
             </span>
+            <span className="t-caption">Set it and re-activate the revision.</span>
           </span>
         </Callout>
       )}
@@ -3235,10 +3200,7 @@ export function Integrations({ kind }: { kind?: string }) {
       )}
       {setup.guarded && (
         <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
-          <span>
-            Setting an integration up needs an operator token. This screen is showing what it can
-            read without one.
-          </span>
+          <span>Setting up integrations needs an operator token.</span>
           <span className="spacer" />
           {/* The same door QueryState opens, for the same reason: with
               anonymous reads allowed the socket is never refused, so a banner
@@ -3330,20 +3292,18 @@ export function Integrations({ kind }: { kind?: string }) {
       )}
       <QueryState error={error} loading={loading} empty={undefined}>
         {/* NOTHING CONNECTED IS A FACT ABOUT THE LIST, SAID ABOVE IT. A page
-            holding a tile for every tool is not empty, and what the sentence adds —
-            that only a schedule can wake a seat until then — is worth reading
-            before the list, not after it. */}
+            holding a tile for every tool is not empty, and the sentence is
+            worth reading before the list, not after it. */}
         {data && !kind && configured.length === 0 && (
           <Callout variant="neutral" icon={<PlugGlyph size="md" />}>
-            No integration is connected yet. Until one is, the only thing that can wake a seat is a
-            schedule — connect a chat surface, a tracker or a code host below.
+            No integration connected yet. Connect one below.
           </Callout>
         )}
         {kind && !focus && (
           <EmptyState
             icon={<PlugGlyph size="xl" />}
             title={`This build serves no integration called “${kind}”`}
-            description="The link that brought you here names a surface this engine does not have. Every integration it does serve is in Settings › Integrations."
+            description="See Settings › Integrations for the ones available."
           />
         )}
         {/* THE CATALOGUE: WHAT THIS COMPANY HAS, THEN WHAT IT COULD HAVE, each
@@ -3391,9 +3351,7 @@ export function Integrations({ kind }: { kind?: string }) {
                   <PlusGlyph size="sm" />
                 </span>
                 <span className="int-name">Add an MCP server</span>
-                <span className="int-tile-text">
-                  Give agents any tool that speaks MCP — per role, with per-seat credentials.
-                </span>
+                <span className="int-tile-text">Give agents any MCP tool.</span>
               </a>
             )}
           </div>

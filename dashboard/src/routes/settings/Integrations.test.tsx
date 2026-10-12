@@ -1211,6 +1211,7 @@ test("a dropped delivery is stated, not counted", () => {
   );
   expect(screen.getByRole("button", { name: /Hide GitHub details/ })).toBeTruthy();
   expect(screen.getByText(/3 deliveries were verified and dropped/)).toBeTruthy();
+  expect(screen.getByText("They reached no seat.")).toBeTruthy();
 });
 
 // And a surface dropping nothing says nothing, which is the whole reason the
