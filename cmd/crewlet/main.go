@@ -1262,17 +1262,18 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// start new work to refuse.
 	probes := "this node binds no HTTP listener, so its drain is visible " +
 		"only in this log"
+	finish := "the turns already running finish"
 	switch {
 	case surface != nil && surface.app != nil:
 		probes = "/health stays 200, /ready answers 503 and every route " +
 			"that would start new work answers 503"
+		finish += ", and then the git requests it is serving,"
 	case surface != nil:
 		probes = "/health stays 200 and /ready answers 503"
 	}
 	log.InfoContext(ctx, "engine_draining",
 		"in_flight", e.Backends().Queue.InFlightCount(),
-		"detail", "the turns already running finish before this node stops; "+
-			"until they have, "+probes,
+		"detail", finish+" before this node stops; until they have, "+probes,
 		"hint", "a second interrupt exits at once, leaving those turns to be "+
 			"redelivered once their ack window elapses")
 
@@ -1297,22 +1298,39 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 //     from its first moment the HTTP surface refuses every route that would
 //     start new work (see internal/api's drain gate), so a listener still
 //     accepting is no longer a listener still minting turns.
-//  2. CLOSE THE LISTENER, once the drain has completed or its context has
+//  2. FINISH THE GIT REQUESTS the node is serving ([api.App.DrainGit]),
+//     once the turns are done and with the listener still up: a clone or a
+//     push the listener's close cut is begun again from nothing on a peer,
+//     and the listener's own grace is sized for a REST read. The drain gate
+//     begins no fetch or push here from the drain's first moment, but it
+//     goes on serving the upload RPCs of fetches begun on a peer for as long
+//     as a balancer sends them here, so this wait ends once that traffic has
+//     moved — and like the turns' it has no bound of its own: the
+//     supervisor's grace is the bound.
+//  3. CLOSE THE LISTENER, once both have completed or their context has
 //     ended, and not before: a node that closed it first answered neither
 //     probe for the whole drain, so its liveness probe failed while it was
 //     doing exactly what it should.
-//  3. TEAR THE ENGINE DOWN, after the listener, because both probes read the
-//     broker and the coordination store the teardown closes.
+//  4. TEAR THE ENGINE DOWN, after the listener, because both probes read the
+//     broker and the coordination store the teardown closes — and a git
+//     request still running reads the estate and the object store it closes.
 //
 // A nil surface is a node that bound no listener — api.port 0, or a node
 // without the ingress role and with no tool bridge to serve — and it drains
 // and stops the same way with nothing to close between the two.
-func shutdown(ctx context.Context, e *engine.Engine, surface *httpSurface, log *slog.Logger) {
+func shutdown(ctx context.Context, e drainer, surface *httpSurface, log *slog.Logger) {
 	e.Drain(ctx)
 	if surface != nil {
+		surface.finishGit(ctx)
 		surface.stop(ctx, log)
 	}
 	e.Stop(ctx)
+}
+
+// drainer is the engine as [shutdown] stops it: the drain, then the teardown.
+type drainer interface {
+	Drain(ctx context.Context)
+	Stop(ctx context.Context)
 }
 
 // httpSurface is the HTTP listeners a node binds: the whole API on a node with
@@ -1331,6 +1349,19 @@ type httpSurface struct {
 	// role: it holds a subscription on the engine's queue for its peers'
 	// rebuilds, which has to end before the engine closes that queue.
 	operators *api.EngineOperators
+	// drainGit waits for the git requests the API is serving — the app's
+	// [api.App.DrainGit] — and is nil on a node without the ingress role,
+	// which serves no git.
+	drainGit func(context.Context) error
+}
+
+// finishGit waits for the git requests this surface is serving, once the
+// engine has drained. See [shutdown] for why there, and [api.App.DrainGit] for
+// what it waits for; what it could not wait out is logged there.
+func (s *httpSurface) finishGit(ctx context.Context) {
+	if s.drainGit != nil {
+		_ = s.drainGit(ctx)
+	}
 }
 
 // stop closes the HTTP surface, once the engine has drained. See [shutdown]
@@ -1960,7 +1991,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	cancelSeed()
 	runs.Start(ctx)
 
-	surface := &httpSurface{app: app, projector: projector, runs: runs, operators: operators}
+	surface := &httpSurface{
+		app: app, projector: projector, runs: runs, operators: operators,
+		drainGit: app.DrainGit,
+	}
 	// api.port FIRST, then the public listener: the probes are on api.port,
 	// so the moment anything is reachable an orchestrator can read it. A
 	// public bind that fails takes the admin one down with it, through the

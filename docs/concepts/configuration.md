@@ -608,8 +608,9 @@ that fires identically for both is one nobody reads by the third deployment.
 **The guard is mounted whether or not `api.auth` is configured.** It applies one
 rule (`auth.Guard.Requires`), and what Tier A supplies is the *posture*, not the
 existence of a check. An API built with no Tier A at all therefore has no token
-that can match, which means reads serve and every write plus the whole `/config`,
-`/secrets` and `/setup` surfaces answer `401`. That is the only safe reading of "an app was built
+that can match, which means reads serve and every write plus the whole of every
+always-guarded surface — `/config`, `/secrets`, `/setup`, `/operator`, and the
+engine's own git host's `/git/*` and `/code/*` — answer `401`. That is the only safe reading of "an app was built
 without being told who may write to it", and it removes the possibility of a
 process that serves `/config` writes with nothing in front of them.
 
@@ -630,10 +631,20 @@ needs a credential like anything else — and browsers can't set headers on a
 Prefer the header where a client can send one, since query strings tend to land
 in proxy access logs.
 
+A git client reaches `/git/*` with the same token as the **password** of a
+Basic credential (the user name is ignored), because git answers a Basic
+challenge from its credential helper and presents a token no other way without
+configuration. That is the one route family where Basic is accepted: a browser
+caches a Basic credential it was asked for and replays it to every route of the
+origin. See [API Endpoints → Routes](../reference/api-endpoints.md#routes)
+for the challenge and the logging, and
+[During a drain](../reference/api-endpoints.md#during-a-drain) for which git
+requests a draining node still serves.
+
 | Setting | Effect |
 |---------|--------|
 | `api.auth.tokens` | The accepted bearer tokens. Needed for writes and `/config`, whatever the read posture is |
-| `api.auth.allow_anonymous_read: true` *(default)* | `GET`/`HEAD` outside `/config`, `/secrets` and `/setup` serve without a token; writes and those three surfaces still require one, and so do the individual reads that describe the deployment rather than the company's work (`/fleet`, `/integrations`) or somebody else's personal record (`/work/my-work`, `/work/people/{handle}`, `/work/inbox`, `/conversations`, and `?viewer=` on `/work/views`, each naming a seat other than the caller's own) |
+| `api.auth.allow_anonymous_read: true` *(default)* | `GET`/`HEAD` outside the always-guarded surfaces (`/config`, `/secrets`, `/setup`, `/operator`, `/git/*`, `/code/*`) serve without a token; writes and those surfaces still require one, and so do the individual reads that describe the deployment rather than the company's work (`/fleet`, `/integrations`) or somebody else's personal record (`/work/my-work`, `/work/people/{handle}`, `/work/inbox`, `/conversations`, and `?viewer=` on `/work/views`, each naming a seat other than the caller's own) |
 | `api.auth.allow_anonymous_read: false` | Every route needs a token, `/ws/stream` included. The lockdown posture for a deployment that terminates traffic somewhere reachable |
 | `api.auth.disabled: true` | Local development only. Everything serves unauthenticated **including writes**, attribution becomes `"anonymous"`, loud `WARNING` at startup |
 | `api.auth.company_writers` | The token ids that alone may **change** the company document; empty *(default)* is every token. See [Managed configuration](#managed-configuration) |
@@ -673,7 +684,14 @@ short enough that removing an origin takes effect within one.
 
 The auth middleware compares tokens in constant time (`crypto/subtle`).
 Failed attempts log `api_auth_failed` at WARNING (never the candidate token
-value); successes log `api_auth_ok` at DEBUG with `operator_id` and `route`.
+value) — with one exception: a git request under `/git/*` that presented no
+credential logs `api_auth_challenge` at DEBUG instead, because git's first
+request never carries one (it asks its credential helper only once the `401`
+challenge arrives), so every clone would otherwise write a warning. A git
+request that did present a credential and was refused — a wrong Basic
+password included — is `api_auth_failed` at WARNING like every other refusal,
+with reason `invalid_credential`. Successes log `api_auth_ok` at DEBUG with
+`operator_id` and `route`.
 
 See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-auth-gated) for the per-route auth + status semantics.
 

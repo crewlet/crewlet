@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -57,6 +59,24 @@ const DrainRetryAfter = 30 * time.Second
 //     coding job out of the drain). Refusing these therefore shortens no drain
 //     and does nothing but break a run mid-flight against the node still
 //     holding its bridge session and its receiver.
+//   - A git FETCH ALREADY BEGUN is SERVED: the upload-pack RPC, a POST, which
+//     continues a fetch whose advertisement was answered before the drain —
+//     here or on a peer, since git's smart HTTP keeps no state between an
+//     exchange's requests — and a refusal would break it half done. A NEW
+//     fetch is REFUSED at its advertisement ([auth.GitAdvertisement]), which
+//     is where every fetch begins: a fetch is not "a read that starts
+//     nothing" but an upload-pack process tree on the transfer lane and the
+//     cache's sync from the object store before it, new work the shutdown
+//     would have to wait out. And what was served is waited for: the node's
+//     shutdown finishes every git request it is serving before it closes the
+//     listener ([App.DrainGit]), since a clone cut part way is begun again
+//     from nothing.
+//   - A git PUSH is REFUSED, every request of it, the advertisement GET
+//     included: refusing at the GET is what lets git print the reason, which
+//     on the POST it does not — it prints only `RPC failed; HTTP 503`. Which
+//     is which is [auth.GitAccess]'s answer, the one classifier the guard and
+//     the code host ask too, so a drain can never take for a fetch a request
+//     the host would serve as a push.
 //   - Every other read is SERVED: the probes, the dashboard, the REST reads and
 //     the live socket. A read starts nothing, and it is how an operator watches
 //     the drain.
@@ -79,13 +99,19 @@ const DrainRetryAfter = 30 * time.Second
 // (operator.Listeners.End) — ending it at the drain's first moment would cut
 // off a client that does not open another stream for the drain's whole length.
 // /mcp/{token} is not split either, because the whole prefix is exempted above.
-func servedWhileDraining(r *http.Request) bool {
+//
+// git is r's [auth.GitAccess], which the gate asks once and hands in.
+func servedWhileDraining(r *http.Request, git auth.GitOp) bool {
 	path := r.URL.Path
 	switch {
 	case strings.HasPrefix(path, auth.WebhookPrefix):
 		return false
 	case strings.HasPrefix(path, mcpbridge.PathPrefix), strings.HasPrefix(path, auth.OTLPPrefix):
 		return true
+	case git == auth.GitFetch:
+		return !auth.GitAdvertisement(r)
+	case git == auth.GitPush:
+		return false
 	default:
 		return auth.IsRead(r.Method)
 	}
@@ -103,7 +129,11 @@ func servedWhileDraining(r *http.Request) bool {
 func (a *App) drainGate(next http.Handler) http.Handler {
 	retryAfter := strconv.Itoa(int(DrainRetryAfter / time.Second))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if servedWhileDraining(r) || !a.draining() {
+		git := auth.GitAccess(r)
+		if a.admit(r, git) {
+			if git != auth.GitNone {
+				defer a.git.end()
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -112,6 +142,14 @@ func (a *App) drainGate(next http.Handler) http.Handler {
 		// delivery carries its shared token.
 		log.Info("api_refused_while_draining", "method", r.Method, "route", r.URL.Path)
 		w.Header().Set("Retry-After", retryAfter)
+		if git != auth.GitNone {
+			// In git's form: git prints a text/plain refusal as
+			// `remote: …` and the API's JSON as nothing at all.
+			auth.GitText(w, http.StatusServiceUnavailable, "this node is draining for a shutdown "+
+				"and begins no new fetch or push: retry in "+retryAfter+" s, against another "+
+				"node or once it has restarted")
+			return
+		}
 		httpjson.FailWith(w, http.StatusServiceUnavailable, httpjson.CodeDraining,
 			map[string]string{
 				"detail": "this node is draining for a shutdown: the turns already " +
@@ -122,6 +160,212 @@ func (a *App) drainGate(next http.Handler) http.Handler {
 	})
 }
 
+// admit reports whether the drain gate lets r through, and COUNTS a git request
+// it lets through for [App.DrainGit] — counted until [gitServing.end].
+//
+// A GIT REQUEST IS COUNTED BEFORE IT IS JUDGED, and taken back if it is
+// refused, because the other order has a gap the wait can fall into: a push
+// told the node is not draining, and only then counted, is invisible to a wait
+// that looks between the two — the drain having begun, the turns finished and
+// the wait found nothing running in that instant — so the listener closes
+// under a push the gate let through. Counted first, the count and the wait's
+// look take one lock, so one of them comes first: if the count does, the wait
+// sees the request; if the look does, the drain began before it (the shutdown
+// waits for git only once the drain has begun), so the judgement made after
+// the count sees the drain and refuses everything it refuses during one.
+//
+// Never the other way round, deciding under that lock: the judgement asks the
+// engine, and no call out of this package is made holding a lock the drain's
+// wait takes.
+func (a *App) admit(r *http.Request, git auth.GitOp) bool {
+	if git == auth.GitNone {
+		return servedWhileDraining(r, git) || !a.draining()
+	}
+	a.git.begin()
+	if servedWhileDraining(r, git) || !a.draining() {
+		return true
+	}
+	a.git.abandon()
+	return false
+}
+
 // draining reports whether this node has begun to drain. A process with no
 // engine has nothing to drain, so it never is.
 func (a *App) draining() bool { return a.runtime != nil && a.runtime.ShuttingDown() }
+
+// DrainGit waits until this node has finished the git requests it is serving:
+// until none is running and none has ended for [gitExchangeGap]. It is the git
+// half of a node's drain, which crewlet's shutdown runs once the engine has
+// drained and before it closes the listener, and it answers ctx's error if ctx
+// ends first.
+//
+// WHY THE SHUTDOWN WAITS FOR THEM. A git transfer cut part way is not resumed:
+// the client begins it again from nothing, on a peer, so the fleet pays its
+// pack, its transfer slot and its sync from the object store twice — at every
+// rolling restart, for every clone and push that happened to be running. The
+// listener's own grace ([apiShutdownGrace] in crewlet) is sized for a REST
+// read, and would cut every transfer longer than five seconds.
+//
+// WHAT IT WAITS FOR. Every git request the drain gate let through before the
+// wait's last look — a push or a fetch begun before the drain, and a fetch's
+// upload RPC served during it — and then the quiet an exchange's next request
+// would break: git's smart HTTP keeps no state between an exchange's requests,
+// so "nothing running" alone would close the listener between two rounds of
+// one fetch ([gitExchangeGap]). Nothing else: a request the gate refused
+// started nothing, and every other request the listener is serving — a
+// dashboard's socket, a coding run's bridge session — is the listener's grace
+// to end, as is an upload RPC let through in the instant after the wait ended
+// and before the listener closed.
+//
+// WHEN IT ENDS. From the drain's first moment the gate begins no fetch or push
+// here — a fetch's advertisement and every request of a push are refused — but
+// it goes on serving every upload RPC that reaches it, since each continues a
+// fetch already begun, here or on a peer. So the count can GROW while this
+// waits, each such request a whole pack and a fresh gap: they reach a draining
+// node for as long as a load balancer still sends it requests — until the
+// balancer has acted on /ready's 503 ([DrainRetryAfter]), or, under
+// Kubernetes, until the pod is out of its Service's endpoints, which the
+// deployment guide's preStop sleep gives time for — and a client holding a
+// token can send one with no advertisement before it at all. The wait
+// therefore ends once that traffic has moved elsewhere and what was running
+// is done, and what bounds it is the supervisor (below), never the gate. It
+// must also run only once the drain has begun: before it, the gate begins
+// every new exchange, and the wait need never end.
+//
+// NO DEADLINE OF ITS OWN, for the reason the turns' wait has none: what bounds
+// a shutdown is whatever supervises the process — a container runtime's kill
+// grace, the operator's second interrupt — which already has a bound and can
+// see things this process cannot, so a second one here could only disagree
+// with it. Nor can a client that stopped taking part hold it open: the code
+// host holds every git connection to the transfer pace (api/paced), which
+// ends a request whose client stops reading its answer or sending its body.
+func (a *App) DrainGit(ctx context.Context) error {
+	started := time.Now()
+	reported := false
+	for {
+		running, ended, moved := a.git.state()
+		quiet := a.gitGap - time.Since(ended)
+		if running == 0 && quiet <= 0 {
+			if reported {
+				log.InfoContext(ctx, "git_drain_complete", "waited", time.Since(started).Round(time.Millisecond))
+			}
+			return nil
+		}
+		if !reported {
+			// ONCE, when there is something to wait for: a node that
+			// served no git says nothing, and this line is what an
+			// operator reads to learn why the listener is still open
+			// after drain_complete.
+			reported = true
+			log.InfoContext(ctx, "git_draining", "running", running,
+				"detail", "the git requests this node is serving finish before its listener closes",
+				"hint", "a second interrupt exits at once, and a clone or push it cuts is begun again by its client")
+		}
+		var gap <-chan time.Time
+		var timer *time.Timer
+		if running == 0 {
+			timer = time.NewTimer(quiet)
+			gap = timer.C
+		}
+		select {
+		case <-ctx.Done():
+			if timer != nil {
+				timer.Stop()
+			}
+			log.WarnContext(ctx, "git_drain_abandoned", "running", running, "error", ctx.Err())
+			return ctx.Err()
+		case <-moved:
+		case <-gap:
+		}
+		if timer != nil {
+			timer.Stop()
+		}
+	}
+}
+
+// gitExchangeGap is how long a draining node goes on listening, once the last
+// git request it served has ended, for the next request of an exchange still
+// under way.
+//
+// GIT'S SMART HTTP IS STATELESS: a fetch is one request after another — the
+// advertisement, then v2's ls-refs and its fetch, or v0's negotiation a round
+// a POST — each sent only once the client has read the answer before it.
+// Between two of them this node is serving nothing of that fetch, so a drain
+// that ended the instant nothing was running would close the listener under a
+// fetch half done, and its next request would meet a closed port: exactly the
+// cut [App.DrainGit] exists to spare it.
+//
+// FIVE SECONDS, git's own uploadpack.keepAlive default: the longest a git
+// server lets a healthy exchange go silent before it speaks up, so that nothing
+// on the path takes the exchange for dead. A client's pause between two
+// requests is a round trip and its own work on the last answer — milliseconds
+// inside one network, a few hundred across the world — so this holds it many
+// times over, and costs a shutdown that served git in its last five seconds at
+// most five seconds more.
+const gitExchangeGap = 5 * time.Second
+
+// gitServing counts the git requests the drain gate let through and has not
+// seen answered, and when the last of them was answered. Its zero value is
+// ready: nothing running, nothing ever answered.
+type gitServing struct {
+	mu sync.Mutex
+	// running counts the requests begun and not yet ended or abandoned —
+	// for an instant, a request the gate is about to refuse ([App.admit]).
+	running int
+	// ended is when the last request was answered, on the monotonic clock —
+	// never the app's own, which a test fixes, since a gap measured on a
+	// fixed clock would never pass.
+	ended time.Time
+	// moved is closed at the next begin or end and then forgotten, so a
+	// waiter holding it wakes on the change rather than polling; nil until
+	// somebody waits.
+	moved chan struct{}
+}
+
+// begin counts one git request, before the gate judges it.
+func (g *gitServing) begin() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.running++
+	g.wake()
+}
+
+// end counts one git request answered, which is when an exchange's next request
+// is waited for from ([gitExchangeGap]).
+func (g *gitServing) end() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.running--
+	g.ended = time.Now()
+	g.wake()
+}
+
+// abandon takes back a git request the gate counted and then refused. It wakes
+// a wait that saw it counted, and leaves when the last request was answered
+// where it was: a refused request started nothing, so no exchange's next
+// request follows it and no gap is owed for it.
+func (g *gitServing) abandon() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.running--
+	g.wake()
+}
+
+// wake tells every waiter the count moved. Under mu.
+func (g *gitServing) wake() {
+	if g.moved != nil {
+		close(g.moved)
+		g.moved = nil
+	}
+}
+
+// state is the count, when the last request was answered, and a channel
+// closed at the next change.
+func (g *gitServing) state() (running int, ended time.Time, moved <-chan struct{}) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.moved == nil {
+		g.moved = make(chan struct{})
+	}
+	return g.running, g.ended, g.moved
+}

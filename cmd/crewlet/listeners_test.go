@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -281,3 +283,78 @@ func TestTheProbesOutliveThePublicListener(t *testing.T) {
 		t.Error("api.port is still listening after the surface stopped")
 	}
 }
+
+// THE SHUTDOWN FINISHES ITS GIT REQUESTS WITH THE LISTENER UP, after the
+// engine's drain and before the listener closes. A clone or a push the close
+// cut would be begun again from nothing on a peer — the listener's own grace
+// is sized for a REST read — and a git request still running reads the estate
+// and the object store the teardown closes, so the teardown waits too.
+func TestTheShutdownFinishesGitBeforeTheListenerCloses(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	log := logging.Get("test")
+	server, addr, err := listenAPI(ctx, "127.0.0.1:0", http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var steps []string
+	step := func(s string) {
+		mu.Lock()
+		defer mu.Unlock()
+		steps = append(steps, s)
+	}
+	taken := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(steps)
+	}
+	finishing, finished := make(chan struct{}), make(chan struct{})
+	surface := &httpSurface{server: server, drainGit: func(context.Context) error {
+		step("git")
+		close(finishing)
+		<-finished
+		return nil
+	}}
+	stopped := make(chan struct{})
+	go func() {
+		shutdown(context.Background(), &recordingEngine{step: step}, surface, log)
+		close(stopped)
+	}()
+
+	select {
+	case <-finishing:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the shutdown never waited for the git requests it was serving")
+	}
+	// While the git requests finish: the engine has drained and is not torn
+	// down, and the listener still answers.
+	if got := taken(); !slices.Equal(got, []string{"drain", "git"}) {
+		t.Errorf("the git requests were waited for after %v, want after the drain alone", got)
+	}
+	if status, _ := answer(t, http.MethodGet, "http://"+addr+"/health"); status != http.StatusOK {
+		t.Errorf("the listener answered %d while its git requests finished, want 200", status)
+	}
+
+	close(finished)
+	select {
+	case <-stopped:
+	case <-time.After(3 * apiShutdownGrace):
+		t.Fatal("the shutdown never ended once its git requests had")
+	}
+	if got := taken(); !slices.Equal(got, []string{"drain", "git", "stop"}) {
+		t.Errorf("the shutdown ran %v, want the drain, the git requests and then the teardown", got)
+	}
+	_, p, _ := net.SplitHostPort(addr)
+	if n, _ := strconv.Atoi(p); bound(n) {
+		t.Error("api.port is still listening after the shutdown")
+	}
+}
+
+// recordingEngine is a [drainer] that records each half of its stop.
+type recordingEngine struct{ step func(string) }
+
+func (e *recordingEngine) Drain(context.Context) { e.step("drain") }
+func (e *recordingEngine) Stop(context.Context)  { e.step("stop") }

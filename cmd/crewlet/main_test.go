@@ -312,7 +312,7 @@ func TestANodeWithoutTheIngressRoleServesOnlyItsProbes(t *testing.T) {
 			"orchestrator can probe it:\n%s", logged.String())
 	}
 	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
-	if surface.app != nil || surface.projector != nil {
+	if surface.app != nil || surface.projector != nil || surface.drainGit != nil {
 		t.Error("a node without the ingress role built the whole API")
 	}
 	if !strings.Contains(logged.String(), "api_probes_listening") {
@@ -394,7 +394,7 @@ func TestASeatsNodeWithoutIngressServesItsProbesAndToolBridge(t *testing.T) {
 			"agent-mode boxes can reach no tools:\n%s", logged.String())
 	}
 	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
-	if surface.app != nil || surface.projector != nil {
+	if surface.app != nil || surface.projector != nil || surface.drainGit != nil {
 		t.Error("a node without the ingress role built the whole API")
 	}
 	if !bridge.Mounted() {
@@ -543,6 +543,36 @@ func TestANodeServesItsOwnHealth(t *testing.T) {
 	}
 	if body["queue"] == "" || body["queue"] == nil {
 		t.Errorf("queue = %v, want the broker named", body["queue"])
+	}
+}
+
+// AN INGRESS NODE'S SHUTDOWN FINISHES ITS GIT REQUESTS. The surface a node is
+// served through hands [shutdown] the API's own wait for them, which
+// TestTheShutdownFinishesGitBeforeTheListenerCloses holds in its place: a
+// surface built without it would close the listener under every clone and
+// push the node was serving.
+func TestAnIngressNodesShutdownFinishesItsGitRequests(t *testing.T) {
+	t.Parallel()
+	e := testEngine(t)
+	boot := bootstrapFor(t, 0)
+	boot.API.Port = freePort(t)
+	surface, err := serveNode(t, boot, e)
+	if err != nil {
+		t.Fatalf("serveAPI: %v", err)
+	}
+	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+	if surface.app == nil {
+		t.Fatal("a node with the ingress role built no API")
+	}
+	if surface.drainGit == nil {
+		t.Fatal("the node serves git through its API and its shutdown would not wait for one request of it")
+	}
+	// The API's own wait, which on a node that served no git has nothing to
+	// wait for.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := surface.drainGit(ctx); err != nil {
+		t.Errorf("a node that served no git waited for some: %v", err)
 	}
 }
 
