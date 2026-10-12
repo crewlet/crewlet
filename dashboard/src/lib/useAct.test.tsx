@@ -39,6 +39,8 @@ const BOUND: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  chatBackend: "",
+  chatVendors: [],
 };
 
 interface Sent {
@@ -313,6 +315,56 @@ test("an abandoned press resolves with null and reports nothing", async () => {
   controller.abort();
   await waitFor(() => expect(got).toHaveBeenCalledWith(null));
   expect(screen.queryByText(/Could not confirm/)).toBeNull();
+});
+
+/** Two presses through `run`, the second naming the first's request id. */
+function Repeat({ onResult }: { onResult: (r: unknown) => void }) {
+  const pin = useAct("set_pins");
+  const [first, setFirst] = useState("");
+  return (
+    <>
+      <button
+        onClick={() =>
+          void pin
+            .run({ views: { add: ["v1"] } }, { done: "Pinned", quiet: true })
+            .then((r) => setFirst(r?.requestId ?? ""))
+        }
+      >
+        First
+      </button>
+      <button
+        onClick={() =>
+          void pin
+            .run({ views: { add: ["v1"] } }, { done: "Pinned", quiet: true }, { requestId: first })
+            .then(onResult)
+        }
+      >
+        Again
+      </button>
+    </>
+  );
+}
+
+// A CALLER THAT KEEPS ITS OWN PRESSES REPEATS ONE UNDER ITS ID. The chat
+// outbox holds a row per message nobody answered for, each with a Retry of its
+// own, so the hook's one held refusal cannot be what a retry reads — and a
+// retry sent under a fresh id is a second message rather than the first again.
+test("a press naming an earlier press's request id is that press again", async () => {
+  const posts = engine(() => json({ tool: "set_pins", outcome: "unknown" }, 504));
+  const got = vi.fn();
+  render(
+    <ToastProvider>
+      <Repeat onResult={got} />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "First" }));
+  await waitFor(() => expect(posts).toHaveLength(1));
+  await new Promise((r) => setTimeout(r, 20));
+  fireEvent.click(screen.getByRole("button", { name: "Again" }));
+  await waitFor(() => expect(got).toHaveBeenCalled());
+  expect(posts).toHaveLength(2);
+  expect(posts[1]!.request_id).toBe(posts[0]!.request_id);
+  expect(got.mock.calls[0]![0]).toMatchObject({ requestId: posts[0]!.request_id });
 });
 
 // A PRESS IS ITS PERSON'S. The act route derives a press's writes from its

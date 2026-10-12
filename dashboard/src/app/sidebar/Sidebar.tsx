@@ -4,7 +4,7 @@
  * # What is on it, and what is not
  *
  * The WORKSPACES, from `nav.ts`'s one table — the three that are about you
- * (Home, Inbox, My work), then the company's five, and Settings at the foot.
+ * (Home, Inbox, My work), then the company's six, and Settings at the foot.
  * Then three LIVE SHORTCUTS, each a real object with its own path: the views
  * this reader pinned, the pages they starred, and the turns running now.
  * Nothing else. A workspace's own sections are tabs in its page header and its
@@ -34,11 +34,13 @@
  * turns Live is running, a pinned view's total). A
  * figure the engine did not answer is absent, never a zero.
  *
- * # Settings is never hidden
+ * # Settings is never hidden, and neither is Chat
  *
- * It carries a lock for a reader without an operator credential, and stays: a
- * section that vanished when a credential is absent is indistinguishable from
- * one that does not exist.
+ * Each carries a lock for a reader without an operator credential, and stays:
+ * a section that vanished when a credential is absent is indistinguishable
+ * from one that does not exist. Settings' lock says MOST of its sections need
+ * one, because its charter is public; Chat's says the whole of it does
+ * (`WorkspaceRow.guarded`), because every chat read is a person's.
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -166,7 +168,20 @@ export function Sidebar({
   const row = (ws: WorkspaceRow) => (
     <NavRow
       key={ws.key}
-      label={ws.label}
+      label={
+        // A GUARDED WORKSPACE KEEPS ITS ROW AND SAYS WHAT IT NEEDS, as the
+        // foot's Settings row does — before a click, rather than as the page
+        // a click lands on.
+        ws.guarded && !viewer.operator ? (
+          <span className="side-locked">
+            {ws.label}
+            <KeyGlyph size="xs" aria-hidden="true" />
+            <span className="sr-only">, needs an operator credential</span>
+          </span>
+        ) : (
+          ws.label
+        )
+      }
       icon={ws.icon}
       path={ws.path}
       current={here === ws.key}

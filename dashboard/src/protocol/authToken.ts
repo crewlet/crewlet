@@ -93,8 +93,8 @@ export function onTokenRequested(listener: Listener): () => void {
  * origin shares, and a request reads it when it is sent (`rest.ts`), so a
  * token saved in one window is the credential every other window's next write
  * goes out under. Announced only for this tab's own writes, a window still
- * holding the last person's screen went on writing as the next one — a Retry
- * it held was sent again under somebody else's name — while its socket
+ * drawing the last person's chat went on flushing their reading — as the next
+ * person, whose shared rooms it then marked read for good — while its socket
  * stayed the last person's. `storage` fires in every OTHER document of the
  * origin, so it is followed while anybody is listening, as `lib/recents.ts`
  * follows its own key; `e.key === null` is a `localStorage.clear()`, which

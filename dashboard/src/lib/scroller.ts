@@ -11,8 +11,9 @@
  *
  * IT IS NOT THE ONLY SCROLLER, and two others are worth knowing about before
  * reasoning about where a wheel goes or what `reveal` moves. A FULL-HEIGHT
- * screen (`useFillScreen`: a task, the Inbox, a knowledge page) holds this
- * element still and lets its own columns scroll — each exactly this element's
+ * screen — one of the screens `app/fill.tsx` lists as asking `useFillScreen`
+ * for the window's height — holds this element still and lets its own columns,
+ * its canvas or its transcript and rail scroll — each exactly this element's
  * height, so `100cqb` is their view too, and on those screens THEY are the
  * page's scrollers. And a box inside the page may scroll its own content (a
  * running phase's transcript, a seat's thread list, a board lane, a long

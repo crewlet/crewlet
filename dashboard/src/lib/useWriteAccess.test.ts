@@ -29,6 +29,8 @@ const BOUND: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  chatBackend: "",
+  chatVendors: [],
 };
 
 test.each([
@@ -101,6 +103,8 @@ describe("changing the company's configuration", () => {
     asking: false,
     configWriter: true,
     configManagedBy: [],
+    chatBackend: "",
+    chatVendors: [],
     ...over,
   });
 

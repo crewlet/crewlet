@@ -33,6 +33,8 @@ const nobody: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  chatBackend: "",
+  chatVendors: [],
 };
 const ada: ViewerState = {
   ...nobody,

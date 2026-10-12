@@ -78,6 +78,15 @@ export interface ViewerState {
   configWriter: boolean;
   /** Who manages the company document, or empty when nothing does. */
   configManagedBy: readonly string[];
+  /**
+   * Which chat the company runs — the engine's answer, named to an operator
+   * only, and "" when nobody has said (no answer yet, or not an operator).
+   * Read by the chat screen, which draws a company on a vendor's chat or on
+   * none as that rather than asking questions this engine does not serve.
+   */
+  chatBackend: Viewer["chat_backend"];
+  /** On a vendor company, which vendor surfaces it declares. */
+  chatVendors: readonly string[];
 }
 
 /**
@@ -118,6 +127,8 @@ function useViewerRead(): ViewerState {
     asking: loading && data === null && error === null,
     configWriter: data?.config_writer ?? false,
     configManagedBy: data?.config_managed_by ?? [],
+    chatBackend: data?.chat_backend ?? "",
+    chatVendors: data?.chat_vendors ?? [],
   };
 }
 

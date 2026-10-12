@@ -82,6 +82,20 @@ export interface RunOptions {
    * they are owed.
    */
   signal?: AbortSignal;
+  /**
+   * The request id of the press this one REPEATS, for a caller that keeps its
+   * own presses past the hook's single refusal: the chat outbox, whose every
+   * unanswered message is a row with a Retry of its own. The engine derives
+   * the same operations from the same id, so the repeat is the first attempt
+   * again rather than a second message. Omitted — every new press — the id is
+   * minted here.
+   *
+   * ONLY UNDER THE CREDENTIAL IT WAS FIRST SENT WITH, which the hook cannot
+   * check for a press it does not hold: a caller keeping presses drops them
+   * when the credential changes (the chat screen remounts under its reader,
+   * `routes/chat/Chat.tsx`).
+   */
+  requestId?: string;
 }
 
 export interface Act<T extends ActionTool> {
@@ -285,13 +299,14 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
   );
 
   // A NEW PRESS IS A NEW REQUEST ID, minted here in the handler and never
-  // per attempt: only a retry of that press reuses it.
+  // per attempt: only a retry of that press reuses it — through [retry], or
+  // through `options.requestId` from a caller that keeps its own presses.
   const run = useCallback(
     (args: ActionArgs<T>, label: PressLabel, options?: RunOptions) =>
       send(
         // THE CREDENTIAL IS READ HERE, in the same turn the request reads it
         // to send, so it is the one the first attempt went with.
-        { args, requestId: newRequestId(), label, credential: apiToken() },
+        { args, requestId: options?.requestId ?? newRequestId(), label, credential: apiToken() },
         options?.signal,
       ),
     [send],

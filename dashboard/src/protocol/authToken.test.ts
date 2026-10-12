@@ -6,7 +6,7 @@
  * which every tab of the origin shares, and a request reads it when it is sent
  * — so a token saved in one window is the credential the next write from every
  * other window goes out under. Announced only for a tab's own writes, a window
- * still holding the last person's screen sent its writes as the next
+ * still drawing the last person's chat flushed their reading as the next
  * person, and kept their socket.
  */
 
