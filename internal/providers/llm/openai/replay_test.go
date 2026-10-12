@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -317,6 +318,82 @@ func TestAnUnnumberedStreamedCallKeepsItsSignature(t *testing.T) {
 				t.Fatalf("the stream assembled %+v, want call_1", turn.ToolCalls)
 			}
 			sameJSON(t, "call_1's extra_content", sent["tool_calls"].([]any)[0].(map[string]any)["extra_content"], google)
+		})
+	}
+}
+
+// Calls a stream does not number are still told apart. The SDK's accumulator
+// files every unnumbered fragment (no index, or Bedrock's -1) at position 0,
+// which is right for a lone call and fuses two: their ids overwrite each
+// other and their names and arguments run together into one call nothing can
+// run. A fragment naming another id than the call last opened opens the next
+// one; one naming none, or that call's id, continues it.
+func TestUnnumberedStreamedCallsAreAssembledApart(t *testing.T) {
+	t.Parallel()
+	const google = `{"google":{"thought_signature":"PFNJR05BVFVSRV9BPg=="}}`
+	call := func(index, id, extra, name, args string) string {
+		var b strings.Builder
+		b.WriteString(`{"tool_calls":[{`)
+		if index != "" {
+			b.WriteString(`"index":` + index + `,`)
+		}
+		if id != "" {
+			b.WriteString(`"id":"` + id + `","type":"function",`)
+		}
+		if extra != "" {
+			b.WriteString(`"extra_content":` + extra + `,`)
+		}
+		b.WriteString(`"function":{`)
+		if name != "" {
+			b.WriteString(`"name":"` + name + `",`)
+		}
+		b.WriteString(`"arguments":` + strconv.Quote(args) + `}}]}`)
+		return b.String()
+	}
+	type want struct{ id, name, city string }
+	for _, tc := range []struct {
+		name   string
+		deltas []string
+		want   []want
+	}{
+		{"each whole, unnumbered", []string{
+			call("", "0", google, "weather", `{"city":"Paris"}`),
+			call("", "1", "", "weather", `{"city":"London"}`),
+		}, []want{{"0", "weather", "Paris"}, {"1", "weather", "London"}}},
+		{"each numbered -1", []string{
+			call("-1", "a", google, "weather", `{"city":"Paris"}`),
+			call("-1", "b", "", "time", `{"city":"London"}`),
+		}, []want{{"a", "weather", "Paris"}, {"b", "time", "London"}}},
+		{"in fragments, unnumbered", []string{
+			call("", "a", google, "weather", ``),
+			call("", "", "", "", `{"city":`),
+			call("", "a", "", "", `"Paris"}`),
+			call("", "b", "", "time", `{"city":"London"}`),
+		}, []want{{"a", "weather", "Paris"}, {"b", "time", "London"}}},
+		{"numbered, then not", []string{
+			call("0", "a", google, "weather", `{"city":"Paris"}`),
+			call("", "b", "", "time", `{"city":"London"}`),
+		}, []want{{"a", "weather", "Paris"}, {"b", "time", "London"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			turn, sent := roundTrip(t, true, func(w http.ResponseWriter) {
+				streamAnswer(w, append([]string{`{"role":"assistant"}`}, tc.deltas...)...)
+			})
+			if len(turn.ToolCalls) != len(tc.want) {
+				t.Fatalf("the stream assembled %d calls, want %d: %+v", len(turn.ToolCalls), len(tc.want), turn.ToolCalls)
+			}
+			for i, w := range tc.want {
+				got := turn.ToolCalls[i]
+				if got.ID != w.id || got.Name != w.name || got.Arguments["city"] != w.city || got.ArgumentsError != "" {
+					t.Fatalf("call %d assembled as %+v, want %+v", i, got, w)
+				}
+			}
+			calls := sent["tool_calls"].([]any)
+			sameJSON(t, "the first call's extra_content", calls[0].(map[string]any)["extra_content"], google)
+			if _, invented := calls[1].(map[string]any)["extra_content"]; invented {
+				t.Fatalf("the second call went back with the first one's signature: %v", calls[1])
+			}
 		})
 	}
 }

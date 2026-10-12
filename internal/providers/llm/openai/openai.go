@@ -354,6 +354,9 @@ func (p *Provider) streamOnce(
 	for stream.Next() {
 		events++
 		chunk := stream.Current()
+		if len(chunk.Choices) > 0 {
+			turn.number(&chunk.Choices[0].Delta)
+		}
 		if !acc.AddChunk(chunk) {
 			// THE ANSWER CANNOT HOLD THIS CHUNK. The accumulator refuses
 			// one naming another completion id than the stream's first,

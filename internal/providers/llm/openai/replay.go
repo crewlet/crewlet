@@ -110,7 +110,8 @@ import (
 // keep two blocks of one type, which a whole response lists apart, apart here
 // too. A tool call's own fields are taken from the first fragment of that call
 // that carries them, filed at the position the SDK's accumulator assembles the
-// call at ([streamPosition]).
+// call at — which a stream that does not number its calls is given first
+// ([streamTurn.number]).
 
 // messageFields are the reasoning fields an assistant message carries beside
 // OpenAI's schema, and how a stream sends each one.
@@ -281,21 +282,66 @@ type streamTurn struct {
 	listed bool
 
 	// calls is each tool call's own fields, by the position the SDK's
-	// accumulator assembles the call at ([streamPosition]).
+	// accumulator assembles the call at ([streamTurn.number]).
 	calls map[int64]map[string]json.RawMessage
+
+	// ids is the id each position was opened under, last the position the
+	// latest fragment was filed at (once opened is set), and next the
+	// position after the highest one yet: what [streamTurn.number] reads
+	// an unnumbered fragment against.
+	ids    map[int64]string
+	last   int64
+	next   int64
+	opened bool
 
 	// readable is the reasoning text forwarded as it arrived.
 	readable strings.Builder
 }
 
-// add folds one delta in, and answers the visible text and the reasoning it
-// carried — what the caller forwards. The message's own fields are read off
-// the delta's raw JSON, which is the only place they are; a delta that is not
-// a JSON object carries none. The tool calls are the SDK's typed ones, so each
-// is read at the position the accumulator files it under.
+// number gives each tool call fragment of d the position of the call it
+// belongs to, in place, before the SDK's accumulator reads it.
+//
+// A host numbers a call's fragments with an `index`, and the accumulator files
+// them by it. A host that leaves the index out (Google's OpenAI-compatible
+// endpoint has been reported to) or sends -1 (Bedrock's number for a lone
+// call) has every fragment filed at 0 there — right for one call, and two
+// calls fused into one: their ids overwrite each other and their names and
+// arguments run together into a call nothing can run. So an unnumbered
+// fragment continues the call last opened when it names no id or that call's
+// id, and opens the next position when it names another: the reading a host
+// that numbers its calls spells out. A numbered fragment keeps its number.
+func (s *streamTurn) number(d *sdk.ChatCompletionChunkChoiceDelta) {
+	for i := range d.ToolCalls {
+		call := &d.ToolCalls[i]
+		if !call.JSON.Index.Valid() || call.Index == -1 {
+			if s.opened && (call.ID == "" || call.ID == s.ids[s.last]) {
+				call.Index = s.last
+			} else {
+				call.Index = s.next
+			}
+		}
+		if s.ids == nil {
+			s.ids = map[int64]string{}
+		}
+		if _, named := s.ids[call.Index]; !named && call.ID != "" {
+			s.ids[call.Index] = call.ID
+		}
+		s.last, s.opened = call.Index, true
+		if call.Index >= s.next {
+			s.next = call.Index + 1
+		}
+	}
+}
+
+// add folds one delta [streamTurn.number] has numbered in, and answers the
+// visible text and the reasoning it carried — what the caller forwards. The
+// message's own fields are read off the delta's raw JSON, which is the only
+// place they are; a delta that is not a JSON object carries none. The tool
+// calls are the SDK's typed ones, so each is kept at the position the
+// accumulator assembles it at.
 func (s *streamTurn) add(d sdk.ChatCompletionChunkChoiceDelta) (content, reasoning string) {
 	for _, call := range d.ToolCalls {
-		s.addCall(streamPosition(call.Index), call.RawJSON())
+		s.addCall(call.Index, call.RawJSON())
 	}
 	raw := d.RawJSON()
 	var delta map[string]json.RawMessage
@@ -374,19 +420,6 @@ func (s *streamTurn) add(d sdk.ChatCompletionChunkChoiceDelta) (content, reasoni
 
 	s.readable.WriteString(reasoning)
 	return content, reasoning
-}
-
-// streamPosition is where the SDK's accumulator files a streamed tool call
-// fragment: at its index, an absent one read as the zero it decodes to, and
-// -1 (Bedrock's number for a lone call) as 0 — the accumulator's own
-// checkedToolCallIndex. The fields kept beside the accumulator are matched to
-// the call it assembled at the same position, so they are filed by the same
-// rule or matched to nothing.
-func streamPosition(index int64) int64 {
-	if index == -1 {
-		return 0
-	}
-	return index
 }
 
 // addCall keeps a tool call fragment's own fields, the first value each one
