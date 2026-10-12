@@ -345,10 +345,18 @@ func declaresJSON(header string) bool {
 // A KEY THIS TRANSPORT DOES NOT READ IS REFUSED rather than ignored: a
 // client that wrote `requestId` would otherwise send every write without an
 // identity it believes it sent.
+//
+// THE ARGUMENTS' NUMBERS ARRIVE AS json.Number, as they do on every other
+// path into these tools — a seat's from its provider, a coding agent's over
+// the bridge. Decoded to a float64 instead, an integer past 2^53 was rounded
+// before any tool saw it: a read cursor is a packed log position whose
+// generation sits above bit 40, so a person's flush on a log past its first
+// eight thousand generations recorded a place they had never read to.
 func decodeAct(raw []byte) (actRequest, error) {
 	var req actRequest
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
+	dec.UseNumber()
 	if err := dec.Decode(&req); err != nil {
 		return actRequest{}, fmt.Errorf("the body must be one JSON object "+
 			"{\"request_id\": \"<uuid>\", \"args\": {…}}: %w", err)

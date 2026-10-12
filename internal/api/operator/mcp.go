@@ -1,9 +1,12 @@
 package operator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -69,6 +72,29 @@ func newMCPTransport(s *Server, company string) mcpTransport {
 	return mcpTransport{srv: srv}
 }
 
+// decodeArgs reads one call's arguments: a JSON object, or nothing.
+//
+// THROUGH json.Number, for [decodeAct]'s reason: an integer past 2^53 — a
+// packed log position, a vendor's id — is exact here and rounded the moment it
+// becomes a float64, and every other path into these tools already reads
+// through json.Number, so a tool written for a seat reads the same shape from
+// a person.
+func decodeArgs(raw json.RawMessage) (map[string]any, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var args map[string]any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&args); err != nil {
+		return nil, err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, errors.New("the arguments carry something after their JSON object")
+	}
+	return args, nil
+}
+
 // handlerFor adapts one catalogue tool to the MCP SDK's own signature.
 //
 // BY NAME, THROUGH THE SERVER'S DISPATCH, rather than closing over the tool
@@ -84,11 +110,9 @@ func newMCPTransport(s *Server, company string) mcpTransport {
 // reason.
 func handlerFor(s *Server, name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		var args map[string]any
-		if len(req.Params.Arguments) > 0 {
-			if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
-				return nil, fmt.Errorf("operator: %s: bad arguments: %w", name, err)
-			}
+		args, err := decodeArgs(req.Params.Arguments)
+		if err != nil {
+			return nil, fmt.Errorf("operator: %s: bad arguments: %w", name, err)
 		}
 		result, served, err := s.dispatch(ctx, types.TransportMCP, "", name, args)
 		if !served {
