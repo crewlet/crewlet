@@ -49,6 +49,29 @@
 // already makes. A NAME is claimed on name.<token>, so two creates of one name
 // contend there, where two fresh repository ids never would ([NameToken]).
 //
+// # Group commit
+//
+// Because every push to a repository contends on its one subject, a
+// repository's pushes are committed by ONE goroutine on the deciding node
+// ([Committer]), in the order they arrive, and each record carries every push
+// that was waiting when the last one finished — without lingering for more, up
+// to [MaxPushesPerRecord] pushes, [MaxRecordBytes] of entries and
+// [MaxRecordRows] of writes: an idle repository pays one record a push and a
+// burst one record a batch. A batch is decided in ONE snapshot, each push
+// against what the ones before it did (decide.go's order of rules), and
+// answered from the push rows its record applied — never from the decision,
+// so an ok is only ever reported for a ref that moved. A push id the
+// repository's history already holds is answered from its row, which is what
+// makes a push forwarded twice, or decided again on another node after a
+// failover, one push. A queue holds at most [CommitterInbox] pushes and
+// [CommitterInboxBytes] of entries, and past either a push is refused busy at
+// once. A batch is bounded by [CommitBudget], half the write attempt the estate
+// router gives the node it asked, and so is a push's wait in the queue: one
+// still queued a whole budget after it arrived is refused busy rather than
+// decided, and one whose caller has gone is never decided, so every push a
+// committer decides is answered inside its asker's attempt — never after the
+// asker has handed the same push id to another node.
+//
 // # The activation fence
 //
 // A repository code.repos declares is created, settled, deleted and restored
@@ -94,8 +117,9 @@
 // # What this package does not do
 //
 // It runs no git, moves no object bytes and serves no HTTP. It decides and
-// applies records, answers reads of the rows, and holds a bundle's bytes to
-// the row that names them when a caller tees them through a [SealWriter].
+// applies records, commits pushes a receiving node proposes, answers reads of
+// the rows, and holds a bundle's bytes to the row that names them when a
+// caller tees them through a [SealWriter].
 //
 // # Three horizons, each a function of the record that applies it
 //
@@ -165,6 +189,17 @@
 // one transaction, against 1.7–2.0 ms a repository through [Store.EnsureRepo]
 // — seventeen to twenty seconds of every data node's reads at ten thousand,
 // for an activation that appends one fence record.
+//
+// A DECIDE ROUND (BenchmarkDecideABatch, four counts of twenty) holds no write
+// lane — it is one read transaction on a connection of the replicated
+// estate's reader pool, on the repository's one committer goroutine, and it
+// is paid again on every compare-and-set round a peer's record forces: 15–16
+// ms for three pushes of [MaxCommandsPerPush] ref creations against
+// [MaxProtectionsPerRepo] rules on a repository of ten thousand refs, where
+// asking each rule in its one-off form — the pattern parsed and the ref
+// checked again for every command and rule, 192 000 times — took 83–87 ms;
+// and 2.1–2.7 ms for a group of [MaxPushesPerRecord] one-command pushes
+// (3.7–3.8 ms one-off). The rules are parsed once a round ([Protections]).
 //
 // A READ: one full page of a snapshot's refs ([MaxSnapshotItems]) from a
 // repository of [MaxRefsPerRepo] refs is 57–64 ms to serve, 5.7–6.4 µs a

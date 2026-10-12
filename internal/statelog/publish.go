@@ -1474,8 +1474,12 @@ const (
 // A record the read shows is ANOTHER operation's — the ambiguous path found it
 // newest on the subject — is not this operation's landing, and the gates are
 // asked about this node, whose own copy may be the one below it that a gate
-// dropped. And a record that cannot be read is one whose writer nobody here
-// can name, which is `unknown` rather than a guess in either direction.
+// dropped. A refusal there is about THIS NODE, and it says so: it names the
+// position the gate was judged at and NOT a dropped record of this operation
+// ([Unavailable.Dropped]), because the record there may be a healthy peer's
+// that applied everywhere and this write's own append may never have landed.
+// And a record that cannot be read is one whose writer nobody here can name,
+// which is `unknown` rather than a guess in either direction.
 //
 // # And whether it is this operation's
 //
@@ -1579,9 +1583,11 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 		return Result{}, err
 	}
 	if gated {
-		// THE RECORD APPLIED NOWHERE AND NEVER WILL. A refusal rather
-		// than an outcome, and never a re-decide: republishing produces
-		// another durable record nothing applies.
+		// THE WRITE APPLIED NOWHERE AND NEVER WILL. A refusal rather than
+		// an outcome, and never a re-decide: republishing produces another
+		// durable record nothing applies — or, where the gate holds this
+		// node at another operation's record, another this node's gate
+		// drops.
 		//
 		// NOT COUNTED AS A DROPPED RECORD HERE. This node's applier
 		// counted the drop when it applied `at` — the wait above is what
@@ -1590,11 +1596,13 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 		// every node a retry of the same operation id reached inside the
 		// duplicate window. The write's refusal is counted where every
 		// refusal is, by reason ([Publisher.observe]), and this line keeps
-		// the writer and the position.
+		// the writer and the position — and whether the record there is
+		// this operation's ([Unavailable.Dropped]), without which a reader
+		// took another operation's record for the write's own.
 		p.logger.WarnContext(ctx, "statelog_write_gated",
 			"domain", p.domain.Name(), "subject", req.Subject.String(),
 			"gate", string(reason), "position", at.String(), "op_id", req.OpID,
-			"writer", writer)
+			"writer", writer, "dropped", ours)
 		// AND THAT THE OPERATION ID IS SPENT FOR A WHILE, which decides
 		// how it is retried: the broker collapses the same id onto the
 		// record for its duplicate window, and the answer is this refusal
@@ -1607,9 +1615,10 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 		var detail string
 		switch {
 		case !ours:
-			detail = fmt.Sprintf("this node is held by the gate at %s, the newest "+
-				"record on the subject, so whatever it appended under this "+
-				"operation applies nowhere — and if that landed, %s", at, spent)
+			detail = fmt.Sprintf("the newest record on the subject, at %s, is "+
+				"another operation's, and the gate holds this node there: whatever "+
+				"it appended under this operation lies below that record and "+
+				"applies nowhere — and if that landed, %s", at, spent)
 		case writer != p.nodeID:
 			detail = fmt.Sprintf("the record at %s is node %s's copy of this "+
 				"operation, which this node's append was collapsed onto, and it "+
@@ -1635,6 +1644,7 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 			Position:   at,
 			OpID:       req.OpID,
 			CopyWriter: copyWriter,
+			Dropped:    ours,
 		}
 	}
 

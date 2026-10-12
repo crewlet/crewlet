@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -249,6 +250,9 @@ func TestOnlyAGateThatHoldsAWriterBlamesIt(t *testing.T) {
 		if got := reason.BlamesWriter(); got != want.blames {
 			t.Errorf("%q.BlamesWriter() = %v, want %v", reason, got, want.blames)
 		}
+		if got := reason.FromGate(); got != want.gate {
+			t.Errorf("%q.FromGate() = %v, want %v", reason, got, want.gate)
+		}
 	}
 	for reason := range reasonDecisions {
 		if !slices.Contains(statelog.Reasons(), reason) {
@@ -258,6 +262,187 @@ func TestOnlyAGateThatHoldsAWriterBlamesIt(t *testing.T) {
 	if statelog.Reason("from-a-newer-peer").BlamesWriter() {
 		t.Error("a reason this build does not name blames the writer — nothing " +
 			"here knows what its gate holds")
+	}
+	if statelog.Reason("from-a-newer-peer").FromGate() {
+		t.Error("a reason this build does not name is a gate's — nothing here " +
+			"knows that a record landed under it")
+	}
+}
+
+// ONLY A GATE'S REFUSAL OF A RECORD OF ITS OWN OPERATION LANDED. Every reason,
+// with and without a position, with and without [statelog.Unavailable.Dropped]:
+// a refusal made before the append carries positions too — the point a
+// `behind` write needs, a `deferred` record, a `skew`'s last sequence, the
+// record an `op_reused` id names — and so does a gate's refusal at ANOTHER
+// operation's record, at which the gate holds this node; a caller that read
+// any of those as a record that landed and applies nowhere told its client a
+// write was durable and lost when nothing of it was known to be on the log and
+// another node could make it.
+func TestOnlyAGateRefusalOfItsOwnRecordLanded(t *testing.T) {
+	t.Parallel()
+	at := statelog.Position{Stream: "CREWLET_PROBE_LOG", Generation: 1, Seq: 42}
+	for _, reason := range statelog.Reasons() {
+		for _, dropped := range []bool{false, true} {
+			if (&statelog.Unavailable{Reason: reason, Dropped: dropped}).Landed() {
+				t.Errorf("a %q refusal with no position (dropped %v) landed — nothing "+
+					"names a record", reason, dropped)
+			}
+		}
+		if (&statelog.Unavailable{Reason: reason, Position: at}).Landed() {
+			t.Errorf("a %q refusal at %s that names no record of its own operation "+
+				"landed — the record there may be anybody's", reason, at)
+		}
+		want := reasonDecisions[reason].gate
+		if got := (&statelog.Unavailable{Reason: reason, Position: at, Dropped: true}).Landed(); got != want {
+			t.Errorf("a %q refusal of its own record at %s: Landed() = %v, want %v",
+				reason, at, got, want)
+		}
+	}
+}
+
+// A GATED WRITE'S REFUSAL SAYS WHETHER THE RECORD IT NAMES IS THE WRITE'S OWN,
+// on both arms of the resolution.
+//
+// Where the record at the refusal's position carries this operation — this
+// write's own acknowledged append, the copy the broker collapsed it onto, or
+// the record a lost answer found newest carrying its id — a gate dropped THAT
+// record, and the refusal is [statelog.Unavailable.Landed]. Where a lost answer
+// found ANOTHER operation's record newest on the subject and the gates hold
+// THIS NODE there, the record named is only where the gate was judged: it may
+// be a healthy peer's that applied on every node, and this write's own append
+// may never have landed at all. Read as landed, a caller told its client the
+// write was durable at that position and dropped everywhere — neither known —
+// and answered as lost a write the runner-up could have made.
+func TestAGatedWriteSaysWhetherItsRecordIsItsOwn(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// settle lands what the case is about and holds what the gate holds;
+		// it answers, once the write has run, the position the refusal must
+		// name.
+		settle  func(t *testing.T, h *harness) func() statelog.Position
+		op      string
+		reason  statelog.Reason
+		dropped bool
+	}{{
+		name: "this write's own acknowledged record", op: "op-own",
+		reason: statelog.ReasonEvicted, dropped: true,
+		settle: func(t *testing.T, h *harness) func() statelog.Position {
+			h.applier.mu.Lock()
+			h.applier.auto = false
+			h.applier.mu.Unlock()
+			h.applier.advance(statelog.Position{Stream: probeStream, Generation: 1, Seq: 1_000})
+			h.gates.holdWriter("node-a", statelog.ReasonEvicted)
+			return h.lastAppended
+		},
+	}, {
+		name: "a copy the broker collapsed the append onto", op: "op-copied",
+		reason: statelog.ReasonEvicted, dropped: true,
+		settle: func(t *testing.T, h *harness) func() statelog.Position {
+			at := peerCopy(t, h, "node-b", "op-copied")
+			h.gates.holdWriter("node-b", statelog.ReasonEvicted)
+			return func() statelog.Position { return at }
+		},
+	}, {
+		name: "this write's own record a lost answer found", op: "op-found",
+		reason: statelog.ReasonEvicted, dropped: true,
+		settle: func(t *testing.T, h *harness) func() statelog.Position {
+			return heldAfterALostAnswer(t, h, false, statelog.ReasonEvicted)
+		},
+	}, {
+		name: "another operation's record a lost answer found, evicted", op: "op-held",
+		reason: statelog.ReasonEvicted,
+		settle: func(t *testing.T, h *harness) func() statelog.Position {
+			return heldAfterALostAnswer(t, h, true, statelog.ReasonEvicted)
+		},
+	}, {
+		name: "another operation's record a lost answer found, deleted", op: "op-purged",
+		reason: statelog.ReasonDeleted,
+		settle: func(t *testing.T, h *harness) func() statelog.Position {
+			return heldAfterALostAnswer(t, h, true, statelog.ReasonDeleted)
+		},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			at := tc.settle(t, h)
+
+			res, err := h.write(probeSubject("a"), tc.op, "mine")
+			var refusal *statelog.Unavailable
+			if !errors.As(err, &refusal) || refusal.Reason != tc.reason {
+				t.Fatalf("the write = (%+v, %v), want a refusal %q", res, err, tc.reason)
+			}
+			if want := at(); refusal.Position != want || refusal.OpID != tc.op {
+				t.Errorf("the refusal names %s under %s, want %s under %s",
+					refusal.Position, refusal.OpID, want, tc.op)
+			}
+			if refusal.Dropped != tc.dropped || refusal.Landed() != tc.dropped {
+				t.Errorf("the refusal at %s: Dropped = %v, Landed() = %v, want %v — "+
+					"the record there is this operation's, and a gate dropped it, in "+
+					"exactly the cases that say so", refusal.Position, refusal.Dropped,
+					refusal.Landed(), tc.dropped)
+			}
+			if !tc.dropped && refusal.CopyWriter != "" {
+				t.Errorf("a refusal held at another operation's record names %q as a "+
+					"copy's writer — it is about this node", refusal.CopyWriter)
+			}
+		})
+	}
+}
+
+// lastAppended is where this harness's appender last put a record.
+func (h *harness) lastAppended() statelog.Position {
+	return statelog.Position{Stream: probeStream, Generation: h.gen.Load(),
+		Seq: uint64(h.appends.lastSeq.Load())}
+}
+
+// heldAfterALostAnswer has the next write's append on subject a lose its
+// answer — after landing, or (swallowed) without landing at all, in which case
+// a PEER's record of another operation lands on the subject before the
+// publisher asks the broker what the subject holds. The subject is
+// established first, so the write takes the anchored path; this node's
+// applier passes everything without a ledger row for the write; and the gate
+// holds this node under reason. It answers, once the write has run, the
+// newest record on the subject: the peer's, or the write's own.
+func heldAfterALostAnswer(t *testing.T, h *harness, swallowed bool,
+	reason statelog.Reason) func() statelog.Position {
+
+	t.Helper()
+	first, err := h.write(probeSubject("a"), "op-0", "one")
+	if err != nil {
+		t.Fatalf("the first write: %v", err)
+	}
+	h.anchorAt(probeSubject("a"), first.Position.Seq)
+	h.applier.mu.Lock()
+	h.applier.auto = false
+	h.applier.mu.Unlock()
+	h.applier.advance(statelog.Position{Stream: probeStream, Generation: 1, Seq: 1_000})
+	if reason == statelog.ReasonDeleted {
+		// EVERY WRITER, as the marker holds them.
+		h.gates.mu.Lock()
+		h.gates.gated, h.gates.reason = true, reason
+		h.gates.mu.Unlock()
+	} else {
+		h.gates.holdWriter("node-a", reason)
+	}
+	h.appends.fail(errors.New("no response from stream"), swallowed)
+	if !swallowed {
+		return h.lastAppended
+	}
+	var peer atomic.Uint64
+	h.appends.mu.Lock()
+	h.appends.beforeLastSeq = func() {
+		seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
+			probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("a"),
+				statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "the peer's"))
+		if err != nil {
+			t.Errorf("land the peer's record: %v", err)
+		}
+		peer.Store(seq)
+	}
+	h.appends.mu.Unlock()
+	return func() statelog.Position {
+		return statelog.Position{Stream: probeStream, Generation: h.gen.Load(), Seq: peer.Load()}
 	}
 }
 

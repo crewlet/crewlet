@@ -1,10 +1,12 @@
 package code_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitref"
 )
 
 // EVERY REFUSAL HAS ITS SENTENCE, and the five answers ABOUT a push are never
@@ -103,8 +105,123 @@ func TestEveryMatchingProtectionHolds(t *testing.T) {
 		{code.Command{Ref: "refs/heads/release/1", Old: a, New: code.ZeroOID, Forced: true},
 			code.RefusalProtectedDirect},
 	} {
-		if got := code.ProtectionRefusal(tc.cmd, rules); got != tc.want {
+		if got := code.ProtectionRefusal(tc.cmd, parsed(t, rules...)); got != tc.want {
 			t.Errorf("ProtectionRefusal(%s) = %q, want %q", tc.cmd.Ref, got, tc.want)
 		}
+	}
+}
+
+// parsed is rules as ProtectionRefusal asks them.
+func parsed(t *testing.T, rules ...code.Protection) code.Protections {
+	t.Helper()
+	ps, err := code.ParseProtections(rules)
+	if err != nil {
+		t.Fatalf("ParseProtections: %v", err)
+	}
+	return ps
+}
+
+// A PARSED RULE MATCHES EXACTLY WHAT THE ONE-OFF FORM MATCHES: the decide and
+// the receiver ask rules parsed once, and gitref.MatchPattern — the form that
+// checks the ref and parses the pattern on every call, which gitref holds to
+// real git — is the oracle, so the two can never drift. One rule a case, with
+// direct_push none, so the refusal says exactly whether it matched.
+func TestAParsedProtectionMatchesWhatMatchPatternMatches(t *testing.T) {
+	t.Parallel()
+	deep := "refs/heads/" + strings.Repeat("d/", 100) + "hotfix"
+	patterns := []string{
+		"refs/heads/main", "refs/heads/*", "refs/heads/**", "refs/heads/release/**",
+		"refs/heads/release/*", "refs/heads/**/hotfix", "refs/heads/team*/release/**",
+		"refs/heads/a/**/b/**/c", "refs/tags/v*", "refs/tags/**", "refs/heads/*-wip",
+	}
+	refs := []string{
+		"refs/heads/main", "refs/heads/main/x", "refs/heads/release", "refs/heads/release/1.0",
+		"refs/heads/release/1/2", "refs/heads/hotfix", "refs/heads/x/hotfix", deep,
+		"refs/heads/team7/release/2/rc", "refs/heads/team7/feature", "refs/heads/a/b/c",
+		"refs/heads/a/x/b/y/c", "refs/heads/a/c", "refs/tags/v1.0", "refs/tags/x",
+		"refs/heads/my-wip", "refs/heads/wip",
+	}
+	matched := 0
+	for _, pattern := range patterns {
+		rules := parsed(t, code.Protection{Pattern: pattern, DirectPush: code.DirectNone})
+		for _, ref := range refs {
+			want := gitref.MatchPattern(pattern, ref)
+			got := code.ProtectionRefusal(code.Command{Ref: ref, Old: code.ZeroOID,
+				New: strings.Repeat("b", 40)}, rules) == code.RefusalProtectedDirect
+			if got != want {
+				t.Errorf("%s against %s: the parsed rule matched = %v, MatchPattern = %v",
+					pattern, ref, got, want)
+			}
+			if want {
+				matched++
+			}
+		}
+	}
+	// A TABLE THAT NEVER MATCHED would agree with an oracle that never
+	// matches either.
+	if matched < 20 {
+		t.Fatalf("only %d (pattern, ref) pairs matched — the table no longer tells a "+
+			"matching rule from an absent one", matched)
+	}
+}
+
+// A RULE THAT IS NOT A PATTERN IS REFUSED, NEVER READ AS PROTECTING NOTHING: a
+// stored rule this build cannot parse would otherwise leave the ref it was
+// written for open to every push.
+func TestAProtectionThatIsNotAPatternIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, pattern := range []string{"refs/heads/*.lock", "refs/notes/x", "refs/heads/a**b", ""} {
+		_, err := code.ParseProtections([]code.Protection{
+			{Pattern: "refs/heads/main", DirectPush: code.DirectNone},
+			{Pattern: pattern, DirectPush: code.DirectNone},
+		})
+		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%q", pattern)) {
+			t.Errorf("ParseProtections with %q: %v; want an error naming it", pattern, err)
+		}
+	}
+	if got := code.ProtectionRefusal(code.Command{Ref: "refs/heads/main", Old: code.ZeroOID,
+		New: strings.Repeat("b", 40)}, code.Protections{}); got != "" {
+		t.Errorf("no rules refused %q", got)
+	}
+}
+
+// AN ATOMIC PUSH IS REFUSED WHOLE: once any command is ng, every command that
+// is ok or undecided is ng atomic, a noop stays a noop and the refusal that
+// caused it keeps its own code — and a push with no refusal is untouched.
+func TestAtomicRefusesEveryOtherCommand(t *testing.T) {
+	t.Parallel()
+	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	cmds := []code.Command{
+		{Ref: "refs/heads/one", Old: a, New: b, Result: code.ResultOK},
+		{Ref: "refs/heads/two", Old: a, New: b},
+		{Ref: "refs/heads/three", Old: a, New: b, Result: code.ResultNoop},
+		{Ref: "refs/heads/four", Old: a, New: b, Result: code.ResultNG, Reason: code.RefusalStale,
+			Detail: "refs/heads/four is at bbbbbbb; fetch first"},
+	}
+	got := code.Atomic(cmds)
+	want := []struct {
+		result code.CommandResult
+		reason code.Refusal
+	}{
+		{code.ResultNG, code.RefusalAtomic}, {code.ResultNG, code.RefusalAtomic},
+		{code.ResultNoop, ""}, {code.ResultNG, code.RefusalStale},
+	}
+	for i, w := range want {
+		if got[i].Result != w.result || got[i].Reason != w.reason {
+			t.Errorf("command %d is %s %s, want %s %s", i, got[i].Result, got[i].Reason, w.result, w.reason)
+		}
+		if got[i].Reason == code.RefusalAtomic && got[i].Detail == "" {
+			t.Errorf("command %d is refused atomic with no detail", i)
+		}
+	}
+	if got[3].Detail != cmds[3].Detail {
+		t.Errorf("the refusal that caused it lost its detail: %q", got[3].Detail)
+	}
+	if cmds[0].Result != code.ResultOK || cmds[1].Result != "" {
+		t.Error("Atomic changed the commands it was handed")
+	}
+	clean := cmds[:3]
+	if out := code.Atomic(clean); &out[0] != &clean[0] {
+		t.Error("a push with no refusal was copied rather than returned as it is")
 	}
 }

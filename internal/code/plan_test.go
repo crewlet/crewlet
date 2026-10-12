@@ -20,7 +20,8 @@ import (
 // only thing that knows whether the statement reaches the index. So this runs
 // EXPLAIN QUERY PLAN over every statement the package issues against the
 // tables a repository's history lives in — the guards, the applier's reads
-// and writes, the lifecycle store's decides, the reader's pages in their
+// and writes, the lifecycle store's decides, the push decide's reads (the
+// expired tombstones it counts among them), the reader's pages in their
 // first and keyset forms, the purge's bounded count and the object store's
 // two statements over code_packs — and holds each to the EXACT seek it names:
 // the index and every column of it the statement bounds. Seeking an index is
@@ -160,6 +161,10 @@ func registeredStatements() map[string]statement {
 		"head":                {headSQL, []any{"repo-1", "refs/heads/main"}, []string{refsKey + " (repo_id=? AND ref=?)"}},
 		"deleted":             {deletedSQL, []any{100}, []string{"code_repos_deleted_idx (deleted_at<=?)"}},
 		"count a gate reject": {countRejectSQL, []any{1, "repo-1"}, []string{deletionKey + " (repo_id=?)"}},
+		"decide repo":         {decideRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
+		"pushes named":        {pushesNamedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
+		"expired tombstones counted": {expiredTombstoneCountSQL, []any{"repo-1", 100, MaxRecordRows},
+			[]string{"COVERING INDEX code_refs_tombstones_idx (repo_id=? AND at<?)"}},
 	}
 	among, err := PackReferences.ObjectsAmong(3)
 	if err != nil {

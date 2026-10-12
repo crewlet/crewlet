@@ -19,6 +19,8 @@ const (
 	BackupAge                        = "crewlet.backup.age"
 	BackupDuration                   = "crewlet.backup.duration"
 	BackupHolds                      = "crewlet.backup.holds"
+	CodeCommitBatchSize              = "crewlet.code.commit.batch.size"
+	CodeCommitBusy                   = "crewlet.code.commit.busy"
 	CodeGitLentCores                 = "crewlet.code.git.lent_cores"
 	CodeGitProcesses                 = "crewlet.code.git.processes"
 	CodeGitWait                      = "crewlet.code.git.wait"

@@ -1,8 +1,12 @@
 package code
 
 import (
+	"fmt"
+	"iter"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/gitref"
 )
 
 // Refusal is why a command was refused, or why a push was not committed — a
@@ -147,18 +151,66 @@ func StatelessRefusal(c Command) Refusal {
 	return ""
 }
 
+// Protections is a repository's protection rules with each pattern PARSED
+// ONCE ([ParseProtections]) — the form [ProtectionRefusal] asks, because the
+// push decide asks every rule about every command of a batch, on the
+// repository's one committer and inside one read snapshot, again on every
+// compare-and-set round, and the receiver asks every rule about every command
+// of a push. Parsed per question, a maximal batch's round re-read each pattern
+// and re-checked each ref for every (command, rule) pair — 192 000 of them at
+// three thousand commands and [MaxProtectionsPerRepo] rules, most of the
+// round's cost (doc.go's measured section).
+//
+// The zero Protections holds no rule.
+type Protections struct {
+	rules    []Protection
+	patterns []gitref.Pattern
+}
+
+// ParseProtections reads rules for asking about many refs, refusing — rather
+// than reading as a rule that protects nothing — one whose pattern is not a
+// protection pattern: every stored rule passed the configuration's validation
+// and [RepoSettings.Validate] before any record carried it, so one that does
+// not parse is an estate that holds what no writer of this build wrote, and a
+// protection read as absent is a protected ref open to every push.
+func ParseProtections(rules []Protection) (Protections, error) {
+	out := Protections{rules: rules, patterns: make([]gitref.Pattern, len(rules))}
+	for i, rule := range rules {
+		p, ok := gitref.ParsePattern(rule.Pattern)
+		if !ok {
+			return Protections{}, fmt.Errorf("code: protection %q is not a protection pattern "+
+				"this build reads, so no push to its repository can be judged against it", rule.Pattern)
+		}
+		out.patterns[i] = p
+	}
+	return out, nil
+}
+
+// matching is every rule whose pattern matches ref, in the order they were
+// parsed.
+func (ps Protections) matching(ref string) iter.Seq[Protection] {
+	return func(yield func(Protection) bool) {
+		for i, p := range ps.patterns {
+			if p.Match(ref) && !yield(ps.rules[i]) {
+				return
+			}
+		}
+	}
+}
+
 // ProtectionRefusal is the protection rule of the push decide over EVERY rule
 // whose pattern matches the command's ref — or "" when none fires. Every
 // matching rule is consulted, because two rules written for two reasons both
 // hold: any rule with direct_push none refuses protected_direct; a deletion any
 // rule does not allow is protected_delete; a force-push any rule does not allow
 // is protected_force — in that order of precedence.
-func ProtectionRefusal(c Command, rules []Protection) Refusal {
+//
+// c.Ref is a ref: [StatelessRefusal] refuses anything else first, in the
+// decide and in the receiver alike, so the ref is not checked again for every
+// rule — for anything else the answer means nothing (and is never a panic).
+func ProtectionRefusal(c Command, rules Protections) Refusal {
 	var direct, deletion, force bool
-	for _, rule := range rules {
-		if !MatchPattern(rule.Pattern, c.Ref) {
-			continue
-		}
+	for rule := range rules.matching(c.Ref) {
 		direct = direct || rule.DirectPush == DirectNone
 		deletion = deletion || !rule.AllowDelete
 		force = force || !rule.AllowForce
@@ -173,6 +225,34 @@ func ProtectionRefusal(c Command, rules []Protection) Refusal {
 	}
 	return ""
 }
+
+// Atomic is an --atomic push's all-or-nothing rule: when any command is ng,
+// every command that is ok or not yet decided becomes ng atomic, and a noop
+// stays one — it asked for what the ref already holds, which no refusal of
+// its neighbours makes untrue. A push with no refusal is returned unchanged;
+// otherwise the answer is a new slice and cmds is left as it was.
+//
+// ONE FUNCTION the decide and the receiver both call (ADR-0008): the receiver
+// applies it to the refusals it fills in before proposing, so a push it
+// refuses in part never uploads a pack for the rest, and the decide applies it
+// to what it decided — never a second spelling of the rule.
+func Atomic(cmds []Command) []Command {
+	if !slices.ContainsFunc(cmds, func(c Command) bool { return c.Result == ResultNG }) {
+		return cmds
+	}
+	out := slices.Clone(cmds)
+	for i, c := range out {
+		if c.Result == ResultNG || c.Result == ResultNoop {
+			continue
+		}
+		out[i].Result, out[i].Reason = ResultNG, RefusalAtomic
+		out[i].Detail = atomicDetail
+	}
+	return out
+}
+
+// atomicDetail is what a command refused with the rest of its push says.
+const atomicDetail = "refused with the rest of this --atomic push"
 
 // The ref namespaces the stateless rules read.
 const (

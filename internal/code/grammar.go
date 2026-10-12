@@ -18,6 +18,3 @@ func ValidName(name string) bool { return gitref.ValidRepoName(name) }
 
 // ValidRef reports whether ref is a ref a push may name.
 func ValidRef(ref string) bool { return gitref.ValidRef(ref) }
-
-// MatchPattern reports whether ref matches a protection pattern.
-func MatchPattern(pattern, ref string) bool { return gitref.MatchPattern(pattern, ref) }
