@@ -1281,14 +1281,16 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 // system the moment it is, so a SECOND one kills the process.
 //
 // At the first signal rather than once the node is serving, because a
-// serving node's drain is not the only unbounded wait: a boot that fails
-// once the engine is up runs the same drain. While signal.NotifyContext is
-// still the installed handler, every further press is swallowed, which left
-// an operator with no way to abort from the terminal they started the node
-// in short of SIGKILL from somewhere else. The escape hatch is what makes
-// those unbounded waits safe to offer: the bound belongs to whoever
-// supervises the process, and for an operator at a terminal the second
-// press IS their bound.
+// serving node's drain is not the only unbounded wait. A boot has them too:
+// a boot that fails once the engine is up runs the same drain, and an
+// embedded broker still recovering a large store cannot be interrupted
+// (internal/queue/jetstream's startEmbedded waits the recovery out). While
+// signal.NotifyContext is still the installed handler, every further press is
+// swallowed, which left an operator with no way to abort from the terminal
+// they started the node in short of SIGKILL from somewhere else. The escape
+// hatch is what makes those unbounded waits safe to offer: the bound belongs
+// to whoever supervises the process, and for an operator at a terminal the
+// second press IS their bound.
 //
 // The returned stop releases the signals without one having arrived; calling
 // it again is harmless.

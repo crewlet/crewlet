@@ -528,12 +528,15 @@ Embedding our own grace window would duplicate that decision in two places and i
 the operating system* the moment it arrives, so a second SIGINT or SIGTERM
 does what it always does: the process dies immediately, with no cleanup.
 That holds from the first moment of `crewlet run`, while the node is still
-booting as much as while it drains, because a boot can wait unboundedly too:
-a boot that fails once the engine is up runs the same drain. The handover is
-what makes those unbounded waits safe to offer. Without it the engine would
-still be the installed handler, every further press would be swallowed, and
-an operator watching a drain or a slow boot from the terminal they started it
-in would have no way to abort it short of SIGKILL from somewhere else.
+booting as much as while it drains, because a boot can wait unboundedly too.
+A boot that fails once the engine is up runs the same drain. An embedded
+broker that is still recovering a large store cannot be interrupted, so a
+first Ctrl+C during that recovery waits for it to finish (the log says
+`embedded_start_cancel_waits`) before the boot gives up. The handover is what
+makes those unbounded waits safe to offer. Without it the engine would still
+be the installed handler, every further press would be swallowed, and an
+operator watching a drain or a slow boot from the terminal they started it in
+would have no way to abort it short of SIGKILL from somewhere else.
 
 A turn killed that way leaves its trigger **unacknowledged** rather than
 NAK'd, because nothing gets to run. The broker redelivers it once its ack
