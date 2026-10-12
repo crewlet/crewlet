@@ -71,8 +71,15 @@ func withPack(p Proposal, size int64, at time.Time) Proposal {
 // cmd is an undecided command.
 func cmd(ref, old, new string) Command { return Command{Ref: ref, Old: old, New: new} }
 
-// decideIn runs one round of the decide over e's rows.
+// decideIn runs the first round of a batch's decide over e's rows.
 func decideIn(t *testing.T, e *estate, limits Limits, batch ...Proposal) ([]PushEntry, []decided) {
+	t.Helper()
+	return decideRound(t, e, limits, &verdicts{}, batch...)
+}
+
+// decideRound runs one round of the decide over e's rows, with the protection
+// verdicts the batch's earlier rounds formed.
+func decideRound(t *testing.T, e *estate, limits Limits, v *verdicts, batch ...Proposal) ([]PushEntry, []decided) {
 	t.Helper()
 	var (
 		entries []PushEntry
@@ -80,12 +87,54 @@ func decideIn(t *testing.T, e *estate, limits Limits, batch ...Proposal) ([]Push
 	)
 	if err := e.db.Read(context.Background(), func(tx *sql.Tx) error {
 		var err error
-		entries, answers, _, err = decideBatch(context.Background(), tx, decideRepo, batch, limits, decideAt)
+		entries, answers, _, err = decideBatch(context.Background(), tx, decideRepo, batch, limits,
+			decideAt, v)
 		return err
 	}); err != nil {
 		t.Fatalf("decide: %v", err)
 	}
 	return entries, answers
+}
+
+// A PROTECTION VERDICT OUTLIVES ITS ROUND ONLY UNDER THE RULES IT WAS FORMED
+// UNDER. The rounds of one publish ask the same commands, so a round whose
+// snapshot holds the same rules forms no verdict again — asking every rule
+// about every command is the one cost of a round a founder's rules can make
+// seconds long — and a round whose snapshot holds other rules, after a
+// settings record, forms every verdict again from them rather than answering
+// from rules the repository no longer has.
+func TestAProtectionVerdictOutlivesItsRoundOnlyUnderItsRules(t *testing.T) {
+	t.Parallel()
+	e := decideEstate(t)
+	batch := []Proposal{
+		proposalOf(cmd("refs/heads/locked", ZeroOID, oid("L"))),
+		proposalOf(cmd("refs/heads/main", oid("A"), oid("B")), cmd("refs/heads/fresh", ZeroOID, oid("N"))),
+	}
+	var v verdicts
+	want := func(round string, answers []decided, locked Refusal, formed int) {
+		t.Helper()
+		if got := answers[0].commands[0].Reason; got != locked {
+			t.Fatalf("%s: the push to refs/heads/locked was decided %q, want %q", round, got, locked)
+		}
+		for _, c := range answers[1].commands {
+			if c.Result != ResultOK {
+				t.Fatalf("%s: %s was decided %s %q, want ok", round, c.Ref, c.Result, c.Reason)
+			}
+		}
+		if v.formed != formed {
+			t.Fatalf("%s: %d verdicts formed over the batch's rounds, want %d", round, v.formed, formed)
+		}
+	}
+	_, answers := decideRound(t, e, DefaultLimits(), &v, batch...)
+	want("the first round", answers, RefusalProtectedDirect, 3)
+	_, answers = decideRound(t, e, DefaultLimits(), &v, batch...)
+	want("a round under the same rules", answers, RefusalProtectedDirect, 3)
+
+	// THE RULES CHANGE between rounds: the lock is lifted.
+	e.apply(rec(t, RepoSubject(decideRepo), OpSettings, Scope{RepoPath(decideRepo)},
+		SettingsRecord{RepoID: decideRepo, Settings: settingsFor("", "refs/heads/main")}))
+	_, answers = decideRound(t, e, DefaultLimits(), &v, batch...)
+	want("a round under new rules", answers, "", 6)
 }
 
 // THE RULES IN ORDER, one command at a time, each the first that fires.

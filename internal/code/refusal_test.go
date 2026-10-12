@@ -88,25 +88,100 @@ func TestEveryMatchingProtectionHolds(t *testing.T) {
 		{Pattern: "refs/heads/main", AllowForce: true, AllowDelete: true, DirectPush: code.DirectPersons},
 		{Pattern: "refs/heads/**", DirectPush: code.DirectPersons},
 		{Pattern: "refs/heads/release/*", AllowForce: true, AllowDelete: true, DirectPush: code.DirectNone},
+		{Pattern: "refs/heads/release/**", DirectPush: code.DirectNone},
+		// A SECOND RULE refusing main's force and deletion, LATER in the
+		// order: the refusal names the first.
+		{Pattern: "refs/heads/m*", DirectPush: code.DirectPersons},
 	}
 	for _, tc := range []struct {
 		cmd  code.Command
 		want code.Refusal
+		// by is the rule the refusal names: the first, in the rules'
+		// order, to refuse the command for that reason.
+		by string
 	}{
-		{code.Command{Ref: "refs/heads/main", Old: a, New: b}, ""},
+		{code.Command{Ref: "refs/heads/main", Old: a, New: b}, "", ""},
 		// TWO RULES MATCH and only the SECOND refuses a force-push: the
 		// first's allow_force does not overrule it.
-		{code.Command{Ref: "refs/heads/main", Old: a, New: b, Forced: true}, code.RefusalProtectedForce},
-		{code.Command{Ref: "refs/heads/main", Old: a, New: code.ZeroOID}, code.RefusalProtectedDelete},
-		{code.Command{Ref: "refs/heads/release/1", Old: a, New: b}, code.RefusalProtectedDirect},
-		{code.Command{Ref: "refs/tags/v1", Old: code.ZeroOID, New: b}, ""},
+		{code.Command{Ref: "refs/heads/main", Old: a, New: b, Forced: true}, code.RefusalProtectedForce,
+			"refs/heads/**"},
+		{code.Command{Ref: "refs/heads/main", Old: a, New: code.ZeroOID}, code.RefusalProtectedDelete,
+			"refs/heads/**"},
+		{code.Command{Ref: "refs/heads/release/1", Old: a, New: b}, code.RefusalProtectedDirect,
+			"refs/heads/release/*"},
+		{code.Command{Ref: "refs/tags/v1", Old: code.ZeroOID, New: b}, "", ""},
 		// direct_push: none WINS OVER THE REST: a ref nobody pushes to is
 		// refused as that before its deletion or its force is weighed.
 		{code.Command{Ref: "refs/heads/release/1", Old: a, New: code.ZeroOID, Forced: true},
-			code.RefusalProtectedDirect},
+			code.RefusalProtectedDirect, "refs/heads/release/*"},
+		{code.Command{Ref: "refs/heads/release/1/x", Old: a, New: b}, code.RefusalProtectedDirect,
+			"refs/heads/release/**"},
 	} {
-		if got := code.ProtectionRefusal(tc.cmd, parsed(t, rules...)); got != tc.want {
-			t.Errorf("ProtectionRefusal(%s) = %q, want %q", tc.cmd.Ref, got, tc.want)
+		got, rule := code.ProtectionRefusal(tc.cmd, parsed(t, rules...))
+		if got != tc.want || rule.Pattern != tc.by {
+			t.Errorf("ProtectionRefusal(%s) = %q by %q, want %q by %q", tc.cmd.Ref, got,
+				rule.Pattern, tc.want, tc.by)
+		}
+	}
+}
+
+// A COMMAND'S PROTECTION VERDICT ALLOCATES NOTHING, against the most rules a
+// repository may carry, each of gitref's costliest shape: the decide asks it of
+// every command of a batch, and the receiver of every command of a push, so an
+// allocation a rule would be MaxProtectionsPerRepo of them a command — garbage
+// at the rate the costliest round already spends its core on.
+//
+// THE WALK [code.CommitBudget] IS SIZED BY, never rules a ref leaves at their
+// first part: the parts before a rule's first ** are compared once, at the
+// ref's start, so rules named for sixty-four teams cost a ref of one team
+// sixty-three comparisons and a single search. Every rule here starts its **
+// at the ref's first branch component and holds a run of four globs before
+// its second, so each searches the whole 255-byte ref. Both commands are
+// DELETIONS, which every one of these rules refuses, so an answer of none
+// says no rule matched.
+//
+// NOT PARALLEL, because an allocation count is the whole process's, and over
+// A HUNDRED RUNS, which testing.AllocsPerRun divides and rounds down: a stray
+// allocation of the process's own (search's fixture test names nats-server's
+// sampler) divides to zero, and one a rule allocates a run never does.
+func TestAProtectionVerdictAllocatesNothing(t *testing.T) {
+	costliest := code.CostliestRules(code.MaxProtectionsPerRepo)
+	for _, rule := range costliest {
+		if !strings.HasPrefix(rule.Pattern, "refs/heads/**/") || strings.Count(rule.Pattern, "**") != 2 ||
+			rule.AllowDelete {
+			t.Fatalf("%s is not a run between two **s from the ref's first branch component, "+
+				"refusing a deletion", rule.Pattern)
+		}
+	}
+	// THE LAST RULE MATCHES every ref of the shape, so the deletion's walk
+	// asks every costly rule before it and carries the one that refuses to
+	// its end.
+	refusing := append(costliest[:len(costliest)-1:len(costliest)-1], code.Protection{
+		Pattern: "refs/heads/" + code.WidestComponent + "/**", DirectPush: code.DirectPersons,
+	})
+	ref := code.WidestRef(0, 0)
+	if len(ref) != gitref.MaxRefNameBytes {
+		t.Fatalf("the ref is %d bytes, and the costliest is %d", len(ref), gitref.MaxRefNameBytes)
+	}
+	deletion := code.Command{Ref: ref, Old: strings.Repeat("b", 40), New: code.ZeroOID}
+	for _, tc := range []struct {
+		what  string
+		rules []code.Protection
+		want  code.Refusal
+	}{
+		{"no rule matching", costliest, ""},
+		{"the last rule refusing", refusing, code.RefusalProtectedDelete},
+	} {
+		ps := parsed(t, tc.rules...)
+		var got code.Refusal
+		if allocs := testing.AllocsPerRun(100, func() {
+			got, _ = code.ProtectionRefusal(deletion, ps)
+		}); allocs != 0 {
+			t.Errorf("%s: ProtectionRefusal allocated %v times a command, want none", tc.what, allocs)
+		}
+		if got != tc.want {
+			t.Errorf("%s: ProtectionRefusal = %q, want %q — the case is not the one it measures",
+				tc.what, got, tc.want)
 		}
 	}
 }
@@ -146,8 +221,9 @@ func TestAParsedProtectionMatchesWhatMatchPatternMatches(t *testing.T) {
 		rules := parsed(t, code.Protection{Pattern: pattern, DirectPush: code.DirectNone})
 		for _, ref := range refs {
 			want := gitref.MatchPattern(pattern, ref)
-			got := code.ProtectionRefusal(code.Command{Ref: ref, Old: code.ZeroOID,
-				New: strings.Repeat("b", 40)}, rules) == code.RefusalProtectedDirect
+			r, _ := code.ProtectionRefusal(code.Command{Ref: ref, Old: code.ZeroOID,
+				New: strings.Repeat("b", 40)}, rules)
+			got := r == code.RefusalProtectedDirect
 			if got != want {
 				t.Errorf("%s against %s: the parsed rule matched = %v, MatchPattern = %v",
 					pattern, ref, got, want)
@@ -179,9 +255,9 @@ func TestAProtectionThatIsNotAPatternIsRefused(t *testing.T) {
 			t.Errorf("ParseProtections with %q: %v; want an error naming it", pattern, err)
 		}
 	}
-	if got := code.ProtectionRefusal(code.Command{Ref: "refs/heads/main", Old: code.ZeroOID,
-		New: strings.Repeat("b", 40)}, code.Protections{}); got != "" {
-		t.Errorf("no rules refused %q", got)
+	if got, rule := code.ProtectionRefusal(code.Command{Ref: "refs/heads/main", Old: code.ZeroOID,
+		New: strings.Repeat("b", 40)}, code.Protections{}); got != "" || rule != (code.Protection{}) {
+		t.Errorf("no rules refused %q by %+v", got, rule)
 	}
 }
 

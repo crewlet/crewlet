@@ -2,7 +2,6 @@ package code
 
 import (
 	"fmt"
-	"iter"
 	"slices"
 	"strings"
 
@@ -153,11 +152,12 @@ func StatelessRefusal(c Command) Refusal {
 
 // Protections is a repository's protection rules with each pattern PARSED
 // ONCE ([ParseProtections]) — the form [ProtectionRefusal] asks, because the
-// push decide asks every rule about every command of a batch, on the
-// repository's one committer and inside one read snapshot, again on every
-// compare-and-set round, and the receiver asks every rule about every command
-// of a push. Parsed per question, a maximal batch's round re-read each pattern
-// and re-checked each ref for every (command, rule) pair — 192 000 of them at
+// push decide asks every rule about every command of a batch on the
+// repository's one committer (once a batch, before its publish and outside
+// every snapshot, and again only inside a round whose rules differ —
+// decide.go), and the receiver asks every rule about every command of a
+// push. Parsed per question, a maximal batch's round re-read each pattern and
+// re-checked each ref for every (command, rule) pair — 192 000 of them at
 // three thousand commands and [MaxProtectionsPerRepo] rules, most of the
 // round's cost (doc.go's measured section).
 //
@@ -186,44 +186,49 @@ func ParseProtections(rules []Protection) (Protections, error) {
 	return out, nil
 }
 
-// matching is every rule whose pattern matches ref, in the order they were
-// parsed.
-func (ps Protections) matching(ref string) iter.Seq[Protection] {
-	return func(yield func(Protection) bool) {
-		for i, p := range ps.patterns {
-			if p.Match(ref) && !yield(ps.rules[i]) {
-				return
-			}
-		}
-	}
-}
-
 // ProtectionRefusal is the protection rule of the push decide over EVERY rule
-// whose pattern matches the command's ref — or "" when none fires. Every
-// matching rule is consulted, because two rules written for two reasons both
-// hold: any rule with direct_push none refuses protected_direct; a deletion any
-// rule does not allow is protected_delete; a force-push any rule does not allow
-// is protected_force — in that order of precedence.
+// whose pattern matches the command's ref — the refusal and the rule that
+// refuses it, the first in the rules' order to refuse it for that reason; ""
+// and the zero Protection when none fires. Every matching rule is consulted,
+// because two rules written for two reasons both hold: any rule with
+// direct_push none refuses protected_direct; a deletion any rule does not
+// allow is protected_delete; a force-push any rule does not allow is
+// protected_force — in that order of precedence.
+//
+// ONE WALK, answering the rule with the refusal. The sentence a refusal
+// carries names that rule, and finding it with a second walk over the rules
+// asked every rule before it about the ref again: twice the cost of the
+// costliest round a repository's rules can make (3.4 s against 1.8 s,
+// doc.go's measured section), every command of it refused. A rule with
+// direct_push none ends the walk, since nothing after it outranks it.
 //
 // c.Ref is a ref: [StatelessRefusal] refuses anything else first, in the
 // decide and in the receiver alike, so the ref is not checked again for every
 // rule — for anything else the answer means nothing (and is never a panic).
-func ProtectionRefusal(c Command, rules Protections) Refusal {
-	var direct, deletion, force bool
-	for rule := range rules.matching(c.Ref) {
-		direct = direct || rule.DirectPush == DirectNone
-		deletion = deletion || !rule.AllowDelete
-		force = force || !rule.AllowForce
+func ProtectionRefusal(c Command, rules Protections) (Refusal, Protection) {
+	deletion, force := -1, -1
+	for i, p := range rules.patterns {
+		if !p.Match(c.Ref) {
+			continue
+		}
+		rule := rules.rules[i]
+		if rule.DirectPush == DirectNone {
+			return RefusalProtectedDirect, rule
+		}
+		if deletion < 0 && !rule.AllowDelete {
+			deletion = i
+		}
+		if force < 0 && !rule.AllowForce {
+			force = i
+		}
 	}
 	switch {
-	case direct:
-		return RefusalProtectedDirect
-	case c.New == ZeroOID && deletion:
-		return RefusalProtectedDelete
-	case c.Forced && force:
-		return RefusalProtectedForce
+	case c.New == ZeroOID && deletion >= 0:
+		return RefusalProtectedDelete, rules.rules[deletion]
+	case c.Forced && force >= 0:
+		return RefusalProtectedForce, rules.rules[force]
 	}
-	return ""
+	return "", Protection{}
 }
 
 // Atomic is an --atomic push's all-or-nothing rule: when any command is ng,

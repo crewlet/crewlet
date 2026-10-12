@@ -170,6 +170,11 @@ type Committer struct {
 	// nodeBytes is CommitterNodeBytes, and a test's smaller value
 	// (export_test.go).
 	nodeBytes int
+	// formedInRound, when set, is told how many protection verdicts each
+	// decide round formed inside the publisher's snapshot — a test's
+	// (export_test.go), which holds a round under the rules the formation
+	// before the publish read to forming none there.
+	formedInRound func(formed int)
 
 	// life is the batches' context: the committer's own lifetime, never a
 	// caller's — THE ONE CONTEXT STORED IN A STRUCT, because a batch is
@@ -622,6 +627,12 @@ func (c *Committer) commit(repoID string, batch []*queued) {
 	subject := RepoSubject(repoID)
 	scope := []string{RepoPath(repoID)}
 	var last round
+	// THE BATCH'S PROTECTION VERDICTS, FORMED BEFORE THE PUBLISH — CPU alone,
+	// holding no connection of the reader pool — and shared by its rounds
+	// while the rules each round's snapshot reads are the ones they were
+	// formed under (decide.go).
+	var verdicts verdicts
+	verdicts.formBefore(ctx, c.db, repoID, proposals)
 	res, err := c.pub.Publish(ctx, statelog.Request{
 		Subject: subject.statelog(), Scope: statelog.ScopeSet{Paths: scope},
 		OpID: opID, Pattern: statelog.PatternArbitrated, Session: seen,
@@ -630,7 +641,12 @@ func (c *Committer) commit(repoID string, batch []*queued) {
 			// what the publish decided.
 			last = round{}
 			now := c.now()
-			entries, answers, version, err := decideBatch(ctx, tx, repoID, proposals, limits, now)
+			formed := verdicts.formed
+			entries, answers, version, err := decideBatch(ctx, tx, repoID, proposals, limits, now,
+				&verdicts)
+			if c.formedInRound != nil {
+				c.formedInRound(verdicts.formed - formed)
+			}
 			if err != nil {
 				return statelog.Decision{}, err
 			}

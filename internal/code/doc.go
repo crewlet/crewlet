@@ -220,16 +220,33 @@
 // — seventeen to twenty seconds of every data node's reads at ten thousand,
 // for an activation that appends one fence record.
 //
-// A DECIDE ROUND (BenchmarkDecideABatch, four counts of twenty) holds no write
-// lane — it is one read transaction on a connection of the replicated
-// estate's reader pool, on the repository's one committer goroutine, and it
-// is paid again on every compare-and-set round a peer's record forces: 15–16
-// ms for three pushes of [MaxCommandsPerPush] ref creations against
-// [MaxProtectionsPerRepo] rules on a repository of ten thousand refs, where
-// asking each rule in its one-off form — the pattern parsed and the ref
-// checked again for every command and rule, 192 000 times — took 83–87 ms;
-// and 2.1–2.7 ms for a group of [MaxPushesPerRecord] one-command pushes
-// (3.7–3.8 ms one-off). The rules are parsed once a round ([Protections]).
+// A DECIDE (BenchmarkDecideABatch, four counts of twenty, a 2.1 GHz Xeon)
+// holds no write lane, and is two parts on the repository's one committer
+// goroutine: the FORMATION of the batch's protection verdicts, before the
+// publish, holding nothing but a read of the rules; and a ROUND, one read
+// transaction on a connection of the replicated estate's reader pool, run
+// again on every compare-and-set round a peer's record forces. For three
+// pushes of [MaxCommandsPerPush] ref creations against
+// [MaxProtectionsPerRepo] rules of a team's shape on a repository of ten
+// thousand refs, the formation is 8.4–12 ms and a round 9.7–11 ms, where a
+// round that formed the verdicts inside its snapshot is 19–22 ms; for a group
+// of [MaxPushesPerRecord] one-command pushes, 0.64–0.96 ms and 2.6–3.8 ms.
+// (Asking each rule in its one-off form — the pattern parsed and the ref
+// checked again for every command and rule, 192 000 times — took 83–87 ms
+// for the three pushes where parsing the rules once took 14–16 ms, and
+// 3.7–3.8 ms for the group, in an earlier run.) At the costliest rules a
+// repository can carry — every one of gitref's costliest shape, asked about
+// as many refs of 255 bytes as a record carries (2 567) — the formation is
+// 1.83–2.03 s, 11–12 µs a rule and ref, and the same whether no rule matches
+// or every command is refused (1.82–1.91 s), where naming the refusing rule
+// with a second walk over the rules made a refused round 3.4 s; and a round
+// is 13–22 ms, the reads and nothing else. So a reader is held for the reads
+// alone, where forming the verdicts inside the snapshot held one for
+// seconds, and four such batches held every reader of the pool; and a
+// publish's formation and sixteen rounds cost about 2.4 s of the 30 s
+// [CommitBudget], where forming the verdicts every round cost 28–30 s. A
+// round whose rules differ from those the verdicts were formed under forms
+// them again inside its snapshot: 1.85–2.13 s at that worst.
 //
 // A READ: one full page of a snapshot's refs ([MaxSnapshotItems]) from a
 // repository of [MaxRefsPerRepo] refs is 57–64 ms to serve, 5.7–6.4 µs a
