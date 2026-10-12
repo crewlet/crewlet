@@ -81,7 +81,7 @@ function WriteStatus({ write, onReload }: { write: CeilingWrite; onReload: () =>
       {state.kind === "checking" && <span className="t-caption">Checking with the engine…</span>}
       {state.kind === "saving" && <span className="t-caption">Saving…</span>}
       {state.kind === "unchanged" && (
-        <span className="t-caption">That is already the ceiling — nothing to save.</span>
+        <span className="t-caption">That is already the ceiling, so there is nothing to save.</span>
       )}
       {state.kind === "warned" && (
         <Callout variant="warning">

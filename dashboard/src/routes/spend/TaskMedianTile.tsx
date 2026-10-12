@@ -45,7 +45,7 @@ export function TaskMedianTile({
       ) : (
         <span
           className="spend-tile-figure"
-          title={`${fmtExact(median)} tokens — the middle of ${plural(count, "finished task")}${words ? `, ${words}` : ""}`}
+          title={`${fmtExact(median)} tokens, the middle of ${plural(count, "finished task")}${words ? `, ${words}` : ""}`}
         >
           {fmtCount(median)}
         </span>

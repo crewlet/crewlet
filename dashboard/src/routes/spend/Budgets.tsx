@@ -282,7 +282,7 @@ export function Budgets() {
       <PageNote>
         What each window may spend on the company clock{zone ? ` (${zone})` : ""}, and what it has.
         The engine calls a window near at {nearPct}% of its ceiling and refuses a charge that does
-        not fit — a refused seat stops until the window resets on its own, or until its ceiling is
+        not fit. A refused seat stops until the window resets on its own, or until its ceiling is
         raised.
       </PageNote>
 
@@ -301,8 +301,8 @@ export function Budgets() {
 
       {answer && answer.durable === false && (
         <Callout variant="neutral" icon={<DatabaseGlyph size="md" />}>
-          The durable counter could not be READ — which is not the same as it being zero. It lives
-          in the fleet's coordination store; this node could not reach it.
+          The durable counter could not be READ, which is not the same as it being zero. It lives in
+          the fleet's coordination store; this node could not reach it.
         </Callout>
       )}
 

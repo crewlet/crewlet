@@ -97,7 +97,7 @@ function Comparison({
     // engine refuses it naming why — which is what the reader is told.
     return (
       <span className="spend-hero-change" title={prior.detail}>
-        No comparison — {prior.detail ?? "the window before this one could not be read"}
+        No comparison: {prior.detail ?? "the window before this one could not be read"}
       </span>
     );
   }

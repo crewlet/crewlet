@@ -105,7 +105,7 @@ export function PhaseChart({
                   {drawn === "phase"
                     ? "Execute does the work; review, workers and auxiliary calls are the overhead"
                     : drawn === "worker"
-                      ? "Background duties only — every other call is outside these bands"
+                      ? "Background duties only (every other call is outside these bands)"
                       : "The four biggest, and everything else as one band"}
                 </span>
               </div>

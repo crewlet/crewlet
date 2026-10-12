@@ -53,13 +53,13 @@ export function turnsLink(w: Window): { path: string; clamped: string | null } {
   const window = isRange(w) ? (clamp ? "30d" : w) : windowParam(w);
   return {
     path: href(["live", "turns"], { sort: "-tokens", window }),
-    clamped: clamp ? "the last 30 days — the turn list keeps no older" : null,
+    clamped: clamp ? "the last 30 days: the turn list keeps no older" : null,
   };
 }
 
 /** What a person's row says where a seat's counts its turns. */
 export const PERSON_TAKES_NO_TURNS =
-  "A person takes no turns — this is what the auxiliary model spent for them";
+  "A person takes no turns: this is what the auxiliary model spent for them";
 
 export function ByAgent({
   lines,

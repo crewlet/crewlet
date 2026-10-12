@@ -671,7 +671,7 @@ test("recent turns link to the turn list by tokens, over the same window where i
   await settle();
   const link = screen.getByRole("link", { name: "Recent turns by tokens →" });
   expect(link.getAttribute("href")).toBe("#/live/turns?sort=-tokens&window=30d");
-  expect(screen.getByText(/the last 30 days — the turn list keeps no older/)).toBeTruthy();
+  expect(screen.getByText(/the last 30 days: the turn list keeps no older/)).toBeTruthy();
 });
 
 // A REFUSED WINDOW HAS NO LIST TO WAIT FOR. The list's question starts where

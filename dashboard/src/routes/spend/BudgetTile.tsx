@@ -87,7 +87,7 @@ export function BudgetTile({
       />
       {month.state === "refusing" && (
         <span className="spend-caption spend-refusing">
-          Refusing charges — turns wait until {resets}, or until the ceiling is raised.
+          Refusing charges. Turns wait until {resets}, or until the ceiling is raised.
         </span>
       )}
     </div>

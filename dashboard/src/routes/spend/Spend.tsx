@@ -118,7 +118,7 @@ export function Spend() {
           disabled={!rollup}
           title={
             rollup
-              ? `The rollup and the by-agent table for ${words}, as CSV — tokens only`
+              ? `The rollup and the by-agent table for ${words}, as CSV (tokens only)`
               : "Nothing to export until the window has answered"
           }
         />
