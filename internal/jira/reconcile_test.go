@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
@@ -333,7 +334,7 @@ func company() *org.Organization {
 func run(t *testing.T, inst *instance, mutate func(*jira.Options)) (*jira.Result, error) {
 	t.Helper()
 	client, err := jira.NewClient(jira.ClientOptions{
-		URL: inst.URL, Token: "org-token", Deployment: jira.DataCenter,
+		URL: inst.URL, Token: "org-token", Declared: atlassianhost.DataCenter,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -780,7 +781,7 @@ func TestCloudRegistersItsOwnWebhook(t *testing.T) {
 	inst.accounts["Bearer org-token"] = "acct-org"
 
 	client, err := jira.NewClient(jira.ClientOptions{
-		URL: inst.URL, Token: "org-token", Deployment: jira.Cloud,
+		URL: inst.URL, Token: "org-token", Declared: atlassianhost.Cloud,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1224,7 +1225,7 @@ func TestACloudCompanySaysNothingAboutIngress(t *testing.T) {
 
 	res, err := run(t, inst, func(o *jira.Options) {
 		client, err := jira.NewClient(jira.ClientOptions{
-			URL: inst.URL, Token: "org-token", Deployment: jira.Cloud,
+			URL: inst.URL, Token: "org-token", Declared: atlassianhost.Cloud,
 		})
 		if err != nil {
 			t.Fatal(err)

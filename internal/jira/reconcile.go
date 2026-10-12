@@ -442,10 +442,12 @@ func resolveSeats(ctx context.Context, opts Options) ([]SeatIdentity, error) {
 	provision.ResolveConcurrently(len(lookups), func(n int) {
 		i := lookups[n]
 		client, err := NewClient(ClientOptions{
-			URL:        opts.Client.URL(),
-			Email:      creds[i].Email,
-			Token:      creds[i].Token,
-			Deployment: opts.Client.Deployment(),
+			URL:   opts.Client.URL(),
+			Email: creds[i].Email,
+			Token: creds[i].Token,
+			// The org client's declaration, so a seat's account is
+			// looked up on the API the org's was.
+			Declared: opts.Client.declared,
 		})
 		if err != nil {
 			// THE CREDENTIAL ITSELF, not the instance: nothing was

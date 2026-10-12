@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
-	"github.com/crewlet/crewlet/internal/jira"
+	"github.com/crewlet/crewlet/internal/atlassianhost"
 )
 
 // countingForge answers one identity endpoint, counts the calls, and holds the
@@ -166,7 +166,7 @@ func TestOneCredentialIsResolvedOnceForConcurrentCallers(t *testing.T) {
 			resolve: func(t *testing.T, f *countingForge) []string {
 				ids := &jiraIdentities{}
 				return raceTwo(t, f, func() string {
-					ids.resolve(context.Background(), f.url, jira.Cloud,
+					ids.resolve(context.Background(), f.url, atlassianhost.Cloud,
 						[]atlassian.Credential{cred})
 					return ids.snapshot()[cred]
 				})
