@@ -1274,7 +1274,13 @@ then whom it woke. People & access is a column of the sheet beside a person's
 peek, and every flexible column it keeps has a floor (Seat and Grants `8rem`):
 at zero the seat drew its avatar alone and the grants stacked a row ten lines
 tall while Kind and Login stayed, so it gives up Grants, then Kind, then Login,
-and keeps the name, the stage and the seat. The peek's own grids are a 385px
+and keeps the name, the stage and the seat. A grant list in ANY grid cell (the
+People list, the invitations, a person's or the Account's tokens) draws three
+grants and counts the rest in one "+n" tag that names them on hover and to a
+screen reader (`GRANTS_IN_A_CELL`, `components/people.tsx`): drawn whole, an
+administrator's eleven stacked one per line in its `8rem` column and stood one
+row of the People list about 290px tall at 1280. A field that IS the answer, the
+peek's Grants or the Account's, draws every grant. The peek's own grids are a 385px
 column: a credential's name and a session's state keep `8rem` floors, its
 state pill and a session's start take their own width (`max-content`, short
 by construction, where a fifth of the column cut "In use" to "In u…" and the

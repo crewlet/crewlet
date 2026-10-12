@@ -81,6 +81,7 @@ import {
   endedWord,
   ExpiresCell,
   GrantTags,
+  GRANTS_IN_A_CELL,
   MintTokenDialog,
 } from "~/components/people.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -959,7 +960,7 @@ function Tokens({
               key: "grants",
               header: "Carries",
               drop: 2,
-              cell: (c) => <GrantTags grants={c.grants} />,
+              cell: (c) => <GrantTags grants={c.grants} cap={GRANTS_IN_A_CELL} />,
             },
             {
               key: "revoke",

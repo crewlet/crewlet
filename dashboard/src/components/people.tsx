@@ -185,18 +185,51 @@ export const GRANT_WORDS: Record<(typeof GRANTS)[number], string> = {
 };
 
 /** Grants as written — a directory row's, or what a token carries. */
-export function GrantTags({ grants }: { grants?: readonly string[] | null }) {
+export function GrantTags({
+  grants,
+  cap,
+}: {
+  grants?: readonly string[] | null;
+  /**
+   * Draw at most this many and count the rest as one "+n" tag that names
+   * them, for a GRID CELL. Unset draws every grant, for a field that is the
+   * whole answer (a peek, the Account page). See [GRANTS_IN_A_CELL].
+   */
+  cap?: number;
+}) {
   if (!grants || grants.length === 0) return <EmptyValue label="No grants" />;
+  const shown = cap !== undefined && grants.length > cap ? grants.slice(0, cap) : grants;
+  const rest = grants.slice(shown.length);
   return (
     <span className="row gap-1" style={{ flexWrap: "wrap" }}>
-      {grants.map((g) => (
+      {shown.map((g) => (
         <Tag key={g} size="sm" appearance="outline">
           <span className="mono">{g}</span>
         </Tag>
       ))}
+      {rest.length > 0 && (
+        <Tag size="sm" appearance="outline" title={rest.join(", ")}>
+          <span aria-hidden="true">+{rest.length}</span>
+          <span className="sr-only">
+            and {rest.length} more: {rest.join(", ")}
+          </span>
+        </Tag>
+      )}
     </span>
   );
 }
+
+/**
+ * How many grants a GRID CELL draws before counting the rest.
+ *
+ * THREE, the seat peek's tool-chip cap, because a list row is a line to scan
+ * and not the answer: an administrator holds every grant there is (eleven),
+ * and drawn whole in an eight-rem column they stacked one per line, so one
+ * row of the People list stood about 290 px tall at 1280 px wide and pushed
+ * every other person below the fold. The full set is one press away, in the
+ * row's peek, which draws it uncapped.
+ */
+export const GRANTS_IN_A_CELL = 3;
 
 /**
  * Checkboxes over the grants. One outside `held` is drawn disabled with why —

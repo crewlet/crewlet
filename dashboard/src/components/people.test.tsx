@@ -29,6 +29,8 @@ import {
   SeatHolding,
   seatOptions,
   useHumanSeats,
+  GrantTags,
+  GRANTS_IN_A_CELL,
 } from "./people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
 import { Router } from "~/app/router.tsx";
@@ -701,5 +703,47 @@ describe("cancelling an invitation", () => {
     expect(within(dialog).getByRole("button", { name: "Keep it" })).toBeTruthy();
     expect(within(dialog).queryByRole("button", { name: "Cancel" })).toBeNull();
     expect(dialog.textContent).toMatch(/the address is free to invite again/);
+  });
+});
+
+// A LIST ROW IS A LINE TO SCAN: an administrator's eleven grants drawn whole
+// stacked one per line in a list cell, so a cell draws GRANTS_IN_A_CELL and
+// counts the rest in one tag that still names every one of them. Mutation:
+// drop the cap and the first case finds eleven tags.
+describe("grants drawn in a list cell", () => {
+  const all = [
+    "state:read",
+    "audit:read",
+    "config:read",
+    "secrets:read",
+    "work:write",
+    "knowledge:write",
+    "config:write",
+    "secrets:write",
+    "fleet:operate",
+    "people:manage",
+    "sandbox:run",
+  ];
+
+  test("a cell draws the cap and counts the rest, naming each", () => {
+    const { container } = render(<GrantTags grants={all} cap={GRANTS_IN_A_CELL} />);
+    const shown = [...container.querySelectorAll(".mono")].map((n) => n.textContent);
+    expect(shown).toEqual(all.slice(0, GRANTS_IN_A_CELL));
+    const rest = all.slice(GRANTS_IN_A_CELL);
+    const more = screen.getByTitle(rest.join(", "));
+    expect(more.textContent).toContain(`+${rest.length}`);
+    expect(more.querySelector(".sr-only")?.textContent).toBe(
+      `and ${rest.length} more: ${rest.join(", ")}`,
+    );
+  });
+
+  test("a field draws every grant, and a short list is never counted", () => {
+    const { container, unmount } = render(<GrantTags grants={all} />);
+    expect(container.querySelectorAll(".mono")).toHaveLength(all.length);
+    unmount();
+    const few = all.slice(0, GRANTS_IN_A_CELL);
+    const short = render(<GrantTags grants={few} cap={GRANTS_IN_A_CELL} />);
+    expect(short.container.querySelectorAll(".mono")).toHaveLength(few.length);
+    expect(short.container.textContent).not.toContain("+");
   });
 });

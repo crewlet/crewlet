@@ -115,6 +115,7 @@ import {
   endedWord,
   ExpiresCell,
   GrantTags,
+  GRANTS_IN_A_CELL,
   IamOutcome,
   listsNoCompany,
   MintTokenDialog,
@@ -848,7 +849,7 @@ export function PeopleAndAccess() {
                   floor: "8rem",
                   drop: 1,
                   sortValue: (p) => (p.grants ?? []).length,
-                  cell: (p) => <GrantTags grants={p.grants} />,
+                  cell: (p) => <GrantTags grants={p.grants} cap={GRANTS_IN_A_CELL} />,
                 },
               ]}
             />
@@ -1245,7 +1246,7 @@ function Invitations({
               header: "Grants",
               drop: 1,
               sortValue: (i) => (i.grants ?? []).length,
-              cell: (i) => <GrantTags grants={i.grants} />,
+              cell: (i) => <GrantTags grants={i.grants} cap={GRANTS_IN_A_CELL} />,
             },
             {
               key: "by",
@@ -1803,7 +1804,7 @@ function Principal({
                 // link that opened the account.
                 cell: (c) =>
                   c.method === "token" ? (
-                    <GrantTags grants={c.grants} />
+                    <GrantTags grants={c.grants} cap={GRANTS_IN_A_CELL} />
                   ) : (
                     <EmptyValue
                       label={c.method === "reset" ? "Sets a password once" : "Its holder's grants"}
