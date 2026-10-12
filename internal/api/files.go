@@ -208,7 +208,7 @@ const downloadHead = 32 << 10
 // serveFileDownload answers GET /work/files/{project}/{path...}: the file's
 // bytes, streamed.
 func (a *App) serveFileDownload(w http.ResponseWriter, r *http.Request) {
-	fresh, err := tracker.ParseFreshness(queries.FromQuery(r.URL.Query()))
+	fresh, err := statelog.ParseFreshness(queries.FromQuery(r.URL.Query()))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_params", "detail": err.Error()})
 		return
