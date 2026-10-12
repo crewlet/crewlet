@@ -52,7 +52,8 @@ type NewComment struct {
 	// `unknown` rather than deciding it again — which is what the key's
 	// [CallKey.Since] is for. Its [CallKey.Repeat] is what makes a remark
 	// made again after a different one a second comment rather than the
-	// first one's retry.
+	// first one's retry, and its [CallKey.Args] what keeps that so when the
+	// page was named by its id in one call and by its title in another.
 	CallKey CallKey
 
 	Quiet bool

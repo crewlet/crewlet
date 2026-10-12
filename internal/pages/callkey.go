@@ -53,10 +53,35 @@ import (
 // of its own while a call repeated with nothing different in between — an
 // executor asking twice, a retry after `unknown`, a re-run — stays one.
 //
+// # Why it carries the call's own arguments
+//
+// Because the count and the identity have to agree on what makes two calls
+// different, and on their own they do not. [CallKey.Repeat] tells calls apart
+// by their ARGUMENTS, as a model typed them, and skips every earlier call that
+// was this same call; the parts a derived id is computed over are what those
+// arguments RESOLVED to — the page's id, never the "ENG/Runbook" or the uuid
+// it was named by. comment_on_page names its page either way, so two calls
+// typed differently can resolve alike, and a count two of them happen to share
+// hands the later one the earlier one's id. A seat that commented "ok" by the
+// page's id, asked that again, commented "ok" by its title, "other" by its id
+// and then "ok" by its id once more gave the last call a count of two — the
+// title call and "other", the two by id being itself — which is exactly the
+// title call's count. So the last call derived the title comment's id, was
+// answered with that comment's success, and wrote nothing, though it was the
+// same words said again after a different remark.
+//
+// With a digest of the arguments in the identity ([CallKey.Args]) two calls
+// derive one id only where they share the arguments and the count, and the
+// call log gives a repeated call its earlier count only when no different call
+// to its tool came between: which is exactly a call made again, and nothing
+// else. A tracker write's id carries the digest too (builtin's opIDFor). The
+// parts still follow it, because a key that carries none — a request's, whose
+// operation already names the call — is distinguished by them alone.
+//
 // A STRUCT RATHER THAN A STRING because two of the writes that take it already
 // take three strings in a row, and a key passed where a body was meant is a
-// write that compiles and derives nothing; and because the three values are
-// one identity, which a caller could otherwise hand over two-thirds of.
+// write that compiles and derives nothing; and because its values are one
+// identity, which a caller could otherwise hand over part of.
 //
 // THE ZERO VALUE IS A REAL ONE: a call that names no seed — an operator's
 // assistant over MCP, an import — writes under a fresh operation every time,
@@ -84,6 +109,13 @@ type CallKey struct {
 	// a derived id, so a run's first call of each kind derives the id it
 	// always did.
 	Repeat int
+
+	// Args is a digest of the arguments the call was made with
+	// (turnctx.ArgsDigest), for a key whose Repeat a call log counted — a
+	// turn's. Empty for a key whose seed already names the one call it was
+	// derived for, which is a request's operation. See the type's doc for
+	// why the count needs it beside it.
+	Args string
 }
 
 // String is the seed as text.
@@ -92,15 +124,18 @@ func (k CallKey) String() string { return strings.TrimSpace(k.Seed) }
 func (k CallKey) empty() bool { return k.String() == "" }
 
 // identity is what a derived id is computed over: a namespace, the seed, the
-// parts that make this operation this operation, and the repeat count when
-// there is one.
+// parts that make this operation this operation, the call's own arguments
+// where the key carries them, and the repeat count when there is one.
 //
 // ONE SPELLING for every derivation here — an operation's, a comment's, a new
 // page's — so the three can never disagree about what makes two calls one.
 func (k CallKey) identity(namespace string, parts ...string) []string {
-	out := make([]string, 0, len(parts)+3)
+	out := make([]string, 0, len(parts)+4)
 	out = append(out, namespace, k.String())
 	out = append(out, parts...)
+	if k.Args != "" {
+		out = append(out, "args:"+k.Args)
+	}
 	if k.Repeat > 0 {
 		out = append(out, "repeat:"+strconv.Itoa(k.Repeat))
 	}

@@ -905,9 +905,11 @@ Those derived ids name the **call** as well as the work: the unit of work, the
 verb, the item, and a digest of the tool call's own arguments. So a re-run that
 makes the same call writes once, while two different calls in one turn — an
 item moved to `in_progress` and later to `done`, two comments on one item —
-are two writes. Each id also carries **how many different calls to the same
-tool the run made before it**, so a call made again after a different one is a
-new write: an item moved to `in_progress`, then `done`, then back to
+are two writes. The knowledge base's writes are derived the same way, digest
+included, so one page named two ways — by its id and by `ENG/Runbook` — is two
+calls to the id exactly as it is to the count below. Each id also carries **how
+many different calls to the same tool the run made before it**, so a call made
+again after a different one is a new write: an item moved to `in_progress`, then `done`, then back to
 `in_progress` ends `in_progress`, where the third move used to be answered as
 the first one's retry and the item stayed `done`. A call repeated with nothing
 different in between — an executor that asks twice, a retry after `unknown` —

@@ -122,20 +122,30 @@ func (d PageDeps) operation(ctx context.Context) string {
 // ([pages.CallKey]):
 //
 //   - IN A TURN, the turn's seed ([turnKey]), the instant it began
-//     ([turnSince]) and this call's repeat count in the run
-//     ([turnctx.CallLog.Ordinal]) — what [opIDFor] derives a work write
+//     ([turnSince]), this call's repeat count in the run
+//     ([turnctx.CallLog.Ordinal]) and a digest of the arguments the count
+//     compared ([turnctx.ArgsDigest]) — what [opIDFor] derives a work write
 //     from, so a remark made again after a different one is a second
-//     comment and a re-run's is the first;
+//     comment, the same remark made again after a different one is too
+//     whatever the page was called in each, and a re-run's is the first;
 //   - OUTSIDE ONE, the operation the transport named for this call
 //     ([PageDeps.Operation]), carrying that operation's own instant — it
-//     already names the call, so it takes no repeat count;
+//     already names the call, its arguments included, so it takes no
+//     repeat count and no digest;
 //   - or none, which the store mints afresh.
+//
+// THE DIGEST TRAVELS WITH THE COUNT because the count compares the arguments
+// as typed and the store's parts are what they resolved to: a page named by
+// its id once and by "CONTAINER/Title" the next time is two calls to one and
+// one page to the other, and without the digest a count two such calls share
+// hands the later one the earlier one's id — see [pages.CallKey].
 func (d PageDeps) callKey(ctx context.Context, turn *turnctx.Turn, tool string,
 	args map[string]any) pages.CallKey {
 
 	if seed := turnKey(turn); seed != "" {
 		return pages.CallKey{Seed: seed, Since: turnSince(turn),
-			Repeat: turn.CallLog().Ordinal(tool, args)}
+			Repeat: turn.CallLog().Ordinal(tool, args),
+			Args:   turnctx.ArgsDigest(args)}
 	}
 	if op := d.operation(ctx); op != "" {
 		at, _ := statelog.OpMintedAt(op)
@@ -883,8 +893,9 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	in := pages.NewComment{
 		Body:    body,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
-		// THE CALL'S KEY, repeat count included — see [opIDFor] for what a
-		// remark made again after another one cost without it.
+		// THE CALL'S KEY, repeat count and argument digest included — see
+		// [opIDFor] for what a remark made again after another one cost
+		// without the count, and [PageDeps.callKey] for the digest.
 		CallKey: t.deps.callKey(ctx, turn, t.Name(), args),
 	}
 	if t.deps.Mentions != nil {

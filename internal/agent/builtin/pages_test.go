@@ -847,6 +847,9 @@ func TestAPageBodyIsToldTheLinkTheBacklinksRead(t *testing.T) {
 // A PAGE REMARK MADE AGAIN AFTER A DIFFERENT ONE CARRIES ITS REPEAT COUNT, so
 // the store derives a second comment rather than the first one's retry; a
 // remark repeated with nothing between carries the same count and stays one.
+// And every key carries the digest of the arguments its count compared,
+// because the store's parts are what the arguments resolved to — see
+// pages.CallKey, and the end-to-end case in internal/pages.
 func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
@@ -866,6 +869,13 @@ func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 	var repeats []int
 	for _, c := range kb.comments {
 		repeats = append(repeats, c.CallKey.Repeat)
+		args := map[string]any{"page": "p1", "body": c.Body}
+		if c.CallKey.Args != turnctx.ArgsDigest(args) {
+			t.Errorf("the remark %q carried argument digest %q, want %q — a "+
+				"count shared by two calls that named the page differently "+
+				"would hand the later one the earlier one's comment",
+				c.Body, c.CallKey.Args, turnctx.ArgsDigest(args))
+		}
 	}
 	if len(repeats) != 4 {
 		t.Fatalf("four remarks reached the store as %d", len(repeats))
