@@ -1648,6 +1648,50 @@ test("the spend chart's subtitle asks for no width of its own", () => {
   );
 });
 
+// SPEND READS AS ROWS. Its cards started at their own heights, so a table of
+// two seats ended two hundred pixels above the lists beside it and the row
+// under it began below the lists: a hole the width of the table at every
+// desktop width. Each row stretches its cards to the tallest, the narrow
+// track's last list takes what its stack leaves, and a stretched card keeps
+// its foot on the floor.
+describe("the Spend overview's rows", () => {
+  const css = sheet("screens.css");
+
+  test("every row stretches its cards to one height", () => {
+    const rows = block(css, ".spend-top,\n.spend-pair");
+    expect(rows).toMatch(/display:\s*grid/);
+    expect(rows).toMatch(/align-items:\s*stretch/);
+  });
+
+  test("the stacked lists end level with the table beside them", () => {
+    const side = block(css, ".spend-side");
+    expect(side).toMatch(/display:\s*flex/);
+    expect(side).toMatch(/flex-direction:\s*column/);
+    expect(block(css, ".spend-side > :last-child")).toMatch(/flex-grow:\s*1/);
+  });
+
+  test("a stretched card keeps its foot on the floor", () => {
+    expect(block(css, ".spend-card-foot")).toMatch(/margin-top:\s*auto/);
+  });
+
+  test("a card without its partner takes the whole row", () => {
+    expect(block(css, ".spend-pair > :only-child")).toMatch(/grid-column:\s*1 \/ -1/);
+  });
+
+  // ONE FOLD FOR THE PAGE. The hero stacked over the chart at 760 while the
+  // pairs stacked at 900, so between the two the chart stood 450px wide
+  // beside the hero with its title broken over two lines.
+  test("every row folds to one column at the same page width", () => {
+    const folds = [...css.matchAll(/@container page \(width < (\d+)px\)\s*\{/g)].filter((m) =>
+      /\.spend-(top|pair)\b/.test(atRuleBody(css.slice(m.index), m[0].slice(0, -1).trim())),
+    );
+    expect(folds.map((m) => Number(m[1]))).toEqual([900]);
+    expect(atRuleBody(css, "@container page (width < 900px)")).toMatch(
+      /\.spend-top,\s*\.spend-pair\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\);/,
+    );
+  });
+});
+
 /**
  * A REPEATING TRACK'S FLOOR NEVER EXCEEDS ITS CONTAINER.
  *

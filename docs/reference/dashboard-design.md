@@ -922,7 +922,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/pages/{id}` | **Page**: addressed by its id, which a rename does not change. The document with its outline, its properties, its comments and what it is connected to; edited as you | `edit=1` · `version=` (History: one revision in the document's place) · `lens=diff\|full` |
 | `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes. Handles live here as they do under `seats/` | |
-| `#/spend` | **Spend › Overview** — the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent, by provider, by team, the auxiliary model by purpose and the three most expensive tasks (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
+| `#/spend` | **Spend › Overview**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an operator), and what is refusing. ONE address: Settings lists it as a cross-link | `window=` is not read here, and is carried through to the other sections |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
@@ -5824,6 +5824,19 @@ says which of the two it is and what to change — shown once at the top of the
 page and nothing under it: the previous window's answer is not kept on screen
 beneath a control that now names a different window, and Export has nothing to
 export.
+
+**Three rows, each one height.** The hero beside the daily chart; **By agent**
+beside **By model** and **By team**, stacked; then the **most expensive tasks**
+beside the **auxiliary model**. The two rows under the hero share one pair of
+tracks (1.7 : 1), so the gutter runs down the page as one line: the wide track
+holds what is read along a row, the seats' table and the tasks' titles, and the
+narrow one the ranked lists, which a wide track only stretches. Every card in a
+row stretches to the tallest, so the row's edges line up and nothing leaves a
+hole under it. A stretched card keeps its content at the top and its foot on
+the floor, the stacked lists' last card takes what the stack leaves, and a card
+whose partner is absent (no task spend to rank on a tracker that is not the
+engine's) takes the whole row. Below a page column of 900px every row stacks,
+the table first; the width is the page column's, not the window's.
 
 - **The hero** is the window's tokens, the change against the window before it
   (the engine's `previous=true`, cut on the company's calendar, and "nothing

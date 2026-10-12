@@ -768,3 +768,23 @@ test("the auxiliary card names each purpose and its provider calls", async () =>
   expect(within(card).getByText("memory filter")).toBeTruthy();
   expect(screen.queryByText("Background workers")).toBeNull();
 });
+
+// WHO SPENT IT, THEN WHAT ON. The seats' table shares its row with the model
+// and team lists, stacked in the narrow track where every ranked list stands,
+// and the tasks share theirs with the auxiliary model: a team list in the wide
+// track ran its bar a thousand pixels from the team's name.
+test("the ranked lists stand in the narrow track, beside the seats and the tasks", async () => {
+  mount("#/spend?window=30d", <Spend />, { tokens: rollup(1_000), viewer: VIEWER });
+  await settle();
+  const card = (title: string) =>
+    screen.getByRole("heading", { name: title }).closest(".spend-card") as HTMLElement;
+  const row = (title: string) => card(title).closest(".spend-pair");
+  expect(card("By model").parentElement!.className).toBe("spend-side");
+  expect(card("By team").parentElement!.className).toBe("spend-side");
+  expect(row("By model")).toBe(row("By agent"));
+  expect(row("Auxiliary model")).toBe(row("Most expensive tasks"));
+  expect(row("Auxiliary model")).not.toBe(row("By agent"));
+  // The wide card leads its row: first in the track, and first to be read.
+  expect(row("By agent")!.firstElementChild).toBe(card("By agent"));
+  expect(row("Most expensive tasks")!.firstElementChild).toBe(card("Most expensive tasks"));
+});

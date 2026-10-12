@@ -9127,9 +9127,10 @@ a.live-row:focus-visible {
 }
 
 /* ---- Spend ---------------------------------------------------------------
-   The design's Spend artboard: the hero beside the daily chart, then the
-   by-agent table beside a column of ranked lists, then the teams and the
-   background workers. Every row is MEASURED FROM THE PAGE COLUMN
+   The design's Spend artboard, in three rows: the hero beside the daily
+   chart; the by-agent table beside the two ranked lists that break the same
+   tokens down by model and by team; then the most expensive tasks beside the
+   auxiliary model's purposes. Every row is MEASURED FROM THE PAGE COLUMN
    (`@container page`), not the window, because the sidebar and the peek take
    their share first. */
 .spend {
@@ -9137,46 +9138,56 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-4);
 }
+/* EVERY ROW IS ONE HEIGHT. Its cards stretch to the tallest, so a row's edges
+   line up and the page reads as rows: started at their own heights, a table of
+   two seats ended two hundred pixels above the lists beside it, and the row
+   under it began below the lists, leaving a hole the width of the table. */
+.spend-top,
+.spend-pair {
+  display: grid;
+  gap: var(--spacing-4);
+  align-items: stretch;
+}
 /* THE HERO'S 340px IS THE ARTBOARD'S: the figure at display size and two
    tiles side by side under it, which is the narrowest that holds "of input
    served from prompt cache" on two lines. */
 .spend-top {
-  display: grid;
   grid-template-columns: 340px minmax(0, 1fr);
-  gap: var(--spacing-4);
-  align-items: stretch;
 }
-/* The table is the wider of the pair: the design's 1.7 : 1. */
-.spend-mid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
-  gap: var(--spacing-4);
-  align-items: start;
-}
-.spend-side,
-.spend-pair {
-  display: grid;
-  gap: var(--spacing-4);
-  align-items: start;
-}
-/* THE SAME TRACKS AS THE ROW ABOVE, so the gutter between By team and
-   Background workers is the gutter between By agent and By model: two rows
-   split 1.7 : 1 and 1 : 1 drew two gutters 150px apart down one page. */
+/* THE DESIGN'S 1.7 : 1, the same tracks in both rows under the hero, so the
+   gutter runs down the page as one line. The wide track holds what is read
+   along a row (the seats' table, the tasks' titles), the narrow one the ranked
+   lists: a team's bar across the wide track ran a thousand pixels from its
+   name to its figure. */
 .spend-pair {
   grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
 }
-/* 900px IS THE TABLE'S FLOOR beside a list column of 300: below it the pairs
-   stack, the table first, since it is what the screen is read for. The hero
-   stacks over the chart below 760, where the chart would be narrower than
-   thirty columns can be read in. */
+/* A CARD WITHOUT ITS PARTNER TAKES THE ROW: on a tracker that is not the
+   engine's there is no task spend to rank, and the auxiliary card alone in
+   the wide track left the narrow one empty beside it. */
+.spend-pair > :only-child {
+  grid-column: 1 / -1;
+}
+/* The two lists stacked in the narrow track. The last takes whatever the row
+   has left, so the stack ends level with the table beside it. */
+.spend-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.spend-side > :last-child {
+  flex-grow: 1;
+}
+/* 900px IS THE PAGE'S ONE FOLD, for every row at once. It is the table's
+   floor beside a list column of 330, and the chart's beside the hero: at an
+   800px column the chart was 450 wide, its title broke over two lines, the
+   sentence under it stood four words wide, and the hero beside it had a
+   hundred pixels to spare. Stacked, the table comes first, since it is what
+   the screen is read for. */
 @container page (width < 900px) {
-  .spend-mid,
+  .spend-top,
   .spend-pair {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-@container page (width < 760px) {
-  .spend-top {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -9303,10 +9314,11 @@ a.live-row:focus-visible {
    width — so a one-line sentence as wide as the card squeezed the legend into
    two ragged rows at 1280 (and with four seat names at 1440). With no
    intrinsic width the block's basis is the title's, the legend keeps its one
-   row, and the sentence wraps in the room the block then grows into.
-   ONLY BESIDE THE HERO: stacked on a narrow page the legend is most of the
-   head's width, and a sentence with no width of its own was left a column
-   four words wide under a title wrapped onto two lines. */
+   row, and the sentence wraps in the room the block then grows into. That
+   holds stacked under the hero too, down to 760.
+   NOT ON A NARROWER PAGE: there the legend is most of the head's width, and a
+   sentence with no width of its own was left a column four words wide under a
+   title wrapped onto two lines. */
 @container page (width >= 760px) {
   .spend-chart-head .spend-caption {
     contain: inline-size;
@@ -9426,7 +9438,11 @@ a.live-row:focus-visible {
   font-weight: var(--font-weight-medium);
   color: var(--color-feedback-danger-ink);
 }
+/* THE FOOT STANDS ON THE CARD'S FLOOR: a card stretched to its row keeps its
+   link at the bottom edge, level with the lists beside it, rather than under
+   the last row with the spare height below it. */
 .spend-card-foot {
+  margin-top: auto;
   padding: var(--spacing-3) var(--spacing-4);
   border-top: 1px solid var(--color-border-default);
   font-size: var(--font-size-xs);
