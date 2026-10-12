@@ -510,9 +510,17 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		return DomainGate{Stream: "CREWLET_PAGES_LOG",
 			Err: &statelog.Unavailable{Reason: reason}}
 	}
-	// landed is a refusal of a record the log holds at a position and a gate
-	// dropped there.
+	// landed is a refusal of a record of the gesture's operation that the log
+	// holds at a position and a gate dropped there.
 	landed := func(reason statelog.Reason) DomainGate {
+		return DomainGate{Stream: "CREWLET_PAGES_LOG", Duplicates: 2 * time.Minute,
+			Err: &statelog.Unavailable{Reason: reason, Dropped: true, Position: statelog.Position{
+				Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 7}}}
+	}
+	// held is a refusal at ANOTHER operation's record — newest on the subject
+	// when the gesture's answer was lost — at which the gate holds this node:
+	// a position, and no record of the gesture's.
+	held := func(reason statelog.Reason) DomainGate {
 		return DomainGate{Stream: "CREWLET_PAGES_LOG", Duplicates: 2 * time.Minute,
 			Err: &statelog.Unavailable{Reason: reason, Position: statelog.Position{
 				Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 7}}}
@@ -546,6 +554,14 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		// would write every other log's record again.
 		"evicted, landed": {gate: landed(statelog.ReasonEvicted), actions: []statelog.GateAction{other},
 			detail: "duplicate window, 2m0s, from when it landed. Once that has passed, run the gesture through a node the fleet still counts under the same operation id"},
+		// A REFUSAL AT ANOTHER OPERATION'S RECORD names a position that is no
+		// record of this gesture — it may be a healthy peer's — so it is this
+		// node's own eviction: never "the record this gesture put on the log
+		// there", and another node takes the gesture under the same id at
+		// once, told by the broker if this node's own record did land.
+		"evicted, held at another operation's record": {gate: held(statelog.ReasonEvicted),
+			actions: []statelog.GateAction{other},
+			detail:  "the newest record on CREWLET_PAGES_LOG, at CREWLET_PAGES_LOG@1:7, is another operation's"},
 		// A RECORD A REANCHOR'S RULE VOIDED landed too, from rows the
 		// reanchor did not keep: another node finishes it once the window
 		// has passed.
