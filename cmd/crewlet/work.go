@@ -83,7 +83,7 @@ func workPurge(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stderr, "usage: crewlet work purge <task-id> "+
 			"-project KEY -reason TEXT -confirm <task-key>")
 		return fmt.Errorf("a purge destroys the task and every row it produced " +
-			"on every node, and nothing undoes it — name the task's KEY in " +
+			"on every data node, and nothing undoes it — name the task's KEY in " +
 			"-confirm to run it")
 	case strings.TrimSpace(*project) == "":
 		return fmt.Errorf("name the task's project in -project: it is the " +
@@ -144,11 +144,11 @@ func workPurge(args []string, stdout, stderr io.Writer) error {
 	switch answer.Outcome {
 	case "pending":
 		// THE THREE-VALUED OUTCOME, said plainly and NOT as a failure.
-		// The record is on the log and every node applies it as it
+		// The record is on the log and every data node applies it as it
 		// reaches it; running the gesture again would append a second
 		// purge of a task the first one already destroyed.
 		fmt.Fprintln(stdout, "  The record is durable and this node has not "+
-			"applied it yet: the rows go as each node reaches it. Do not "+
+			"applied it yet: the rows go as each data node reaches it. Do not "+
 			"run this again.")
 	case "unknown":
 		fmt.Fprintf(stdout, "  No acknowledgement — this is the one outcome to "+

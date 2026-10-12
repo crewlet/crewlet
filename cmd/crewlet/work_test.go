@@ -202,7 +202,7 @@ func TestAnUnknownPurgeNamesTheIdToRetryWith(t *testing.T) {
 }
 
 // `pending` IS NOT A FAILURE AND MUST NOT BE RETRIED: the record is on the log
-// and every node applies it as it reaches it.
+// and every data node applies it as it reaches it.
 func TestAPendingPurgeSaysNotToRunItAgain(t *testing.T) {
 	t.Parallel()
 	node := newFakePurgeNode(t)
