@@ -124,7 +124,7 @@ describe("the status sentence", () => {
 
   test("an engine condition takes the sentence over", () => {
     expect(sentenceText(statusSentence({ ...base, authRejected: true }))).toMatch(
-      /refused this browser's token/,
+      /refused this browser’s token/,
     );
     expect(sentenceText(statusSentence({ ...base, connected: false }))).toMatch(/^Not connected/);
     expect(sentenceText(statusSentence({ ...base, configured: false }))).toMatch(

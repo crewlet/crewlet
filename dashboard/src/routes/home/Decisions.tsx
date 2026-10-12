@@ -29,9 +29,8 @@ import type { DecisionsAnswer } from "~/protocol/index.ts";
 /** What a reader signed in as nobody is told: a decision is a person's, so
  *  there is nothing to list until the browser is somebody. */
 export const NOBODY_SENTENCE = {
-  anonymous: "Set an API token bound to your seat to see what waits on your decision.",
-  unbound:
-    "This token is not bound to a person — set contact.crewlet_operator_id on your seat to see what waits on your decision.",
+  anonymous: "Set a token bound to your seat to see your decisions.",
+  unbound: "Bind this token to your seat to see your decisions.",
 } as const;
 
 /** How many decisions the landing screen shows before "Open inbox". */
@@ -83,10 +82,6 @@ export function Decisions({
           {subjects.length === 0 ? (
             <div className="home-quiet">
               <strong className="t-cell">Nothing needs your decision</strong>
-              <span className="t-caption">
-                No question is put to you, no coding run is waiting on your answer, and no seat is
-                stopped on its budget.
-              </span>
             </div>
           ) : (
             <DecisionList
@@ -98,10 +93,6 @@ export function Decisions({
           )}
         </QueryState>
       )}
-      <p className="home-card-foot">
-        Agents only bring you what their own authority can't decide. Everything else is in the
-        activity below.
-      </p>
     </Card>
   );
 }

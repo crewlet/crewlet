@@ -95,16 +95,14 @@ describe("the shell", () => {
     expect(screen.getAllByText("Reconnecting").length).toBeGreaterThan(0);
     // AND THE LANDING SCREEN IS HOME, whose one sentence an engine condition
     // takes over rather than sitting beside a claim that all is well.
-    expect(screen.getByText(/Not connected to the engine/)).toBeDefined();
+    expect(screen.getByText(/Not connected\. Showing the last state received/)).toBeDefined();
   });
 
   test("a disconnected engine is itself the first thing needing a person", () => {
     // It is not a footnote in a popover: the page cannot tell the truth about
     // anything else while the socket is down, so it leads.
     mount();
-    expect(
-      screen.getByText("Not connected to the engine. What is shown is the last state it sent."),
-    ).toBeDefined();
+    expect(screen.getByText("Not connected. Showing the last state received.")).toBeDefined();
   });
 
   test("every workspace is in the sidebar, Settings included", () => {
