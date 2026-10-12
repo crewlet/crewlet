@@ -309,7 +309,7 @@ type Reading struct {
 	SearchDegradedFraction, SearchScopedFraction float64
 
 	// HistoryPartialFraction is the fraction of this node's fleet history
-	// reads answered without every live node — one did not answer inside
+	// reads answered without every live data node — one did not answer inside
 	// [eventfan.FleetReadBudget].
 	HistoryPartialFraction float64
 
@@ -626,8 +626,9 @@ var table = []rule{
 				r.SearchP95 > InteractiveSearchTarget
 		},
 		remedy: "The corpus has outgrown what one node's share can scan in " +
-			"the budget. Adding a node divides the buckets again, with no " +
-			"configuration and no rebuild. See docs/guides/search.md.",
+			"the budget. Adding a data node divides the buckets again, with " +
+			"no configuration and no rebuild; a node without `data` takes " +
+			"no range. See docs/guides/search.md.",
 	},
 	{
 		kind: KindSearchDegraded,
@@ -660,14 +661,15 @@ var table = []rule{
 		kind: KindHistoryPartial,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%.0f%% of fleet history reads were answered without "+
-					"every node, because one did not answer inside the %s fleet read budget",
+					"every data node, because one did not answer inside the %s fleet read budget",
 					r.HistoryPartialFraction*100, spoken(eventfan.FleetReadBudget)),
 				r.HistoryPartialFraction > 0
 		},
-		remedy: "Turn-level history lives only on the node that published it, so " +
-			"a partial answer is missing that node's rows, and every answer names " +
-			"the node in its `coverage`. A node that has left the fleet is gone " +
-			"with its detail, and the aggregates survive it in the usage domain; " +
+		remedy: "Turn-level history lives only on the data node that published it " +
+			"or keeps it in custody, so a partial answer is missing that node's " +
+			"rows, and every answer names the node in its `coverage`. A node that " +
+			"has left the fleet is gone with its detail, and the aggregates " +
+			"survive it in the usage domain; " +
 			"a live node that keeps missing the budget is slow on its own store " +
 			"or its route, and its own `pool_starved` and `apply_lag` alarms say " +
 			"which.",

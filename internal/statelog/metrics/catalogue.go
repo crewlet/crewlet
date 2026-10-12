@@ -223,8 +223,8 @@ func Catalogue() []Instrument {
 			Name: StatelogBarriersApplied, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "stream"},
 			Shows: "Barrier records applied from each log — every node's " +
-				"linearizable reads on it, since every node applies every " +
-				"record. It is the rate `census_drift` holds against the " +
+				"linearizable reads on it, since every data node applies " +
+				"every record. It is the rate `census_drift` holds against the " +
 				"census, per log: a node's own appends are only its share of " +
 				"the fleet's reads, and on a fleet of several serving nodes " +
 				"they describe a company that many times quieter than it is. " +
@@ -456,11 +456,12 @@ func Catalogue() []Instrument {
 			Name: HistoryAnswers, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"question", "coverage"},
 			Shows: "What each fleet history read covered: `complete` when " +
-				"every live node answered inside the fleet read budget, " +
-				"`partial` when one did not. Turn-level detail lives only " +
-				"on the node that published it, so a partial answer is " +
-				"missing that node's rows — and the history_partial alarm " +
-				"is a fraction of this counter.",
+				"every live data node answered inside the fleet read " +
+				"budget, `partial` when one did not. Turn-level detail " +
+				"lives only on the data node that published it or keeps " +
+				"it in custody, so a partial answer is missing that " +
+				"node's rows — and the history_partial alarm is a " +
+				"fraction of this counter.",
 		},
 
 		// ---- the store ------------------------------------------------
