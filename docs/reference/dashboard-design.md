@@ -844,8 +844,8 @@ the bar's line, and Work shrinks to its glyph.
 
 **The panel.** A search band, a list that scrolls and a footer that does not.
 **All projects** comes first, with the open work across every active project;
-then a note when the listing was cut at 200 ("200 of 340 listed. Type to
-search all of them."); **Recent**, the last three projects opened with the
+then a note when the listing was cut at 200 ("200 of 340. Type to search.");
+**Recent**, the last three projects opened with the
 current one aside, once a company has more than eight; **Projects**, the
 active ones with a 52 px key column, the name and the open count, the current
 scope outlined; and the footer's **Browse all projects** and **New project…**,
@@ -2338,13 +2338,10 @@ and a caption that grew with the engine's state line would relay the whole
 chart twice a tool-loop round. That line ("Executing ENG-412", "3 workers on
 ENG-405", "Needs you · run parked", "Stopped · budget", "Idle · last turn 24m
 ago") is the node's title, and it is read after the node's name. **A seat's
-dot shows what it is doing**, which the section tabs say at the end of their
-row on every Agents section, wherever the row has room for it beside every tab
-(it gives way to the tabs, so a phone does without it): the dot and the word
-are the only state hue on a node, and an agent's colour is its own look (see "The
-one rule"). The legend at the chart's foot counts Working, Needs you, Stopped
-and Idle from the engine's `activity`: a seat with no row yet is counted
-nowhere, and a person never.
+dot shows what it is doing**: the dot and the word are the only state hue on a
+node, and an agent's colour is its own look (see "The one rule"). The legend at
+the chart's foot counts Working, Needs you, Stopped and Idle from the engine's
+`activity`: a seat with no row yet is counted nowhere, and a person never.
 
 **A node opens beside the chart**: a seat its seat (`peek=seat:{handle}`) and
 a unit its unit (`peek=unit:{name}`). Enter does the same, the arrows walk the
@@ -2818,10 +2815,10 @@ under **Sources of the answer**, below the actions, so the keyboard reaches
 all of them and the three changes stay in the first screen. A term that reads
 as a question also trims All to two task and two page hits, from the moment it
 is typed rather than when the answer lands, so the list does not shrink under
-the highlight. The answer ends with a footnote in **tokens** — "1,440 tokens, charged to
-the company", or "Answered before — no tokens spent" — never money. An
+the highlight. The answer ends with a footnote in **tokens** ("1,440 tokens,
+charged to the company", or "Cached answer, no tokens spent"), never money. An
 anonymous or unbound reader gets one line instead: *Set a token bound to your
-seat to get an answer from your company's knowledge.*
+seat to ask.*
 
 ### Three changes, made as you
 

@@ -410,7 +410,7 @@ describe("an id pasted out of a log", () => {
     const id = "22222222-2222-4222-8222-222222222222";
     const p = mount();
     await p.type(id);
-    fireEvent.click(p.row("as a trace — every event that carries it"));
+    fireEvent.click(p.row("as a trace"));
     expect(location.hash).toBe(`#/live/traces/${id}`);
   });
 });
@@ -423,7 +423,7 @@ describe("the task search has four answers, kept apart", () => {
   test("too short is not a search", async () => {
     const p = mount();
     await p.type("#a");
-    expect(screen.getByText(/at least two characters/)).toBeDefined();
+    expect(screen.getByText("Type two or more characters.")).toBeDefined();
     expect(asked.filter((a) => a.kind === "work_search")).toEqual([]);
   });
 
@@ -453,7 +453,7 @@ describe("the task search has four answers, kept apart", () => {
       answers: answering(async () => ({ ...OUTCOME, hits: [], available: false })),
     });
     await p.type("#auth");
-    expect(screen.getByText(/still building/)).toBeDefined();
+    expect(screen.getByText("Still indexing. Try again shortly.")).toBeDefined();
   });
 
   test("an answered term with nothing does say nothing matched", async () => {
@@ -587,11 +587,7 @@ describe("the knowledge answer", () => {
   test("an anonymous or unbound reader is told what would let them ask", async () => {
     const p = mount({ viewer: UNBOUND });
     await p.type(QUESTION);
-    expect(
-      screen.getByText(
-        /Set a token bound to your seat to get an answer from your company’s knowledge/,
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("Set a token bound to your seat to ask.")).toBeDefined();
   });
 
   // "ASKING" IS DRAWN FOR A QUESTION ACTUALLY SENT. A reader whose access is
@@ -912,7 +908,7 @@ describe("the actions, made as the person", () => {
       },
     });
     await p.type("cluster join");
-    expect(p.row(/Create task/).textContent).toContain("no project yet");
+    expect(p.row(/Create task/).textContent).toContain("No projects yet. Add one in Work.");
   });
 
   // WHO HOLDS IT NOW is said on the assign step, from the picker's own read.
@@ -1118,10 +1114,10 @@ describe("the theme step", () => {
     expect(screen.getByText("Change theme…")).toBeTruthy();
   });
 
-  test("a query that matches no theme says how to find one", async () => {
+  test("a query that matches no theme says so", async () => {
     const p = await intoStep();
     await p.type("zzz");
-    expect(screen.getByText(/No theme matches/)).toBeTruthy();
+    expect(screen.getByText("No theme matches.")).toBeTruthy();
     expect(root().hasAttribute("data-palette")).toBe(false);
   });
 });
