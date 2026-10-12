@@ -1026,8 +1026,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// is what stops it if the boot goes no further.
 	e.startDataView(ctx)
 
-	// THE SKILL SYNC IS BUILT BEFORE THE NATIVE BACKENDS, whose page
-	// projection nudges it from a post-commit hook: a nudge with nothing to
+	// THE SKILL SYNC IS BUILT BEFORE THE NATIVE BACKENDS, whose pages
+	// applier nudges it from its post-commit half: a nudge with nothing to
 	// land on would be lost. Building it starts nothing.
 	if err = e.newSkillSync(nodeID); err != nil {
 		return nil, fmt.Errorf("engine: tool skills: %w", err)
@@ -1219,7 +1219,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// host's own doc asks for exactly this and the binding did the
 		// opposite.
 		Seats: func() []placement.Seat { return e.Company().Seats() },
-		// A seat whose mailbox attached before this node's projection had
+		// A seat whose mailbox attached before this node's copy had
 		// caught up would answer "there is no such item" to its own
 		// tools — and that is an answer a seat ACTS on: it files the
 		// duplicate, it tells a person their link is dead. So a node
@@ -1227,7 +1227,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// until its copy of the company's records is current.
 		//
 		// Trivially true on a company running the vendor backends, which
-		// have no projection to wait for.
+		// have no copy here to wait for.
 		//
 		// AND NEVER IN A MAINTENANCE MODE, where this same host still
 		// runs for the presence it renews — see [Engine.seatsAdmitted].
@@ -1975,13 +1975,13 @@ func (e *Engine) teardown(ctx context.Context) {
 	// this node can claim one again once it is given back.
 	e.releaseDuties(ctx)
 	e.stopCooldownRefresh()
-	// BEFORE the native backends, whose page projection its walk reads, and
+	// BEFORE the native backends, whose applied pages its walk reads, and
 	// before backends.Close, which closes the broker its nudge listens on.
 	e.stopSkillSync(ctx)
 	e.stopServingEstate(ctx)
 	e.stopServingFleetBroker(ctx)
 	// BEFORE backends.Close, for the same reason and with more at stake:
-	// the projectors and the indexer both write, and an apply landing
+	// the apply loops and the indexers both write, and an apply landing
 	// after the close would fail its transaction mid-batch and leave the
 	// cursor ahead of the rows it claims to describe.
 	e.stopNative(ctx)
@@ -2493,12 +2493,11 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 			status.Draining = host.Draining()
 		}
 	}
-	// The native replication loops — the wiki's projector and every
-	// state-log domain's applier — so an operator asking why a fresh node
-	// holds no seats can see the answer in the fleet view rather than
-	// inferring it from an empty claim list. See
-	// [coord.NodeStatus.ProjectionsReady] for why this is not a readiness
-	// signal.
+	// The native replication loops — every state-log domain's applier —
+	// so an operator asking why a fresh node holds no seats can see the
+	// answer in the fleet view rather than inferring it from an empty
+	// claim list. See [coord.NodeStatus.ProjectionsReady] for why this is
+	// not a readiness signal.
 	for _, loop := range e.NativeStatus(ctx) {
 		status.ProjectionsTotal++
 		if loop.Ready {

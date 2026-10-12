@@ -336,8 +336,6 @@ func TestEveryDomainReportsItsOwnReplicationRow(t *testing.T) {
 	}
 	for _, row := range rows {
 		switch {
-		case row.Kind != "projection" && row.Kind != "domain":
-			t.Errorf("%s reports kind %q, which is neither", row.Name, row.Kind)
 		case !row.Ready && strings.TrimSpace(row.Detail) == "":
 			t.Errorf("%s is not ready and says nothing about why — an operator "+
 				"reading the fleet view has no next step", row.Name)

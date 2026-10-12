@@ -233,10 +233,10 @@ type Sources struct {
 	// an unreported surface as connecting rather than guessing either way.
 	Converges func(kind integration.Kind) bool
 
-	// Work and Pages are this node's projections of the company's own
-	// tracker and knowledge base. Nil leaves their questions unregistered,
-	// which is the honest answer for a company on Jira and Confluence:
-	// there is no native record for this node to have a copy of.
+	// Work and Pages are the company's own tracker and knowledge base,
+	// read through the estate router. Nil leaves their questions
+	// unregistered, which is the honest answer for a company on Jira and
+	// Confluence: there is no native record for any node to have a copy of.
 	//
 	// Consumer-defined interfaces rather than the concrete readers, like
 	// every other seam here — and the READ side only. Nothing on this

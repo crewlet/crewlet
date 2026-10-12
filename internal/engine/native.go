@@ -34,12 +34,11 @@ import (
 //
 // # What is per-NODE and what is per-EPOCH, and why the split is not obvious
 //
-// The apply loops, the projector, the indexer and the change feeds are
-// per-NODE: they follow a LOG or a coordination family, and neither changes
-// when a company revision does. Rebuilding them on an apply would restart
-// every node's applier and re-run a boot reconcile on every configuration
-// change, which for a company that edits its org chart twice a day is a node
-// that is never established.
+// The apply loops, the indexers and the change feeds are per-NODE: they
+// follow a LOG, which does not change when a company revision does.
+// Rebuilding them on an apply would restart every node's applier and re-run a
+// boot reconcile on every configuration change, which for a company that edits
+// its org chart twice a day is a node that is never established.
 //
 // The parsers, the prompts and the tool wiring are per-EPOCH, because all
 // three depend on the org chart: the lead map a fallback routes through, the
@@ -92,10 +91,8 @@ type native struct {
 	// anybody at all.
 	gate *NodeGate
 
-	// It adopts the state log in its own step; until then this node runs
-	// one projector and one log side by side, and that is visible here
-	// rather than hidden behind a common name.
-	// indexer keeps the lexical search index behind the page projection.
+	// indexer keeps this node's lexical search index over the tracker's
+	// and the knowledge base's applied rows.
 	indexer *search.Indexer
 
 	// writer is the tracker's write authority and pages the wiki's.
@@ -123,7 +120,7 @@ type native struct {
 	// run is the context every goroutine this node started runs under, and
 	// stop is what ends it.
 	//
-	// HELD, not re-derived. The feeds start later than the projectors — a
+	// HELD, not re-derived. The feeds start later than the apply loops — a
 	// feed publishes onto the inbound edge, so it is armed with the rest
 	// of the node rather than at construction — and a goroutine registered
 	// on done but started under the CALLER's context would never be ended
@@ -581,14 +578,14 @@ func (n *native) shutdown(ctx context.Context) {
 	}
 	n.stop()
 	n.done.Wait()
-	// THE APPLY LOOPS LAST, after the feeds and the projector that read
+	// THE APPLY LOOPS LAST, after the feeds and the indexers that read
 	// what they write. A loop stopped first leaves a feed consuming a log
 	// nothing is applying, which is not wrong so much as a shutdown that
 	// looks like a stall in every log line it produces on the way out.
 	n.log.Stop()
 }
 
-// NativeHydrated reports whether every native projection this node runs has
+// NativeHydrated reports whether every native domain this node runs has
 // caught up.
 //
 // THE GATE ON SEAT ACQUISITION. A seat whose mailbox attached first would
@@ -701,34 +698,24 @@ func (e *Engine) serviceable(now time.Time) (bool, string) {
 }
 
 // ReplicationStatus is one of this node's replication loops, as the fleet view
-// counts them.
+// counts them: one state-log domain's applier.
 //
-// # Why one type over two mechanisms
+// What the fleet view asks is "how many of this node's copies of the
+// company's state have caught up" — the question behind an operator's "why is
+// the new node holding no seats" — so this is that question's shape: a name,
+// whether it is ready, and the detail an operator reads when it is not.
 //
-// This node runs two kinds of loop and they are genuinely different: a
-// PROJECTOR follows a coordination bucket's change feed and holds a revision
-// cursor, and a state-log APPLIER consumes an ordered stream and commits a
-// checkpoint with the rows it derives. Nothing about their internals is
-// shared, and forcing one into the other's status struct would put a revision
-// where a position belongs.
-//
-// What the fleet view asks is not about either mechanism. It asks "how many of
-// this node's copies of the company's state have caught up" — the question
-// behind an operator's "why is the new node holding no seats" — and a count
-// that included only one of the two kinds would answer 1 of 1 for a node whose
-// tracker is hours behind. So the shared thing is the QUESTION, and this is
-// its shape: a name, whether it is ready, and the detail an operator reads
-// when it is not.
+// THERE IS NO KIND. The rows once came from two mechanisms — a projector over
+// a coordination bucket beside the state-log appliers — and carried which one
+// they were. The projector is gone and every row is a domain's, so a field
+// that could only ever say `domain` told a reader nothing, and a check that it
+// was one of two values certified a distinction that no longer exists.
 type ReplicationStatus struct {
-	// Name is the family or the domain, which is what an operator sees.
+	// Name is the domain, which is what an operator sees.
 	Name string
 
-	// Kind is `projection` or `domain`, so the two mechanisms are
-	// distinguishable when the detail below is not enough.
-	Kind string
-
-	// Ready is the same fact for both: this loop's copy is one a seat's
-	// tools may be attached to. It is NOT strict readiness — see
+	// Ready is whether this loop's copy is one a seat's tools may be
+	// attached to. It is NOT strict readiness — see
 	// [Engine.NativeHydrated], which asks the stricter question that
 	// actually gates admission.
 	Ready bool
@@ -988,10 +975,10 @@ func pagesParserOptions(env *config.Resolver, c *Company) pages.ParserOptions {
 // the old company's org chart — an item filed into a project whose lead
 // moved would keep waking the seat that used to own it.
 //
-// NOT the projectors, the index, the stores or the feeds. Those follow a
-// coordination FAMILY, which no company revision changes; rebuilding them
-// here would drop this node's projection and re-run a boot reconcile on
-// every configuration edit.
+// NOT the apply loops, the indexes, the stores or the feeds. Those follow a
+// LOG, which no company revision changes; rebuilding them here would restart
+// this node's appliers and re-run a boot reconcile on every configuration
+// edit.
 //
 // There is no retirement branch. Switching `tracker.backend` away from
 // native is not a live gesture — the runtime, its halves and its feeds are
@@ -1404,16 +1391,16 @@ func parentOf(o *org.Organization, child *org.Unit) *org.Unit {
 	return nil
 }
 
-// skillDetector answers whether a page body is a tool skill, for the
-// projection's derived flag.
+// skillDetector answers whether a page body is a tool skill, for the pages
+// applier's derived flag.
 type skillDetector struct{}
 
 // IsSkill reports a body that parses as a tool skill.
 //
 // THROUGH THE SKILLS PACKAGE'S OWN ADMISSION TEST, so the projected flag
 // means exactly what the registry means by it: a page the sync would admit.
-// A second heuristic here would let one page be a skill to the projection
-// and prose to the loader — and the disagreement is silent, because each
+// A second heuristic here would let one page be a skill to the applier and
+// prose to the loader — and the disagreement is silent, because each
 // half is self-consistent.
 func (skillDetector) IsSkill(body string) bool { return skills.IsSkill(body) }
 
@@ -2063,9 +2050,9 @@ func (m seatMentions) Mentions(text string) []string {
 //
 // # Why it is a nudge and not a read
 //
-// It is called from the page projection's post-commit hook, which runs on the
-// projector's own loop, so doing the read here would hold every subsequent
-// change behind a page walk and a registry replace. So it is a request to the
+// It is called from the pages applier's post-commit half, which runs on that
+// domain's apply loop, so doing the read here would hold every subsequent
+// record behind a page walk and a registry replace. So it is a request to the
 // node's one sync loop, which coalesces however many arrive into one walk: the
 // read is wholesale, and one re-read after N changes is the same answer as N
 // of them.
@@ -2079,9 +2066,9 @@ func (m seatMentions) Mentions(text string) []string {
 // every such node to walk its container through a data node. Several data
 // nodes announce one edit; a hearer coalesces them into one walk.
 //
-// NAMED AS THE NATIVE BACKEND'S, because the projection outlives an apply that
-// moves the company's skills to Confluence, and the loop ignores a refresh
-// from a backend its source is not on.
+// NAMED AS THE NATIVE BACKEND'S, because the pages applier outlives an apply
+// that moves the company's skills to Confluence, and the loop ignores a
+// refresh from a backend its source is not on.
 func (e *Engine) nudgeSkills() { e.skillSync.Announce(string(config.KnowledgeNative)) }
 
 // walkRemoteSkills reads the tool-skill container through a data node, for a
@@ -2110,8 +2097,8 @@ func (e *Engine) walkRemoteSkills(ctx context.Context, container string) ([]skil
 	return out, nil
 }
 
-// walkNativeSkills reads the tool-skill container out of this node's own page
-// projection.
+// walkNativeSkills reads the tool-skill container out of this node's own
+// applied pages.
 //
 // # It waits for hydration first
 //
@@ -2162,8 +2149,8 @@ func (e *Engine) awaitHydration(ctx context.Context) bool {
 	return true
 }
 
-// hydrationPoll is how often the first skill read checks whether the
-// projection has caught up.
+// hydrationPoll is how often the first skill read checks whether this node's
+// pages have caught up.
 //
 // A quarter-second. The wait is bounded by a boot reconcile, which is
 // hundreds of milliseconds on an ordinary company and minutes on a large one

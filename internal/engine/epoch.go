@@ -366,9 +366,9 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// and the answer just changed here. See [integration.Worker.MarkStale].
 	e.integrations.MarkStale()
 	// The NATIVE backends' parsers are on the same edge and rebuilt for
-	// the same reason. Their projectors, index, stores and feeds are NOT:
-	// those follow a coordination family, which a company revision does
-	// not change — see [Engine.reconcileNative].
+	// the same reason. Their apply loops, indexes, stores and feeds are
+	// NOT: those follow a log, which a company revision does not change —
+	// see [Engine.reconcileNative].
 	e.reconcileNative(ctx, next, activatedAt)
 	// AND THE TOOL SKILLS' SOURCE, after the knowledge base's own reconcile
 	// above, because the Confluence source is read off the wiring it left
