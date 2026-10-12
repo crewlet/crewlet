@@ -285,8 +285,8 @@ test("an unbound token says what to bind, not that something is broken", async (
   });
   mount();
   await waitFor(() => expect(screen.getByText(/not bound to a person/)).toBeTruthy());
-  // The id is NAMED, because it is the value that goes in the config.
-  expect(screen.getByText(/ops-7/)).toBeTruthy();
+  // And it says where the binding is made.
+  expect(screen.getByText("Bind it to a seat in Edit org, or pick someone above.")).toBeTruthy();
 });
 
 test("no credential at all is a different sentence from an unbound one", async () => {
@@ -643,7 +643,7 @@ test("an empty claim says what would be in it", async () => {
   serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
   mount("unblocked");
   await waitFor(() => expect(screen.getByText("Nothing here")).toBeTruthy());
-  expect(screen.getByText(/has become workable for you/)).toBeTruthy();
+  expect(screen.getByText("Nothing newly unblocked.")).toBeTruthy();
 });
 
 // THE QUESTIONS PUT TO SOMEBODY ELSE ARE NOT WRITTEN AS THE READER'S. This is
@@ -741,10 +741,10 @@ test("an ask on somebody else's day is written about them and cannot be answered
   expect(screen.queryByText(/you are the approver/)).toBeNull();
   // SAID ONCE ON THE PAGE, not only on a hover: a row of dimmed options with
   // nothing said reads as a broken screen.
-  expect(screen.getByText(/^Answering is off\. This is Rui Santos’s day/)).toBeTruthy();
+  expect(screen.getByText("Answering is off. Viewing Rui Santos’s day. Read-only.")).toBeTruthy();
   const accept = screen.getByRole("button", { name: "Accept" });
   expect(accept.getAttribute("aria-disabled")).toBe("true");
-  expect(accept.getAttribute("title")).toContain("This is Rui Santos’s day");
+  expect(accept.getAttribute("title")).toContain("Viewing Rui Santos’s day. Read-only.");
   expect(screen.getByRole("button", { name: "Change" }).getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(accept);
   await new Promise((r) => setTimeout(r, 20));
@@ -860,7 +860,7 @@ const orderedByRui = {
 test("a queue a lead ordered is announced on the reading nobody opened", async () => {
   serving(orderedByRui);
   mount();
-  await waitFor(() => expect(screen.getByText(/put this order in place/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/Order set by/)).toBeTruthy());
   expect(screen.getByText(/Rui Santos/)).toBeTruthy();
   // The queue opens ordered by due date, so the banner is what carried it.
   expect(screen.getByRole("radio", { name: /Due/ }).getAttribute("aria-checked")).toBe("true");
@@ -897,7 +897,7 @@ test("a queue nobody else ordered carries neither banner nor mark", async () => 
   });
   mount();
   await counts();
-  expect(screen.queryByText(/put this order in place/)).toBeNull();
+  expect(screen.queryByText(/Order set by/)).toBeNull();
   expect(prioritiesOption().getAttribute("title")).toBeNull();
 });
 
@@ -908,7 +908,7 @@ test("the banner offers no way to the reading that is already open", async () =>
   location.hash = "#/me?order=priorities";
   serving(orderedByRui);
   mount();
-  await waitFor(() => expect(screen.getByText(/put this order in place/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/Order set by/)).toBeTruthy());
   expect(screen.queryByRole("button", { name: "Priorities →" })).toBeNull();
 });
 
@@ -1115,7 +1115,7 @@ test("an anonymous reader gets the credential sentence, not a menu of refusals",
   mount();
   await waitFor(() => expect(screen.getByText(/No credential is presented/)).toBeTruthy());
   expect(screen.queryByRole("combobox", { name: "Whose day" })).toBeNull();
-  expect(screen.queryByText(/pick somebody above/)).toBeNull();
+  expect(screen.queryByText(/pick someone above/)).toBeNull();
   // AND THE LOAD STOPS BEING ASKED FOR. It is the picker's own question, and
   // once the viewer answers there is no control for it to fill — the FIRST
   // read is unavoidable, because until then this reader is indistinguishable
@@ -1369,9 +1369,9 @@ describe("somebody else's day", () => {
     serving(day("rui"), ledOrg);
     mount();
     await waitFor(() => expect(rowOf("ENG-5").getAttribute("draggable")).toBe("true"));
-    // AND WHAT IT DOES IS SAID BEFORE IT IS DONE: an instruction to them,
-    // stamped with the reader's name — not a private arrangement.
-    expect(screen.getByText(/stamped on Rui Santos’s queue with your name/)).toBeTruthy();
+    // AND WHAT IT DOES IS SAID BEFORE IT IS DONE: the report is told, so it is
+    // an instruction to them rather than a private arrangement.
+    expect(screen.getByText("Rui Santos is told when you reorder.")).toBeTruthy();
     fireEvent.keyDown(rowOf("ENG-5"), { key: "ArrowDown", altKey: true });
     await waitFor(() => expect(posted.length).toBe(1));
     expect(posted[0]!.args).toEqual({
@@ -1433,8 +1433,7 @@ test.each([
   expect(rowOf("ENG-5").getAttribute("draggable")).toBeNull();
 });
 
-// A PAGE OF PRIORITIES SAYS IT IS ONE, and what becomes of the rest: the
-// entries past the page keep their places when one of these moves.
+// A PAGE OF PRIORITIES SAYS IT IS ONE, and how much of the list it holds.
 test("the entries past the page are named, not dropped", async () => {
   location.hash = "#/me?order=priorities";
   serving({
@@ -1448,11 +1447,7 @@ test("the entries past the page are named, not dropped", async () => {
     work_person: storedOf("ada"),
   });
   mount();
-  await waitFor(() =>
-    expect(
-      screen.getByText(/The first 3 open entries of 5\. The other 2 keep their places/),
-    ).toBeTruthy(),
-  );
+  await waitFor(() => expect(screen.getByText("Showing 3 of 5.")).toBeTruthy());
 });
 
 // THE INBOX IS NOT ONE OF THE CLAIMS. What REACHED somebody is a different
