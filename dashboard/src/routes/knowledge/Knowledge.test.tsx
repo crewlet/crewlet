@@ -28,7 +28,7 @@ import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Knowledge } from "./Knowledge.tsx";
 import { ContainerPeek } from "./peeks.tsx";
 import { Router } from "~/app/router.tsx";
-import { FrameReadings } from "~/app/Shell.tsx";
+import { FrameReadings, Shell } from "~/app/Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { resetForTest as resetStars } from "~/lib/starred.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -387,6 +387,31 @@ test("a mode the reader named is kept even where the engine would degrade it", a
 // ---------------------------------------------------------------------------
 // The landing
 // ---------------------------------------------------------------------------
+
+// A PAGE IS STARRED FROM ITS OWN MORE MENU. The frame's star in the landing's
+// bar offered the workspace the sidebar already lists, beside a design that
+// keeps no star of its own.
+test("the landing's page bar draws no star", async () => {
+  location.hash = "#/knowledge";
+  const store = new Store();
+  store.applyOrg(withDerived(ORG) as never);
+  store.setConnected(true);
+  const socket = new LiveSocket(store);
+  socket.query = (() => new Promise(() => {})) as typeof socket.query;
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <Shell>
+          <Knowledge />
+        </Shell>
+      </Router>
+    </ClientContext.Provider>,
+  );
+  // THE BAR IS DRAWN, with the screen's own controls in it.
+  expect(await screen.findByRole("search", { name: "Search the knowledge base" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /New page/ })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Starred/ })).toBeNull();
+});
 
 test("the spaces row links every space, with its key, its count and its purpose", async () => {
   location.hash = "#/knowledge";

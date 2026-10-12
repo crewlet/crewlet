@@ -59,6 +59,7 @@ import {
   XGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { useOwnStar } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateCompact, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
@@ -106,6 +107,9 @@ function pageOf(path: readonly string[]): string {
 export function Knowledge() {
   const [q] = useParam("q", "");
   const phrase = q.trim();
+  // NO STAR IN THIS BAR: a page is starred from its own More menu, and the
+  // frame's would offer the workspace the sidebar already lists.
+  useOwnStar();
   return (
     <>
       <KnowledgeBar>

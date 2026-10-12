@@ -1574,7 +1574,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | Piece | What it is |
 |---|---|
 | `sidebar/` | the one sidebar — [The sidebar](#the-sidebar) — with the health card and the user block |
-| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a key mark on a guarded section and an arrow on a cross-link. A screen whose own menu carries the star (a knowledge page's More, `useOwnStar`) gets no star from the frame |
+| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a key mark on a guarded section and an arrow on a cross-link. A screen whose design keeps the star in a menu rather than in the bar gets no star from the frame (`useOwnStar`): a knowledge page, whose More carries it, and Knowledge's landing, whose pages are each starred from their own More |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
@@ -1832,10 +1832,12 @@ show its ancestry beside the controls takes a line of its own.
   object strip measures a twin of the kit's row — hidden, inert, clipped —
   since the kit draws a row whole, and hands the widths to the same fold.
 - **The star is on every page that is one.** A workspace's own page is already
-  a sidebar row, so the star there cannot keep it — but it is drawn,
+  a sidebar row, so the star there cannot keep it, but it is drawn,
   unavailable and saying "Already in the sidebar", rather than left out: left
   out, it appeared on every section of a workspace but the first, and moving
-  between two tabs moved the header's controls.
+  between two tabs moved the header's controls. Knowledge's landing and its
+  pages are the exception: a page is starred from its own More menu, so
+  neither draws the frame's star (`useOwnStar`).
 
 ### Moving, and going back
 
