@@ -260,7 +260,7 @@ test("the custom window opens on the company days a named range covers", async (
         ),
     );
     await settle();
-    fireEvent.click(screen.getByTitle("Name two company days of your own"));
+    fireEvent.click(screen.getByTitle("Pick two dates"));
     expect((screen.getByLabelText("First day") as HTMLInputElement).value).toBe("2026-08-31");
     expect((screen.getByLabelText("Last day") as HTMLInputElement).value).toBe("2026-09-29");
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));

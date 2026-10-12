@@ -50,6 +50,9 @@ function periodTitle(period: Period): string {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
+/** How a ceiling is typed, said under the field that takes one. */
+const CEILING_TYPING = "Type 40M or 2.5M; empty means no limit.";
+
 /**
  * When a window's allowance comes back, as the company's calendar says it:
  * the date for a week or a month ("Oct 1"), the time for a day, which always
@@ -80,9 +83,7 @@ function WriteStatus({ write, onReload }: { write: CeilingWrite; onReload: () =>
     <div className="ceiling-status" role="status" aria-live="polite">
       {state.kind === "checking" && <span className="t-caption">Checking with the engine…</span>}
       {state.kind === "saving" && <span className="t-caption">Saving…</span>}
-      {state.kind === "unchanged" && (
-        <span className="t-caption">That is already the ceiling, so there is nothing to save.</span>
-      )}
+      {state.kind === "unchanged" && <span className="t-caption">Already the limit.</span>}
       {state.kind === "warned" && (
         <Callout variant="warning">
           <ul className="ceiling-warnings">
@@ -257,8 +258,8 @@ export function CeilingEditor({
             error={error}
             helper={
               w
-                ? `${fmtCount(w.used)} spent ${PERIOD_WORDS[period]}, ${resetsWords(w, zone)}. Type 40M, 2.5M or digits; empty is no ceiling.`
-                : "Type 40M, 2.5M or digits; empty is no ceiling."
+                ? `${fmtCount(w.used)} spent ${PERIOD_WORDS[period]}. ${CEILING_TYPING}`
+                : CEILING_TYPING
             }
           >
             <Input
@@ -371,9 +372,8 @@ export function RaiseBudgetDialog({
     return read.ok && read.value !== (windowOf(windows, period)?.limit ?? null);
   });
 
-  // A SAVE ENDS THE DIALOG, and the toast carries the revision's own summary
-  // — the sentence the history will show — and that it is applying, since
-  // the gate enforces the ceiling it replaced until each node has it.
+  // A SAVE ENDS THE DIALOG, and the toast carries the revision's own summary:
+  // the sentence the history will show.
   const savedSummary = write.state.kind === "saved" ? write.state.summary : null;
   const announced = useRef(false);
   useEffect(() => {
@@ -384,7 +384,7 @@ export function RaiseBudgetDialog({
     toast.show({
       variant: "success",
       title: savedSummary,
-      message: "Saved. Each node enforces it once it has applied the new configuration.",
+      message: "Saved.",
     });
     onClose();
   }, [savedSummary, toast, onClose]);
@@ -436,11 +436,7 @@ export function RaiseBudgetDialog({
       }
     >
       <div className="col gap-3">
-        <p className="t-caption">
-          A window resets on its own at the turn of its day, week or month on the company clock
-          {zone ? ` (${zone})` : ""}; raise the ceiling to make room now. Leave a field empty for no
-          ceiling on that window.
-        </p>
+        <p className="t-caption">Leave a field empty for no limit.</p>
         {BUDGET_WINDOWS.map(({ period }) => {
           const w = windowOf(windows, period);
           const fieldId = `raise-${period}`;

@@ -82,7 +82,7 @@ export function TimeRangePicker({
       title:
         isRange(window) || window.today
           ? offer.customDays
-            ? "Name two company days of your own"
+            ? "Pick two dates"
             : "Name two instants of your own"
           : offer.customDays
             ? daysLabel(companyDays(window, offer.zone))
@@ -168,14 +168,14 @@ function CustomWindow({
       : till === null
         ? "The last day is not a date."
         : till < at
-          ? "The last day has to be on or after the first — both are counted."
+          ? "The last day must be on or after the first."
           : ""
     : at === null
       ? "The start is not a date and time."
       : till === null
         ? "The end is not a date and time."
         : till <= at
-          ? "The end has to be after the start — a window is half-open, so one that ends where it begins holds nothing."
+          ? "The end must be after the start."
           : "";
 
   return (
@@ -228,11 +228,7 @@ function CustomWindow({
             here cannot quietly inherit the first one's. */}
       <FormField
         label={days ? "First day" : "From"}
-        helper={
-          days
-            ? `Company days, both counted, on the company's clock${days.zone ? ` (${days.zone})` : ""}.`
-            : "In your own time zone, as every time on this screen is."
-        }
+        helper={days ? `Company days, in ${days.zone || "UTC"}.` : "In your time zone."}
       >
         {(field) => (
           <Input
