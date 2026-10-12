@@ -776,7 +776,7 @@ test("a change reads as a sentence, a checklist move included", () => {
   );
   expect(
     said({ checklists: { from: "Acceptance: 0 of 4 done", to: "Acceptance: 1 of 4 done" } }),
-  ).toBe("ticked 1 on Acceptance — 1 of 4 done");
+  ).toBe("ticked 1 on Acceptance, 1 of 4 done");
   expect(
     said({
       checklists: {

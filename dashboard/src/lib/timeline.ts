@@ -362,6 +362,6 @@ export function barTitle(bar: TimelineBar): string {
     case "inverted":
       // NAMED, not smoothed over: the dates are the wrong way round and the
       // person who typed them is the only one who can fix it.
-      return `due ${from} but starting ${to} — the dates are the wrong way round`;
+      return `Due ${from}, before its start ${to}`;
   }
 }

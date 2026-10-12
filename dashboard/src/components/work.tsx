@@ -357,11 +357,7 @@ export function AsksTag({ count }: { count?: number }) {
   return (
     <Tag
       variant="warning"
-      title={
-        many
-          ? "asked something, rather than merely informed"
-          : "this asks something of its recipient, rather than informing them"
-      }
+      title={many ? "asked something, rather than merely informed" : "Asks for an answer"}
     >
       {/* ONE TEXT NODE, so a DOM query can match the pill's own label rather
           than a fragment of it. */}

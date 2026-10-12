@@ -602,9 +602,7 @@ test("Assign task decides whose the task is from the read, not the search's answ
   expect(dialog.getByRole("option", { name: /ENG-20/ }).getAttribute("aria-disabled")).toBe("true");
 
   await pick("ENG-21");
-  await waitFor(() =>
-    expect(dialog.getByText(/ENG-21 is already SWE’s — find another/)).toBeTruthy(),
-  );
+  await waitFor(() => expect(dialog.getByText(/ENG-21 is already assigned to SWE\./)).toBeTruthy());
   expect(assign().getAttribute("aria-disabled")).toBe("true");
 });
 
@@ -625,7 +623,7 @@ test("pausing sends stop_running only when the box is ticked", async () => {
   await settle();
 
   let dialog = await openPause();
-  expect(dialog.getByText(/the turn it is on finishes first/)).toBeTruthy();
+  expect(dialog.getByText(/Otherwise the current turn finishes first\./)).toBeTruthy();
   fireEvent.change(dialog.getByLabelText(/Why/), { target: { value: "rolling the fleet" } });
   fireEvent.click(dialog.getByRole("button", { name: "Pause" }));
   await waitFor(() => expect(posted).toHaveLength(1));
