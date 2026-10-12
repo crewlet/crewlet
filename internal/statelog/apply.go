@@ -2788,7 +2788,7 @@ func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts Appl
 		//
 		// A FLOOR THAT DOES NOT PARSE IS A FAULT, the treatment a domain
 		// gives a malformed record of a kind it declares: the one writer
-		// ([SweepAnchors]) checks every body before it appends one, so a
+		// ([PlanSweep]) checks every body before it appends one, so a
 		// record that names no floor came from somewhere this build cannot
 		// explain, and applying it as nothing would hide that.
 		floor, err := TrimmedFloor(r.spec.Name, rec.Subject)

@@ -276,7 +276,7 @@ the object's next write to the broker to be refused before the write asks the
 log what the object holds. Kept, the anchors would grow by every object the log
 ever carried, on every data node, for the life of the deployment.
 
-So after each tick's purge, on each log that writes anchors — the tracker's,
+So after each tick's purges, on each log that writes anchors — the tracker's,
 the knowledge base's and the code log — the trim holder counts the anchors its
 own copy holds below the log's **first surviving record** and appends one
 `trimmed` record per 250 of them, at most 128 a tick. Every node's applier removes up to 250
@@ -291,24 +291,29 @@ each node runs on its own schedule
   sweep failed — goes on the following ticks without waiting for another purge.
 - **The holder counts only once its own copy has applied the whole log.** It
   reads the log's end and waits for its applier to commit it — up to five
-  seconds, and never past the sweep's time budget; a copy that is behind —
-  catching up after adopting a snapshot, or with a backlog — would count
-  anchors that the records already on the log remove, so it appends nothing
-  that tick and says so.
+  seconds, and never past the interval the tick's sweeps share; a copy that is
+  behind — catching up after adopting a snapshot, or with a backlog — would
+  count anchors that the records already on the log remove, so it appends
+  nothing that tick and says so.
 - **One record at a time.** Each record is appended only once the holder's own
   applier has committed the one before it (again waiting up to five seconds),
   so a seat's write or a read's barrier that lands behind the sweep on the
   holder waits for one record's apply, never for the whole run.
 - **Within a time budget.** The trim holder evaluates its own alarms on the
   same loop that sweeps, so a tick's sweeps share one alarm interval (ten
-  seconds) equally — a third each for the tracker's, the knowledge base's and
-  the code log — and each stops appending when its share is spent, leaving the
-  rest to the next tick. That bounds two things. The holder's alarms are
-  evaluated at most one interval late, however slow its applier is. And a data
-  node that applies the records more slowly than the holder, which builds the
-  difference up in front of its own writes and reads, is left at most about
-  (k − 1) budgets behind them when it is k times slower — about one budget at
-  half the holder's speed — and never more than 128 records behind.
+  seconds), counts included. Every log is counted first, and the interval is
+  then shared among the logs that have anchors below their floor **that
+  tick** — each handed an equal share of what is left, so what one leaves
+  unspent goes to the logs after it. A log with nothing below costs the others
+  its count and nothing more: a log draining a backlog on its own is given the
+  whole ten seconds, and the three logs draining at once a third each. Each
+  stops appending when its share is spent, leaving the rest to the next tick.
+  That bounds two things. The holder's alarms are evaluated at most one
+  interval late, however slow its applier is. And a data node that applies the
+  records more slowly than the holder, which builds the difference up in front
+  of its own writes and reads, is left at most about (k − 1) budgets behind
+  them when it is k times slower — about one budget at half the holder's speed
+  — and never more than 128 records behind.
 - **The floor is the log's first surviving record, not the published floor.**
   The published floor can run ahead of the log after a purge that failed, and
   an anchor of a record the log still holds is one the object's next write uses.
@@ -323,9 +328,10 @@ each node runs on its own schedule
   `go test ./internal/statelog -run '^$' -bench BenchmarkATrimmedRecordsSweep -benchtime 200x`
   re-measures it on yours). A backlog drains at up to 128 records — 32,000
   anchors — per log per tick where records apply quickly. On a large table the
-  time budget binds first: at a million anchors a record's apply and append
-  take about 45 ms, so a share of a third appends about seventy records a
-  tick, 1.7 million anchors a day.
+  time budget can bind first: at a million anchors a record's apply and append
+  take about 45 ms, so a log sweeping on its own still reaches the 128 inside
+  its ten seconds — three million anchors a day — while each of three logs
+  sweeping at once appends about seventy into its third, 1.7 million a day.
 - **What to watch:** the duty logs `retention_anchors_swept` (`domain`,
   `generation`, `below`, `records`, and `more_remain` when the cap or the time
   budget stopped it with anchors still below) when it appends, and

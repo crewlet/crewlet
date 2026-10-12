@@ -474,8 +474,7 @@ func sweepEstate(t testing.TB) store.ReplicatedHandle {
 func encodeProbe(env statelog.Envelope) ([]byte, error) { return json.Marshal(env) }
 
 // sweepDeps is a sweep of the probe log over estate, appending to log, on an
-// applier that keeps up with it unless log names one of its own — under a
-// budget no case reaches but the ones that set their own.
+// applier that keeps up with it unless log names one of its own.
 func sweepDeps(t testing.TB, estate store.ReplicatedHandle, log *sweepLog) statelog.SweepDeps {
 	if log.runner == nil {
 		log.runner = &sweepRunner{}
@@ -484,15 +483,35 @@ func sweepDeps(t testing.TB, estate store.ReplicatedHandle, log *sweepLog) state
 		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 		Log: log, Ends: log.Ends, Runner: log.runner,
 		Admission: noCeiling(t), Encode: encodeProbe,
-		DB: estate.Reader(), Writer: "node-a", Budget: time.Hour,
+		DB: estate.Reader(), Writer: "node-a",
 	}
+}
+
+// noBound is a budget no case reaches but the ones that set their own.
+const noBound = time.Hour
+
+// sweep counts the anchors deps' copy holds below floor and appends the
+// records they call for — the two steps the engine's trim takes — counting
+// under a context bounded by budget, as the engine counts every log under the
+// deadline their sweeps share, and appending within budget.
+func sweep(t testing.TB, deps statelog.SweepDeps, floor statelog.Position,
+	budget time.Duration) (statelog.Swept, error) {
+
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), budget)
+	plan, err := statelog.PlanSweep(ctx, deps, floor)
+	cancel()
+	if err != nil {
+		return statelog.Swept{}, err
+	}
+	return plan.Sweep(t.Context(), budget)
 }
 
 // THE TRIM APPENDS ONE TRIMMED RECORD PER BOUND OF ANCHORS BELOW THE FLOOR, AT
 // MOST ITS CAP, AND NONE WHEN THERE ARE NONE — so an idle fleet's log gains
 // nothing, and a backlog drains over the ticks that follow without waiting for
 // another purge.
-func TestSweepAnchorsAppendsOneRecordPerBoundAndNoneWhenNothingIsBelow(t *testing.T) {
+func TestASweepAppendsOneRecordPerBoundAndNoneWhenNothingIsBelow(t *testing.T) {
 	t.Parallel()
 	floor := statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}
 	per := statelog.AnchorsPerTrimmedRecord
@@ -518,13 +537,22 @@ func TestSweepAnchorsAppendsOneRecordPerBoundAndNoneWhenNothingIsBelow(t *testin
 				probePrefix + ".object.kept": floor,
 			})
 			log := &sweepLog{}
-			swept, err := statelog.SweepAnchors(t.Context(), sweepDeps(t, estate, log), floor)
+			plan, err := statelog.PlanSweep(t.Context(), sweepDeps(t, estate, log), floor)
 			if err != nil {
-				t.Fatalf("SweepAnchors: %v", err)
+				t.Fatalf("PlanSweep: %v", err)
+			}
+			if plan.Records() != tc.want || len(log.made()) != 0 {
+				t.Fatalf("the plan over %d anchors below the floor counts %d records and "+
+					"appended %d, want %d counted and nothing appended until it sweeps",
+					tc.anchors, plan.Records(), len(log.made()), tc.want)
+			}
+			swept, err := plan.Sweep(t.Context(), noBound)
+			if err != nil {
+				t.Fatalf("Sweep: %v", err)
 			}
 			made := log.made()
 			if swept.Records != tc.want || len(made) != tc.want {
-				t.Fatalf("SweepAnchors answered %d and appended %d over %d anchors "+
+				t.Fatalf("the sweep answered %d and appended %d over %d anchors "+
 					"below the floor, want %d", swept.Records, len(made), tc.anchors, tc.want)
 			}
 			if swept.Remain != tc.remain {
@@ -550,8 +578,10 @@ func TestSweepAnchorsAppendsOneRecordPerBoundAndNoneWhenNothingIsBelow(t *testin
 	}
 }
 
-// THE SWEEP REFUSES WHAT IT COULD NOT DO RIGHT, before it appends anything.
-func TestSweepAnchorsRefusesBeforeItAppends(t *testing.T) {
+// THE SWEEP REFUSES WHAT IT COULD NOT DO RIGHT, before it appends anything —
+// the plan what it could not count or would not recognise, the sweep a budget
+// that bounds nothing.
+func TestASweepRefusesBeforeItAppends(t *testing.T) {
 	t.Parallel()
 	floor := statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}
 	estate := sweepEstate(t)
@@ -560,6 +590,8 @@ func TestSweepAnchorsRefusesBeforeItAppends(t *testing.T) {
 	for name, tc := range map[string]struct {
 		mutate func(*statelog.SweepDeps)
 		floor  statelog.Position
+		// unbounded hands the sweep a budget of zero.
+		unbounded bool
 	}{
 		"a body the framework would not recognise": {mutate: func(d *statelog.SweepDeps) {
 			d.Encode = func(env statelog.Envelope) ([]byte, error) {
@@ -583,7 +615,7 @@ func TestSweepAnchorsRefusesBeforeItAppends(t *testing.T) {
 			d.Admission = nil
 		}},
 		"no writer":                    {mutate: func(d *statelog.SweepDeps) { d.Writer = "" }},
-		"no time budget":               {mutate: func(d *statelog.SweepDeps) { d.Budget = 0 }},
+		"no time budget":               {unbounded: true},
 		"no reading of the log's ends": {mutate: func(d *statelog.SweepDeps) { d.Ends = nil }},
 		"no applier to wait on":        {mutate: func(d *statelog.SweepDeps) { d.Runner = nil }},
 		"a floor on another log":       {floor: statelog.Position{Stream: "CREWLET_OTHER_LOG", Generation: 1, Seq: 1}},
@@ -606,8 +638,18 @@ func TestSweepAnchorsRefusesBeforeItAppends(t *testing.T) {
 			if tc.floor != (statelog.Position{}) {
 				at = tc.floor
 			}
-			if swept, err := statelog.SweepAnchors(t.Context(), deps, at); err == nil {
-				t.Fatalf("SweepAnchors answered %d with no error", swept.Records)
+			budget := noBound
+			if tc.unbounded {
+				budget = 0
+			}
+			// COUNTED UNDER NO BOUND OF THE BUDGET'S, so a budget of zero
+			// reaches the sweep that refuses it.
+			plan, err := statelog.PlanSweep(t.Context(), deps, at)
+			if err == nil {
+				var swept statelog.Swept
+				if swept, err = plan.Sweep(t.Context(), budget); err == nil {
+					t.Fatalf("the sweep answered %d with no error", swept.Records)
+				}
 			}
 			if made := log.made(); len(made) != 0 {
 				t.Fatalf("a refused sweep appended %d records", len(made))
@@ -635,8 +677,7 @@ func TestAnEvictedNodeSweepsNothing(t *testing.T) {
 	log := &sweepLog{}
 	deps := sweepDeps(t, estate, log)
 	deps.Evicted = func(context.Context) (bool, error) { return true, nil }
-	swept, err := statelog.SweepAnchors(t.Context(), deps,
-		statelog.Position{Stream: probeStream, Generation: 1, Seq: 1})
+	swept, err := sweep(t, deps, statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}, noBound)
 	if err != nil || swept.Records != 0 || len(log.made()) != 0 {
 		t.Fatalf("an evicted node's sweep = %d, %v, appending %d", swept.Records, err, len(log.made()))
 	}
@@ -648,8 +689,8 @@ func TestASweepOnAFullLogSaysSoAndCountsWhatLanded(t *testing.T) {
 	estate := sweepEstate(t)
 	seedManyAnchors(t, estate, probeStream, 0, 3*statelog.AnchorsPerTrimmedRecord)
 	log := &sweepLog{failAt: 2, failErr: fullLogError()}
-	swept, err := statelog.SweepAnchors(t.Context(), sweepDeps(t, estate, log),
-		statelog.Position{Stream: probeStream, Generation: 1, Seq: 1})
+	swept, err := sweep(t, sweepDeps(t, estate, log),
+		statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}, noBound)
 	var refused *statelog.Unavailable
 	if !errors.As(err, &refused) || refused.Reason != statelog.ReasonLogFull {
 		t.Fatalf("a sweep on a full log = %v, want a log_full refusal", err)
@@ -668,10 +709,9 @@ func TestASweepAppendsEachRecordOnlyOnceTheOneBeforeHasCommittedHere(t *testing.
 	seedManyAnchors(t, estate, probeStream, 0, 3*statelog.AnchorsPerTrimmedRecord)
 	log := &sweepLog{held: 7}
 	deps := sweepDeps(t, estate, log)
-	swept, err := statelog.SweepAnchors(t.Context(), deps,
-		statelog.Position{Stream: probeStream, Generation: 1, Seq: 1})
+	swept, err := sweep(t, deps, statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}, noBound)
 	if err != nil || swept.Records != 3 || swept.Remain {
-		t.Fatalf("SweepAnchors = %+v, %v, want 3 records and none remaining", swept, err)
+		t.Fatalf("the sweep = %+v, %v, want 3 records and none remaining", swept, err)
 	}
 	if early := log.appendedEarly(); early != 0 {
 		t.Fatalf("%d trimmed record(s) were appended while the one before was not "+
@@ -692,8 +732,8 @@ func TestASweepWhoseCommitWaitFailsStopsWithWhatItAppended(t *testing.T) {
 	estate := sweepEstate(t)
 	seedManyAnchors(t, estate, probeStream, 0, 3*statelog.AnchorsPerTrimmedRecord)
 	log := &sweepLog{runner: &sweepRunner{stuckAt: 2}}
-	swept, err := statelog.SweepAnchors(t.Context(), sweepDeps(t, estate, log),
-		statelog.Position{Stream: probeStream, Generation: 1, Seq: 1})
+	swept, err := sweep(t, sweepDeps(t, estate, log),
+		statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}, noBound)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a sweep whose second record never applied here = %v, want the "+
 			"wait's own failure", err)
@@ -715,8 +755,8 @@ func TestASweepFromACopyBehindTheLogAppendsNothing(t *testing.T) {
 	// THE LAST SWEEP'S TWO RECORDS ARE ON THE LOG, at 9 and 10, and this
 	// node's applier stopped at 8.
 	log := &sweepLog{held: 10, runner: &sweepRunner{committed: 8, stuckAt: 9}}
-	swept, err := statelog.SweepAnchors(t.Context(), sweepDeps(t, estate, log),
-		statelog.Position{Stream: probeStream, Generation: 1, Seq: 1})
+	swept, err := sweep(t, sweepDeps(t, estate, log),
+		statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}, noBound)
 	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a sweep from a copy behind the log = %d, %v, want a refusal naming "+
 			"the wait", swept.Records, err)
@@ -730,8 +770,8 @@ func TestASweepFromACopyBehindTheLogAppendsNothing(t *testing.T) {
 // EVERY WAIT THE SWEEP MAKES IS BOUNDED BY THE RESOLVE BUDGET, the bound a write
 // waits for its own applier by: the trim's tick has other logs to sweep, and a
 // node whose applier cannot reach what it just appended has a fault that
-// waiting does not fix. And by the sweep's own budget where that is shorter,
-// so no wait outlasts the sweep.
+// waiting does not fix. And by the caller's bound where that is shorter — the
+// plan's context, the sweep's budget — so no wait outlasts either.
 func TestEveryWaitASweepMakesIsBounded(t *testing.T) {
 	t.Parallel()
 	for _, budget := range []time.Duration{time.Hour, statelog.DefaultResolveBudget / 2} {
@@ -741,10 +781,9 @@ func TestEveryWaitASweepMakesIsBounded(t *testing.T) {
 			seedManyAnchors(t, estate, probeStream, 0, 2*statelog.AnchorsPerTrimmedRecord)
 			log := &sweepLog{}
 			deps := sweepDeps(t, estate, log)
-			deps.Budget = budget
-			if _, err := statelog.SweepAnchors(t.Context(), deps,
-				statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}); err != nil {
-				t.Fatalf("SweepAnchors: %v", err)
+			if _, err := sweep(t, deps,
+				statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}, budget); err != nil {
+				t.Fatalf("the sweep: %v", err)
 			}
 			waits := log.runner.waits()
 			if len(waits) != 3 {
@@ -772,26 +811,30 @@ func TestEveryWaitASweepMakesIsBounded(t *testing.T) {
 // and one held to its cap all twenty. EVERY WAIT ENDS AT ONE DEADLINE, the
 // sweep's, so no wait outlasts it whatever the resolve budget allows.
 //
-// THE BUDGET IS SECONDS, because it covers the COUNT too — a budget spent
-// before the count is an error by design — and the count reads five thousand
-// anchors: under the race detector, beside this package's other parallel
-// cases on a four-core machine, it outlasted a 250 ms budget and the sweep
-// failed before it appended anything. Two seconds keeps the count a small
-// share of the budget while a record is still a fifth of it.
+// THE BUDGET BOUNDS THE APPENDS ALONE: the count of five thousand anchors is
+// PlanSweep's, under the caller's context, and over before the budget begins.
+// It is still SECONDS, with a record a fifth of it, so the store work each
+// record does beside its apply — under the race detector, beside this
+// package's other parallel cases — stays a small share of a record, and a
+// stall of a scheduler's making cannot spend the budget before the first
+// record lands.
 func TestASweepStopsAppendingOnceItsBudgetIsSpent(t *testing.T) {
 	t.Parallel()
 	const records = 20
 	const budget, slow = 2 * time.Second, 400 * time.Millisecond
 	estate := sweepEstate(t)
 	seedManyAnchors(t, estate, probeStream, 0, records*statelog.AnchorsPerTrimmedRecord)
-	// THE LOG'S END IS ALREADY COMMITTED HERE, so the budget is spent on the
-	// records and never on the count.
+	// THE LOG'S END IS ALREADY COMMITTED HERE, so planning waits on nothing
+	// slow and every slow wait below is a record's.
 	log := &sweepLog{held: 4, runner: &sweepRunner{committed: 4, slow: slow}}
-	deps := sweepDeps(t, estate, log)
-	deps.Budget = budget
-	started := time.Now()
-	swept, err := statelog.SweepAnchors(t.Context(), deps,
+	plan, err := statelog.PlanSweep(t.Context(), sweepDeps(t, estate, log),
 		statelog.Position{Stream: probeStream, Generation: 1, Seq: 1})
+	if err != nil {
+		t.Fatalf("PlanSweep: %v", err)
+	}
+	counted := len(log.runner.waitDeadlines())
+	started := time.Now()
+	swept, err := plan.Sweep(t.Context(), budget)
 	returned := time.Now()
 	if err != nil || !swept.Remain {
 		t.Fatalf("a sweep whose budget ran out = %+v, %v, want no error and more "+
@@ -803,7 +846,7 @@ func TestASweepStopsAppendingOnceItsBudgetIsSpent(t *testing.T) {
 			"the same handful — at %v a record, a %v budget is not the whole backlog",
 			n, made, records, slow, budget)
 	}
-	deadlines := log.runner.waitDeadlines()
+	deadlines := log.runner.waitDeadlines()[counted:]
 	for i, deadline := range deadlines {
 		if !deadline.Equal(deadlines[0]) {
 			t.Fatalf("wait %d ended at %v and the first at %v — every wait ends at "+
@@ -836,12 +879,12 @@ func TestASweepAppendsNoRecordPastItsBudget(t *testing.T) {
 			log := &sweepLog{held: 4, runner: &sweepRunner{committed: 4,
 				slow: 300 * time.Millisecond, late: true}}
 			deps := sweepDeps(t, estate, log)
-			deps.Domain, deps.Spec, deps.Budget = domain, specOf(domain), 100*time.Millisecond
+			deps.Domain, deps.Spec = domain, specOf(domain)
 			if !statelog.KeepsGateReserve(domain) {
 				deps.Admission = nil
 			}
-			swept, err := statelog.SweepAnchors(t.Context(), deps,
-				statelog.Position{Stream: probeStream, Generation: 1, Seq: 1})
+			swept, err := sweep(t, deps,
+				statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}, 100*time.Millisecond)
 			if err != nil || swept.Records != 1 || !swept.Remain || len(log.made()) != 1 {
 				t.Fatalf("a sweep whose first record committed past its budget = %+v, "+
 					"%v, appending %d — want that one record, no other and more "+
@@ -861,9 +904,9 @@ func TestASweepWhoseAdmissionOutlastsItsBudgetStops(t *testing.T) {
 	seedManyAnchors(t, estate, probeStream, 0, 2*statelog.AnchorsPerTrimmedRecord)
 	log := &sweepLog{}
 	deps := sweepDeps(t, estate, log)
-	deps.Admission, deps.Budget = waitingAdmission{}, 50*time.Millisecond
-	swept, err := statelog.SweepAnchors(t.Context(), deps,
-		statelog.Position{Stream: probeStream, Generation: 1, Seq: 1})
+	deps.Admission = waitingAdmission{}
+	swept, err := sweep(t, deps,
+		statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}, 50*time.Millisecond)
 	if err != nil || swept.Records != 0 || !swept.Remain || len(log.made()) != 0 {
 		t.Fatalf("a sweep whose admission outlasted its budget = %+v, %v, appending "+
 			"%d — want nothing appended, no error and more remaining", swept, err,

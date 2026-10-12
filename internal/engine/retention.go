@@ -327,7 +327,7 @@ func (e *Engine) Alarms() ([]statelog.Kind, bool) {
 // trims. ONE GOROUTINE for both, so an evaluation and a trim never run at
 // once — which is why the one part of a tick whose length is not a handful of
 // round trips, the anchor sweeps, shares one alarm interval among them
-// ([retention.anchorSweepBudget]). Only the evaluation takes the faster
+// ([retention.sweepAnchors]). Only the evaluation takes the faster
 // ticker: [retention.capacity] stays on the trim's, the cadence its pool-wait
 // delta and backup walk are defined at.
 func (r *retention) run(ctx context.Context) {
@@ -415,11 +415,19 @@ func (r *retention) tick(ctx context.Context) {
 		log.WarnContext(ctx, "retention_inputs_unreadable", "err", err)
 		return
 	}
+	var sweeps []sweepTarget
 	for _, running := range r.state.running() {
-		if err := r.domain(ctx, running, shared); err != nil {
+		below, err := r.domain(ctx, running, shared)
+		if err != nil {
 			log.WarnContext(ctx, "retention_trim_failed", "domain", running.domain.Name(), "err", err)
+			continue
 		}
+		sweeps = append(sweeps, sweepTarget{running: running, below: below})
 	}
+	// AND THEN THE ANCHORS BELOW WHAT EACH LOG NO LONGER HOLDS — ADR-0032 —
+	// once every log's purge has landed, so the sweeps share their one
+	// interval among the logs that have anything to sweep.
+	r.sweepAnchors(ctx, sweeps)
 }
 
 // decidesFrom is every domain whose rows the trim decides from, in the
@@ -530,8 +538,12 @@ func (shared fleetInputs) counted(running *runningLog, tombs []statelog.Tombston
 		shared.holders, tombs)
 }
 
-// domain evaluates and applies one log's trim.
-func (r *retention) domain(ctx context.Context, running *runningLog, shared fleetInputs) error {
+// domain evaluates and applies one log's trim, and answers the floor the
+// log's anchor sweep removes below ([retention.sweepAnchors]): the log's first
+// surviving sequence once the purge has landed — never the published floor,
+// which can lead the log after a purge that failed, and an anchor of a record
+// the log still holds is one its next write uses.
+func (r *retention) domain(ctx context.Context, running *runningLog, shared fleetInputs) (statelog.Position, error) {
 	name := running.domain.Name()
 	stats, err := running.log.Stats(ctx)
 	if err != nil {
@@ -541,7 +553,7 @@ func (r *retention) domain(ctx context.Context, running *runningLog, shared flee
 		// observed, so the tick says so and leaves the previous floor
 		// standing — which is older, and honestly labelled by its own
 		// `at`.
-		return fmt.Errorf("read the stream's state: %w", err)
+		return statelog.Position{}, fmt.Errorf("read the stream's state: %w", err)
 	}
 	generation := running.runner.Committed().Generation
 
@@ -565,65 +577,156 @@ func (r *retention) domain(ctx context.Context, running *runningLog, shared flee
 	in.FeedAckFloor, in.HasFeed, in.FeedReadable = r.feedTerm(ctx, running)
 	in.AgeFloor, err = r.ageFloor(ctx, running.log, stats, r.cfg.MinAge(), shared.at)
 	if err != nil {
-		return fmt.Errorf("find the age floor: %w", err)
+		return statelog.Position{}, fmt.Errorf("find the age floor: %w", err)
 	}
 
 	decision := statelog.Trim(in.Terms())
 	r.gauges(name, statelog.KeepsGateReserve(running.domain), stats, decision, shared)
 	first, err := r.apply(ctx, running.log, name, generation, decision, stats.FirstSeq, shared)
 	if err != nil {
-		return err
+		return statelog.Position{}, err
 	}
-	// AND THEN THE ANCHORS BELOW WHAT THE LOG NO LONGER HOLDS — ADR-0032.
-	// After the purge, so the floor is the log's first surviving sequence:
-	// the published floor can lead the log after a purge that failed, and an
-	// anchor of a record the log still holds is one its next write uses.
-	r.sweepAnchors(ctx, running, statelog.Position{
-		Stream: running.spec.Name, Generation: generation, Seq: first,
-	})
-	return nil
+	return statelog.Position{Stream: running.spec.Name, Generation: generation, Seq: first}, nil
 }
 
-// sweepAnchors appends the trimmed records that remove the arbitration anchors
-// this node's copy holds below what running's log no longer holds — one per
+// sweepTarget is one log a tick sweeps the anchors of, and the floor
+// [retention.domain] answered for it.
+type sweepTarget struct {
+	running *runningLog
+	below   statelog.Position
+}
+
+// sweepAnchors appends, on every log the tick trimmed that writes anchors, the
+// trimmed records that remove the arbitration anchors this node's copy holds
+// below what the log no longer holds — one per
 // [statelog.AnchorsPerTrimmedRecord] of them, at most
-// [statelog.TrimmedRecordsPerSweep] a tick, and none on a tick with none below,
-// so an idle fleet's log gains nothing ([statelog.SweepAnchors]).
+// [statelog.TrimmedRecordsPerSweep] a log a tick, and none on a log with none
+// below, so an idle fleet's logs gain nothing.
 //
 // A RECORD AND NEVER A DELETE, because the anchors are replicated-estate state
 // and the trim is not their writer: every node's applier removes them, at the
 // record's position, in the transaction that applies it.
 //
-// ON THIS NODE'S OWN APPLIER, which the sweep counts only once it has applied
-// the log's end and paces its records on, one committed before the next is
-// appended — so a holder whose copy is behind appends nothing, and a write or
-// a read behind the sweep on this node waits one record's apply rather than
-// the whole run's. And WITHIN ITS SHARE OF ONE ALARM INTERVAL
-// ([retention.anchorSweepBudget]), which also bounds what a node applying the
-// records slower than this one is left queued behind them.
+// ON THIS NODE'S OWN APPLIER, which each log's count waits to have applied the
+// log's end and each log's records are paced on, one committed before the
+// next is appended — so a holder whose copy is behind appends nothing, and a
+// write or a read behind the sweep on this node waits one record's apply
+// rather than the whole run's ([statelog.PlanSweep], [statelog.SweepPlan]).
+//
+// ALL OF IT INSIDE ONE [AlarmInterval], counted first: every log is counted
+// under the interval's deadline, and then the logs that have anything to
+// sweep share what is left of it ([runSweeps]). See [anchorSweepDeadline] for
+// why one interval, and [runSweeps] for why counted first.
 //
 // A FAILURE DOES NOT FAIL THE TICK. The floor and the purge have already
 // landed, and an anchor kept costs its next write one refused append and never
 // a lost update — so it is said, and the next tick's count retries it. A sweep
 // whose budget ran out is no failure at all: it says what it appended and that
 // more remain, as one stopped by the cap does, and the next tick goes on.
-func (r *retention) sweepAnchors(ctx context.Context, running *runningLog, below statelog.Position) {
-	deps, sweeps := r.sweepDeps(running)
-	if !sweeps {
-		return
+func (r *retention) sweepAnchors(ctx context.Context, targets []sweepTarget) {
+	deadline := time.Now().Add(anchorSweepDeadline)
+	counting, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	var counted []countedSweep
+	for _, target := range targets {
+		deps, sweeps := r.sweepDeps(target.running)
+		if !sweeps {
+			continue
+		}
+		name := target.running.domain.Name()
+		plan, err := statelog.PlanSweep(counting, deps, target.below)
+		if err != nil {
+			log.WarnContext(ctx, "retention_anchor_sweep_failed", "domain", name,
+				"generation", target.below.Generation, "below", target.below.Seq,
+				"records", 0, "err", err)
+			continue
+		}
+		counted = append(counted, countedSweep{domain: name, below: target.below, plan: plan})
 	}
-	name := running.domain.Name()
-	swept, err := statelog.SweepAnchors(ctx, deps, below)
-	if err != nil {
-		log.WarnContext(ctx, "retention_anchor_sweep_failed", "domain", name,
-			"generation", below.Generation, "below", below.Seq, "records", swept.Records,
-			"err", err)
-		return
+	runSweeps(ctx, deadline, time.Now, counted)
+}
+
+// anchorSweepDeadline is how long a tick's anchor sweeps may take together,
+// counts and appends alike: ONE [AlarmInterval].
+//
+// THE SWEEPS RUN ON THE GOROUTINE THAT EVALUATES THIS NODE'S ALARMS
+// ([retention.run]), one log after another, and each paces its records on this
+// node's applier — so their length is whatever that applier takes, and an
+// applier slow but still moving would hold the alarms for minutes: the moment
+// `apply_lag` matters most is the one it would go unevaluated. Inside one
+// interval, a tick's sweeps together delay an evaluation by at most one
+// interval and the append in flight when the last budget ran out — one
+// skipped evaluation in a quarter hour — however many logs write anchors. A
+// longer bound delays the alarms further; a shorter one only drains a backlog
+// slower, and the bound binds only on a large table, where records apply
+// slowest (the drain arithmetic is [statelog.TrimmedRecordsPerSweep]'s).
+//
+// It is the bound on another node's queue too: a node that applies the
+// records k times slower than this one is left at most about k − 1 of a log's
+// budgets behind them when its sweep ends ([statelog.SweepPlan.Sweep]).
+const anchorSweepDeadline = AlarmInterval
+
+// countedSweep is one log's anchor sweep, counted, as [runSweeps] schedules
+// it.
+type countedSweep struct {
+	domain string
+	below  statelog.Position
+	plan   anchorSweep
+}
+
+// anchorSweep is what [runSweeps] asks of a counted sweep: how many records
+// it appends, and to append them within a budget — [statelog.SweepPlan].
+type anchorSweep interface {
+	Records() int
+	Sweep(ctx context.Context, budget time.Duration) (statelog.Swept, error)
+}
+
+// runSweeps appends every counted sweep that has records to append, in order,
+// each within an equal share of what is left before deadline among the sweeps
+// still to run.
+//
+// SHARED AMONG THE LOGS WITH ANYTHING TO SWEEP, AND COUNTED FIRST, because an
+// equal share of the interval for every log that writes anchors spent a share
+// on each idle one: registering a third such log cut the tracker's and the
+// knowledge base's sweeps from five seconds a tick to three and a third on
+// every node, a company with no repositories at all included, and a sixth
+// would cut them again. Counted first, a log with nothing below its floor
+// costs the others its count and nothing more, wherever it sits in the order.
+// And SHARED rather than handed out first come: what one sweep leaves unspent
+// goes to the sweeps after it, and a backlog on an early log never takes the
+// whole interval from a later one.
+func runSweeps(ctx context.Context, deadline time.Time, now func() time.Time, counted []countedSweep) {
+	var busy []countedSweep
+	for _, c := range counted {
+		if c.plan.Records() > 0 {
+			busy = append(busy, c)
+		}
 	}
-	if swept.Records > 0 {
-		log.InfoContext(ctx, "retention_anchors_swept", "domain", name,
-			"generation", below.Generation, "below", below.Seq, "records", swept.Records,
-			"more_remain", swept.Remain)
+	for i, c := range busy {
+		budget := deadline.Sub(now()) / time.Duration(len(busy)-i)
+		if budget <= 0 {
+			// THE COUNTS SPENT THE INTERVAL: every copy was slow to reach
+			// its log's end. Nothing is appended past the bound, and the
+			// next tick counts again.
+			log.WarnContext(ctx, "retention_anchor_sweep_failed", "domain", c.domain,
+				"generation", c.below.Generation, "below", c.below.Seq, "records", 0,
+				"err", fmt.Errorf("the %v a tick's anchor sweeps share was spent "+
+					"counting the logs' anchors, so none is left to append %d "+
+					"record(s) in", anchorSweepDeadline, c.plan.Records()))
+			continue
+		}
+		swept, err := c.plan.Sweep(ctx, budget)
+		if err != nil {
+			log.WarnContext(ctx, "retention_anchor_sweep_failed", "domain", c.domain,
+				"generation", c.below.Generation, "below", c.below.Seq, "records", swept.Records,
+				"err", err)
+			continue
+		}
+		if swept.Records > 0 {
+			log.InfoContext(ctx, "retention_anchors_swept", "domain", c.domain,
+				"generation", c.below.Generation, "below", c.below.Seq, "records", swept.Records,
+				"more_remain", swept.Remain)
+		}
 	}
 }
 
@@ -643,7 +746,6 @@ func (r *retention) sweepDeps(running *runningLog) (statelog.SweepDeps, bool) {
 		},
 		Runner: running.runner,
 		Encode: encode, DB: r.estate(), Writer: r.nodeID, Evicted: running.evicted,
-		Budget: r.anchorSweepBudget(),
 	}
 	// NEVER A NIL *Reserve IN THE INTERFACE: a domain that keeps none is
 	// handed none, which the sweep tells apart from one that forgot it.
@@ -651,35 +753,6 @@ func (r *retention) sweepDeps(running *runningLog) (statelog.SweepDeps, bool) {
 		deps.Admission = running.reserve
 	}
 	return deps, true
-}
-
-// anchorSweepBudget is how long one log's anchor sweep may take: ONE
-// [AlarmInterval], shared equally by every log this node runs that writes
-// anchors.
-//
-// THE SWEEPS RUN ON THE GOROUTINE THAT EVALUATES THIS NODE'S ALARMS
-// ([retention.run]), one log after another, and each paces its records on this
-// node's applier — so their length is whatever that applier takes, and an
-// applier slow but still moving would hold the alarms for minutes: the moment
-// `apply_lag` matters most is the one it would go unevaluated. Shared out of
-// one interval, a tick's sweeps together delay an evaluation by at most one
-// interval and the appends in flight when their budgets ran out — one skipped
-// evaluation in a quarter hour — however many logs write anchors. A larger
-// share delays the alarms further; a smaller one only drains a backlog slower,
-// and the budget binds only on a large table, where records apply slowest
-// (the drain arithmetic is [statelog.TrimmedRecordsPerSweep]'s).
-//
-// It is the bound on another node's queue too: a node that applies the
-// records k times slower than this one is left at most about k − 1 of these
-// budgets behind them when a sweep ends ([statelog.SweepAnchors]).
-func (r *retention) anchorSweepBudget() time.Duration {
-	logs := 0
-	for _, running := range r.state.running() {
-		if statelog.WritesAnchors(running.spec) {
-			logs++
-		}
-	}
-	return AlarmInterval / time.Duration(max(logs, 1))
 }
 
 // apply carries out what one tick decided: it publishes the conclusion, and

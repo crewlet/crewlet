@@ -661,7 +661,7 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 					}},
 				}},
 			}
-			if err := r.domain(t.Context(), running, shared); err != nil {
+			if err := trimLog(t.Context(), r, running, shared); err != nil {
 				t.Fatalf("the tick on %s: %v", name, err)
 			}
 			floors, err = back.Fleet.Floors(t.Context())

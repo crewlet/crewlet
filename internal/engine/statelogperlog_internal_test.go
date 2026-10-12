@@ -174,7 +174,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 		t.Fatalf("read the tick's inputs: %v", err)
 	}
 	running := s.Domain(tracker.Domain{}.Name())
-	if err := r.domain(t.Context(), running, shared); err != nil {
+	if err := trimLog(t.Context(), r, running, shared); err != nil {
 		t.Fatalf("the tracker's tick: %v", err)
 	}
 	floors, err := e.backends.Fleet.Floors(t.Context())

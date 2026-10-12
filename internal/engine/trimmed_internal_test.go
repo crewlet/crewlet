@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -42,42 +44,155 @@ func TestEveryLogThatWritesAnchorsHasATrimmedRecord(t *testing.T) {
 // The sweeps run on the goroutine that evaluates this node's alarms
 // ([retention.run]), and each is paced on this node's applier, so an applier
 // slow but still moving would otherwise hold that goroutine for the cap times
-// every wait, log after log. So each log that writes anchors is handed an
-// equal share of [AlarmInterval] as its sweep's budget: together they hold the
-// goroutine for at most one interval, however many logs write anchors. A log
-// that writes none is handed no sweep.
+// every wait, log after log. So the logs that have anything to sweep share
+// [AlarmInterval] ([runSweeps]): each is handed an equal share of what is left
+// among the sweeps still to run, and together they hold the goroutine for at
+// most one interval, however many logs write anchors. Every log that writes
+// anchors is handed a sweep, and a log that writes none is handed none.
 func TestATicksAnchorSweepsShareOneAlarmInterval(t *testing.T) {
 	t.Parallel()
 	r := &retention{state: everyLog(), nodeID: "node-a",
 		estate: func() statelog.ReadEstate { return nil }}
-	var budgets []time.Duration
+	writers := 0
 	for _, running := range r.state.running() {
-		deps, sweeps := r.sweepDeps(running)
+		_, sweeps := r.sweepDeps(running)
 		if writes := statelog.WritesAnchors(running.spec); sweeps != writes {
 			t.Errorf("%s writes anchors=%v and is handed a sweep=%v — the two must agree",
 				running.domain.Name(), writes, sweeps)
 		}
 		if sweeps {
-			budgets = append(budgets, deps.Budget)
+			writers++
 		}
 	}
-	if len(budgets) < 2 {
-		t.Fatalf("%d registered log(s) write anchors — the case needs the two that "+
-			"share the interval today", len(budgets))
+	if writers < 2 {
+		t.Fatalf("%d registered log(s) write anchors — the case needs the ones that "+
+			"share the interval today", writers)
 	}
+
+	// EVERY LOG BUSY AND EVERY SWEEP SPENDING ITS WHOLE BUDGET: equal shares,
+	// and together exactly the interval.
+	clock := &sweepClock{at: time.Unix(0, 0)}
+	sweeps := make([]*fakeSweep, writers)
+	counted := make([]countedSweep, writers)
+	for i := range sweeps {
+		sweeps[i] = &fakeSweep{records: 3, clock: clock, spends: time.Hour}
+		counted[i] = countedSweep{domain: fmt.Sprint("log-", i), plan: sweeps[i]}
+	}
+	runSweeps(t.Context(), clock.at.Add(anchorSweepDeadline), clock.now, counted)
 	var total time.Duration
-	for _, budget := range budgets {
-		if want := AlarmInterval / time.Duration(len(budgets)); budget != want {
-			t.Errorf("a log's sweep was handed %v, want %v — an equal share of one "+
-				"alarm interval among the %d logs that write anchors", budget, want,
-				len(budgets))
+	for i, s := range sweeps {
+		// AN EQUAL SHARE OF WHAT IS LEFT, so the nanoseconds a division
+		// drops go to the last.
+		if want := (AlarmInterval - total) / time.Duration(writers-i); s.budget != want {
+			t.Errorf("busy log %d was handed %v, want %v — an equal share of one alarm "+
+				"interval among the %d logs with anything to sweep", i, s.budget, want, writers)
 		}
-		total += budget
+		total += s.budget
 	}
-	if total > AlarmInterval {
-		t.Errorf("a tick's sweeps may take %v together, past one alarm interval (%v) "+
-			"— the holder's alarms would go unevaluated for longer", total, AlarmInterval)
+	if total > AlarmInterval || clock.at.Sub(time.Unix(0, 0)) > AlarmInterval {
+		t.Errorf("a tick's sweeps were handed %v together and took %v, past one alarm "+
+			"interval (%v) — the holder's alarms would go unevaluated for longer",
+			total, clock.at.Sub(time.Unix(0, 0)), AlarmInterval)
 	}
+
+	// A SWEEP THAT FINISHES EARLY LEAVES WHAT IT DID NOT SPEND to the sweeps
+	// after it, and the deadline still holds every one.
+	clock = &sweepClock{at: time.Unix(0, 0)}
+	quick := &fakeSweep{records: 1, clock: clock, spends: time.Second}
+	slow := &fakeSweep{records: 9, clock: clock, spends: time.Hour}
+	runSweeps(t.Context(), clock.at.Add(anchorSweepDeadline), clock.now, []countedSweep{
+		{domain: "quick", plan: quick}, {domain: "slow", plan: slow},
+	})
+	if quick.budget != AlarmInterval/2 || slow.budget != AlarmInterval-time.Second {
+		t.Errorf("a sweep done in a second was handed %v and the one after it %v, want "+
+			"%v and %v — what one sweep leaves goes to the sweeps after it",
+			quick.budget, slow.budget, AlarmInterval/2, AlarmInterval-time.Second)
+	}
+
+	// COUNTS THAT SPENT THE INTERVAL leave nothing to append in: no sweep is
+	// handed a budget that bounds nothing.
+	clock = &sweepClock{at: time.Unix(0, 0)}
+	late := &fakeSweep{records: 2, clock: clock}
+	runSweeps(t.Context(), clock.at, clock.now, []countedSweep{{domain: "late", plan: late}})
+	if late.called {
+		t.Errorf("a sweep was run with %v left of the interval", late.budget)
+	}
+}
+
+// AN IDLE LOG LEAVES ITS SHARE TO THE OTHERS — ADR-0032. A log with nothing
+// below its floor this tick is counted and never handed a share, wherever it
+// sits in the order: an equal share for every log that writes anchors spent a
+// share on each idle one, so registering the code log cut the tracker's sweep
+// from five seconds a tick to three and a third on every node, a company with
+// no repositories at all included.
+func TestAnIdleLogLeavesItsShareToTheOthers(t *testing.T) {
+	t.Parallel()
+	for name, order := range map[string][]int{
+		"idle before":        {0, 0, 5},
+		"idle after":         {5, 0, 0},
+		"idle on both sides": {0, 5, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			clock := &sweepClock{at: time.Unix(0, 0)}
+			var counted []countedSweep
+			var busy, idle []*fakeSweep
+			for i, records := range order {
+				s := &fakeSweep{records: records, clock: clock, spends: time.Hour}
+				counted = append(counted, countedSweep{domain: fmt.Sprint("log-", i), plan: s})
+				if records > 0 {
+					busy = append(busy, s)
+				} else {
+					idle = append(idle, s)
+				}
+			}
+			runSweeps(t.Context(), clock.at.Add(anchorSweepDeadline), clock.now, counted)
+			if busy[0].budget != AlarmInterval {
+				t.Errorf("the one busy log among %d was handed %v, want the whole %v — an "+
+					"idle log costs the others nothing", len(order), busy[0].budget, AlarmInterval)
+			}
+			for _, s := range idle {
+				if s.called {
+					t.Errorf("an idle log was handed a sweep of %v", s.budget)
+				}
+			}
+		})
+	}
+}
+
+// sweepClock is the time a fake sweep spends, as [runSweeps] reads it.
+type sweepClock struct{ at time.Time }
+
+func (c *sweepClock) now() time.Time { return c.at }
+
+// fakeSweep is a counted sweep of records records that takes spends of the
+// budget it is handed, or all of it where spends is more, and remembers the
+// budget.
+type fakeSweep struct {
+	records int
+	spends  time.Duration
+	clock   *sweepClock
+	called  bool
+	budget  time.Duration
+}
+
+func (f *fakeSweep) Records() int { return f.records }
+
+func (f *fakeSweep) Sweep(_ context.Context, budget time.Duration) (statelog.Swept, error) {
+	f.called, f.budget = true, budget
+	f.clock.at = f.clock.at.Add(min(f.spends, budget))
+	return statelog.Swept{Records: f.records, Remain: f.spends > budget}, nil
+}
+
+// trimLog is the tick's two steps for one log — its trim, then its anchor
+// sweep — as [retention.tick] takes them for every log.
+func trimLog(ctx context.Context, r *retention, running *runningLog, shared fleetInputs) error {
+	below, err := r.domain(ctx, running, shared)
+	if err != nil {
+		return err
+	}
+	r.sweepAnchors(ctx, []sweepTarget{{running: running, below: below}})
+	return nil
 }
 
 // anchorsOf is every anchor this node's copy holds on stream, by subject.
@@ -202,7 +317,7 @@ func TestATickRemovesTheAnchorsBelowWhatItPurged(t *testing.T) {
 			}},
 		}},
 	}
-	if err := r.domain(t.Context(), running, shared); err != nil {
+	if err := trimLog(t.Context(), r, running, shared); err != nil {
 		t.Fatalf("the tick: %v", err)
 	}
 
@@ -260,7 +375,7 @@ func TestATickThatPurgesNothingSweepsBelowTheLogsFirstRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the fleet's inputs: %v", err)
 	}
-	if err := r.domain(t.Context(), running, shared); err != nil {
+	if err := trimLog(t.Context(), r, running, shared); err != nil {
 		t.Fatalf("the tick: %v", err)
 	}
 	_, end, err := running.log.Bounds(t.Context())
@@ -308,9 +423,9 @@ func TestATickWithNoAnchorBelowTheLogAppendsNothing(t *testing.T) {
 	if after != first {
 		t.Fatalf("a blocked tick answered %d as the first surviving record, want %d", after, first)
 	}
-	r.sweepAnchors(t.Context(), running, statelog.Position{
+	r.sweepAnchors(t.Context(), []sweepTarget{{running: running, below: statelog.Position{
 		Stream: running.spec.Name, Generation: gen, Seq: after,
-	})
+	}}})
 	if _, end, err := running.log.Bounds(t.Context()); err != nil || end != last {
 		t.Fatalf("the log ends at %d (err %v) after a sweep with nothing below the "+
 			"floor, want %d — it appended a record that removes nothing", end, err, last)
