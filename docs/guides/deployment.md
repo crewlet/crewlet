@@ -262,8 +262,12 @@ same scheduler, and the asymmetry is stark: failing this wait fails the
 **whole boot**, so a budget that is too short turns a busy host into a node
 that refuses to start and then works on the retry — which during a rolling
 restart is how one slow member takes out the restart. Too long only means a
-genuinely broken server is reported later, and the wait is cancellable, so
-Ctrl-C returns immediately. Every other error is returned at once: a bad subject or
+genuinely broken server is reported later, and the wait is cancellable:
+Ctrl-C ends it at once, unless the member is still recovering its file store.
+The broker cannot stop a recovery in progress, so the boot waits for it to
+finish and logs `embedded_start_cancel_waits` while it does; a second Ctrl-C
+exits immediately (see
+[Force stop](../concepts/agent-runtime.md#graceful-shutdown)). Every other error is returned at once: a bad subject or
 a conflicting retention does not clear by waiting, and retrying would turn a
 config mistake into a half-minute hang with the same message at the end.
 

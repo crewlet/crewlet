@@ -51,7 +51,9 @@ import (
 // then works on the retry — which during a rolling restart is how one slow
 // member takes out the restart. Too long only means a genuinely broken
 // server is reported as broken later, and the wait is CANCELLABLE, so a
-// person who has seen enough gets their prompt back immediately.
+// person who has seen enough gets their prompt back — at once, unless the
+// broker is still recovering its store, which nats-server cannot stop and a
+// second interrupt walks away from (see [startEmbedded]).
 //
 // The clustered case shared the solo 30 seconds and flaked under the full
 // race suite with several clusters forming at once — which is a smaller
@@ -120,6 +122,9 @@ type readiness struct {
 // architecture — and the client code above it is identical either way.
 type embeddedServer struct {
 	ns *server.Server
+	// started is closed when ns.Start has returned. Every shutdown waits for
+	// it; see [shutdownAndClean].
+	started <-chan struct{}
 	// inProcess is true when nothing listens on a socket, which is the
 	// solo case: connections are made through an in-memory pipe, so the
 	// broker cannot be reached from outside the process at all.
@@ -330,6 +335,15 @@ func (s *Server) LeafPort() int {
 }
 
 // Shutdown stops the broker. Every client of it should be stopped first.
+//
+// WHEN IT RETURNS THE SERVER HAS STOPPED, and every writer of its store has
+// stopped but one: a consumer's state write already in flight, which
+// nats-server waits for for at most 100 ms. A write that a loaded machine
+// stretches past that lands afterwards. So the caller's next step — a
+// test's TempDir removing the store, a scratch store being deleted, a process
+// exiting with its consumers' last acknowledgements on disk — can still meet
+// one late write. It is rare on an idle host and measured under contention in
+// [shutdownAndClean], which also says what would remove it.
 func (s *Server) Shutdown() {
 	if s.embedded != nil {
 		s.embedded.shutdown()
@@ -672,13 +686,23 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	// engine publishes every event through here. Debug is the operator's
 	// own answer rather than the log level's — see [Config.Debug].
 	ns.SetLoggerV2(newNATSLogger(cfg.ServerName), cfg.Debug, false, false)
-	go ns.Start()
+	// START IS JOINED, and every shutdown of this server waits for it: see
+	// [shutdownAndClean] for what a Shutdown that overlaps it leaves behind.
+	started := make(chan struct{})
+	go func() {
+		defer close(started)
+		ns.Start()
+	}()
 
 	// THE WAIT IS CANCELLABLE, which is the whole reason this function takes
 	// a context. ReadyForConnections blocks for up to its budget with no way
 	// to interrupt it, so a Ctrl-C during a slow cold start — a large file
 	// store recovering its streams — used to sit out the full 30 seconds
-	// before the process could begin its drain.
+	// before the process could begin its drain. What a cancel cannot end is
+	// Start itself, which nats-server gives no way to stop: a cancel during a
+	// store's recovery waits for the recovery, says so, and a second
+	// interrupt is the operator's way out (cmd/crewlet hands the signals back
+	// at the first).
 	budget := acceptBudget(clustered)
 	ready := make(chan bool, 1)
 	go func() { ready <- ns.ReadyForConnections(budget) }()
@@ -693,19 +717,29 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 			// port collision.
 			err := notReadyError(budget, clustered, opts.Cluster.Port,
 				opts.Cluster.Host, ns.ClusterAddr() != nil)
-			shutdownAndClean(ns, scratch)
+			shutdownAndClean(ns, started, scratch)
 			return nil, err
 		}
 	case <-ctx.Done():
-		// Shutdown makes the in-flight ReadyForConnections return, so the
-		// goroutine above finishes into its buffered channel rather than
-		// leaking.
-		shutdownAndClean(ns, scratch)
+		select {
+		case <-started:
+		default:
+			logging.Get("queue.jetstream").Warn("embedded_start_cancel_waits",
+				"server", cfg.ServerName,
+				"detail", "the embedded broker is still starting — usually "+
+					"recovering its store — and nats-server cannot stop a start "+
+					"in progress, so this waits for it before shutting it down",
+				"hint", "interrupt again to exit at once; the store recovers "+
+					"again at the next start")
+		}
+		// The readiness goroutine is not waited for: it ends within its
+		// budget, into a channel buffered for the answer nobody reads.
+		shutdownAndClean(ns, started, scratch)
 		return nil, fmt.Errorf("start embedded nats: %w", ctx.Err())
 	}
 	return &embeddedServer{
-		ns: ns, inProcess: opts.DontListen, scratch: scratch, clustered: clustered,
-		leaf: len(opts.LeafNode.Remotes) > 0, system: system,
+		ns: ns, started: started, inProcess: opts.DontListen, scratch: scratch,
+		clustered: clustered, leaf: len(opts.LeafNode.Remotes) > 0, system: system,
 	}, nil
 }
 
@@ -922,22 +956,65 @@ func (e *embeddedServer) connect() (*nats.Conn, error) {
 	return nats.Connect(e.ns.ClientURL())
 }
 
-func (e *embeddedServer) shutdown() { shutdownAndClean(e.ns, e.scratch) }
+func (e *embeddedServer) shutdown() { shutdownAndClean(e.ns, e.started, e.scratch) }
 
-// shutdownAndClean stops the server and removes its scratch store, IN THAT
-// ORDER AND WAITING IN BETWEEN.
+// stoppable is the half of a nats-server that [shutdownAndClean] drives, and
+// the seam its order is tested at.
+type stoppable interface {
+	Shutdown()
+	WaitForShutdown()
+}
+
+// shutdownAndClean waits for the server's Start to return, then stops the
+// server and removes its scratch store, IN THAT ORDER AND WAITING IN BETWEEN.
 //
-// [server.Server.Shutdown] is asynchronous — it signals and returns, while the
-// server's own goroutine is still closing listeners and flushing its file
-// store. Removing the directory without waiting races that goroutine, so the
-// store is deleted underneath a broker still writing to it.
+// START FIRST, because nats-server's Start is not safe against a Shutdown that
+// overlaps it. It checks for none: it sets the flag that lets the server start
+// goroutines again — the flag Shutdown cleared — and enables JetStream, which
+// creates or recovers the store, whether or not a Shutdown has already run
+// (server.go Start, v2.15.1). A Shutdown that lands first therefore leaves a
+// server that comes up behind it, after WaitForShutdown has returned: its
+// store open and written to, and, for a scratch member, a directory that
+// removeScratch had just deleted made again. Only the two failure paths in
+// [startEmbedded] can overlap a Start — every other caller saw the server
+// ready, and Start returns right after that — so the wait costs nothing
+// there, and nothing on a fresh store, whose Start takes milliseconds. On a
+// large store still recovering it waits for the recovery, which nats-server
+// gives no way to interrupt; [startEmbedded] says so when it happens.
+//
+// BOTH CALLS, because [server.Server.Shutdown] runs a shutdown to its end only
+// when it is the call that starts one: if the server is already shutting down
+// (its own lame-duck exit, or a second caller) it returns at once, and
+// [server.Server.WaitForShutdown] is what waits for that one.
+//
+// WHAT EITHER WAITS FOR IS THE SERVER'S OWN GOROUTINES, and one writer of the
+// store is not among them: every file-backed consumer flushes its state from
+// a goroutine nats-server starts beside the consumer's store
+// (consumerFileStore.flushLoop), which neither call joins. Through nats-server
+// v2.15.0 a consumer stopped while that flusher was mid-write returned without
+// waiting for it, so the write — `o.dat.tmp` renamed to `o.dat` under
+// `obs/<consumer>` — landed after this function returned: in 90 of 1,200
+// shutdowns of a member whose consumers had just been acknowledged (24
+// members at once under CPU contention, the shape of this package's suite),
+// and in a test whose TempDir removal then failed with "directory not empty".
+// v2.15.1 makes the stop wait for a flush in flight and refuses a write after
+// it, so no release before it is one to pin — but that NARROWS THE RACE AND
+// DOES NOT CLOSE IT. The wait (waitOnFlusher) polls for 100 ms and then
+// returns whether or not the write has finished, and a loaded machine
+// stretches a write past that: on v2.15.1, with 32 such members at once on a
+// real disk beside a running suite, 3 of 1,528 shutdowns still had a write in
+// flight or landing after this returned (0 of 1,200 in the lighter harness
+// above). With the stop joining the flush loop instead of polling for it, the
+// same runs gave 0 of 1,531. That change is nats-server's to make; nothing
+// here can join a goroutine the server keeps no handle to.
 //
 // It exists because the two shapes had drifted: the ordinary teardown waited
 // and the two failure paths inside [startEmbedded] did not, which is the
 // harder half to notice — those run when a boot is already going wrong, and a
 // RemoveAll that raced left an error about a scratch directory on top of the
 // failure the operator actually needed to read.
-func shutdownAndClean(ns *server.Server, scratch string) {
+func shutdownAndClean(ns stoppable, started <-chan struct{}, scratch string) {
+	<-started
 	ns.Shutdown()
 	ns.WaitForShutdown()
 	removeScratch(scratch)

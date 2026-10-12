@@ -11,13 +11,13 @@
 //
 //	go test ./internal/coord/kv/ -run TestBrokerBehavior -v
 //
-// Measured on nats-server 2.15.0 / nats.go 1.54.0, embedded in-process with
+// Measured on nats-server 2.15.1 / nats.go 1.54.0, embedded in-process with
 // file storage (a run prints the versions it ran on as its first row, read
 // from the binary rather than from here):
 //
 //	bucket TTL (MaxAge) under test                1s
 //	renewed through Update, held for              3x the bucket TTL, no lapse
-//	unrenewed key reaped after                    1.298s — TTL + 298 ms
+//	unrenewed key reaped after                    1.304s — TTL + 304 ms
 //	Get on a reaped key                           jetstream.ErrKeyNotFound
 //	Create on the reaped key                      succeeds
 //	epoch record after the lease key was reaped   still there, value intact
@@ -25,9 +25,9 @@
 //	Update at a stale revision                    jetstream.ErrKeyRevisionMismatch
 //	per-key TTL (KeyTTL), never renewed           expires
 //	per-key TTL (KeyTTL), renewed through Update  IMMORTAL — the trap
-//	Get                                           20 µs
+//	Get                                           30 µs
 //	Update                                        30 µs
-//	WatchAll over 21 keys                         710 µs
+//	WatchAll over 21 keys                         760 µs
 //
 // Three of these decide something.
 //
