@@ -674,12 +674,25 @@ without the code log and with it:
 
 A shorter mutation log is a shorter blocked trim survived before it refuses
 appends — 23 % shorter on any first boot below about 300 GiB free, and less
-above it. A company that hosts no
-code and is short of broker room sets `stream.code_log_max_bytes: 1073741824`
-before the first boot: a ceiling you set comes off the logs' share whole and is
-never scaled, so the others divide all but that gibibyte (at 100 GiB free, the
-mutation log is created at 15.8 GiB). Once the streams exist they keep their
-ceilings, and the same trade is two
+above it.
+
+A smaller vector changelog is less room for a full re-embedding, which
+republishes the whole corpus at once — 8.46 GB at the reference company's
+fifth year. The changelog is created at 7.9 GiB on 64 GiB free, where it was
+10.2 GiB with four logs: that re-embedding then leaves about 0.1 % of it free
+rather than about 23 %, and raises `log_headroom`, which fires within a tenth
+of a ceiling. It does so on any first boot below about 71 GiB free, where the
+line was about 55 GiB with four logs
+([the designed excursions](retention.md#the-storage-forecast)).
+
+A company that hosts no code and is short of broker room sets
+`stream.code_log_max_bytes: 1073741824` before the first boot: a ceiling you
+set comes off the logs' share whole and is never scaled, so the others divide
+all but that gibibyte (at 100 GiB free, the mutation log is created at
+15.8 GiB; at 64 GiB free, the vector changelog at 9.8 GiB, which a year-five
+re-embedding leaves about 19 % free, and the line below which it alarms moves
+to about 58 GiB). Once the streams exist they keep their ceilings, and the
+same trade is two
 [`crewlet retention set-capacity`](retention.md#changing-a-logs-ceiling) calls:
 the code log's lowered, then the log you want longer raised.
 
