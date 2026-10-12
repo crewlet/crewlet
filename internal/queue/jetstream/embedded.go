@@ -330,6 +330,15 @@ func (s *Server) LeafPort() int {
 }
 
 // Shutdown stops the broker. Every client of it should be stopped first.
+//
+// WHEN IT RETURNS THE SERVER HAS STOPPED, and every writer of its store has
+// stopped but one: a consumer's state write already in flight, which
+// nats-server waits for for at most 100 ms. A write that a loaded machine
+// stretches past that lands afterwards. So the caller's next step — a
+// test's TempDir removing the store, a scratch store being deleted, a process
+// exiting with its consumers' last acknowledgements on disk — can still meet
+// one late write. It is rare on an idle host and measured under contention in
+// [shutdownAndClean], which also says what would remove it.
 func (s *Server) Shutdown() {
 	if s.embedded != nil {
 		s.embedded.shutdown()
@@ -927,10 +936,31 @@ func (e *embeddedServer) shutdown() { shutdownAndClean(e.ns, e.scratch) }
 // shutdownAndClean stops the server and removes its scratch store, IN THAT
 // ORDER AND WAITING IN BETWEEN.
 //
-// [server.Server.Shutdown] is asynchronous — it signals and returns, while the
-// server's own goroutine is still closing listeners and flushing its file
-// store. Removing the directory without waiting races that goroutine, so the
-// store is deleted underneath a broker still writing to it.
+// BOTH CALLS, because [server.Server.Shutdown] runs a shutdown to its end only
+// when it is the call that starts one: if the server is already shutting down
+// (its own lame-duck exit, or a second caller) it returns at once, and
+// [server.Server.WaitForShutdown] is what waits for that one.
+//
+// WHAT EITHER WAITS FOR IS THE SERVER'S OWN GOROUTINES, and one writer of the
+// store is not among them: every file-backed consumer flushes its state from
+// a goroutine nats-server starts beside the consumer's store
+// (consumerFileStore.flushLoop), which neither call joins. Through nats-server
+// v2.15.0 a consumer stopped while that flusher was mid-write returned without
+// waiting for it, so the write — `o.dat.tmp` renamed to `o.dat` under
+// `obs/<consumer>` — landed after this function returned: in 90 of 1,200
+// shutdowns of a member whose consumers had just been acknowledged (24
+// members at once under CPU contention, the shape of this package's suite),
+// and in a test whose TempDir removal then failed with "directory not empty".
+// v2.15.1 makes the stop wait for a flush in flight and refuses a write after
+// it, so no release before it is one to pin — but that NARROWS THE RACE AND
+// DOES NOT CLOSE IT. The wait (waitOnFlusher) polls for 100 ms and then
+// returns whether or not the write has finished, and a loaded machine
+// stretches a write past that: on v2.15.1, with 32 such members at once on a
+// real disk beside a running suite, 3 of 1,528 shutdowns still had a write in
+// flight or landing after this returned (0 of 1,200 in the lighter harness
+// above). With the stop joining the flush loop instead of polling for it, the
+// same runs gave 0 of 1,531. That change is nats-server's to make; nothing
+// here can join a goroutine the server keeps no handle to.
 //
 // It exists because the two shapes had drifted: the ordinary teardown waited
 // and the two failure paths inside [startEmbedded] did not, which is the
