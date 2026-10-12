@@ -115,9 +115,8 @@ export function TakeBackupDialog({
       }
     >
       <p className="t-body secondary" style={{ margin: 0 }}>
-        Copies everything <InlineCode>{host}</InlineCode> holds — both databases and every stream,
-        the company&rsquo;s sealed credentials included — into a directory on{" "}
-        <strong>{host}&rsquo;s host</strong>. Nothing is downloaded to this browser.
+        Copies everything <InlineCode>{host}</InlineCode> holds, credentials included, to a
+        directory on <strong>its host</strong>.
       </p>
       <Field
         label="Directory"
@@ -134,15 +133,14 @@ export function TakeBackupDialog({
           error?.field
             ? error.message
             : dir.trim() !== "" && !absolute
-              ? "An absolute path — it is resolved on the engine's host, not here."
+              ? "Use an absolute path on the engine’s host."
               : undefined
         }
-        help="Absolute, on the engine's host, and empty or not there yet. It is created readable by the engine's user alone."
+        help="An absolute, empty path on the engine’s host."
       />
       {busy && (
         <Callout variant="neutral" role="status">
-          Copying. A large store takes minutes; closing this does not stop it, and the outcome
-          arrives here or as a notice, and in the history on this page.
+          Copying. You can close this; the result appears in the history.
         </Callout>
       )}
       {error && !error.field && (

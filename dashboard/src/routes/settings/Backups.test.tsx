@@ -243,7 +243,7 @@ test("the history's span is the one the engine reports", async () => {
   mount({ history: [] }, { historySeconds: 7 * 86_400 });
   await settle();
   expect(screen.getByText("No backup was asked for in the last 7 days")).toBeTruthy();
-  expect(screen.getByText(/the store keeps 7 days/)).toBeTruthy();
+  expect(screen.getByText("Older backups still count above.")).toBeTruthy();
   cleanup();
 
   mount({ history: [] }, { historySeconds: null });
@@ -290,7 +290,7 @@ test("a directory the engine cannot use is said on the field", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Take a backup" }));
   const field = screen.getByLabelText(/Directory/) as HTMLInputElement;
   fireEvent.change(field, { target: { value: "backups/tonight" } });
-  expect(screen.getByText(/An absolute path/)).toBeTruthy();
+  expect(screen.getByText("Use an absolute path on the engine’s host.")).toBeTruthy();
   expect((screen.getByRole("button", { name: "Take backup" }) as HTMLButtonElement).disabled).toBe(
     true,
   );

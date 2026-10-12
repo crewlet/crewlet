@@ -28,7 +28,8 @@
  * A domain absent from the document is NOT a domain at position zero: a node
  * that keeps no state log serves a report with no domains at all, and drawing
  * zeros over that would be a confident claim about a subsystem this node does
- * not run. It says which, and the two read differently.
+ * not run. It says the node reports no such domain instead, and names the
+ * ones it does.
  */
 
 import { useMemo } from "react";
@@ -47,6 +48,7 @@ import {
   DomainRefusals,
   DomainSize,
   FloorFact,
+  noConclusion,
   Terms,
   TrimStatus,
 } from "./Retention.tsx";
@@ -185,13 +187,7 @@ export function DomainScreen({ name }: { name: string }) {
                 <Terms
                   terms={domain.terms}
                   snapshotBlocked={domain.snapshot_blocked_by}
-                  empty={
-                    domain.trim_floor_state === "published"
-                      ? undefined
-                      : domain.trim_floor_state === "unreadable"
-                        ? `The trim floor register could not be read, so nothing is known here about the trim of generation ${domain.generation}.`
-                        : `The trim has concluded nothing about generation ${domain.generation} yet — its first tick on this stream is pending.`
-                  }
+                  empty={noConclusion(domain)}
                 />
               </Card>
 
@@ -199,7 +195,7 @@ export function DomainScreen({ name }: { name: string }) {
                 <Card.Header
                   icon={<ServerGlyph size="sm" />}
                   count={positions.length}
-                  subtitle="The trim takes a minimum across these, so the lowest row is what the floor is waiting on."
+                  subtitle="The lowest row holds the floor"
                 >
                   <Card.Title>Where each node is</Card.Title>
                 </Card.Header>
@@ -298,12 +294,11 @@ export function DomainScreen({ name }: { name: string }) {
                 <Card.Title>No such domain</Card.Title>
               </Card.Header>
               <p className="t-body">
-                This node&apos;s retention report names no domain <InlineCode>{name}</InlineCode>.
-                The domains it does report are{" "}
-                {(data.domains ?? []).length === 0 ? (
-                  <>none at all, which is what a node running no state log looks like.</>
-                ) : (
+                This node reports no domain <InlineCode>{name}</InlineCode>.
+                {(data.domains ?? []).length > 0 && (
                   <>
+                    {" "}
+                    The domains it does report are{" "}
                     {(data.domains ?? []).map((d, i) => (
                       <span key={d.domain}>
                         {i > 0 && ", "}

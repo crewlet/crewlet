@@ -86,14 +86,17 @@ export function BlockedBanner({ domain: d, now }: { domain: RetentionDomain; now
     <Callout variant="warning">
       <span>
         {d.prose ? (
-          d.prose.replace(/\.$/, "")
+          <>
+            {d.prose.replace(/\.$/, "")}
+            {d.blocked_since && <>, since {relTime(d.blocked_since, now)}</>}
+          </>
         ) : (
           <>
-            Nothing is being trimmed on <InlineCode>{d.domain}</InlineCode>: the {d.blocked_by} term
-            is holding it
+            Nothing is trimmed on <InlineCode>{d.domain}</InlineCode>: held by {d.blocked_by}
+            {d.blocked_since && <> since {relTime(d.blocked_since, now)}</>}
           </>
         )}
-        {d.blocked_since && <> — since {relTime(d.blocked_since, now)}</>}.{" "}
+        .{" "}
         <a
           className="prose-link"
           href="https://docs.crewlet.ai/engine/latest/guides/retention/"
@@ -173,8 +176,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
     <>
       {error && (
         <Callout variant="danger" role="alert">
-          This retention poll failed ({error}). What is below is the last reading that succeeded —
-          on this screen, which is read while nodes are dying, that difference matters.
+          Refresh failed ({error}). Showing the last good reading.
         </Callout>
       )}
       {loading && !data && <Skeleton variant="text" rows={3} label="Loading" />}
@@ -194,19 +196,15 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
       {data?.maintenance && <MaintenanceBanner op={data.maintenance} now={now} />}
 
       {data?.register_readable === false && (
-        <Callout variant="warning">
-          The node register could not be listed, so the rows below are what could be READ of the
-          fleet rather than the fleet. An empty list here is not an empty company.
-        </Callout>
+        <Callout variant="warning">Couldn’t list nodes, so some may be missing below.</Callout>
       )}
 
       {domains
         .filter((d) => d.evictions_unreadable)
         .map((d) => (
           <Callout key={`evictions:${d.domain}`} variant="warning">
-            This node could not read <InlineCode>{d.domain}</InlineCode>'s evictions, so no node
-            below shows as evicted there — an eviction may be hidden rather than absent. The next
-            report reads them again.
+            Couldn’t read <InlineCode>{d.domain}</InlineCode>’s evictions, so evicted nodes may not
+            show.
           </Callout>
         ))}
 
@@ -228,7 +226,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               // identifies the alarm, and the detail is where the domain is.
               <Callout key={`${a.kind}:${a.detail}`} variant="warning">
                 <span>
-                  <InlineCode>{a.kind}</InlineCode> — {a.detail}{" "}
+                  <InlineCode>{a.kind}</InlineCode>: {a.detail}{" "}
                   <span className="muted">{a.remedy}</span>
                 </span>
               </Callout>
@@ -322,10 +320,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
                         the button alone read as though it would simply
                         work. */}
                     {action.evict && n.live && (
-                      <Tag
-                        variant="neutral"
-                        title="it holds a presence lease, so an eviction is refused unless you force it"
-                      >
+                      <Tag variant="neutral" title="Still running. Eviction needs force.">
                         live
                       </Tag>
                     )}
@@ -362,7 +357,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
         <Card.Header
           icon={<PackageGlyph size="sm" />}
           count={data?.snapshots?.length}
-          subtitle={`${donorsCounted(data?.snapshots ?? [])} of ${SNAPSHOT_DONORS_REQUIRED} donors — the trim's sixth term`}
+          subtitle={`${donorsCounted(data?.snapshots ?? [])} of ${SNAPSHOT_DONORS_REQUIRED} donors`}
         >
           Snapshots
         </Card.Header>
@@ -445,9 +440,9 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               sub={
                 data.replica.rejoin_window_seconds > 0 &&
                 data.replica.projected_join_seconds > data.replica.rejoin_window_seconds
-                  ? `LONGER than the ${fmtDuration(
+                  ? `Longer than the ${fmtDuration(
                       data.replica.rejoin_window_seconds * 1000,
-                    )} window — a node that fell out could not catch up`
+                    )} window, so a lagging node can’t catch up`
                   : `inside the ${fmtDuration(data.replica.rejoin_window_seconds * 1000)} window`
               }
             />
@@ -513,10 +508,7 @@ export function Tombstone({ evicted, now }: { evicted: RetentionEviction; now: n
 export function ServedLevelBanner({ level }: { level?: string }) {
   if (!level || level === "stale") return null;
   return (
-    <Callout variant="warning">
-      This node could not measure its own distance from the log, so the figures below are a coherent
-      point in its order with no statement about age (read level <InlineCode>{level}</InlineCode>).
-    </Callout>
+    <Callout variant="warning">How current these figures are can’t be measured right now.</Callout>
   );
 }
 
@@ -541,15 +533,14 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
     <Callout variant="danger" role="alert">
       <span className="col" style={{ gap: 6 }}>
         <span>
-          <strong>Maintenance is open on {op.stream}</strong> — no publisher is running anywhere in
-          this fleet. Phase <InlineCode>{op.phase}</InlineCode>, attempt {op.attempt}, since{" "}
-          {relTime(op.since, now)}
-          {op.by && <> ({op.by})</>}. Resizing from {fmtBytes(op.original_max_bytes)} to{" "}
+          <strong>Maintenance on {op.stream}</strong>: publishing is paused. Phase{" "}
+          <InlineCode>{op.phase}</InlineCode>, attempt {op.attempt}, since {relTime(op.since, now)}
+          {op.by && <> ({op.by})</>}. Resizing {fmtBytes(op.original_max_bytes)} to{" "}
           {fmtBytes(op.target_max_bytes)}.
         </span>
         {op.blocked && (
           <span>
-            <strong>Blocked:</strong> {op.blocked} — this needs a person, not time.
+            <strong>Blocked:</strong> {op.blocked}. Needs a person.
           </span>
         )}
         <span className="t-caption">
@@ -559,7 +550,7 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
             // NOBODY OUTSTANDING IS NOT PROGRESS. It is the operation
             // waiting on whoever ran the verb, and rendering it as an
             // empty list would read as "nearly done".
-            <>No acknowledgement is outstanding — this operation is waiting on its operator.</>
+            <>Waiting on its operator.</>
           )}
         </span>
       </span>
@@ -746,16 +737,13 @@ export function NodePositions({ node }: { node: RetentionNode }) {
           {d.log_diverged && (
             <Tag
               variant="danger"
-              title="the log holds another record at this node's checkpoint than the one it consumed there; every other node refuses its writes of this log until an operator decides which history the fleet keeps"
+              title="This node’s history differs from the log. An operator must choose which to keep."
             >
               log diverged
             </Tag>
           )}
           {(d.deferred ?? 0) > 0 && (
-            <Tag
-              variant="danger"
-              title="this node holds records it cannot decode; its rows are missing their effects"
-            >
+            <Tag variant="danger" title="Records this node can’t read yet">
               {d.deferred} deferred
             </Tag>
           )}
@@ -778,7 +766,11 @@ function PositionStanding({ d }: { d: RetentionNodeDomain }) {
     return (
       <Tag
         variant="warning"
-        title="this position is from another generation of the log, so its sequence compares with nothing the log holds now"
+        title={
+          d.generation_state === "ahead"
+            ? "From a newer generation of the log"
+            : "From an older generation of the log"
+        }
       >
         {d.generation_state} gen {d.generation}
       </Tag>
@@ -786,8 +778,8 @@ function PositionStanding({ d }: { d: RetentionNodeDomain }) {
   }
   if (d.lag == null) {
     return (
-      <span className="muted" title="the stream could not be read, so the lag is unknown">
-        lag —
+      <span className="muted" title="Lag unknown">
+        lag unknown
       </span>
     );
   }
@@ -885,14 +877,14 @@ export function FloorFact({ domain: d }: { domain: RetentionDomain }) {
 }
 
 /** The sentence a domain with no conclusion shows in place of its terms. */
-function noConclusion(d: RetentionDomain): string | undefined {
+export function noConclusion(d: RetentionDomain): string | undefined {
   switch (d.trim_floor_state) {
     case "published":
       return undefined;
     case "unreadable":
-      return `The trim floor register could not be read, so nothing is known here about the trim of generation ${d.generation}.`;
+      return `Couldn’t read the trim floor for generation ${d.generation}.`;
     default:
-      return `The trim has concluded nothing about generation ${d.generation} yet — its first tick on this stream is pending.`;
+      return `No trim result for generation ${d.generation} yet.`;
   }
 }
 
@@ -911,7 +903,7 @@ export function DomainRefusals({ domain: d }: { domain: RetentionDomain }) {
             <strong>Not ready on this node:</strong> <InlineCode>{d.not_ready.code}</InlineCode>
             {(d.not_ready.causes?.length ?? 0) > 0 && (
               <> ({d.not_ready.causes!.join(", ")})</>
-            )} — {d.not_ready.detail}
+            )}: {d.not_ready.detail}
           </span>
         </Callout>
       )}
@@ -919,7 +911,7 @@ export function DomainRefusals({ domain: d }: { domain: RetentionDomain }) {
         <Callout variant="warning" role="alert">
           <span>
             <strong>Writes refused on this node:</strong>{" "}
-            <InlineCode>{d.writes_refused.code}</InlineCode> — {d.writes_refused.detail}
+            <InlineCode>{d.writes_refused.code}</InlineCode>: {d.writes_refused.detail}
           </span>
         </Callout>
       )}
@@ -972,9 +964,8 @@ export function Terms({
       {snapshotBlocked && (
         <Callout variant="warning">
           <span>
-            This node is taking no snapshots: <InlineCode>{snapshotBlocked}</InlineCode>. A stalled
-            snapshot tier and a stalled trim are different problems — this one is silent until a
-            node tries to join.
+            No snapshots on this node: <InlineCode>{snapshotBlocked}</InlineCode>. New nodes can’t
+            join from it.
           </span>
         </Callout>
       )}
