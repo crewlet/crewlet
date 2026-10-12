@@ -906,6 +906,65 @@ roles:
       mattermost_user_id: jane
 ```
 
+### How a person's post is recognised
+
+A post names its author by the **user id**, never by the username — so the
+name in the chart cannot attribute anything on its own. The Mattermost
+transport asks the server which account holds each human seat's name
+(`POST /api/v4/users/usernames`, every name in one request, on a seat's bot
+token) and registers **that account's user id** for the seat. A post from
+it then reaches the agents as the colleague the chart describes —
+`Jane Founder (jane-founder, human colleague)` — in the trigger, in the thread
+a turn reads back and in what the agent remembers about who it spoke with,
+rather than from a stranger with an opaque id.
+
+The name is asked about in lowercase, the only case Mattermost stores a
+username in, so `Jane` and `@jane` both find the account `jane`. It is asked
+again:
+
+| When | Why |
+|---|---|
+| At connect, before any socket is attached | so the first post a socket hears is already attributed |
+| On every apply | an apply is what names a new person or corrects a name. The new party registry is filled from the last answer first, with no request, so nobody recognised a moment ago is a stranger while the server is asked again |
+| Every **minute** (`mattermost.PeopleRefresh`) | the two changes that happen **at the server** — a person joining under the name the chart already gives them, and a rename — reach the engine no other way. One request per node per minute, however many people the company names |
+
+The minute is what a person who has just joined waits to be recognised. A
+rename keeps the account's id, so the person stays recognised until the next
+ask — and that ask is what notices that the chart's name for them is stale.
+Mattermost does broadcast `new_user` and `user_updated` on its websocket, and
+the engine deliberately does not listen for them: every seat's socket would
+hear each one, nothing replays one a socket missed while it was down, and the
+answer they would prompt is the same request.
+
+**A name that holds no person is reported, never guessed at.** If the server
+answers without it — nobody holds that name, or nobody the bots may see — or
+the name belongs to a **bot**, nothing is registered for the seat (a bot's
+name registered for a person would present that agent's every post as the
+person's word), and:
+
+- the engine logs `mattermost_person_unknown` with the seat's handle, the
+  name and a `reason` (`no_account` or `bot_account`), once, when it
+  happens — and `mattermost_person_found` when the name holds the person
+  again;
+- the integration's status carries a `contact_unknown`
+  [finding](../concepts/integration-reconcile.md#what-a-pass-reports) about
+  that seat: *degraded*, owed by the **operator**, because the fix is the
+  name in the company document — the one the person's profile shows — or the
+  person joining the server. Reported whether or not the engine provisions
+  the bots.
+
+A name that comes to belong to a **different** account (the person renamed
+themselves and somebody else took the name) moves the seat to that account,
+because the chart names the name — logged as
+`mattermost_person_account_changed` with both ids. A request that **fails**
+changes nothing: `mattermost_people_unread` is logged and the last answer
+stands, because a server mid-restart says nothing about who anybody is.
+
+A bot holding the built-in `system_user` role can see every account. If the
+bots' role has had `view_members` taken away, the server answers only for
+the people a bot shares a team or a channel with, and anyone else reads as a
+name nobody holds.
+
 ---
 
 ## Local testing
@@ -1163,6 +1222,7 @@ to the server than people do — an internal DNS name, say — and never point
 | The engine logs `the server redirects it to …` and no seat connects | `integrations.mattermost.url` is not where the server serves its API: outside the Site URL's path, or `http://` where a proxy sends it to `https://`. Neither the engine nor the agents' MCP server follows a redirect | Set `url` — and the MCP server's `MATTERMOST_URL`, the same variable in the examples — to the address the error names; its host may stay whatever reaches the server |
 | The engine logs `answered with text/html rather than the API's JSON` | `url` carries a path the server has no route for, so Mattermost answers its web app's page there | Give `url` the Site URL's path |
 | One bot stays silent while others work | Its token was revoked, or its account disabled | `crewlet mattermost doctor <company.yaml>`, then re-run the provisioner |
+| A person's messages reach the agents as a stranger's; the engine logs `mattermost_person_unknown` and the integration reports `contact_unknown` | The human seat's `contact.mattermost_user_id` names no account the bots can see — a typo, a rename, a person who has not joined — or names a bot | Write the username their profile shows; see [How a person's post is recognised](#how-a-persons-post-is-recognised) |
 | An agent receives messages but never answers in Mattermost | The `mcp-server-mattermost` MCP server is missing, so the turn completes with no tool to send with | Check `uvx mcp-server-mattermost` resolves |
 | Every agent is deaf after a restart, and the log has `mattermost_ws_auth_rejected` | Personal access tokens were disabled server-wide, or the tokens were revoked | Re-enable under System Console → Integrations, re-run the provisioner |
 

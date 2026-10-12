@@ -31,6 +31,7 @@ var knownKinds = []FindingKind{
 	FindingGrantPending,
 	FindingUnknownTier,
 	FindingGrantShort,
+	FindingContactUnknown,
 	FindingGrantExcess,
 	FindingRegistrationOrphaned,
 	FindingCoveragePartial,
@@ -166,7 +167,7 @@ func TestSeverityIsAStrictOrder(t *testing.T) {
 // kind is allowed to share a verdict with the default (an unknown tier is
 // genuinely degraded and genuinely the operator's, which is what the default
 // says too). The rank is what proves the switch has a case for it: the
-// default's rank sits between the short grant and the advisory, and no known
+// default's rank sits between the last real problem and the advisory, and no known
 // kind may land there.
 func TestEveryKnownKindIsRankedAndJudged(t *testing.T) {
 	unknownRank := FindingKind("a kind a newer build found").severity()
@@ -348,6 +349,10 @@ func TestTheSeverityOrderIsPinned(t *testing.T) {
 		FindingGrantPending,
 		FindingUnknownTier,
 		FindingGrantShort,
+		// A PERSON THE COMPANY NAMES BY AN ACCOUNT NOBODY HOLDS, after every
+		// problem with an agent: each agent still works whole, and what is
+		// lost is one person's name on what they write.
+		FindingContactUnknown,
 		// THE ADVISORIES, the expiring credential first because it is the
 		// only note with a deadline on it.
 		FindingCredentialExpiring,
@@ -371,9 +376,10 @@ func TestTheSeverityOrderIsPinned(t *testing.T) {
 	// report a healthy company as broken; ranked below the advisory, one
 	// spare permission would hide a finding this binary cannot read.
 	unknown := FindingKind("a-kind-from-a-newer-build").severity()
-	if unknown <= FindingGrantShort.severity() || unknown >= FindingCredentialExpiring.severity() {
-		t.Errorf("an unknown kind ranks %d, want between %s (%d) and the first advisory %s (%d)",
-			unknown, FindingGrantShort, FindingGrantShort.severity(),
+	if unknown <= FindingContactUnknown.severity() || unknown >= FindingCredentialExpiring.severity() {
+		t.Errorf("an unknown kind ranks %d, want between the last real problem %s (%d) "+
+			"and the first advisory %s (%d)",
+			unknown, FindingContactUnknown, FindingContactUnknown.severity(),
 			FindingCredentialExpiring, FindingCredentialExpiring.severity())
 	}
 }

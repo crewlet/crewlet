@@ -109,12 +109,18 @@ type HumanContact struct {
 	// id: Mattermost mentions address a person by name, and the name is
 	// what an agent has to write into a message for it to render.
 	//
+	// A post names its author by the user id instead, so the name alone
+	// attributes nothing: the Mattermost transport asks the server which
+	// account holds it and registers that account's id for the seat (see
+	// [Transport.AddressedByName]).
+	//
 	// Literal values are lowercased, because Mattermost's own are: the
 	// server lowercases a username on every save, admits only lowercase
 	// characters in one, and looks one up as `Username = lower(?)`, so
-	// "Jane" and "jane" are one account there and must be one here — the
-	// party registry keys exactly, and two seats spelling one person
-	// differently would otherwise both validate and split their mail.
+	// "Jane" and "jane" are one account there and must be one here. The
+	// duplicate check compares what the chart declares, and two seats
+	// spelling one person differently would otherwise both validate and
+	// then contend for the one account both names resolve to.
 	MattermostUserID string `yaml:"mattermost_user_id,omitempty" json:"mattermost_user_id,omitempty"`
 
 	// AtlassianAccountID is an Atlassian Cloud account id — one id covers
@@ -189,9 +195,10 @@ type contactField struct {
 	//     without case, and both sides of the engine's own match lowercase —
 	//     the webhook parser and the boot-time identity lookup — so a
 	//     mixed-case literal here would never resolve.
-	//   - mattermost_user_id: nothing inbound is matched against it (a post
-	//     carries the sender's user id, not their username); it is folded
-	//     because Mattermost folds it — the server lowercases a username on
+	//   - mattermost_user_id: nothing inbound is matched against the name
+	//     itself (a post carries the sender's user id, which the transport
+	//     asks the server for by this name); it is folded because
+	//     Mattermost folds it — the server lowercases a username on
 	//     every save (NormalizeUsername), admits only lowercase characters
 	//     in one, and finds one by `Username = lower(?)` — so "Jane" and
 	//     "jane" are one person there and the duplicate check must say so.
@@ -245,14 +252,43 @@ var contactFields = []contactField{
 var contactTransports = []struct {
 	transport Transport
 	field     int
+	// byName marks a field holding the NAME a person is addressed by on a
+	// surface whose events name them by an account id instead. See
+	// [Transport.AddressedByName].
+	byName bool
 }{
-	{TransportSlack, fieldSlackUserID},
-	{TransportMattermost, fieldMattermostUserID},
-	{TransportJira, fieldAtlassianAccountID},
-	{TransportConfluence, fieldAtlassianAccountID},
-	{TransportGitHub, fieldGitHubLogin},
-	{TransportGitLab, fieldGitLabUsername},
-	{TransportCrewlet, fieldCrewletOperatorID},
+	{TransportSlack, fieldSlackUserID, false},
+	{TransportMattermost, fieldMattermostUserID, true},
+	{TransportJira, fieldAtlassianAccountID, false},
+	{TransportConfluence, fieldAtlassianAccountID, false},
+	{TransportGitHub, fieldGitHubLogin, false},
+	{TransportGitLab, fieldGitLabUsername, false},
+	{TransportCrewlet, fieldCrewletOperatorID, false},
+}
+
+// AddressedByName reports whether a contact's id on this transport is the
+// NAME a person is addressed by, where every event the transport receives
+// names them by an account id the platform assigned instead.
+//
+// Mattermost is the one: a mention is `@username`, and a DM is opened with the
+// account that name belongs to, so the name is what an agent needs — while a
+// post carries only its author's 26-character user id. Every other field here
+// is the very id the surface's events carry: a Slack member id, an Atlassian
+// account id, a GitHub or GitLab login, an operator token's id.
+//
+// So the declared value of such a field is NOT an identity the party registry
+// can hold. Registered as written, it is a key no event ever looks up: every
+// post a person wrote reached the agents from a stranger, however the chart
+// named them. The transport resolves the name against its server and
+// registers the account id it was answered with — which is also the only
+// place that can notice the name naming nobody.
+func (t Transport) AddressedByName() bool {
+	for _, entry := range contactTransports {
+		if entry.transport == t {
+			return entry.byName
+		}
+	}
+	return false
 }
 
 // Identity is one external account a human seat can be reached at.

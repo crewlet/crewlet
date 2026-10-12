@@ -50,7 +50,7 @@ units:
 |-------|----------|-------------|
 | `kind: human` | yes | Marks the seat as human |
 | `contact.slack_user_id` | one identity | Slack member ID (`U…`) — `<@…>` mentions and the channel an agent DMs on escalation |
-| `contact.mattermost_user_id` | one identity | [Mattermost](../integrations/mattermost.md) **username**: the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID. Lowercased, because Mattermost stores every username in lowercase and finds one without case |
+| `contact.mattermost_user_id` | one identity | [Mattermost](../integrations/mattermost.md) **username**: the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID. Lowercased, because Mattermost stores every username in lowercase and finds one without case. A post names its author by that ID instead, so the engine asks the server which account holds the name — at connect, on every apply and every minute — and attributes that account's posts to the seat; a name no account holds is reported (see [How a person's post is recognised](../integrations/mattermost.md#how-a-persons-post-is-recognised)) |
 | `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID. One ID covers Jira assignments, Confluence `<ri:user>` mentions and webhook sender attribution on both |
 | `contact.github_login` | one identity | GitHub username: review requests, sender attribution. Lowercased |
 | `contact.gitlab_username` | one identity | GitLab username: assignment, review and mention routing, sender attribution. Lowercased |
@@ -432,7 +432,9 @@ A seat's kind is ordinary configuration, applied like any other change
   reattaches its diary, episodes and onboarding marker.
 - Contact and availability edits take effect with the next epoch: every
   apply builds a new party registry and reconciles the human contact IDs
-  into it.
+  into it. A Mattermost username is the exception that needs the server:
+  the new registry gets the account the name last resolved to at once, and
+  a new or changed name is asked about straight after the apply.
 
 ## Identity Resolution (party registry)
 
@@ -456,6 +458,16 @@ lock, and it holds two kinds of entry:
   edit, a removed seat, a kind flip) is withdrawn, and an ID already held by
   a different seat is never taken over: the conflict is logged as
   `human_contact_id_conflict` naming both seats.
+- **Human chat accounts named by NAME** are the one contact the reconcile
+  leaves alone (`org.Transport.AddressedByName`): a Mattermost username is
+  what an agent mentions a person by, while every post carries the person's
+  user ID, so the name registered as written matched no post and every
+  person on Mattermost read as a stranger. The Mattermost transport asks
+  the server which account holds each name and registers that account's
+  user ID — at connect, on every apply and every minute — and a name no
+  person holds is logged (`mattermost_person_unknown`) and reported on the
+  integration's status as `contact_unknown`. See
+  [How a person's post is recognised](../integrations/mattermost.md#how-a-persons-post-is-recognised).
 - **Agent identities** are registered by the integrations: the code host's
   and the tracker's are derived from each seat's credentials and rebuilt on
   every apply, while the chat transports' bot IDs, resolved against the live
@@ -463,6 +475,8 @@ lock, and it holds two kinds of entry:
 
 External-ID resolution is plain index lookups, because it runs on every
 inbound notification for sender attribution. On each surface it consults
-two namespaces, the surface's own (a human's member ID under `slack`) and
-the companion bot namespace (an agent's bot user under `slack_bot`), so
-agent and human senders are annotated alike.
+two namespaces, the surface's own (a human's member ID under `slack`, a
+human's user ID under `mattermost`) and the companion bot namespace (an
+agent's bot user under `slack_bot` or `mattermost_bot`), so agent and human
+senders are annotated alike. Both hold the ID an event names its sender by,
+and nothing else: a lookup is never handed a username.
