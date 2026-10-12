@@ -125,9 +125,12 @@ roles:
     kind: human
     manages: [CEO]
     contact:
-      # One identity per surface you connect. Swap this for
-      # `slack_user_id` (a `U…` member ID) if Slack is your chat.
-      mattermost_user_id: "${MATTERMOST_FOUNDER_USERNAME}"   # your chat username
+      # Your dashboard token (`api.auth.tokens[].id` in crewlet.yaml) — how
+      # the Inbox and My work know you: see "Bind your token to your seat"
+      # below. Add one identity per surface you connect later:
+      # `mattermost_user_id` for Mattermost, `slack_user_id` (a `U…`
+      # member ID) for Slack.
+      crewlet_operator_id: founder
 
   - name: CEO
     handle: ceo                 # see the note under this block — set these now
@@ -316,7 +319,6 @@ crash loop.)
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."          # embeddings
-export MATTERMOST_FOUNDER_USERNAME="you"  # your chat username (the human seat)
 ```
 
 Validate the Tier B YAML first (this reads no environment — `${VAR}`
@@ -414,9 +416,10 @@ hundredth — and **Filter** and **Display** in the bar decide what is on it and
 how it is drawn: a board, a table, a calendar or a timeline over the same rows.
 **Projects** beside it is the directory of what your units have declared.
 
-**Bind your token to your seat** and the personal screens become yours: give a
-human seat `contact.crewlet_operator_id` matching one of your
-`api.auth.tokens[].id`, and **My work** and the **Inbox** answer for that
+**Bind your token to your seat** and the personal screens become yours: a
+human seat whose `contact.crewlet_operator_id` matches one of your
+`api.auth.tokens[].id` — the example's founder seat names `founder`, the token
+you exported above — makes **My work** and the **Inbox** answer for that
 person. My work is one tab per claim on somebody's attention — what they hold,
 the order somebody put it in, the questions waiting on them and the ones they
 are waiting on — with every count on the strip, and a band above it naming

@@ -298,13 +298,20 @@ roles:
   - name: Jane Founder
     kind: human
     manages: [CEO]
-    contact: { mattermost_user_id: "${MATTERMOST_FOUNDER_USERNAME}" }
+    contact: { crewlet_operator_id: founder }   # an api.auth.tokens[] id
 ```
 
 `kind: human` seats are addressable but never spawned: no runtime, no
 inbox, no LLM. They require at least one `contact` identity and reject
 the runtime-only fields. Scope their `manages` to the top roles — a
-founder managing every seat floods them. See
+founder managing every seat floods them.
+
+`crewlet_operator_id` names one of the Tier A `api.auth.tokens[]` ids,
+and it is the identity that matters on the default stack: it is who the
+founder IS in the dashboard and through their own assistant. Add a
+vendor identity (`mattermost_user_id`, `slack_user_id`,
+`atlassian_account_id`, …) beside it for each surface the company
+connects, so agents recognise the founder there too. See
 [Humans in the org chart](https://docs.crewlet.ai/engine/latest/concepts/humans-in-the-org/).
 
 **Agents do not get code-authoring tools by default.** Reading and
