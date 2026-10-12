@@ -9251,13 +9251,13 @@ a.live-row:focus-visible {
 .spend-hero-figure {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--spacing-2);
   min-width: 0;
 }
 .spend-hero-number {
-  font-size: 3.25rem;
+  font-size: var(--font-size-4xl);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.035em;
+  letter-spacing: var(--font-letter-spacing-tight);
   line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
@@ -9290,7 +9290,7 @@ a.live-row:focus-visible {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
-  gap: 10px;
+  gap: var(--spacing-3);
 }
 .spend-tiles:empty {
   display: none;
@@ -9298,7 +9298,7 @@ a.live-row:focus-visible {
 .spend-tile {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-1);
   min-width: 0;
   padding: var(--spacing-3);
   border-radius: var(--radius-md);
@@ -9327,7 +9327,7 @@ a.live-row:focus-visible {
 .spend-chart-head {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-1);
   min-width: 0;
 }
 /* THE SENTENCE UNDER THE TITLE ASKS FOR NO WIDTH OF ITS OWN. The kit's head
@@ -9441,7 +9441,7 @@ a.live-row:focus-visible {
 .spend-share-bar {
   display: block;
   height: 10px;
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
   background: var(--color-data-1);
 }
 .spend-share-pct,
@@ -9519,7 +9519,7 @@ a.live-row:focus-visible {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-1);
   min-width: 0;
 }
 .spend-task-title {
@@ -9582,14 +9582,14 @@ a.live-row:focus-visible {
   margin: 0 0 var(--spacing-3);
   color: var(--color-text-tertiary);
 }
-/* THE COMPANY'S THREE WINDOWS side by side — the same elevated rung as the
-   Spend overview's tiles, so a window reads as the same object on both
-   screens — stacking below the width where a tile's figure, bar and ceiling
-   editor no longer fit a third of the card. */
+/* THE COMPANY'S THREE WINDOWS side by side, on the same elevated rung and at
+   the same gap as the Spend overview's tiles, so a window reads as the same
+   object on both screens. They stack below the width where a tile's figure,
+   bar and ceiling editor no longer fit a third of the card. */
 .budget-tiles {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--spacing-3);
   padding: 0 var(--spacing-4) var(--spacing-4);
 }
 @container page (width < 760px) {
@@ -9633,7 +9633,7 @@ a.live-row:focus-visible {
 .budget-figure {
   font-size: var(--font-size-xl);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.02em;
+  letter-spacing: var(--font-letter-spacing-tight);
   color: var(--color-text-primary);
 }
 /* THE TRACK A BAR WOULD HAVE, drawn as a hairline: a window with no ceiling
@@ -9656,7 +9656,7 @@ a.live-row:focus-visible {
 .budget-cell {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--spacing-1);
   min-width: 0;
   width: 100%;
 }
@@ -9675,7 +9675,7 @@ a.live-row:focus-visible {
 .ceiling {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--spacing-1);
   min-width: 0;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);

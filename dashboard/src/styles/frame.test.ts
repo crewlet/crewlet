@@ -1715,6 +1715,33 @@ describe("the Spend overview's rows", () => {
     ).toMatch(/display:\s*none/);
   });
 
+  // ON THE TOKEN SCALE. The workspace's rules spelled their own steps, a 52px
+  // figure and gaps of 2, 4, 6 and 10px, beside a scale of 4, 8, 12 and 16
+  // that also follows the density. A step the scale has is its token; a
+  // spacing in ems follows the text it spaces, and only those two are named.
+  test("the Spend workspace spaces and sets its type on the token scale", () => {
+    const EM_SPACING = new Set([".spend-used gap", ".ceiling-warnings padding-left"]);
+    const STEP =
+      /^(gap|row-gap|column-gap|padding(-[a-z-]+)?|margin(-[a-z-]+)?|font-size|letter-spacing|line-height|border-radius)$/;
+    const off: string[] = [];
+    let scanned = 0;
+    for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selector = m[1]!.trim().replace(/\s+/g, " ");
+      if (!/(^|[\s,>+~(])\.(spend-|budget|ceiling)/.test(selector)) continue;
+      scanned++;
+      for (const declaration of m[2]!.split(";")) {
+        const [property = "", ...rest] = declaration.split(":");
+        const prop = property.trim();
+        const value = rest.join(":").trim();
+        if (!STEP.test(prop) || !/\d(px|rem|em)\b/.test(value)) continue;
+        if (/^[\d.]+em$/.test(value) && EM_SPACING.has(`${selector} ${prop}`)) continue;
+        off.push(`${selector} { ${prop}: ${value} }`);
+      }
+    }
+    expect(scanned, "the scan read no Spend rules").toBeGreaterThan(40);
+    expect(off).toEqual([]);
+  });
+
   test("a card without its partner takes the whole row", () => {
     expect(block(css, ".spend-pair > :only-child")).toMatch(/grid-column:\s*1 \/ -1/);
   });

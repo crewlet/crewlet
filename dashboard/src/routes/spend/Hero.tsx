@@ -48,7 +48,7 @@ export function Hero({
             {fmtCount(total)}
           </span>
         ) : loading ? (
-          <Skeleton width="10rem" height="3.25rem" />
+          <Skeleton width="10rem" height="var(--font-size-4xl)" />
         ) : (
           <span className="spend-hero-number">
             <EmptyValue label="This window has not answered" />
