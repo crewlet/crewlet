@@ -85,7 +85,8 @@ export interface ViewerState {
  *
  * A viewer changes on exactly two events — the reader presents a different
  * token, or an epoch lands that binds a seat to their id — so this is a slow
- * poll rather than a push, and the token dialog's own reconnect re-asks it.
+ * poll rather than a push, and the reconnect a token change makes — in this
+ * tab or another — re-asks it.
  */
 function useViewerRead(): ViewerState {
   const { data, loading, error } = useQuery("viewer", undefined, { pollMs: 300_000 });

@@ -484,25 +484,55 @@ function onTokenRequested(listener) {
 	return () => listeners.delete(listener);
 }
 /**
-* The symmetric signal: the token CHANGED.
+* The symmetric signal: the token CHANGED — in this tab or in any other.
 *
-* The socket learns through `setToken` + `reconnect`, which the shell calls
-* from the dialog. Every REST-backed surface learned nothing at all: it had
-* fetched once on mount, so setting a token left `/setup` and `/secrets`
-* still showing the refusal that prompted the reader to set one. The screen
-* said "needs an operator token", the reader supplied it, and nothing moved.
+* Every REST-backed surface used to learn nothing at all: it had fetched once
+* on mount, so setting a token left `/setup` and `/secrets` still showing the
+* refusal that prompted the reader to set one. The screen said "needs an
+* operator token", the reader supplied it, and nothing moved. The socket
+* learns here too (the shell's subscription), so the socket, every REST
+* request and every piece of state a screen holds for a person change person
+* together.
 *
 * Fired from `storeToken` and `clearToken` themselves rather than from the
-* dialog, so a future writer cannot forget to announce it.
+* dialog, so a future writer cannot forget to announce it — AND FROM ANOTHER
+* TAB'S WRITE. The token lives in `localStorage`, which every tab of the
+* origin shares, and a request reads it when it is sent (`rest.ts`), so a
+* token saved in one window is the credential every other window's next write
+* goes out under. Announced only for this tab's own writes, a window still
+* holding the last person's screen went on writing as the next one — a Retry
+* it held was sent again under somebody else's name — while its socket
+* stayed the last person's. `storage` fires in every OTHER document of the
+* origin, so it is followed while anybody is listening, as `lib/recents.ts`
+* follows its own key; `e.key === null` is a `localStorage.clear()`, which
+* names no key and takes the token with everything else.
 */
 var changed = /* @__PURE__ */ new Set();
 /** Subscribe to token changes. Returns the unsubscribe. */
 function onTokenChanged(listener) {
+	if (changed.size === 0) followOtherTabs(true);
 	changed.add(listener);
-	return () => changed.delete(listener);
+	return () => {
+		changed.delete(listener);
+		if (changed.size === 0) followOtherTabs(false);
+	};
 }
 function announce() {
-	for (const listener of changed) listener();
+	for (const listener of [...changed]) listener();
+}
+/**
+* Hear another tab's write, while anybody is listening. NOT IN A DOCUMENT —
+* `protocol.js` is also loaded by plain `node` to replay a capture, where there
+* is no window and no other tab to hear — there is nothing to follow.
+*/
+function followOtherTabs(on) {
+	if (typeof window === "undefined") return;
+	if (on) window.addEventListener("storage", fromAnotherTab);
+	else window.removeEventListener("storage", fromAnotherTab);
+}
+function fromAnotherTab(e) {
+	if (e.key !== null && e.key !== TOKEN_KEY) return;
+	announce();
 }
 /** Forget the stored token. Returns false if the browser refused the write. */
 function clearToken() {

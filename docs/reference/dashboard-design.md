@@ -3042,6 +3042,16 @@ because the same request would be refused again. A control reused across
 objects — the Inbox's Mark read as you move between notices — belongs to the
 object it is drawn for, so one notice's refusal never appears under another's.
 
+**And it is the same person's.** The engine derives a press's operations from
+its `request_id` *and* the operator who sent it, so the same id sent with a
+different token is a second change made as whoever that token names. When the
+token changes — saved in the token dialog, or in another tab of the same
+dashboard, which shares the stored token — the last person's "could not
+confirm" notices and the refusals drawn beside controls are taken down, and a
+Retry still on screen from a page since left is not sent: it says why instead,
+under its own **Not sent again** title. The same token saved again changes
+nothing.
+
 **The refusal is in the dashboard's words**, except where the engine's own
 sentence names the argument that was wrong (`invalid`) or the rule that
 forbade it (`forbidden`): every other tool sentence is written for a model

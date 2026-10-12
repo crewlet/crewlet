@@ -27,10 +27,19 @@
  *
  * AND OFFLINE IS DISABLED, NEVER QUEUED — `lib/useWriteAccess.ts` says so on
  * the control, and `run` refuses to send while it does.
+ *
+ * AND A PRESS IS ITS PERSON'S. A request id names the operations made under
+ * ONE credential (`internal/api/operator`'s act route derives a press's writes
+ * from the request id and the operator who sent it), so the same id sent with
+ * another token is not the first attempt again: it is a second change, made
+ * as whoever that token names. A Retry is therefore refused once the tab's
+ * credential is a different one, and what this hook was holding about the
+ * last person's presses goes when it changes.
  */
 
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useToast } from "@crewlethq/ui";
+import { apiToken, onTokenChanged } from "~/protocol/authToken.ts";
 import { isAbort } from "~/protocol/rest.ts";
 import {
   act,
@@ -103,6 +112,18 @@ export const PENDING_SENTENCE = "Sent. This node has not applied it yet.";
 export const UNKNOWN_TITLE = "Could not confirm. It may have landed";
 
 /**
+ * The title a Retry pressed under another credential is shown under — its
+ * OWN, as the unknown answer's is, because the press's `done` label says the
+ * change was made (`PressLabel.done` is past tense) over a message saying it
+ * was not.
+ */
+export const NOT_RETRIED_TITLE = "Not sent again";
+
+/** Why, beneath it. */
+export const NOT_RETRIED_SENTENCE =
+  "It was pressed under the credential this tab held before, and sent now it would be a new change made as whoever the current one names.";
+
+/**
  * One press: what was sent, under which request id, and what it is called.
  * Every retry of a press sends THIS object again, never "whatever was pressed
  * last" — see [useAct].
@@ -111,7 +132,12 @@ interface Press<T extends ActionTool> {
   args: ActionArgs<T>;
   requestId: string;
   label: PressLabel;
+  /** The token it was first sent with, which every retry must still hold. */
+  credential: string;
 }
+
+/** The id an unknown answer's toast is shown under: one per press. */
+const unknownToast = (press: { requestId: string }) => `act-unknown-${press.requestId}`;
 
 /**
  * The caveats an applied write's own answer carries (`warnings`), as sentences
@@ -150,9 +176,46 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
   // settles first, and a plain flag it cleared would call the newer one done.
   const inFlight = useRef(0);
 
+  // THE UNKNOWN ANSWERS STILL ON SCREEN, each with the credential its press
+  // was made under, so a new credential can take the last person's down.
+  const unanswered = useRef(new Map<string, string>());
+
+  // A NEW CREDENTIAL IS A NEW PERSON. The last person's refusal stops being
+  // drawn beside the control and their "could not confirm" notices go: both
+  // describe changes the next person did not make, and each carries a Retry
+  // the next person cannot honestly press. A toast raised by a hook that has
+  // since unmounted outlives this; its Retry is refused in [send] instead.
+  useEffect(
+    () =>
+      onTokenChanged(() => {
+        const now = apiToken();
+        for (const [id, credential] of unanswered.current) {
+          if (credential === now) continue;
+          toast.dismiss(id);
+          unanswered.current.delete(id);
+        }
+        setRefused((held) => (held && held.press.credential !== now ? null : held));
+      }),
+    [toast],
+  );
+
   const send = useCallback(
     async (press: Press<T>, signal?: AbortSignal): Promise<ActResult | null> => {
       if (!can.current) return null;
+      // A RETRY IS ITS PERSON'S: under another credential the same request id
+      // is a new change, made as somebody else. Refused, and said, because a
+      // Retry that did nothing reads as a broken button.
+      if (apiToken() !== press.credential) {
+        toast.dismiss(unknownToast(press));
+        unanswered.current.delete(unknownToast(press));
+        setRefused((held) => (held?.press === press ? null : held));
+        toast.show({
+          variant: "warning",
+          title: NOT_RETRIED_TITLE,
+          message: `${press.label.done}? ${NOT_RETRIED_SENTENCE}`,
+        });
+        return null;
+      }
       inFlight.current += 1;
       setBusy(true);
       setRefused(null);
@@ -193,10 +256,11 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
           toast.show({ variant: "info", title: press.label.done, message: PENDING_SENTENCE });
           break;
         case "unknown":
+          unanswered.current.set(unknownToast(press), press.credential);
           toast.show({
             // ONE TOAST PER PRESS, replaced rather than stacked when its own
             // Retry comes back unknown again.
-            id: `act-unknown-${press.requestId}`,
+            id: unknownToast(press),
             variant: "warning",
             title: UNKNOWN_TITLE,
             message: `${press.label.done}? ${result.reason}`,
@@ -224,7 +288,12 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
   // per attempt: only a retry of that press reuses it.
   const run = useCallback(
     (args: ActionArgs<T>, label: PressLabel, options?: RunOptions) =>
-      send({ args, requestId: newRequestId(), label }, options?.signal),
+      send(
+        // THE CREDENTIAL IS READ HERE, in the same turn the request reads it
+        // to send, so it is the one the first attempt went with.
+        { args, requestId: newRequestId(), label, credential: apiToken() },
+        options?.signal,
+      ),
     [send],
   );
 
