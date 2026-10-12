@@ -72,12 +72,15 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | `GET /ready` | `503`, `reason: "draining"` | Readiness: takes the node out of rotation so traffic moves to a peer. |
 | Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
 | `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. |
+| A git fetch already begun: `POST /git/{repo}/git-upload-pack` | Served, and finished before the listener closes | The upload `POST` continues a fetch whose advertisement was answered before the drain — on this node or a peer, since git keeps no state between an exchange's requests — and refusing it would break the fetch half done. It is the one request under `/git/` a draining node serves, and like the sandbox edges above it continues work already under way. |
+| A new git fetch: `GET`/`HEAD /git/{repo}/info/refs` asking for `git-upload-pack` (or no service) | `503`, `text/plain` | The advertisement is where every fetch begins, and a fetch is not a read that starts nothing: it runs git's upload-pack on this node, after syncing the repository from the object store, which is new work the shutdown would have to wait out. Refused at its first request, a clone fails at once and is retried against a peer, rather than cut part way and begun again from nothing. |
+| A git push: `GET`/`HEAD /git/{repo}/info/refs` asking for any other service, `POST /git/{repo}/git-receive-pack`, and every other path under `/git/` | `503`, `text/plain` | Every request of a push is refused, its advertisement included, because the `GET` is where git prints the reason (`remote: this node is draining …`); on the `POST` it prints only `RPC failed; HTTP 503`. In git's own form rather than the JSON below, which git prints as nothing. |
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
 | Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/work/*` writes, `POST /operator/mcp`, `POST /operator/act/{tool}` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
 
 `/operator/mcp` serves only `POST` — it keeps no session, so there is no `GET` stream to open and no session to end — and every JSON-RPC call it carries, reads and a new listening stream included, is refused with the writes: telling a listing from a filed task would mean reading the body, which is the per-route carve-out refusing by default avoids. An assistant asking a draining node is told to retry elsewhere, like the dashboard. A stream an assistant opened BEFORE the drain is kept for the whole drain, and goes on hearing every other node's rebuild of its tools ([`/operator/mcp`](#operatormcp--your-own-assistant)): ending it at the drain's first moment would cut a client that does not open a new stream — the Go SDK's does not — off for the drain's whole length rather than for none of it. It is answered, and so ends, as the listener starts to close, so it never holds the listener's five seconds. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
 
-A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load balancer following `/ready` to have moved traffic to a peer, and a body the CLI and the dashboard both render:
+A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load balancer following `/ready` to have moved traffic to a peer, and — everywhere but `/git/*`, whose refusal is the one `text/plain` line `this node is draining for a shutdown and begins no new fetch or push: retry in 30 s, against another node or once it has restarted` — a body the CLI and the dashboard both render:
 
 ```json
 {
@@ -88,6 +91,8 @@ A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load ba
 ```
 
 A write still needs its token first: an unauthenticated write answers `401` whether or not the node is draining. And a request that was already running when the drain began is not interrupted by it; it is cut only if it is still running five seconds after the listener starts to close — except an assistant's listening stream, which is answered the moment the listener starts to close, so `api_shutdown_failed` keeps meaning that a request was stuck.
+
+**A git request is finished, not cut.** A clone or a push cut part way is not resumed — git begins it again from nothing, against a peer, so every rolling restart would pay for each one twice — and five seconds is a REST read's grace, not a transfer's. So once the turns have finished, and before the listener starts to close, the node waits for every git request it is serving: a push or a fetch already running when the drain began, and a fetch's upload `POST` served during it. Because git keeps no state between an exchange's requests, it then goes on listening for five seconds after the last of them has ended — git's own keepalive interval, many times the pause between two requests of one exchange — so a fetch between two of its rounds is not left facing a closed port. The drain begins no fetch or push here, but it goes on serving every upload `POST` that reaches it — a fetch begun on a peer, which a load balancer goes on sending here until it has acted on `/ready` (or, under Kubernetes, until the pod is out of its Service's endpoints) — so what it waits for can grow while it waits, and the wait ends once that traffic has moved and what was running is done. The deployment guide's [`preStop` sleep](../guides/deployment.md#separate-processes-a-split-deployment) is how a deployment makes that window short. The node logs `git_draining` with the count when there is something to wait for and `git_drain_complete` when it is done. Like the wait for the turns, this one has no deadline of its own: what bounds it is the supervisor's kill grace or a second interrupt — see [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown) for sizing that grace.
 
 A node with a [public listener](#which-listener-serves-what) drains both by this one table — its webhooks are refused on `api.public` and its sandbox endpoints served there — and closes `api.public` first, then `api.port`, each with its own five seconds, so `/health` answers until the very end even while an open bridge session holds the public listener for its whole grace.
 
@@ -115,6 +120,19 @@ timeout — and says nothing about what the node did, so a write that meets one
 is reported as *unknown*, with the operation id to finish it under, rather than
 as refused. An answer with a code is the node's own, and a refusal from the
 node means nothing was done.
+
+**Except under `/git/*`, where the node answers in git's form instead.** A git
+client prints a refusal's body only when it is `text/plain` — each line as
+`remote: …` — and prints the API's JSON as nothing at all, so the node's own
+refusals there are one `text/plain` line with no `error` code: the guard's
+`401` Basic challenge ([the auth note under Routes](#routes)) and the drain's
+`503` ([During a drain](#during-a-drain)). So the inference above — no code
+means something in front of the node wrote it — holds on every route but
+`/git/*`. There, a refusal the node wrote is told from a proxy's by its
+`text/plain` sentence, which is the node's own (`authentication required: …`,
+`this node is draining …`), and git prints it to the person who ran the
+command. `/code/*`, the code host's REST reads, answers JSON with a code like
+every other route.
 
 ---
 
@@ -200,8 +218,10 @@ node means nothing was done.
 | `POST` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Which tools it lists follows what the company runs, asked per request. Stateless: no session, so any node answers any request and a `GET` or `DELETE` is answered `405` |
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the person your token is bound to** — the dashboard's write surface. Refused `unbound` to a token no seat binds and to a disabled guard's caller (see [below](#operatoract--the-dashboards-write-surface)). Served wherever `/operator/mcp` is, over the same catalogue |
 
-> **Auth.** Writes and every `/config`, `/secrets` and `/setup` route require
-> `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside those three)
+> **Auth.** Writes and every route of the always-guarded surfaces — `/config`,
+> `/secrets`, `/setup`, `/operator`, and the engine's own git host's `/git/*`
+> and `/code/*` — require `Authorization: Bearer <token>`. Reads (`GET` /
+> `HEAD` outside those surfaces)
 > serve without one unless `api.auth.allow_anonymous_read: false` is set, at
 > which point they need the same token — `/ws/stream` included, and it accepts
 > `?token=…` too since browsers cannot set headers on a WebSocket. Only there:
@@ -209,6 +229,20 @@ node means nothing was done.
 > a URL lands in proxy logs and browser history. Never guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, `/mcp/*`, and the
 > dashboard shell (`/`, `/dashboard`, `/static/*`). See
 > [Configuration § Auth](../concepts/configuration.md#auth).
+>
+> **A git client is answered in git's terms.** On `/git/*` only, the token may
+> also arrive as the **password** of `Authorization: Basic` — the user name is
+> ignored — because a git client presents a credential no other way without
+> configuration: it answers a Basic challenge from its credential helper or a
+> prompt. Basic is accepted on no other route, since a browser that was asked
+> for one caches it and replays it to every route of the origin. A refused git
+> request answers `401` with `WWW-Authenticate: Basic realm="crewlet",
+> charset="UTF-8"` and a `text/plain` body git prints (`authentication
+> required: use a Crewlet API token as the password`), never the JSON below,
+> which git shows as nothing at all. A git request that presented no
+> credential is the protocol's normal first step, so it is logged at debug as
+> `api_auth_challenge`; a credential presented and refused is
+> `api_auth_failed`, a warning, as on every route.
 >
 > **A token that is present and wrong is refused even where reads are open.**
 > Sending a credential says you meant to be somebody, so `/ws/stream` answers
@@ -228,7 +262,7 @@ node means nothing was done.
 > **The guard is always mounted**, whether or not Tier A is present. An API
 > built without `api.auth` configuration has no token, and a route that needs
 > one is therefore refused rather than served: reads work, every write and the
-> whole of `/config`, `/secrets` and `/setup` answers `401`. There is no way to start a
+> whole of every always-guarded surface answers `401`. There is no way to start a
 > process that serves those writes without a guard in front of them.
 >
 > **Every `/webhooks/*` route fails closed.** They are exempt from the bearer
@@ -238,7 +272,7 @@ node means nothing was done.
 > the delivery flows once the secret is set; nothing is discarded, and nothing
 > unsigned is ever recorded, published, or shown on the dashboard.
 
-Plus the four always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up) and `/operator/*` — [`/operator/mcp`](#operatormcp--your-own-assistant) and [`/operator/act`](#operatoract--the-dashboards-write-surface). `/setup` is guarded on its READS as well, and deliberately: the list of which credentials a company has not configured yet is a map of what to attack.
+Plus the always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated), [`/setup/*`](#setting-an-integration-up), `/operator/*` — [`/operator/mcp`](#operatormcp--your-own-assistant) and [`/operator/act`](#operatoract--the-dashboards-write-surface) — and the engine's own git host's `/git/*` and `/code/*`. `/setup` is guarded on its READS as well, and deliberately: the list of which credentials a company has not configured yet is a map of what to attack. So are `/git/*` and `/code/*`: a repository is the company's source, so even a clone needs a token, and the code reads name every repository and the people who pushed to it.
 
 ### Security headers on every response
 

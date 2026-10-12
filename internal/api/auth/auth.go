@@ -7,18 +7,30 @@
 // operator id to the request context or answers 401.
 //
 // WHAT IT GUARDS IS A POLICY DECISION, NOT A FIXED PREFIX. Writes and the whole
-// of /config, /secrets and /setup always need a token — see [GuardedPrefixes],
-// which is the list, and the per-prefix rationale beside it. Reads follow
-// allow_anonymous_read, which defaults to open — [Guard.Requires] is the one place that rule is written
+// of /config, /secrets, /setup and /operator always need a token, and so do the
+// code host's /git/ and /code/ — see [GuardedPrefixes], which is the list, and
+// the per-prefix rationale beside it. Reads follow allow_anonymous_read, which
+// defaults to open — [Guard.Requires] is the one place that rule is written
 // down, and both the HTTP middleware and the WebSocket handshake consult it, so
 // the two cannot end up guarded in one place and open in the other.
+//
+// A GIT CLIENT IS ANSWERED IN GIT'S OWN TERMS. Which requests under /git/ are
+// fetches and which pushes is [GitAccess]'s answer and nobody else's; on a git
+// route, and on no other, the token may arrive as a Basic credential's
+// password; and a git route's refusal is the challenge git answers with its
+// credential helper, written in the one form git prints ([GitText]).
+//
+// A DISABLED GUARD NAMES NOBODY: every caller is the reserved anonymous
+// operator ([AnonymousOperator]), whom no seat can bind, so a surface that acts
+// as a person — the dashboard's act transport, a git push — refuses it, and
+// what a disabled guard can still do there is read: fetch, never push.
 //
 // The guard is mounted UNCONDITIONALLY. Mounting it only when Tier A is
 // present, while gating the /config write surface on a store being configured,
 // is two independent conditions deciding one security property — coinciding
 // only because every real caller happens to supply both. Tier A supplies the POSTURE, never the existence of
 // a check: with no tokens at all, no candidate can match, so reads serve and
-// every write and all of /config, /secrets and /setup is refused.
+// every write and all of every always-guarded surface is refused.
 package auth
 
 import (
@@ -62,13 +74,18 @@ var log = logging.Get("api.auth")
 //     which is exempt wholesale for the sandbox bridge, so a box holding no
 //     API token can reach its seat's tools: mounting a writable company
 //     surface there would have put it behind no credential at all.
+//   - /git/ ([GitPrefix]): a repository is the company's source, and a push
+//     writes it — so always a credential, and a person's to push with. A
+//     clone is no more anonymous than a read of /config.
+//   - /code/ ([CodePrefix]): the code host's reads name every repository,
+//     its refs and the people who pushed to it.
 //
 // In the order the slice declares, and A LIST rather than one constant,
 // because the alternative was a second const somewhere else and a second
 // `HasPrefix` beside it — and the two would have drifted the day a third
 // surface was added, each staying self-consistent while one of them stopped
 // being consulted.
-var GuardedPrefixes = []string{"/config", "/secrets", "/setup", "/operator"}
+var GuardedPrefixes = []string{"/config", "/secrets", "/setup", "/operator", GitPrefix, CodePrefix}
 
 // AlwaysGuarded reports whether a path is on one of those surfaces.
 func AlwaysGuarded(path string) bool {
@@ -335,20 +352,34 @@ const SocketPath = "/ws/stream"
 // Credential returns the token a request presented, or "".
 //
 // THE ONE PLACE A REQUEST'S CREDENTIAL IS READ. The Authorization bearer
-// header on every route; and on the socket path only, the token query
-// parameter as well, because a browser cannot set a header on a WebSocket
-// constructor and the dashboard has no other way to send one. The query is
-// read nowhere else: a token in a URL appears in proxy logs and browser
-// history, which is a price worth paying for exactly one route that has no
-// alternative and for no route that has.
+// header on every route. On the socket path only, the token query parameter
+// as well, because a browser cannot set a header on a WebSocket constructor
+// and the dashboard has no other way to send one. The query is read nowhere
+// else: a token in a URL appears in proxy logs and browser history, which is a
+// price worth paying for exactly one route that has no alternative and for no
+// route that has.
 //
-// The header wins when both are present, so a non-browser client that sent
-// the right header is never judged by a stale query.
+// AND ON A GIT ROUTE ONLY ([GitAccess]), the password of a Basic credential,
+// its user name ignored: a git client has no other way to present a token
+// without configuration — it answers a Basic challenge from its credential
+// helper or a prompt. Basic is accepted nowhere else, because a browser caches
+// a Basic credential it was asked for and replays it to every route of the
+// origin: accepted beyond git, one prompt answered for a clone would be a
+// session on the whole API.
+//
+// The bearer header wins when both are present, so a client that sent the
+// right header is never judged by a stale query.
 func (g *Guard) Credential(r *http.Request) string {
 	header := r.Header.Get("Authorization")
 	const scheme = "bearer "
 	if len(header) >= len(scheme) && strings.EqualFold(header[:len(scheme)], scheme) {
 		return strings.TrimSpace(header[len(scheme):])
+	}
+	if GitAccess(r) != GitNone {
+		if _, password, ok := r.BasicAuth(); ok {
+			return password
+		}
+		return ""
 	}
 	if r.URL.Path == SocketPath {
 		return r.URL.Query().Get("token")
@@ -429,6 +460,25 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		}
 		if !g.Requires(path, r.Method) {
 			next.ServeHTTP(w, r)
+			return
+		}
+		if !authenticated && GitAccess(r) != GitNone {
+			// A GIT CLIENT IS CHALLENGED, and a challenge to a request
+			// that presented nothing is not a warning: the protocol's
+			// first request carries no credential by design — git asks
+			// its credential helper only after a 401 — so every clone
+			// would write one, and the warning a wrong credential
+			// deserves would drown in them.
+			if r.Header.Get("Authorization") == "" {
+				log.Debug("api_auth_challenge", "route", path, "remote", remoteHost(r))
+			} else {
+				// The candidate is never logged, as below.
+				log.Warn("api_auth_failed",
+					"route", path,
+					"reason", "invalid_credential",
+					"remote", remoteHost(r))
+			}
+			GitChallenge(w)
 			return
 		}
 		if !authenticated {

@@ -38,6 +38,12 @@ type App struct {
 	// runtime is the engine this process runs beside. See NodeRuntime.
 	runtime NodeRuntime
 
+	// git counts the git requests the drain gate let through and has not
+	// seen answered, for [App.DrainGit]; gitGap is how long that wait goes
+	// on listening after the last one ([gitExchangeGap], scaled by a test).
+	git    gitServing
+	gitGap time.Duration
+
 	nodeID       string
 	queueBackend string
 
@@ -398,6 +404,7 @@ func New(opts Options) (*App, error) {
 		guard:        auth.New(opts.Bootstrap),
 		state:        state,
 		runtime:      opts.Runtime,
+		gitGap:       gitExchangeGap,
 		nodeID:       opts.Sources.NodeID,
 		queueBackend: opts.QueueBackend,
 		now:          now,

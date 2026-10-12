@@ -440,7 +440,7 @@ turn](turn-engine.md#steering-a-running-turn).
 
 SIGINT / SIGTERM trigger a **drain with the probes up**, designed so a restart picks up cleanly without a half-finished turn: the node stops taking new work, lets the turns already running finish, hands its seats back, and only then closes its HTTP listener and its backends. The engine owns the process signals exclusively. Nothing else in the process may install a handler, the embedded API server included.
 
-**The listener stays up for the whole drain, and the door is a refusal rather than a closed port.** An orchestrator watches a node precisely while it drains, so `GET /health` keeps answering `200` with `status: "shutting_down"`, and `GET /ready` answers `503` with `reason: "draining"`. Traffic moves elsewhere, and nothing kills the node in the middle of the turns the drain exists to finish. What the drain must not do is keep making work for itself, so from its first moment every route that would start new work answers `503` with `{"error": "draining"}` and a `Retry-After`: the webhook edge, the `/config`, `/secrets` and `/setup` writes, the operator's writes, `POST /operator/mcp` and backups. Reads keep being served, the dashboard included, and so do the sandbox bridge (`/mcp/{token}`) and the telemetry edge (`/otlp/{token}`), because those carry the tool calls and spans of coding runs that started before the drain and would only be broken by a refusal. See [During a drain](../reference/api-endpoints.md#during-a-drain) for the exact rule.
+**The listener stays up for the whole drain, and the door is a refusal rather than a closed port.** An orchestrator watches a node precisely while it drains, so `GET /health` keeps answering `200` with `status: "shutting_down"`, and `GET /ready` answers `503` with `reason: "draining"`. Traffic moves elsewhere, and nothing kills the node in the middle of the turns the drain exists to finish. What the drain must not do is keep making work for itself, so from its first moment every route that would start new work answers `503` with `{"error": "draining"}` and a `Retry-After`: the webhook edge, the `/config`, `/secrets` and `/setup` writes, the operator's writes, `POST /operator/mcp`, backups, a new git fetch and every request of a git push (those two in git's `text/plain` form, which git prints). Reads keep being served, the dashboard included, and so do the sandbox bridge (`/mcp/{token}`) and the telemetry edge (`/otlp/{token}`), because those carry the tool calls and spans of coding runs that started before the drain and would only be broken by a refusal — and so does a git fetch already begun, whose next request would otherwise break it half done. See [During a drain](../reference/api-endpoints.md#during-a-drain) for the exact rule.
 
 ```mermaid
 flowchart TD
@@ -451,7 +451,7 @@ flowchart TD
     S4["4. Quiesce every held seat"] --> S5
     S5["5. Wait for in-flight handlers"] --> S6
     S6["6. Release every seat"] --> S7
-    S7["7. Close the HTTP listener<br/>dashboard · REST · webhooks · probes"] --> S8
+    S7["7. Finish the git requests, then close the HTTP listener<br/>dashboard · REST · webhooks · git · probes"] --> S8
     S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance<br/>integrations · memory sync · learning · scheduler"] --> S9
     S9["9. Reap shared MCP servers; last auxiliary-spend flush;<br/>custody flush; close stream + store"]
     SIG -.->|"2nd signal:<br/>immediate exit"| X["Process dies"]
@@ -490,10 +490,22 @@ flowchart TD
    peers can claim them at once rather than waiting out the lease TTL, and
    each seat's last lifecycle event published. The drain then logs
    `drain_complete`.
-7. **Close the HTTP listener**, and not before: until now the probes are what
-   the orchestrator reads, and they read the stream and the coordination
-   store the next steps close. Requests still running get a five-second grace
-   and are then cut, the live feed stops, and every dashboard socket is
+7. **Finish the git requests, then close the HTTP listener**, and not
+   before: until now the probes are what the orchestrator reads, and they
+   read the stream and the coordination store the next steps close. First the
+   node waits, with no bound of its own, for every git request it is serving
+   — a clone or a push cut part way is begun again from nothing on a peer —
+   and then listens five seconds more for the next request of an exchange
+   still under way, since git keeps no state between them (`git_draining`,
+   `git_drain_complete`; a node that served no git says nothing and waits for
+   nothing). The drain began no fetch or push here, but it goes on serving
+   the upload requests that reach it — fetches begun on a peer, which a load
+   balancer sends here until it has acted on `/ready` — so the wait ends once
+   that traffic has moved and what was running is done; the deployment
+   guide's [`preStop` sleep](../guides/deployment.md#separate-processes-a-split-deployment)
+   makes that window short, and the supervisor's grace (below) is the bound.
+   Requests still running when the listener then closes get a five-second
+   grace and are then cut, the live feed stops, and every dashboard socket is
    closed (`api_stopped`).
 8. **Stop the duties**: the sandbox waiter first (its keepalive is what stops
    a running box being reaped while turns are still finishing), then the
@@ -516,13 +528,13 @@ flowchart TD
 
 **Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute executor → reviewer turns one after another during a shutdown that waits for them indefinitely.
 
-**No engine-level timeout on the drain.** Step 5 waits as long as in-flight turns need, and the listener stays up for all of it. We don't try to second-guess "too long", because the host already provides that cutoff:
+**No engine-level timeout on the drain.** Step 5 waits as long as in-flight turns need, step 7 as long as the git requests the node is serving need, and the listener stays up for all of it. We don't try to second-guess "too long", because the host already provides that cutoff:
 
 - **Interactive:** a second Ctrl+C tells us you're done waiting.
 - **Kubernetes:** `terminationGracePeriodSeconds` (default 30 s) — after which the kubelet sends SIGKILL.
 - **systemd:** `TimeoutStopSec` (default 90 s) — same SIGKILL fallback.
 
-Embedding our own grace window would duplicate that decision in two places and inevitably disagree. Size the orchestrator's grace period to cover your expected turn length (a multi-tool executor → reviewer turn can comfortably take 2–5 minutes).
+Embedding our own grace window would duplicate that decision in two places and inevitably disagree. Size the orchestrator's grace period to cover your expected turn length (a multi-tool executor → reviewer turn can comfortably take 2–5 minutes) — and, on a node that serves the engine's own git host, the longest clone or push you want a restart to finish rather than cut, which runs at the client's pace: a gigabyte at 10 MB/s is under two minutes. The two waits overlap, because a git request already running carries on through the turns' wait, so the grace covers the longer of them rather than their sum.
 
 **Force stop (second signal).** The first signal starts the drain and
 *hands the signals back to the operating system*, so a second SIGINT or
@@ -544,9 +556,9 @@ duplicate — the [completion ledger](seat-ownership.md#the-completion-ledger)
 covers a turn that *finished*, and this one did not. That is the trade-off
 you opted into by sending the second signal.
 
-**Watching the drain.** On the dashboard and over the API, for as long as it lasts: the listener closes only once the drain has completed, so the dashboard shows the node as draining with its in-flight count, `GET /health` reports it, and `GET /ready` names the reason. The log says the same and outlives the process: `engine_draining` on the first signal, with what is being waited for and how to stop waiting, then `drain_in_progress` with the in-flight count every 10 seconds, then `drain_complete`, `api_stopped` and `engine_stopped`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that record to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `engine_stopped` is in it.
+**Watching the drain.** On the dashboard and over the API, for as long as it lasts: the listener closes only once the drain has completed, so the dashboard shows the node as draining with its in-flight count, `GET /health` reports it, and `GET /ready` names the reason. The log says the same and outlives the process: `engine_draining` on the first signal, with what is being waited for and how to stop waiting, then `drain_in_progress` with the in-flight count every 10 seconds, then `drain_complete`, then — on a node that was serving git when the turns finished — `git_draining` with the count of git requests still running and `git_drain_complete` once they have, then `api_stopped` and `engine_stopped`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that record to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `engine_stopped` is in it.
 
-A node's drain is reported **by that node**: its own probes, its own dashboard and its own log. It gives up its presence at step 2, so a peer's **Settings › Nodes** screen stops listing it rather than showing it draining. On a split deployment a `-roles data,ingress` node drains the same way; it holds no seats and runs no turns, so its drain is short.
+A node's drain is reported **by that node**: its own probes, its own dashboard and its own log. It gives up its presence at step 2, so a peer's **Settings › Nodes** screen stops listing it rather than showing it draining. On a split deployment a `-roles data,ingress` node drains the same way; it holds no seats and runs no turns, so its drain is short — as long as the git requests it is serving when it is told to stop, and no longer.
 
 The drain is available programmatically up to the moment the listener closes:
 

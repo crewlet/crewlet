@@ -1,12 +1,17 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -25,13 +30,20 @@ import (
 // mounted on a real queue, draining or not.
 func drainingApp(t *testing.T, draining bool) *api.App {
 	t.Helper()
+	return drainingAppOn(t, &fakeRuntime{state: api.RuntimeState{
+		ShuttingDown: draining, Posture: "serve",
+	}})
+}
+
+// drainingAppOn is [drainingApp] beside a runtime of the case's own, for a case
+// that decides when the drain begins.
+func drainingAppOn(t *testing.T, rt api.NodeRuntime) *api.App {
+	t.Helper()
 	b := closedPosture()
 	b.API.Auth.AllowedOrigins = []string{"https://ops.example.com"}
 	a := newApp(t, api.Options{
 		Bootstrap: &b,
-		Runtime: &fakeRuntime{state: api.RuntimeState{
-			ShuttingDown: draining, Posture: "serve",
-		}},
+		Runtime:   rt,
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return webhooks.Secrets{GitHub: "gh-secret"} },
 			Publisher: memory.New(),
@@ -51,11 +63,15 @@ func send(t *testing.T, a *api.App, method, path string) *httptest.ResponseRecor
 	return rec
 }
 
-// refusedForDraining reports whether a response is the drain gate's refusal.
+// refusedForDraining reports whether a response is the drain gate's refusal:
+// the API's JSON, or — on a git route — the text/plain form git prints.
 func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 	t.Helper()
 	if rec.Code != http.StatusServiceUnavailable {
 		return false
+	}
+	if strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") {
+		return strings.HasPrefix(rec.Body.String(), "this node is draining")
 	}
 	var body map[string]string
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
@@ -67,13 +83,14 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // startsWork is every kind of request the gate refuses, one of each route
 // family: the webhook edge (a delivery, and both of its GET landings, one of
 // which acts and the other of which is refused with it), the config and
-// credential writes, the setup pass, the operator writes and the operator MCP
-// surface.
+// credential writes, the setup pass, the operator writes, the operator MCP
+// surface, a new git fetch — its advertisement, which would begin one — and a
+// git push, its advertisement as well as its upload.
 //
 // WHETHER THIS FIXTURE MOUNTS THE ROUTE IS DECLARED, because the gate is
 // middleware and runs BEFORE the mux: it refuses on path and method alone, so
 // a refusal proves the rule whether or not a handler exists behind it. That is
-// what makes the refusal case above meaningful for all twenty — and it is
+// what makes the refusal case above meaningful for every entry — and it is
 // also what would let an entry naming a path nothing serves sit here for ever
 // looking exactly like one that works. [TestNothingIsRefusedForDrainingBeforeADrain]
 // holds the declaration in BOTH directions for that reason, in the idiom
@@ -82,9 +99,10 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // grew a surface and left its declaration behind.
 //
 // [drainingApp] is a node with no store, no coordination store and no company,
-// so the three surfaces that need one (/config, /secrets, /setup) and the two
-// that need a tracker (/work/{id}/purge, /operator/mcp, /operator/act/{tool})
-// are not mounted on it.
+// so the three surfaces that need one (/config, /secrets, /setup) and the
+// three that need a tracker (/work/{id}/purge, /operator/mcp,
+// /operator/act/{tool}) are not mounted on it — and no node mounts a git route
+// yet, so no git row is mounted either.
 var startsWork = []struct {
 	method, path string
 	mounted      bool
@@ -105,6 +123,9 @@ var startsWork = []struct {
 	{http.MethodPost, "/work/ENG-1/purge", false},
 	{http.MethodPost, "/operator/mcp", false},
 	{http.MethodPost, "/operator/act/create_work_item", false},
+	{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack", false},
+	{http.MethodGet, "/git/r.git/info/refs?service=git-receive-pack", false},
+	{http.MethodPost, "/git/r.git/git-receive-pack", false},
 }
 
 func TestADrainRefusesEveryRequestThatWouldStartWork(t *testing.T) {
@@ -159,6 +180,309 @@ func TestNothingIsRefusedForDrainingBeforeADrain(t *testing.T) {
 				"true, so this case starts holding the route rather than "+
 				"reporting it untested", req.method, req.path, rec.Code)
 		}
+	}
+}
+
+// A DRAINING NODE FINISHES A FETCH AND BEGINS NO GIT WORK. A fetch is git
+// processes, and a sync from the object store before them, so a draining node
+// begins none: a fetch's advertisement is refused, which is where every new
+// one starts. What it serves is the upload-pack RPC, which continues a fetch
+// already begun — here or on a peer, since git keeps no state between an
+// exchange's requests — and a refusal there would break a fetch half done.
+// A push is refused at every request of it, its advertisement included,
+// because the GET is where git prints a refusal's reason — on the POST it
+// prints only `RPC failed; HTTP 503`. Every refusal is in git's own form,
+// text/plain, since git prints the API's JSON as nothing at all.
+func TestADrainingNodeFinishesAFetchAndBeginsNoGitWork(t *testing.T) {
+	t.Parallel()
+	continues := []struct{ method, path string }{
+		{http.MethodPost, "/git/r.git/git-upload-pack"},
+	}
+	begins := []struct{ method, path string }{
+		// A fetch's advertisement, however it asks.
+		{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack"},
+		{http.MethodGet, "/git/r.git/info/refs"},
+		{http.MethodHead, "/git/r.git/info/refs?service=git-upload-pack"},
+		// Every request of a push.
+		{http.MethodGet, "/git/r.git/info/refs?service=git-receive-pack"},
+		{http.MethodPost, "/git/r.git/git-receive-pack"},
+	}
+	for _, draining := range []bool{true, false} {
+		a := drainingApp(t, draining)
+		for _, req := range continues {
+			// Past the gate, which runs before the mux: no git route is
+			// mounted yet, so the mux's own 404 is what it reaches.
+			rec := send(t, a, req.method, req.path)
+			if refusedForDraining(t, rec) || rec.Code != http.StatusNotFound {
+				t.Errorf("draining=%v: %s %s answered %d %q, want it past the gate",
+					draining, req.method, req.path, rec.Code, rec.Body.String())
+			}
+		}
+		for _, req := range begins {
+			rec := send(t, a, req.method, req.path)
+			if !draining {
+				if refusedForDraining(t, rec) || rec.Code != http.StatusNotFound {
+					t.Errorf("%s %s answered %d %q on a node that is not draining, want it past the gate",
+						req.method, req.path, rec.Code, rec.Body.String())
+				}
+				continue
+			}
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Errorf("%s %s answered %d during a drain, want 503", req.method, req.path, rec.Code)
+				continue
+			}
+			if got := rec.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+				t.Errorf("%s %s refused as %q: git prints a refusal only when it is text/plain",
+					req.method, req.path, got)
+			}
+			want := strconv.Itoa(int(api.DrainRetryAfter.Seconds()))
+			if got := rec.Header().Get("Retry-After"); got != want {
+				t.Errorf("%s %s: Retry-After = %q, want %q", req.method, req.path, got, want)
+			}
+			const sentence = "this node is draining for a shutdown and begins no new fetch or push: " +
+				"retry in 30 s, against another node or once it has restarted\n"
+			if got := rec.Body.String(); got != sentence {
+				t.Errorf("%s %s said %q, want %q", req.method, req.path, got, sentence)
+			}
+		}
+	}
+}
+
+// holdThroughGate sends one request through a's drain gate into a handler that
+// holds it until the returned release is called, and returns once the handler
+// holds it — or, for a request the gate refuses, once the refusal is written.
+// ended is closed when the request has been answered.
+func holdThroughGate(t *testing.T, a *api.App, method, path string) (release func(), ended <-chan struct{}) {
+	t.Helper()
+	held, let := make(chan struct{}), make(chan struct{})
+	done := make(chan struct{})
+	h := a.ThroughDrainGate(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(held)
+		<-let
+	}))
+	go func() {
+		defer close(done)
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(method, path, nil))
+	}()
+	select {
+	case <-held:
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s %s never reached the handler", method, path)
+	}
+	var once sync.Once
+	release = func() { once.Do(func() { close(let) }) }
+	t.Cleanup(release)
+	return release, done
+}
+
+// drainGit runs a.DrainGit on its own goroutine and hands back its answer.
+func drainGit(ctx context.Context, a *api.App) <-chan error {
+	out := make(chan error, 1)
+	go func() { out <- a.DrainGit(ctx) }()
+	return out
+}
+
+// A DRAIN FINISHES THE GIT REQUESTS IT IS SERVING. A clone or a push cut by the
+// listener's close is not resumed: git begins it again, from nothing, on a
+// peer, and the fleet pays its pack, its transfer slot and its sync from the
+// object store twice, at every rolling restart. So the node's shutdown waits,
+// once the turns are done, for every git request it is serving — a fetch
+// continued during the drain, and a push or a fetch begun before it — and
+// then for the quiet an exchange's next request would break.
+func TestADrainFinishesTheGitRequestsItIsServing(t *testing.T) {
+	t.Parallel()
+	const gap = 100 * time.Millisecond
+	for _, tc := range []struct {
+		name         string
+		draining     bool
+		method, path string
+	}{
+		// The RPC a draining node goes on serving.
+		{"a fetch continued during the drain", true, http.MethodPost, "/git/r.git/git-upload-pack"},
+		// What was running when the drain began, a push included: it
+		// passed the gate before the gate refused pushes.
+		{"a push begun before the drain", false, http.MethodPost, "/git/r.git/git-receive-pack"},
+		{"a clone's advertisement begun before the drain", false, http.MethodGet,
+			"/git/r.git/info/refs?service=git-upload-pack"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := drainingApp(t, tc.draining)
+			api.SetGitExchangeGap(a, gap)
+			release, ended := holdThroughGate(t, a, tc.method, tc.path)
+			drained := drainGit(t.Context(), a)
+
+			// Held: the drain waits however long the request takes.
+			select {
+			case err := <-drained:
+				t.Fatalf("the drain ended (%v) while %s %s was still being served",
+					err, tc.method, tc.path)
+			case <-time.After(5 * gap):
+			}
+
+			released := time.Now()
+			release()
+			<-ended
+			select {
+			case err := <-drained:
+				if err != nil {
+					t.Fatalf("the drain gave up: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the drain never ended after the last git request did")
+			}
+			// AND THEN THE QUIET: an exchange's next request follows
+			// the last answer by a round trip, so the drain listens a
+			// gap longer before it lets the listener close under one.
+			if waited := time.Since(released); waited < gap {
+				t.Errorf("the drain ended %v after the last git request, inside the %v an "+
+					"exchange's next request is waited for", waited, gap)
+			}
+		})
+	}
+}
+
+// THE NEXT REQUEST OF AN EXCHANGE KEEPS THE DRAIN WAITING. Between two requests
+// of one fetch the node serves nothing of it — v2's ls-refs and then fetch,
+// v0's negotiation one round a POST — so a drain that ended the instant
+// nothing was running would close the listener under a fetch half done.
+func TestADrainWaitsForAnExchangesNextRequest(t *testing.T) {
+	t.Parallel()
+	// Room for the scheduler: the case starts the second request at once,
+	// and a gap it could miss would fail the case rather than the code.
+	const gap = 2 * time.Second
+	a := drainingApp(t, true)
+	api.SetGitExchangeGap(a, gap)
+
+	releaseFirst, firstEnded := holdThroughGate(t, a, http.MethodPost, "/git/r.git/git-upload-pack")
+	drained := drainGit(t.Context(), a)
+	releaseFirst()
+	<-firstEnded
+	// The exchange's next round, inside the gap.
+	releaseNext, nextEnded := holdThroughGate(t, a, http.MethodPost, "/git/r.git/git-upload-pack")
+
+	select {
+	case err := <-drained:
+		t.Fatalf("the drain ended (%v) under an exchange's next request", err)
+	case <-time.After(gap + gap/2):
+	}
+	released := time.Now()
+	releaseNext()
+	<-nextEnded
+	select {
+	case err := <-drained:
+		if err != nil {
+			t.Fatalf("the drain gave up: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the drain never ended after the exchange's last request did")
+	}
+	if waited := time.Since(released); waited < gap {
+		t.Errorf("the drain ended %v after the exchange's last request, inside its %v gap", waited, gap)
+	}
+}
+
+// A NODE SERVING NO GIT HAS NONE TO FINISH. The wait is for git requests the gate
+// let through: one it refused started nothing, and every other request — a
+// dashboard's socket, a coding run's bridge session — is the listener's to
+// end, so none of them holds the shutdown here.
+func TestADrainHasNoGitToFinishOnANodeServingNone(t *testing.T) {
+	t.Parallel()
+	a := drainingApp(t, true)
+	// Long enough that a wait for it is a failure rather than a delay.
+	api.SetGitExchangeGap(a, time.Hour)
+
+	// Refused by the drain: started nothing, so it is nothing to wait for.
+	_, refused := holdThroughGate(t, a, http.MethodPost, "/git/r.git/git-receive-pack")
+	<-refused
+	// Served and held, but no git request.
+	holdThroughGate(t, a, http.MethodPost, "/mcp/run-token")
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := <-drainGit(ctx, a); err != nil {
+		t.Errorf("the drain waited for something on a node serving no git: %v", err)
+	}
+}
+
+// THE WAIT IS THE CALLER'S TO BOUND. Like the turns', it has no deadline of its
+// own — the supervisor's kill grace or a second interrupt is the bound — so it
+// ends when its context does, and says so.
+func TestADrainOfGitEndsWithItsContext(t *testing.T) {
+	t.Parallel()
+	a := drainingApp(t, true)
+	holdThroughGate(t, a, http.MethodPost, "/git/r.git/git-upload-pack")
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	select {
+	case err := <-drainGit(ctx, a):
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("the drain answered %v when its context ended, want the context's error", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the drain did not end with its context")
+	}
+}
+
+// drainsWhileAsked is a node whose drain begins WHILE A REQUEST IS ASKING
+// whether it has: the first answer is "not draining", and before that answer
+// is returned the drain begins — every later read says so — and during runs,
+// standing for everything the shutdown does next: the turns' drain, then the
+// git wait ([api.App.DrainGit]).
+type drainsWhileAsked struct {
+	fakeRuntime
+	begun  atomic.Bool
+	once   sync.Once
+	during func()
+}
+
+func (d *drainsWhileAsked) ShuttingDown() bool {
+	answer := d.begun.Load()
+	d.once.Do(func() {
+		d.begun.Store(true)
+		d.during()
+	})
+	return answer
+}
+
+// Snapshot answers the same fact ShuttingDown does, as [fakeRuntime]'s does.
+func (d *drainsWhileAsked) Snapshot(ctx context.Context) api.RuntimeState {
+	s := d.fakeRuntime.Snapshot(ctx)
+	s.ShuttingDown = d.begun.Load()
+	return s
+}
+
+// A GIT REQUEST THE GATE LETS THROUGH IS ONE THE DRAIN WAITS FOR, however the
+// two interleave. The most hostile interleaving is the whole of a drain falling
+// in the instant after a push has been told the node is not draining: the turns
+// finish and the git wait looks before the push takes its next step. Counted
+// only after that answer, the push was invisible to the look, so the wait found
+// nothing running and ended, and the listener closed under a push the gate had
+// let through. The gate counts a git request BEFORE it asks, so whichever comes
+// first, the wait sees it or the gate sees the drain.
+func TestAGitRequestTheGateLetsThroughIsOneTheDrainWaitsFor(t *testing.T) {
+	t.Parallel()
+	rt := &drainsWhileAsked{fakeRuntime: fakeRuntime{state: api.RuntimeState{Posture: "serve"}}}
+	a := drainingAppOn(t, rt)
+	var waited error
+	rt.during = func() {
+		// Short, because a wait that saw the push waits until the push
+		// has been answered, which is after this returns.
+		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		defer cancel()
+		waited = a.DrainGit(ctx)
+	}
+	served := false
+	h := a.ThroughDrainGate(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { served = true }))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/git/r.git/git-receive-pack", nil))
+
+	if !served {
+		t.Fatal("the push was refused, though the node was not draining when it asked")
+	}
+	if !errors.Is(waited, context.DeadlineExceeded) {
+		t.Errorf("the drain's git wait answered %v with a push it had let through still to be "+
+			"served, want it still waiting when its context ended", waited)
 	}
 }
 
