@@ -56,11 +56,10 @@ export type WriteAccess =
  * names whose record is on screen.
  */
 export const WRITE_REASONS: Readonly<Record<Exclude<WriteBlock, "held">, string>> = {
-  offline: "Offline. Reconnect to make changes; nothing is queued while you are away.",
+  offline: "Offline. Reconnect to make changes.",
   loading: "Checking who you are before anything can be changed.",
-  anonymous: "Set an API token to act: every change is recorded under your name.",
-  unbound:
-    "This token is not bound to a person. Set contact.crewlet_operator_id on your seat to act as yourself.",
+  anonymous: "Set an API token to make changes.",
+  unbound: "This token isn’t bound to your seat. See People & access.",
   not_served: "This engine does not make this change for you.",
 };
 
@@ -158,9 +157,8 @@ export const CONFIG_WRITE_REASONS: Readonly<
 > = {
   offline: WRITE_REASONS.offline,
   loading: WRITE_REASONS.loading,
-  anonymous: "Set an operator's API token to change the company's configuration.",
-  not_operator:
-    "This browser's token cannot change the company's configuration: the engine does not take it as an operator's.",
+  anonymous: "Needs an operator token.",
+  not_operator: "This token isn’t an operator token.",
 };
 
 /**

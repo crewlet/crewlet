@@ -617,7 +617,9 @@ test("a refused project list is said to be a refusal, not an empty company", asy
     { work_projects: "unavailable" },
   );
   mountWork();
-  await waitFor(() => expect(screen.getByText(/This is not an empty company/)).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByText(/Still catching up\. This screen retries on its own\./)).toBeTruthy(),
+  );
   expect(screen.queryByText("No work has been filed yet")).toBeNull();
 });
 

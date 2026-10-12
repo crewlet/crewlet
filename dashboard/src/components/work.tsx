@@ -896,6 +896,14 @@ export interface CoverageFacts {
 }
 
 /**
+ * What an answer whose `complete` is false says, wherever it is drawn: the
+ * state bar's banner and a panel's own callout are one sentence, so they
+ * cannot drift apart.
+ */
+export const INCOMPLETE_NOTE =
+  "Some records need a newer engine version to read, so this may be incomplete.";
+
+/**
  * How stale an answer may be, and what it could not account for.
  *
  * # Two different facts, and a screen that shows only one lies
@@ -908,36 +916,18 @@ export interface CoverageFacts {
  * A screen that renders the freshness badge and swallows the coverage flag is
  * worse than a stale tile, because a person reads "a moment ago" and concludes
  * the board is right. So the incomplete line is a BANNER above the rows rather
- * than a badge beside them, it names the count and the scope, and it says the
- * remedy — which is a build that can read the records, not a refresh.
+ * than a badge beside them, and it names the remedy: a newer engine that can
+ * read the records, not a refresh.
  */
 export function Coverage({ answer }: { answer?: CoverageFacts | null }) {
   if (!answer) return null;
   return (
     <>
       {answer.complete === false && (
-        // `title` IS the bold lead-in this banner hand-rolled with a `strong`,
-        // and the `flex: 1` span goes with it: a Callout's content column
-        // already owns that. The severity stays a WARNING rather than a
-        // danger — the answer is usable, it just cannot account for
-        // everything, which is precisely what the sentence says.
-        <Callout
-          variant="warning"
-          title={`This answer is incomplete${
-            answer.incomplete
-              ? ` — ${answer.incomplete.records} record(s) this build cannot read`
-              : ""
-          }`}
-        >
-          Rows may be missing, rows that should have gone may still be here, and the counts were
-          computed over what is shown.
-          {answer.incomplete?.scope?.length
-            ? ` Affected: ${answer.incomplete.scope.join(", ")}.`
-            : ""}
-          {answer.incomplete
-            ? ` Record version ${answer.incomplete.version}, from sequence ${answer.incomplete.from.seq} — a build that can read it is what resolves this, not a refresh.`
-            : ""}
-        </Callout>
+        // The severity stays a WARNING rather than a danger: the answer is
+        // usable, it just cannot account for everything, which is precisely
+        // what the sentence says.
+        <Callout variant="warning">{INCOMPLETE_NOTE}</Callout>
       )}
       <CoverageTags answer={answer} />
     </>
@@ -998,7 +988,7 @@ export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
           variant="warning"
           appearance="outline"
           size="xs"
-          title={`This node could not measure its own distance from the log, so this answer is a coherent point in its order with no statement about age (read level ${level})`}
+          title="How current this is can’t be measured right now."
         >
           age unknown
         </Tag>

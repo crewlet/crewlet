@@ -283,7 +283,7 @@ test("a window the engine refuses shows the engine's own sentence and no figures
   });
   await settle();
   expect(screen.getByText(new RegExp("is 91 days, and a spend window is at most 90"))).toBeTruthy();
-  expect(screen.queryByText(/screen&rsquo;s bug|screen's bug/)).toBeNull();
+  expect(screen.queryByText("The engine refused this request.")).toBeNull();
   expect(screen.queryByText(/Tokens · /)).toBeNull();
 });
 

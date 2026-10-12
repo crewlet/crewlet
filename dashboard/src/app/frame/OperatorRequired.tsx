@@ -21,7 +21,7 @@
  * that FAILED the screen mounts, and its own reads say what they find.
  */
 
-import { Button, EmptyState, InlineCode } from "@crewlethq/ui";
+import { Button, EmptyState } from "@crewlethq/ui";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { apiToken, requestToken } from "~/protocol/index.ts";
 
@@ -36,14 +36,7 @@ export function OperatorRequired({ what }: { what: string }) {
       title={
         stored ? `This browser's token cannot open ${what}` : `${what} needs an operator credential`
       }
-      description={
-        <>
-          {stored
-            ? "The engine did not accept it as an operator's. Set a token matching one of your "
-            : "It is guarded, reads included. Set an API token matching one of your "}
-          <InlineCode>api.auth.tokens</InlineCode> entries.
-        </>
-      }
+      description={stored ? "It isn’t an operator token." : null}
       action={
         <Button variant="primary" leadingIcon={<KeyGlyph />} onClick={requestToken}>
           {stored ? "Change the token" : "Set token"}

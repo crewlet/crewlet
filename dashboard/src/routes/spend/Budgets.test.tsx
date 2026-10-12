@@ -373,7 +373,7 @@ test("a reader who cannot change the configuration sees why, on every ceiling", 
   const pencils = screen.getAllByRole("button", { name: /token ceiling/ });
   expect(pencils.length).toBe(6);
   for (const pencil of pencils) expect(pencil.getAttribute("aria-disabled")).toBe("true");
-  expect(screen.getAllByText(/operator's API token/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/Needs an operator token\./).length).toBeGreaterThan(0);
 });
 
 // UNREADABLE IS NOT ZERO.

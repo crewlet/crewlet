@@ -83,11 +83,11 @@ export type ConfigRefusal =
  * MANAGED IS NOT A PERMISSION THIS PERSON LACKS, it is where the company is
  * written: another system renders the document and writes it with its own
  * token, and replaces any revision made here at its next reconcile. So the
- * sentence says where to change it, and what stays possible.
+ * sentence says where to change it.
  */
 export function managedSentence(managedBy: readonly string[]): string {
   const who = managedBy.length > 0 ? managedBy.join(", ") : "another system";
-  return `This company's configuration is managed by ${who} — change it there. An edit made here would be overwritten; a credential it already names can still be rotated from Settings › Integrations.`;
+  return `Managed by ${who}. Change it there.`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

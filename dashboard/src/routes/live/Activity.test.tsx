@@ -145,7 +145,7 @@ test("a refused first page is not a company that has published nothing", async (
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
-  expect(screen.getByText(/The engine tried to answer and failed/)).toBeTruthy();
+  expect(screen.getByText(/The engine failed to answer\./)).toBeTruthy();
   expect(screen.queryByText("Nothing has been published yet")).toBeNull();
 });
 

@@ -459,7 +459,7 @@ test("a reader who may not act sees every action held, with the reason", async (
   for (const name of ["Message", "Assign task", "Pause"]) {
     const button = screen.getByRole("button", { name });
     expect(button.getAttribute("aria-disabled"), `${name} is pressable`).toBe("true");
-    expect(button.getAttribute("title")).toMatch(/Set an API token to act/);
+    expect(button.getAttribute("title")).toMatch(/Set an API token to make changes\./);
   }
 });
 
@@ -839,7 +839,7 @@ test("a folded action is held in the menu with the reason", async () => {
   pageMore();
   const assign = screen.getByRole("menuitem", { name: /^Assign task/ });
   expect(assign.getAttribute("aria-disabled")).toBe("true");
-  expect(assign.textContent).toMatch(/Set an API token to act/);
+  expect(assign.textContent).toMatch(/Set an API token to make changes\./);
 });
 
 // ---------------------------------------------------------------------------
@@ -1388,7 +1388,7 @@ test("a running turn's row says what it is doing, and has no figures yet", async
   const row = doing.closest(".grid-row") as HTMLElement;
   expect(within(row).getByText("ENG-412")).toBeTruthy();
   expect(within(row).queryByText("no summary recorded")).toBeNull();
-  expect(within(row).getAllByText("Not settled — the turn has not ended")).toHaveLength(2);
+  expect(within(row).getAllByText("Not settled")).toHaveLength(2);
   // A SETTLED TURN'S STATE CELL HOLDS NOTHING AT ALL, which is what a phone's
   // card drops: an empty wrapper left a "STATE" label alone on its line.
   const settled = screen.getByText("did thing 1").closest(".grid-row") as HTMLElement;

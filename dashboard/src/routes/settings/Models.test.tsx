@@ -319,7 +319,7 @@ test("a key the engine does not know is said, not drawn as an empty model", asyn
 test("a refused reader sees the refusal alone — no tiles, no empty list", async () => {
   const { view } = mount(undefined, { refuse: true });
   await settle();
-  expect(await screen.findByText(/This answer is auth-gated/)).toBeDefined();
+  expect(await screen.findByText(/This needs an API token\./)).toBeDefined();
   expect(view.container.querySelector(".crewlet-statcard")).toBeNull();
   expect(screen.queryByText(/No model configured/)).toBeNull();
 });

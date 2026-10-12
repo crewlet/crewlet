@@ -131,16 +131,15 @@ test("a seat card links through seatPath, so an empty handle still reaches a pag
 });
 
 // A REFUSAL WITH THE ENGINE'S SENTENCE SAYS THE SENTENCE. The generic
-// `bad_params` banner blames the screen, which is right when the screen asked
-// wrong and wrong when a reader chose a window past the history — the engine's
-// words name the parameter either way, so they replace the guess.
+// `bad_params` banner says only that the engine refused; the engine's words
+// name the parameter, so they replace it.
 test("a bad_params refusal with the engine's sentence shows the sentence, not the guess", () => {
   render(<QueryState error="bad_params" detail="days=91 is past the ninety" loading={false} />);
   expect(
     screen.getByText(/The engine refused this request: days=91 is past the ninety/),
   ).toBeTruthy();
-  expect(screen.queryByText(/screen’s bug/)).toBeNull();
+  expect(screen.queryByText("The engine refused this request.")).toBeNull();
   cleanup();
   render(<QueryState error="bad_params" loading={false} />);
-  expect(screen.getByText(/screen’s bug to fix/)).toBeTruthy();
+  expect(screen.getByText("The engine refused this request.")).toBeTruthy();
 });

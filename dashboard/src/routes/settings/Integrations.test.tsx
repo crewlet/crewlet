@@ -1258,7 +1258,7 @@ test("a connected tool offers a disconnect", () => {
 // recorded on its seat, is held the same way before the host makes one.
 test("a managed document holds the disconnect and an agent's app", () => {
   const asked: string[] = [];
-  const managed = "This company's configuration is managed by gitops — change it there.";
+  const managed = "Managed by gitops. Change it there.";
   render(
     <>
       <EntryRow
@@ -1281,7 +1281,7 @@ test("a managed document holds the disconnect and an agent's app", () => {
   expect(asked).toEqual([]);
   const create = screen.getByRole("button", { name: "Create app on GitHub" });
   expect(create.getAttribute("aria-disabled")).toBe("true");
-  expect(document.body.textContent).toContain("managed by gitops");
+  expect(document.body.textContent).toContain("Managed by gitops");
 });
 
 // ALPHABETICAL, and it replaced a connected-first sort deliberately.

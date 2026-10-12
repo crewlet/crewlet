@@ -2952,10 +2952,10 @@ in the order you clear them:
 
 | You are | The control says |
 |---|---|
-| Offline | Offline — reconnect to make changes. Nothing is queued while you are away. |
+| Offline | Offline. Reconnect to make changes. |
 | Not yet known | Checking who you are before anything can be changed. |
-| Anonymous | Set an API token to act — every change is recorded under your name. |
-| An unbound token | This token is not bound to a person — set contact.crewlet_operator_id on your seat to act as yourself. |
+| Anonymous | Set an API token to make changes. |
+| An unbound token | This token isn’t bound to your seat. See People & access. |
 | A person the engine does not make this change for | This engine does not make this change for you. |
 
 **One press at a time, by every way in.** A write control refuses a press
@@ -6489,9 +6489,9 @@ pull that workspace back into the entry with nothing failing.
 **A chunk that does not arrive says so, and can be retried.** The usual reason
 is an upgrade: the page names its chunks by content hash, and an engine
 upgraded while the tab was open serves different ones. The screen then names
-what is missing ("The Spend screens could not be loaded"), says the page is
-probably from another engine version, and offers Reload — which is what fixes it — beside Try again,
-for the other reason, a request the network dropped. Try again really asks
+what is missing ("The Spend screens could not be loaded"), says "The engine was
+updated. Reload to continue.", and offers Reload, which is what fixes it, beside
+Try again for the other reason, a request the network dropped. Try again really asks
 again: a failed load is forgotten rather than cached for the life of the page
 the way `React.lazy` caches one.
 

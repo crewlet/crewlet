@@ -154,7 +154,7 @@ test("a 401 renders the auth-gated banner, with the button that fixes it", async
   stubFetch(() => new Response(JSON.stringify({ error: "invalid_token" }), { status: 401 }));
   render(<Secrets />);
 
-  expect(await screen.findByText(/auth-gated/)).toBeDefined();
+  expect(await screen.findByText(/This needs an API token\./)).toBeDefined();
   expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
   expect(screen.queryByText(/code this build does not know/)).toBeNull();
 });
@@ -170,7 +170,7 @@ test("a failed read is reported as a fault on the node, not as an unknown code",
   );
   render(<Secrets />);
 
-  expect(await screen.findByText(/tried to answer and failed/)).toBeDefined();
+  expect(await screen.findByText(/The engine failed to answer\./)).toBeDefined();
   expect(screen.queryByText(/code this build does not know/)).toBeNull();
 });
 

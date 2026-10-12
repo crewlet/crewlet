@@ -158,7 +158,7 @@ test("a purged channel whose events the log still holds shows them", async () =>
 // a confident claim that the channel had been purged.
 test("a read that failed does not claim the channel was purged", async () => {
   mount(() => Promise.reject(new Error("timeout")));
-  expect(await screen.findByText(/did not answer within 10 seconds/)).toBeTruthy();
+  expect(await screen.findByText(/The engine didn’t answer in time\./)).toBeTruthy();
   expect(screen.queryByText(PURGED)).toBeNull();
 });
 

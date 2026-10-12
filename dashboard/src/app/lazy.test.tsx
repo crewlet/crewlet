@@ -99,8 +99,8 @@ describe("a chunk that does not load", () => {
     expect(error).toBeInstanceOf(ChunkLoadError);
     const message = (error as ChunkLoadError).message;
     expect(message).toMatch(/^The Spend screens could not be loaded\./);
-    expect(message).toContain("from another engine version");
-    expect(message).toMatch(/reload/);
+    expect(message).toContain("The engine was updated.");
+    expect(message).toMatch(/Reload/);
     // The cause survives for whoever reads the console.
     expect((error as ChunkLoadError).cause).toBeInstanceOf(TypeError);
   });

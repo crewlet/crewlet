@@ -820,11 +820,7 @@ describe("a document another system manages", () => {
     const engine = new Engine(company());
     mountBuilder({ engine, query: managedViewer });
     expect(await screen.findByText("CEO")).toBeDefined();
-    expect(
-      await screen.findByText(
-        /This company's configuration is managed by gitops — change it there/,
-      ),
-    ).toBeDefined();
+    expect(await screen.findByText(/Managed by gitops\. Change it there\./)).toBeDefined();
 
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() =>
@@ -855,7 +851,7 @@ describe("a document another system manages", () => {
     mountBuilder({ engine });
     expect(await screen.findByText("Managed by another system")).toBeDefined();
     expect(screen.queryByText("The engine refused the token")).toBeNull();
-    expect(screen.getByText(/managed by gitops — change it there/)).toBeDefined();
+    expect(screen.getByText(/Managed by gitops\. Change it there\./)).toBeDefined();
     const checks = engine.checks().length;
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(liveRegion().textContent).toContain("Editing is paused"));

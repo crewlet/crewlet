@@ -444,7 +444,7 @@ describe("the task search has four answers, kept apart", () => {
   test("a refused read says so rather than claiming nothing matched", async () => {
     const p = mount({ answers: answering(() => Promise.reject(new Error("unknown_query"))) });
     await p.type("#auth");
-    expect(screen.getByText(/does not serve this answer/)).toBeDefined();
+    expect(screen.getByText("Not available on this node.")).toBeDefined();
     expect(screen.queryByText(/No task matches/)).toBeNull();
   });
 

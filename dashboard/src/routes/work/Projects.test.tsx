@@ -687,7 +687,9 @@ test("the sortable heads are exactly the orderings the engine takes", async () =
 test("a refused listing is said to be a refusal", async () => {
   serving({}, { work_projects: "unavailable" });
   mount();
-  await waitFor(() => expect(screen.getByText(/This is not an empty company/)).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByText(/Still catching up\. This screen retries on its own\./)).toBeTruthy(),
+  );
   expect(screen.queryByText("No work has been filed yet")).toBeNull();
 });
 

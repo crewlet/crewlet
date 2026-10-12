@@ -88,8 +88,7 @@ export function TokenDialog({
       }
     >
       <Text as="p" variant="body" tone="secondary">
-        The engine is guarding this surface. Paste a bearer token matching one of the{" "}
-        <InlineCode>api.auth.tokens</InlineCode> entries in your{" "}
+        Paste a token from <InlineCode>api.auth.tokens</InlineCode> in your{" "}
         <InlineCode>crewlet.yaml</InlineCode>.
       </Text>
       {/* ON uilet's [FormField], which is what the hand-pairing here was. The
@@ -97,10 +96,7 @@ export function TokenDialog({
           control belong to the component now, so this screen writes the
           sentence and nothing else: the id the label points at and the id the
           help line is read from are minted together and cannot disagree. */}
-      <FormField
-        label="Token"
-        helper="Stored in this browser only, and sent on the socket handshake and every guarded query."
-      >
+      <FormField label="Token" helper="Stored in this browser only.">
         {(field) => (
           <Input
             id={field.id}
@@ -119,8 +115,7 @@ export function TokenDialog({
         // made. Not `role="alert"`: the dialog is already what they are
         // looking at, so nothing has to interrupt to get them there.
         <Callout variant="danger" live="polite">
-          This browser refused to store the token (private mode, or blocked site data). It will work
-          until you reload.
+          This browser can’t save the token. It works until you reload.
         </Callout>
       )}
     </Modal>

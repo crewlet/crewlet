@@ -121,7 +121,11 @@ describe("the state bar's coverage", () => {
   test("it is drawn for the screen that published it", () => {
     frame(<Covered coverage={INCOMPLETE} />);
     expect(screen.getByText(/applied through 41 of 88/)).toBeDefined();
-    expect(screen.getByText("This answer is incomplete")).toBeDefined();
+    expect(
+      screen.getByText(
+        "Some records need a newer engine version to read, so this may be incomplete.",
+      ),
+    ).toBeDefined();
     // AND THE LEVEL IS NOT A WORD ON THE SCREEN. `linearizable` is stronger
     // than this surface's own default; a chip naming it is a label nobody
     // reads, and the one level that matters then arrives as a changed word
@@ -152,15 +156,19 @@ describe("the state bar's coverage", () => {
   });
 
   // THE ONE THAT SHIPPED. Land on the Inbox, which publishes; click through to
-  // a screen that does not — Settings › Secrets, say — and the inbox's
-  // freshness badge and its "this answer is incomplete" banner stayed in the
+  // a screen that does not (Settings › Secrets, say), and the inbox's
+  // freshness badge and its "this may be incomplete" banner stayed in the
   // bar as claims about data the new screen never read.
   test("it goes when the screen that published it does", () => {
     const { show } = frame(<Covered coverage={INCOMPLETE} />);
     show(<Bare />);
     expect(screen.getByText("the bare screen")).toBeDefined();
     expect(screen.queryByText(/applied through/)).toBeNull();
-    expect(screen.queryByText("This answer is incomplete")).toBeNull();
+    expect(
+      screen.queryByText(
+        "Some records need a newer engine version to read, so this may be incomplete.",
+      ),
+    ).toBeNull();
   });
 
   // …and the reset must not eat the INCOMING screen's own facts, which is why
@@ -181,7 +189,11 @@ describe("the state bar's coverage", () => {
     await act(async () => {});
     expect(screen.getByText(/applied through 4 of 9/)).toBeDefined();
     expect(screen.queryByText(/applied through 41 of 88/)).toBeNull();
-    expect(screen.queryByText("This answer is incomplete")).toBeNull();
+    expect(
+      screen.queryByText(
+        "Some records need a newer engine version to read, so this may be incomplete.",
+      ),
+    ).toBeNull();
   });
 });
 

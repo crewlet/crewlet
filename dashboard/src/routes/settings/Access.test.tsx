@@ -170,7 +170,7 @@ test("a refused reader sees the refusal alone — no tiles, no empty lists", asy
   const view = mount((what) =>
     what === "access" ? Promise.reject(new QueryError("unauthorized")) : Promise.resolve(null),
   );
-  expect(await screen.findByText(/This answer is auth-gated/)).toBeDefined();
+  expect(await screen.findByText(/This needs an API token\./)).toBeDefined();
   expect(view.container.querySelector(".crewlet-statcard")).toBeNull();
   expect(screen.queryByText("People", { selector: "*" })).toBeNull();
   expect(screen.queryByText(/No tokens configured/)).toBeNull();

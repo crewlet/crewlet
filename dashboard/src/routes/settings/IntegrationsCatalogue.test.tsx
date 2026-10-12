@@ -255,7 +255,7 @@ test("a managed document holds Connect and keeps Rotate token", async () => {
   });
   // THE PAGE SAYS IT ONCE, and each held control carries the same sentence.
   expect(
-    (await screen.findAllByText(/configuration is managed by gitops — change it there/)).some(
+    (await screen.findAllByText(/Managed by gitops\. Change it there\./)).some(
       (el) => el.closest(".crewlet-callout") !== null,
     ),
   ).toBe(true);
