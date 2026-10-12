@@ -441,10 +441,22 @@ test("History reads the newest revision, lists the others, and shows the page's 
         {
           id: "c-1",
           page_id: ID,
+          title: "Provisioner runbook",
           kind: "saved",
           actor: "founder",
           actor_seat: "jane",
+          excerpt: "Adds the drain step",
           at: "2026-09-24T22:00:00Z",
+        },
+        // A NEW PAGE'S EXCERPT IS ITS FIRST LINE, here the title's heading.
+        {
+          id: "c-0",
+          page_id: ID,
+          title: "Provisioner runbook",
+          kind: "created",
+          actor: "swe",
+          excerpt: "Provisioner runbook",
+          at: "2026-09-20T09:00:00Z",
         },
       ],
     },
@@ -463,6 +475,10 @@ test("History reads the newest revision, lists the others, and shows the page's 
   const changes = region(/^Changes/);
   expect(within(changes).getByText("Jane Founder")).toBeTruthy();
   expect(changes.textContent).toContain("saved it");
+  // A SAVE'S NOTE IS DRAWN; a new page's first line that only repeats the
+  // title is not, since the title heads the page this list is on.
+  const notes = [...changes.querySelectorAll(".knowledge-change-note")].map((n) => n.textContent);
+  expect(notes).toEqual(["Adds the drain step"]);
 });
 
 // THE WATCH IS THE PERSON'S OWN, as a save of nothing but the watch.

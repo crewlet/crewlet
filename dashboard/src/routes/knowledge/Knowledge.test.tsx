@@ -448,6 +448,56 @@ test("recently written draws the person behind a token, grouped by the company's
   expect(rows[1]?.textContent).toMatch(/Crewlet-SWE commented on Deploy notes/);
 });
 
+// A NEW PAGE'S EXCERPT IS ITS FIRST LINE, which is usually `# {title}`: the
+// row named the page and then named it again as its note.
+test("a new page's row never repeats its title as its note", async () => {
+  location.hash = "#/knowledge";
+  vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-25T00:00:00Z"));
+  mount({ ...ran, hits: [], served_mode: "" }, [{ key: "ENG", name: "Engineering", pages: 3 }], {
+    page_activity: {
+      changes: [
+        {
+          id: "c-1",
+          page_id: "p-1",
+          title: "Provisioner runbook",
+          container: "ENG",
+          kind: "saved",
+          actor: "swe",
+          excerpt: "Adds the drain step",
+          at: "2026-09-24T23:30:00Z",
+        },
+        {
+          id: "c-2",
+          page_id: "p-2",
+          title: "Deploy notes",
+          container: "ENG",
+          kind: "created",
+          actor: "swe",
+          excerpt: "Deploy notes",
+          at: "2026-09-24T23:00:00Z",
+        },
+        {
+          id: "c-3",
+          page_id: "p-3",
+          title: "Onboarding",
+          container: "ENG",
+          kind: "created",
+          actor: "swe",
+          excerpt: "Welcome to the team.",
+          at: "2026-09-24T22:00:00Z",
+        },
+      ],
+    },
+  });
+  const written = await screen.findByRole("region", { name: /Recently written/ });
+  // A FIRST LINE THAT IS NOT THE TITLE IS THE NOTE, as it always was.
+  await waitFor(() => expect(within(written).getByText("Welcome to the team.")).toBeTruthy());
+  const deploy = within(written)
+    .getAllByRole("listitem")
+    .find((row) => row.textContent?.includes("Deploy notes"));
+  expect(deploy?.textContent?.match(/Deploy notes/g)).toHaveLength(1);
+});
+
 test("pinned lists the pages starred from a page's More menu, and only pages", async () => {
   location.hash = "#/knowledge";
   localStorage.setItem(

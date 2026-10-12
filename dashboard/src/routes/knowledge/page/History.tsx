@@ -23,10 +23,10 @@ import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { collapse, diffLines, diffStat, type DiffSection } from "~/lib/diff.ts";
 import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
-import { plainText, renderMarkdown } from "~/lib/markdown.ts";
+import { renderMarkdown } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { PageRevision } from "~/protocol/index.ts";
-import { Face, changeWords, drawnBy, type Who } from "../parts.tsx";
+import { Face, changeNote, changeWords, drawnBy, type Who } from "../parts.tsx";
 
 /**
  * A line diff, rendered as the document it is.
@@ -256,6 +256,7 @@ export function PageChanges({ pageID, who, now }: { pageID: string; who: Who; no
         <ol className="knowledge-change-list">
           {changes.map((change) => {
             const by = drawnBy(change.actor, change.actor_seat);
+            const note = changeNote(change);
             return (
               <li key={change.id} className="knowledge-change">
                 {by ? (
@@ -271,9 +272,7 @@ export function PageChanges({ pageID, who, now }: { pageID: string; who: Who; no
                       (quiet)
                     </span>
                   )}
-                  {change.excerpt && (
-                    <span className="knowledge-change-note">{plainText(change.excerpt)}</span>
-                  )}
+                  {note && <span className="knowledge-change-note">{note}</span>}
                 </span>
                 {change.turn_id && (
                   <a

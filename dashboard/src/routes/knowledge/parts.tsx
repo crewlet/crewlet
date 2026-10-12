@@ -35,6 +35,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href, useNavigator, useRoute } from "~/app/router.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { plural } from "~/lib/format.ts";
+import { plainText } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useSeatBadgeOf, type SeatBadge } from "~/lib/seats.ts";
@@ -49,7 +50,8 @@ import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { PAGE_CHANGES } from "~/contract/pages.ts";
-import type { PageContainer, PageStatus, SearchMode } from "~/protocol/index.ts";
+import type { PageChange, PageContainer, PageStatus, SearchMode } from "~/protocol/index.ts";
+import { repeatsTitle } from "./page/body.ts";
 
 /** How often the spaces are read again: a space is created by a config apply. */
 export const SPACES_POLL_MS = 60_000;
@@ -99,6 +101,22 @@ const CHANGE_WORDS = new Map<string, { verb: string; phrase: string }>(
  */
 export function changeWords(kind: string): { verb: string; phrase: string } {
   return CHANGE_WORDS.get(kind) ?? { verb: kind, phrase: kind };
+}
+
+/**
+ * The note a change carries under who made it, as the prose it renders to, or
+ * "" when it has none worth drawing: what a save's writer said it changed, a
+ * comment's words, a new page's first line.
+ *
+ * NEVER THE TITLE AGAIN. A new page's excerpt is the body's first line, and a
+ * seat opens a page with `# {title}` more often than not, so a row named the
+ * page and then named it again as its note. Such a note is dropped rather than
+ * replaced: the line under it is in the page, and a feed carries no body to
+ * read it from.
+ */
+export function changeNote(change: Pick<PageChange, "excerpt" | "title">): string {
+  const note = plainText(change.excerpt ?? "");
+  return repeatsTitle(note, change.title ?? "") ? "" : note;
 }
 
 /** A seat's face, sized for a line of text, and named by the words beside it. */

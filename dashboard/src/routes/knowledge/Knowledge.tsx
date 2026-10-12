@@ -77,6 +77,7 @@ import {
   KnowledgeBar,
   NewPageButton,
   PageGlyph,
+  changeNote,
   changeWords,
   PageTags,
   SpacesRow,
@@ -395,6 +396,7 @@ function RecentlyWritten() {
 
 function WrittenRow({ change, who, now }: { change: PageChange; who: Who; now: number }) {
   const by = drawnBy(change.actor, change.actor_seat);
+  const note = changeNote(change);
   return (
     <li className="knowledge-written-row">
       <Face handle={by} who={who} size="sm" />
@@ -408,9 +410,7 @@ function WrittenRow({ change, who, now }: { change: PageChange; who: Who; now: n
           <span>a page that is gone</span>
         )}{" "}
         {change.container && <KeyChip>{change.container}</KeyChip>}
-        {change.excerpt && (
-          <span className="knowledge-written-note">{plainText(change.excerpt)}</span>
-        )}
+        {note && <span className="knowledge-written-note">{note}</span>}
       </p>
       <time dateTime={change.at} title={fmtDateTime(change.at)}>
         {relTime(change.at, now)}
