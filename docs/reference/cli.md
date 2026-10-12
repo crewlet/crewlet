@@ -714,13 +714,20 @@ second record. A retry whose first purge did land answers `applied`, at the
 position that purge landed at, rather than finding the task already gone. The
 command mints that id **before** it asks and waits thirty seconds — past the
 three five-second waits a write can make — so a purge the node never answered,
-which may well have landed, still prints the `-op-id` to run it again with.
+which may well have landed, still prints the `-op-id` to run it again with. So
+does a purge the node **refused**: the route names the operation beside its
+refusal, and a retry under it is safe whatever happened, where one under a
+fresh id is a second purge if anything landed. A purge the node sent to data
+nodes that none answered is not a refusal at all — it comes back `unknown`.
 Pass the id exactly as printed: it carries the instant it was minted, and a
 node whose operation ledger may have lost the first purge's row since — to the
 ledger's thirty-day sweep — judges the retry by it, answering `unknown` again rather than purging
 twice. An id the engine did not print is refused (`op_id_invalid`), and so is
 one altered on the way back — trimmed, spaced or over 128 bytes — since the
-broker would carry it as a different id.
+broker would carry it as a different id. One printed for another task is
+refused `op_reused`, and that is the one refusal the command does **not** offer
+a retry for: the id already names a record on something else, so it says to
+run the purge again without `-op-id`.
 
 What it does **not** reach: a node that is offline or evicted keeps its copy
 until it replays, adopts a snapshot, is replaced or is destroyed. There is no

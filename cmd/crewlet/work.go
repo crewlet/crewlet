@@ -128,13 +128,7 @@ func workPurge(args []string, stdout, stderr io.Writer) error {
 	// the write path's own waits, not on the network.
 	if err := client.patiently(purgeRequestTimeout).post(context.Background(), path,
 		&answer); err != nil {
-		var lost noAnswer
-		if errors.As(err, &lost) {
-			fmt.Fprintf(stderr, "The node did not answer, so whether the purge "+
-				"landed is unknown. Run the same command again with -op-id %s — "+
-				"if the record landed, the retry answers from it rather than "+
-				"appending a second purge.\n", operation)
-		}
+		sayDestructionRetry(stderr, err, "purge", operation)
 		return err
 	}
 
@@ -170,6 +164,45 @@ func workPurge(args []string, stdout, stderr io.Writer) error {
 		"until it replays, adopts a snapshot, is replaced or is destroyed. "+
 		"`crewlet retention status` names which nodes those are.")
 	return nil
+}
+
+// sayDestructionRetry tells an operator which operation id a destruction that
+// failed is retried under, where the failure leaves one to name — `work purge`
+// mints its id before it asks.
+//
+// TWO FAILURES NAME ONE. A request the node never answered may have run to
+// completion after the connection went, so the id this command minted is the
+// only handle on it. And a refusal a destructive route WROTE carries the id it
+// ran under beside its code: a retry under it is safe whatever happened, while
+// one under a fresh id is a second record if anything landed — so it is said
+// rather than left for the operator to dig out of a URL. A refusal carrying no
+// id (a route this node does not serve, a token it refused) names none, since
+// nothing about it is a gesture to finish.
+//
+// AND ONE REFUSAL SAYS THE OPPOSITE: `op_reused`, an id that already names a
+// record on something else. A retry under it is refused the same way every
+// time — the id is the problem — so it is the one answer that tells the
+// operator to drop -op-id rather than to keep it.
+func sayDestructionRetry(stderr io.Writer, err error, what, operation string) {
+	var lost noAnswer
+	var refusal *nodeRefusal
+	switch {
+	case errors.As(err, &refusal) && refusal.Code == string(statelog.ReasonOpReused):
+		fmt.Fprintf(stderr, "Nothing was written: the operation id %s already "+
+			"names a record on something else, so no retry under it can finish "+
+			"this %s. Run the command again without -op-id, so it runs under an "+
+			"operation of its own.\n", operation, what)
+	case errors.As(err, &lost):
+		fmt.Fprintf(stderr, "The node did not answer, so whether the %s "+
+			"landed is unknown. Run the same command again with -op-id %s — "+
+			"if the record landed, the retry answers from it rather than "+
+			"appending a second %s.\n", what, operation, what)
+	case errors.As(err, &refusal) && refusal.OpID != "":
+		fmt.Fprintf(stderr, "The node refused the %s, and named the operation it "+
+			"ran under. If you run it again, run it with -op-id %s: a retry under "+
+			"the same operation is safe whatever happened, and one under a fresh "+
+			"id is a second %s if anything landed.\n", what, refusal.OpID, what)
+	}
 }
 
 // purgeRequestTimeout is how long `work purge` waits for the node's answer.

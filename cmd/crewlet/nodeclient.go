@@ -313,6 +313,19 @@ type nodeRefusal struct {
 	Code    string
 	Actions []string
 
+	// Outcome is the write outcome a refusal carries beside its code, which
+	// only one does: the act transport's 503 for a write nobody can vouch
+	// for, `unknown`. A refusal carries none. See [nodeClient.act].
+	Outcome string
+
+	// OpID is the operation a destructive route's refusal names beside its
+	// code — every one made once the route holds an operation does, because
+	// a retry under the same id is safe whatever happened and one under a
+	// fresh id is a second record if anything did. A refusal of the request
+	// itself (a missing confirmation, an id that is not one) is made before
+	// any operation exists and names none. See [sayDestructionRetry].
+	OpID string
+
 	// detail and hint are the refusal's own sentences, which the message
 	// carries beneath its first line.
 	detail, hint string
@@ -356,10 +369,13 @@ func nodeError(status int, body []byte, sentToken bool) error {
 		Detail  string   `json:"detail"`
 		Hint    string   `json:"hint"`
 		Actions []string `json:"actions"`
+		Outcome string   `json:"outcome"`
+		OpID    string   `json:"op_id"`
 	}
 	_ = json.Unmarshal(body, &payload)
 	refusal := &nodeRefusal{Status: status, Code: payload.Error, Actions: payload.Actions,
-		detail: payload.Detail, hint: payload.Hint}
+		Outcome: payload.Outcome, OpID: payload.OpID, detail: payload.Detail,
+		hint: payload.Hint}
 	switch {
 	case status == http.StatusForbidden && payload.Error == "unbound":
 		// THE ACT TRANSPORT'S ONE RULE, and not a bad token: the token is
