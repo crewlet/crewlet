@@ -5830,9 +5830,11 @@ beside **By model** and **By team**, stacked; then the **most expensive tasks**
 beside the **auxiliary model**. The two rows under the hero share one pair of
 tracks (1.7 : 1), so the gutter runs down the page as one line: the wide track
 holds what is read along a row, the seats' table and the tasks' titles, and the
-narrow one the ranked lists, which a wide track only stretches. Every card in a
-row stretches to the tallest, so the row's edges line up and nothing leaves a
-hole under it. A stretched card keeps its content at the top and its foot on
+narrow one the ranked lists, which a wide track only stretches. The three
+ranked lists give their words one column, half the card, so their bars start
+at one x down the page and a team's name is not cut at the kit's 128px. Every
+card in a row stretches to the tallest, so the row's edges line up and nothing
+leaves a hole under it. A stretched card keeps its content at the top and its foot on
 the floor, the stacked lists' last card takes what the stack leaves, and a card
 whose partner is absent (no task spend to rank on a tracker that is not the
 engine's) takes the whole row. Below a page column of 900px every row stacks,

@@ -788,3 +788,39 @@ test("the ranked lists stand in the narrow track, beside the seats and the tasks
   expect(row("By agent")!.firstElementChild).toBe(card("By agent"));
   expect(row("Most expensive tasks")!.firstElementChild).toBe(card("Most expensive tasks"));
 });
+
+// ONE LABEL COLUMN FOR THE THREE RANKED LISTS. They stand in one track, and By
+// model's half-row words beside the others' 128px drew two bar columns down
+// the page, 37px apart at 1280 and 115px at 1920 (`.spend-bars`, screens.css).
+test("every ranked list takes the one label width, so the bars start at one x", async () => {
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(1_000, {
+      by_provider: [
+        {
+          ...bucket(1_000),
+          provider_key: "default",
+          models: ["claude-sonnet"],
+          seats: ["swe"],
+          seats_total: 1,
+        },
+      ],
+      by_worker: [{ worker: "memory_filter", ...bucket(200, { calls: 1 }) }],
+    }),
+    token_series: (p: Record<string, unknown>) =>
+      p.group === "unit"
+        ? {
+            ...series(1_000),
+            group: "unit",
+            by_group: [
+              { ...bucket(1_000), group: "Engineering", seats: 2, other: false, folded: 0 },
+            ],
+          }
+        : series(1_000),
+    viewer: VIEWER,
+  });
+  await settle();
+  for (const title of ["By model", "By team", "Auxiliary model"]) {
+    const card = screen.getByRole("heading", { name: title }).closest(".spend-card")!;
+    expect(card.querySelector("ul")?.classList.contains("spend-bars"), title).toBe(true);
+  }
+});

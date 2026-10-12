@@ -1674,6 +1674,10 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".spend-card-foot")).toMatch(/margin-top:\s*auto/);
   });
 
+  test("the ranked lists in the narrow track share one label width", () => {
+    expect(block(css, ".spend-list .spend-bars")).toMatch(/--crewlet-bar-list-label-width:\s*50%/);
+  });
+
   test("a card without its partner takes the whole row", () => {
     expect(block(css, ".spend-pair > :only-child")).toMatch(/grid-column:\s*1 \/ -1/);
   });
