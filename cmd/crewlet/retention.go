@@ -284,9 +284,17 @@ type retentionReplicaRow struct {
 }
 
 type retentionAlarm struct {
-	Kind   string `json:"kind"`
+	Kind    string                 `json:"kind"`
+	Detail  string                 `json:"detail"`
+	Remedy  string                 `json:"remedy"`
+	Domains []retentionAlarmDomain `json:"domains"`
+}
+
+// retentionAlarmDomain is one log an alarm stands on ([statelog.AlarmDomain]).
+type retentionAlarmDomain struct {
+	Domain string `json:"domain"`
 	Detail string `json:"detail"`
-	Remedy string `json:"remedy"`
+	Term   string `json:"term"`
 }
 
 // retentionStatus prints what the log is holding and what is stopping it from
@@ -556,10 +564,39 @@ func retentionAlarms(stderr io.Writer, report retentionReport) error {
 	// the reason in its own mail.
 	fmt.Fprintln(stderr)
 	for _, alarm := range report.Alarms {
-		fmt.Fprintf(stderr, "%s: %s\n  %s\n", alarm.Kind, alarm.Detail, alarm.Remedy)
+		printRetentionAlarm(stderr, alarm)
 	}
 	return fmt.Errorf("%d retention alarm(s) active on %s",
 		len(report.Alarms), report.NodeID)
+}
+
+// printRetentionAlarm prints one alarm: its kind and measurement, the logs it
+// stands on, and its remedy.
+//
+// ONE LOG IS FOLDED INTO THE HEADLINE. An alarm standing on a single log whose
+// measurement is the headline's printed that sentence twice, once as the
+// alarm and once as its only log; it reads `kind on log (term): detail`
+// instead. Several logs, or the logs a backup alarm is holding, are one line
+// each under it.
+func printRetentionAlarm(w io.Writer, alarm retentionAlarm) {
+	if len(alarm.Domains) == 1 && alarm.Domains[0].Detail == alarm.Detail {
+		fmt.Fprintf(w, "%s on %s: %s\n  %s\n",
+			alarm.Kind, alarmLog(alarm.Domains[0]), alarm.Detail, alarm.Remedy)
+		return
+	}
+	fmt.Fprintf(w, "%s: %s\n", alarm.Kind, alarm.Detail)
+	for _, d := range alarm.Domains {
+		fmt.Fprintf(w, "  %s: %s\n", alarmLog(d), d.Detail)
+	}
+	fmt.Fprintf(w, "  %s\n", alarm.Remedy)
+}
+
+// alarmLog names a log an alarm stands on, with the trim term holding it.
+func alarmLog(d retentionAlarmDomain) string {
+	if d.Term == "" {
+		return d.Domain
+	}
+	return d.Domain + " (" + d.Term + ")"
 }
 
 // retentionSnapshots prints the per-node snapshot inventory.

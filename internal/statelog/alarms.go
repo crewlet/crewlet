@@ -410,6 +410,42 @@ type Alarm struct {
 	// and a remedy that lived on one of them would be missing from the
 	// other two.
 	Remedy string `json:"remedy"`
+
+	// Domains is every log this alarm stands on, for a condition that is a
+	// property of a log rather than of the node: the logs nearing their
+	// ceiling, the logs whose trim is held, and under [KindBackupAge] the
+	// logs whose trim the missing or stale backup is holding. Empty for a
+	// node-wide condition.
+	//
+	// ONE ALARM PER KIND, WITH ITS LOGS IN IT, rather than one alarm per log.
+	// The kind is the alarm's identity on every other surface: the gauge
+	// carries one series per kind, and the log writes one line when a kind
+	// starts and one when it clears. A report that raised `trim_blocked`
+	// once per log told the health count four while the gauge and the log
+	// said one, and drew one cause as four problems on the operator's
+	// screen. Detail is the most pressing log's measurement; each entry here
+	// carries its own.
+	Domains []AlarmDomain `json:"domains,omitempty"`
+}
+
+// AlarmDomain is one log an alarm stands on, and what was measured there.
+type AlarmDomain struct {
+	// Domain is the log's registered name.
+	Domain string `json:"domain"`
+
+	// Detail is this log's own measurement, in the operator's units.
+	Detail string `json:"detail"`
+
+	// Term is the trim term holding this log, where the alarm is about its
+	// trim. It is the term's own name, which is what `crewlet retention
+	// status` prints and the retention guide is indexed by.
+	Term TermName `json:"term,omitempty"`
+
+	// Since is when this log's trim stopped advancing, where the alarm is
+	// about its trim. An instant rather than an age, so a reader renders
+	// the age against its own clock instead of trusting one frozen at the
+	// evaluation.
+	Since time.Time `json:"since,omitzero"`
 }
 
 // rule is one row of the table.
@@ -520,13 +556,24 @@ var table = []rule{
 			"advance at all until there is one.",
 	},
 	{
+		// THE TERM IS NOT IN THE SENTENCE. It is a field of the log the
+		// alarm stands on ([AlarmDomain.Term]), because one alarm carries
+		// every held log and two of them can be held by different terms.
 		kind: KindTrimBlocked,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("the trim has not advanced for %s: %s",
-				spoken(r.TrimBlockedFor), r.TrimBlockedBy), r.TrimBlockedBy != ""
+			if r.TrimBlockedBy == "" {
+				return "", false
+			}
+			// A BLOCK SEEN FIRST ON THIS TICK has no duration to report,
+			// and "for 0ms" reads as a measurement of nothing.
+			if r.TrimBlockedFor < time.Second {
+				return "the trim stopped advancing on this evaluation", true
+			}
+			return fmt.Sprintf("the trim has not advanced for %s", spoken(r.TrimBlockedFor)), true
 		},
-		remedy: "The blocking term names what to fix. Until it is fixed the log " +
-			"grows toward its ceiling.",
+		remedy: "The term holding each log names what to fix, and `crewlet " +
+			"retention status` prints it with its detail. Until it is fixed " +
+			"the log grows toward its ceiling.",
 	},
 	{
 		kind: KindDeferredOld,

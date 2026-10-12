@@ -40,14 +40,19 @@ var alarmMeaning = map[Kind]string{
 		"ordinary lag, and have been for longer than a heartbeat.",
 	KindBarrierSlow: "The read barrier — the append every linearizable read " +
 		"waits on — is spending a quarter of the whole read budget.",
-	KindLogHeadroom: "The log is within a tenth of the byte ceiling its " +
-		"ordinary writes are held to. A full log refuses writes rather than " +
-		"dropping records; on the tracker and pages logs an eviction still " +
-		"lands in the gate reserve above that ceiling.",
+	KindLogHeadroom: "A log is within a tenth of the byte ceiling its " +
+		"ordinary writes are held to. One alarm names every such log, " +
+		"leading with the one with the least room. A full log refuses writes " +
+		"rather than dropping records; on the tracker and pages logs an " +
+		"eviction still lands in the gate reserve above that ceiling.",
 	KindBackupAge: "No verified backup has been recorded, or the newest is " +
-		"older than the policy asks for. The trim does not advance either way.",
-	KindTrimBlocked: "The trim has a term it cannot satisfy, so the log is " +
-		"growing toward its ceiling.",
+		"older than the policy asks for. The trim does not advance either way, " +
+		"and the alarm names every log whose trim the backup term is holding, " +
+		"so those logs raise no `trim_blocked` of their own.",
+	KindTrimBlocked: "A log's trim has a term it cannot satisfy, so the log " +
+		"is growing toward its ceiling. One alarm names every held log and " +
+		"the term holding each, leading with the one held longest. A log the " +
+		"backup term holds while `backup_age` fires is named there instead.",
 	KindDeferredOld: "This node has been holding records it cannot apply for " +
 		"longer than the deferral grace. It no longer serves its copy of the " +
 		"estate; its seats read the estate from the other data nodes.",
@@ -112,6 +117,11 @@ heartbeat, so a condition with a one-minute grace is named within that minute.
 The log line is the one to read first. It carries the measurement that raised
 the alarm, in the units of the thing measured, and the remedy from the table
 below.
+
+Each kind is one alarm, however many logs it stands on. A condition that is a
+property of a log (` + "`log_headroom`" + `, ` + "`trim_blocked`" + `) names every
+log it holds in its ` + "`domains`" + ` list, each with its own measurement, so the
+count, the gauge and the log line agree about how many problems there are.
 `
 
 const alarmFooter = `

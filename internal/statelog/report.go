@@ -396,7 +396,7 @@ func (h Health) NotReady(now time.Time, stream string, identity error) *DomainRe
 		}
 	case RefuseBehind:
 		out.Detail = fmt.Sprintf("it is replaying up to the published trim floor "+
-			"from its checkpoint %d — the log still holds what it lacks, and this "+
+			"from its checkpoint %d. The log still holds what it lacks, and this "+
 			"clears on its own", h.Position.Seq)
 	}
 	return out
@@ -910,7 +910,7 @@ func (in ReportInputs) remedy(name TermName) string {
 		}
 		return "No complete backup inside `backup_max_age`. Run `crewlet backup`, " +
 			"or set `backup_floor: operator` and run `crewlet retention ack`. No " +
-			"backup owner is configured — set `retention.backup_owner` so the " +
+			"backup owner is configured: set `retention.backup_owner` so the " +
 			"next person reading this knows whose job it is."
 	case TermSnapshotFloor:
 		return fmt.Sprintf("Fewer than %d nodes hold a verified snapshot. The "+
@@ -1086,14 +1086,36 @@ func (in ReportInputs) snapshots() []SnapshotReport {
 //
 // # Why the per-domain half is evaluated separately
 //
-// [Reading] describes ONE node, and two of its conditions — the log's
-// headroom and a blocked trim — are properties of a DOMAIN. Evaluating the
-// node-wide reading once and each domain's own fields once per domain is what
-// lets a two-domain fleet say WHICH log is filling. Folding them into one
-// reading would report the worst of the two with no name on it, which is the
-// number an operator then has to go and find by hand.
+// [Reading] describes ONE node, and two of its conditions, the log's headroom
+// and a blocked trim, are properties of a DOMAIN. Evaluating the node-wide
+// reading once and each domain's own fields once per domain is what lets a
+// two-domain fleet say WHICH log is filling. Folding them into one reading
+// would report the worst of the two with no name on it, which is the number an
+// operator then has to go and find by hand.
+//
+// # And why each kind is still ONE alarm
+//
+// The kind is an alarm's identity everywhere else: the gauge has one series
+// per kind and the log one line per kind entering or leaving. So a kind raised
+// on several logs is one alarm listing them ([Alarm.Domains]), with the most
+// pressing log's measurement as its detail, rather than one alarm per log that
+// the health count would add up and the gauge would not.
+//
+// # A trim the backup policy holds is the backup alarm's
+//
+// While [KindBackupAge] fires, a log held by the backup term is not a second
+// problem: the backup is the remedy, and the backup alarm already says that
+// the trim waits for one. Its log is listed under that alarm instead, so a
+// company with no backup reads as the one problem it has rather than as one
+// per log. A log the backup term holds while that alarm is quiet (a backup
+// taken on an earlier generation of the log) stays under [KindTrimBlocked],
+// because nothing else names it.
 func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 	out := Evaluate(in.Reading)
+	backup := slices.IndexFunc(out, func(a Alarm) bool { return a.Kind == KindBackupAge })
+	// Where each per-domain kind sits in out, and the log its detail is from.
+	at := make(map[Kind]int)
+	lead := make(map[Kind]DomainReport)
 	for _, d := range domains {
 		perDomain := Reading{
 			HeadroomFraction: d.HeadroomFraction,
@@ -1103,11 +1125,58 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 			perDomain.TrimBlockedFor = in.At.Sub(d.BlockedSince)
 		}
 		for _, a := range Evaluate(perDomain) {
-			a.Detail = d.Domain + ": " + a.Detail
-			out = append(out, a)
+			entry := AlarmDomain{Domain: d.Domain, Detail: a.Detail}
+			if a.Kind == KindTrimBlocked {
+				entry.Term, entry.Since = d.BlockedBy, d.BlockedSince
+				if d.BlockedBy == TermBackupFloor && backup >= 0 {
+					out[backup].Domains = append(out[backup].Domains, entry)
+					continue
+				}
+			}
+			i, seen := at[a.Kind]
+			if !seen {
+				i = len(out)
+				at[a.Kind] = i
+				out = append(out, Alarm{Kind: a.Kind, Remedy: a.Remedy})
+			}
+			out[i].Domains = append(out[i].Domains, entry)
+			if current, has := lead[a.Kind]; !has || morePressing(a.Kind, d, current) {
+				lead[a.Kind] = d
+				out[i].Detail = a.Detail
+			}
 		}
 	}
+	// THE TABLE'S OWN ORDER, which is the order every other surface reads in:
+	// the per-domain kinds were appended after the node-wide ones.
+	slices.SortStableFunc(out, func(a, b Alarm) int {
+		return tableIndex(a.Kind) - tableIndex(b.Kind)
+	})
 	return out
+}
+
+// morePressing reports whether log d's reading of a per-domain alarm is more
+// urgent than current's, which decides whose measurement the alarm leads with:
+// the log with the least headroom left, and the trim held longest.
+func morePressing(kind Kind, d, current DomainReport) bool {
+	switch kind {
+	case KindLogHeadroom:
+		return d.HeadroomFraction != nil && current.HeadroomFraction != nil &&
+			*d.HeadroomFraction < *current.HeadroomFraction
+	case KindTrimBlocked:
+		return d.BlockedSince.Before(current.BlockedSince)
+	}
+	return false
+}
+
+// tableIndex is a kind's position in [table], which is the order alarms are
+// reported in. A kind the table does not hold sorts last.
+func tableIndex(kind Kind) int {
+	for i, rule := range table {
+		if rule.kind == kind {
+			return i
+		}
+	}
+	return len(table)
 }
 
 // JoinSecondsPerGB and JoinFixedSeconds project how long a peer needs to

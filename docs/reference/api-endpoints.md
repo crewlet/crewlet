@@ -3562,9 +3562,21 @@ is three per-node facts attributed to a fleet.
   "snapshots": [...],
   "replica": {"store_bytes": 10415140864, "projected_join_seconds": 308,
               "rejoin_window_seconds": 1800},
-  "alarms": [{"kind": "backup_age", "detail": "...", "remedy": "..."}]
+  "alarms": [{"kind": "backup_age", "detail": "...", "remedy": "...",
+              "domains": [{"domain": "tracker", "detail": "the trim has not advanced for 46h 33m",
+                           "term": "backup_floor", "since": "2031-03-30T02:00:00Z"}]}]
 }
 ```
+
+**`alarms`** holds each standing [alarm](alarms.md) once: `kind`, `detail` (the
+measurement, in the units of the thing measured) and `remedy`. A condition that
+is a property of a log names every log it stands on in **`domains`**, each with
+its own `detail`, and for a held trim the `term` holding it and `since`, when it
+stopped advancing; `detail` is then the most pressing log's. A log whose trim the
+backup term holds while `backup_age` fires is listed under `backup_age` rather
+than as a `trim_blocked` of its own, because the backup is its remedy. So
+`alarms` has one entry per kind, and its length is the health envelope's
+`alarms.count`.
 
 `trim_floor` and `trim_to` are two different numbers, and a blocked domain is
 where they part. `trim_floor` is the floor the fleet has published: everything

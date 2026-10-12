@@ -387,6 +387,51 @@ func TestRetentionStatusExitsNonZeroOnAnAlarm(t *testing.T) {
 	}
 }
 
+// AN ALARM NAMES THE LOGS IT STANDS ON. One log is folded into the headline,
+// since its measurement IS the headline's; several are a line each, with the
+// term holding each one, under the alarm whose remedy covers them all.
+func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
+	t.Parallel()
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.Alarms = []statelog.Alarm{
+		{
+			Kind:   statelog.KindBackupAge,
+			Detail: "no verified backup has been recorded, and the policy asks for one every 24h",
+			Remedy: "Run `crewlet backup` against any node.",
+			Domains: []statelog.AlarmDomain{
+				{Domain: "tracker", Detail: "the trim has not advanced for 46h", Term: statelog.TermBackupFloor},
+				{Domain: "pages", Detail: "the trim has not advanced for 46h", Term: statelog.TermBackupFloor},
+			},
+		},
+		{
+			Kind:    statelog.KindLogHeadroom,
+			Detail:  "3% of the log's byte ceiling for ordinary writes is left",
+			Remedy:  "Raise the log's ceiling.",
+			Domains: []statelog.AlarmDomain{{Domain: "vectors", Detail: "3% of the log's byte ceiling for ordinary writes is left"}},
+		},
+	}
+	node.report = report
+
+	_, stderr, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err == nil {
+		t.Fatal("two active alarms exited zero")
+	}
+	for _, want := range []string{
+		"backup_age: no verified backup has been recorded",
+		"  tracker (backup_floor): the trim has not advanced for 46h",
+		"  pages (backup_floor): the trim has not advanced for 46h",
+		"log_headroom on vectors: 3% of the log's byte ceiling for ordinary writes is left",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr never says %q:\n%s", want, stderr)
+		}
+	}
+	if strings.Count(stderr, "3% of the log's byte ceiling") != 1 {
+		t.Errorf("the single log's measurement is printed twice:\n%s", stderr)
+	}
+}
+
 // MAINTENANCE IS PRINTED ABOVE EVERYTHING, because while it is open every
 // number below it describes a fleet in which nothing is running: no seats, no
 // duties, no scheduler, no write routes. It was visible on no surface at all —

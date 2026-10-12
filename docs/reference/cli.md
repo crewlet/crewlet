@@ -945,7 +945,11 @@ log's own feed — never another domain's.
 report's own rule rather than a second one in the CLI — the shell script
 watching this exit code would otherwise be watching the definition nobody
 maintained. Each alarm's measurement and remedy go to **stderr**, so a cron
-capturing stdout for a dashboard still gets the reason in its own mail.
+capturing stdout for a dashboard still gets the reason in its own mail. An alarm
+that stands on logs names them: one log in its headline (`log_headroom on
+usage: 3% of the log's byte ceiling for ordinary writes is left`), several as a
+line each with the term holding the log's trim (`  tracker (backup_floor): the
+trim has not advanced for 46h 33m`).
 
 `-domain <name>` narrows the log and watermark blocks to one domain.
 

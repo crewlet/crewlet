@@ -149,7 +149,9 @@ The **backup-age alarm** (`backup_age`) ages the same point the trim reads,
 under the same policy: under `operator` a node's nightly copies are fresh
 while the trim waits on an acknowledgement, and the alarm fires on the missing
 acknowledgement rather than staying green beside a log that cannot be trimmed.
-**Settings › Backups & retention** marks that point **counted · newest**.
+It names every log whose trim it is holding, and those logs raise no
+`trim_blocked` of their own: the backup is the one thing to do about all of
+them. **Settings › Backups & retention** marks that point **counted · newest**.
 
 An **unverified** copy satisfies neither. A file that exists and was never
 opened is not a backup, and deleting the log's only copy of a record against
@@ -813,7 +815,7 @@ The **usage log** refuses the same way, and what it costs is different: no read
 appends to it, so nothing a seat does is refused — what stops is the
 replication of each node's days. Every node keeps re-deriving its day and
 retrying on every tick, nothing is lost from any node's own event log, and the
-`log_headroom` alarm names the domain (`usage: …`) long before the ceiling. Its
+`log_headroom` alarm names the domain (`log_headroom on usage`) long before the ceiling. Its
 size is a count of node-days rather than a rate — one message per (node, day,
 seat or schedule) for 181 days — so a log that fills has outgrown its census:
 raise `stream.usage_log_max_bytes` as below.
