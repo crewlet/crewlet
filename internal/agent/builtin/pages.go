@@ -159,7 +159,7 @@ func (d PageDeps) foreignOperation(ctx context.Context, turn *turnctx.Turn,
 		return ""
 	}
 	op := d.operation(ctx)
-	if op == "" || answeredFor(op, callName(tool, args)) {
+	if op == "" || statelog.OpNamed(op, callName(tool, args)) {
 		return ""
 	}
 	return foreignRequest(tool)

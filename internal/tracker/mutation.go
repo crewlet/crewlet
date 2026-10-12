@@ -284,9 +284,9 @@ type ScopeTerm struct {
 func (t ScopeTerm) Path() string {
 	switch t.Kind {
 	case TermObject:
-		return join(pathDomain, pathContainer, t.container(), pathObject, t.ID)
+		return statelog.ScopePath(pathDomain, pathContainer, t.container(), pathObject, t.ID)
 	case TermKey:
-		return join(pathDomain, pathContainer, t.container(), pathKey, t.ID)
+		return statelog.ScopePath(pathDomain, pathContainer, t.container(), pathKey, t.ID)
 	case TermContainer:
 		// THE CONTAINER TERM'S OWN NAME IS ITS ID, not its Container
 		// field: "container(ENG)" names ENG, and reading the field
@@ -296,12 +296,12 @@ func (t ScopeTerm) Path() string {
 		if key == "" {
 			key = t.container()
 		}
-		return join(pathDomain, pathContainer, key)
+		return statelog.ScopePath(pathDomain, pathContainer, key)
 	case TermFamily:
 		if t.ID == "" {
 			return pathDomain
 		}
-		return join(pathDomain, pathFamily, t.ID)
+		return statelog.ScopePath(pathDomain, pathFamily, t.ID)
 	case TermDomain:
 		return pathDomain
 	}
@@ -319,18 +319,6 @@ func (t ScopeTerm) container() string {
 		return WorkspaceContainer
 	}
 	return t.Container
-}
-
-// join builds a scope path from its segments, skipping empty ones so a
-// missing id can never produce a path with a hole in it.
-func join(segments ...string) string {
-	kept := make([]string, 0, len(segments))
-	for _, s := range segments {
-		if s = strings.TrimSpace(s); s != "" {
-			kept = append(kept, s)
-		}
-	}
-	return strings.Join(kept, statelog.ScopeSeparator)
 }
 
 // MaxScopeTerms is the cap on a record's declared scope.
