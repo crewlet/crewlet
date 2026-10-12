@@ -115,6 +115,25 @@ const (
 	// the tracker's ceiling a blocked trim fills both in the same time.
 	DerivedPagesLogDivisor = 4
 
+	// CodeLogMaxBytesFloor and CodeLogMaxBytesCeiling bound the code log's
+	// ceiling: the floor every log shares, and the mutation log's ceiling,
+	// because the two grow at the same order (DerivedCodeLogNumerator).
+	CodeLogMaxBytesFloor   int64 = 1 << 30
+	CodeLogMaxBytesCeiling int64 = 1 << 40
+
+	// DerivedCodeLogNumerator and DerivedCodeLogDenominator: an unset
+	// CodeLogMaxBytes is TWO THIRDS of the mutation log's ceiling, set or
+	// derived.
+	//
+	// THE RATIO IS THE RECORD RATE, the rule DerivedPagesLogDivisor states
+	// for the knowledge base: at the reference company once seats push,
+	// the code log grows about 4.5–6 MB a day (about 3 000 pushes at
+	// 1.5–2 KiB a record) against the tracker's about 9 MB, so at two
+	// thirds of the tracker's ceiling a blocked trim fills both in the same
+	// time.
+	DerivedCodeLogNumerator   = 2
+	DerivedCodeLogDenominator = 3
+
 	// DerivedLogMaxBytesFraction is the share of a volume's free space an
 	// unset TrackerLogMaxBytes takes, and DerivedLogMaxBytesFloor /
 	// DerivedLogMaxBytesCeiling clamp the result.
@@ -129,21 +148,25 @@ const (
 	// StoreMaxBytesFloor and StoreMaxBytesCeiling bound the embedded
 	// broker's own declared store limit.
 	//
-	// THE FLOOR IS FIVE GIBIBYTES, which is the smallest limit the engine's
-	// own logs fit inside: four state-log domains, none of which may be
-	// sized below TrackerLogMaxBytesFloor, plus a gibibyte for the
-	// mailboxes, the event stream and every coordination bucket, which
-	// reserve nothing and grow against the same number. Below it a node
-	// provisions its way to a refusal on whichever stream happens to be
-	// last. It was four while there were three domains; beside the usage
-	// log's gibibyte, four would leave the unreserved streams nothing.
+	// THE FLOOR IS SIX GIBIBYTES, which is the smallest limit the engine's
+	// own logs fit inside: five state-log domains, none of which may be
+	// sized below a gibibyte, plus a gibibyte for the mailboxes, the event
+	// stream and every coordination bucket, which reserve nothing and grow
+	// against the same number. Below it a node provisions its way to a
+	// refusal on whichever stream happens to be last. It was five while
+	// there were four domains; beside the code log's gibibyte, five would
+	// leave the unreserved streams nothing. internal/engine holds the floor
+	// to the register it is derived from
+	// (TestTheStoreFloorFitsEveryRegisteredDomain), and the schema tag on
+	// Stream.StoreMaxBytes spells it again, which
+	// TestTheStoreFloorIsTheSchemasMinimum ties back here.
 	//
 	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is more than
 	// an order of magnitude above the largest estate the domain ceilings can
 	// describe (1 TiB of mutation log, 2 TiB of vectors, 256 GiB of
-	// knowledge base), so anything past it is a unit mistake rather than a
-	// deployment.
-	StoreMaxBytesFloor   int64 = 5 << 30
+	// knowledge base, 1 TiB of code log), so anything past it is a unit
+	// mistake rather than a deployment.
+	StoreMaxBytesFloor   int64 = 6 << 30
 	StoreMaxBytesCeiling int64 = 64 << 40
 )
 
@@ -383,6 +406,27 @@ func (s Stream) UsageMaxBytes() (int64, bool) {
 		return s.UsageLogMaxBytes, true
 	}
 	return DefaultUsageLogMaxBytes, false
+}
+
+// CodeMaxBytes is the code log's ceiling, and whether it was derived.
+//
+// DERIVED FROM THE MUTATION LOG'S CEILING, set or derived, on the rule
+// [Stream.PagesMaxBytes] states: both logs hold a trailing window of records
+// as long as a blocked trim lasts, so in the ratio their records arrive at a
+// blocked trim fills both in the same time — two thirds here
+// ([DerivedCodeLogNumerator]), from the reference company's push volume
+// against its tracker writes. An operator who sized the mutation log for their
+// company therefore sizes this log with it.
+//
+// Held inside the bounds Tier A accepts for the field, so a node never derives
+// a ceiling its own validation would refuse to be told.
+func (s Stream) CodeMaxBytes(free int64) (int64, bool) {
+	if s.CodeLogMaxBytes > 0 {
+		return s.CodeLogMaxBytes, false
+	}
+	tracker, _ := s.LogMaxBytes(free)
+	return min(max(tracker*DerivedCodeLogNumerator/DerivedCodeLogDenominator,
+		CodeLogMaxBytesFloor), CodeLogMaxBytesCeiling), true
 }
 
 // SnapshotDirFor is where a node keeps its snapshots, with the default

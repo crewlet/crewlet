@@ -403,7 +403,7 @@ func Catalogue() []Instrument {
 			Name: StatelogLogHeadroomFraction, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "How much of the ceiling ordinary writes are held to is " +
-				"left — on the tracker and pages logs, the ceiling less the " +
+				"left — on a log that claims identity, the ceiling less the " +
 				"gate reserve kept above it for evictions. At zero the log " +
 				"refuses every write AND every linearizable read, and the " +
 				"remedy is a fleet-wide maintenance cycle, so this is the one " +

@@ -129,7 +129,10 @@ What is worth knowing about it:
   it**, rather than writing a manifest without it; take it again once the node
   reports the estate serving. A node without `data` holds none and backs up
   its own file alone.
-- **The objects come from the object store, not from this node's disk.** On
+- **The objects come from the object store, not from this node's disk.** The
+  rows that name them are the declared ones — a project's files
+  (`tracker_files`) and the pack bundles the company's git repositories'
+  pushes stored (`code_packs`), both live references. On
   `nats` they are already a stream — `OBJ_crewlet_files` — and the stream
   snapshot the backup takes anyway carries them, so no object is copied on its
   own: the manifest's `objects.stream` names the stream. Once the snapshot is
@@ -147,7 +150,7 @@ What is worth knowing about it:
   1.15 TB) took about five hours where thirty-two took about three on the
   host it was measured on — while staying at most an eighth of what S3 serves
   one prefix, so the company's own downloads keep the rest. Each is streamed
-  to disk and checked against its file's size and SHA-256 as it is written,
+  to disk and checked against its row's size and SHA-256 as it is written,
   and lands under `objects/files/<key>` — the
   bucket's own layout under its prefix — first under a temporary name, renamed
   only once it has checked out. Either way the copy's rows are read **a page at
@@ -185,7 +188,7 @@ What is worth knowing about it:
   backup already holds is the same object: when that backup's directory is
   still on this host (the `dir` this node last announced), each object in it
   is **linked** into the new backup — copied where the filesystem refuses a
-  link, another mount among them — and read back against its file's size and
+  link, another mount among them — and read back against its row's size and
   SHA-256 before it counts, so a copy that rotted in the earlier artefact is
   fetched again rather than carried forward. Only what is new since is read
   from the bucket. Each one is a complete file of the new backup, never a

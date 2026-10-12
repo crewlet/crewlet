@@ -562,6 +562,12 @@ var allowedReplicatedWriter = []allowance{
 			"a sweep.",
 	},
 	{
+		Prefix: "internal/code/apply", Kind: mechanism,
+		Why: "The code domain's applier — the record dispatch, a repository's " +
+			"lifecycle and the activation fence, and the push with its " +
+			"horizons and the purge's parts.",
+	},
+	{
 		Prefix: "internal/search/apply", Kind: mechanism,
 		Why: "The embedding domain's applier. The vectors are compacted and " +
 			"claim no identity, but they are still written only from a " +

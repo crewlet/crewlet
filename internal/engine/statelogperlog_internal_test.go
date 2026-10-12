@@ -10,6 +10,7 @@ import (
 
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -43,6 +44,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 		search.Domain{}.Name():  {topics.TrackerVectorsStream, topics.TrackerVectorsPrefix, topics.TrackerVectorsWildcard},
 		pages.Domain{}.Name():   {topics.PagesLogStream, topics.PagesLogPrefix, topics.PagesLogWildcard},
 		usage.Domain{}.Name():   {topics.UsageLogStream, topics.UsageLogPrefix, topics.UsageLogWildcard},
+		code.Domain{}.Name():    {topics.CodeLogStream, topics.CodeLogPrefix, topics.CodeLogWildcard},
 	}
 	var registered []string
 	for _, d := range registeredDomains() {
@@ -84,7 +86,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 		}
 	}
 	// NO OTHER STREAM OF A DOMAIN'S: every stream on the broker that names
-	// one of the state logs' families is one of the four, so nothing beside
+	// one of the state logs' families is one of the five, so nothing beside
 	// them holds a second copy of a domain's records.
 	logStreams := []string{}
 	for _, names := range declared {
@@ -93,7 +95,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 	names := js.StreamNames(t.Context())
 	for name := range names.Name() {
 		family := strings.Contains(name, "TRACKER") || strings.Contains(name, "PAGES") ||
-			strings.Contains(name, "USAGE")
+			strings.Contains(name, "USAGE") || strings.Contains(name, "CODE")
 		if family && !slices.Contains(logStreams, name) {
 			t.Errorf("the node created %s beside the state logs %v", name, logStreams)
 		}

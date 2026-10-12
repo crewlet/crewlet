@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -129,6 +130,12 @@ type native struct {
 	// must check. Read from trackerReader, the answer was "no tracker" for
 	// exactly those companies, and their collector never started.
 	trackerObjects *tracker.Reader
+
+	// codeReader is the code log's rows as every reader reads them, set
+	// whenever this runtime runs a state log — the code log runs in every
+	// register, whatever the company's tools are, so its pack rows are the
+	// object store's to keep from the first push.
+	codeReader *code.Reader
 
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
@@ -334,6 +341,22 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}
 		n.trackerObjects = objects
 	}
+	// THE CODE LOG'S ROWS, UNCONDITIONALLY: there is no backend to choose for
+	// the code host, so a node that runs a state log runs this one, and the
+	// pack bundles its rows name are kept, audited and backed up from here.
+	{
+		running := sl.Domain(code.Domain{}.Name())
+		if running == nil {
+			return fmt.Errorf("engine: this node runs no code domain, so its rows " +
+				"have no reader — the domain is in the register and its stream " +
+				"failed to come up")
+		}
+		reader, err := code.NewReader(code.ReaderOptions{Log: running.reader})
+		if err != nil {
+			return fmt.Errorf("engine: code reader: %w", err)
+		}
+		n.codeReader = reader
+	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER
 	// backend rather than under the wiki's.
 	//
@@ -484,7 +507,11 @@ func (n *native) objectEstates() []collect.Estate {
 		// refused by name ([Engine.startCollectorOver]).
 		return nil
 	}
-	return []collect.Estate{tracker.ObjectEstate{Reader: n.trackerObjects}}
+	estates := []collect.Estate{tracker.ObjectEstate{Reader: n.trackerObjects}}
+	if n.codeReader != nil {
+		estates = append(estates, code.ObjectEstate{Reader: n.codeReader})
+	}
+	return estates
 }
 
 // startNativeFor brings the native runtime up for a company an APPLY hands a

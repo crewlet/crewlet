@@ -94,13 +94,15 @@ const AnchorsPerTrimmedRecord = 250
 // three million a day — where records apply fast: at twenty thousand anchors
 // a record's median apply is 10 ms, so the cap binds well inside any budget
 // the engine sets. On a large table the budget binds first: at a million
-// anchors a record's 43 ms median apply and its append fit about a hundred
-// records into the five seconds the engine gives each of today's two logs —
-// two and a half million anchors a day — and about seventy into a third of its
-// ten seconds once three logs share them — 1.7 million a day. Either is over
-// twenty times the code host's modelled rate of new subjects, so a backlog
-// left by a week-long blocked trim, or by a reanchor that put every anchor of
-// the generation before below the floor, clears within a day.
+// anchors a record's 43 ms median apply and its append fit about seventy
+// records into the third of its ten seconds the engine gives each of today's
+// three logs that write anchors — the tracker's, the knowledge base's and the
+// code host's — which is 1.7 million anchors a day (a hundred records into
+// five seconds, two and a half million a day, when two logs shared the
+// interval). That is over twenty times the code host's modelled rate of new
+// subjects, so a backlog left by a week-long blocked trim, or by a reanchor
+// that put every anchor of the generation before below the floor, clears
+// within a day.
 //
 // THE CAP STILL EARNS ITS PLACE beside the budget, because the budget is a
 // bound on THIS node's time and the records are applied on every node: a node

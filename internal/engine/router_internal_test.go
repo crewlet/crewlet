@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -49,6 +50,7 @@ var (
 	trackerName = tracker.Domain{}.Name()
 	pagesName   = pages.Domain{}.Name()
 	vectorsName = search.Domain{}.Name()
+	codeName    = code.Domain{}.Name()
 )
 
 // soundCopy is a reading of every registered domain's copy: not wrong, and

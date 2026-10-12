@@ -55,10 +55,10 @@ const logRow = (domain: string, over: Partial<RetentionDomain> = {}): RetentionD
   ...over,
 });
 
-/** The two logs every gate gesture writes, both read. */
-const bothLogs = (): RetentionDomain[] => [logRow("tracker"), logRow("pages")];
+/** The three logs every gate gesture writes, every one read. */
+const everyLog = (): RetentionDomain[] => [logRow("tracker"), logRow("pages"), logRow("code")];
 
-function report(nodes: RetentionNode[], domains: RetentionDomain[] = bothLogs()): RetentionReport {
+function report(nodes: RetentionNode[], domains: RetentionDomain[] = everyLog()): RetentionReport {
   return {
     v: 1,
     node_id: "node-1",
@@ -77,7 +77,7 @@ function held(
   gestures: Parameters<typeof heldGestures>[0],
   nodes: RetentionNode[],
   servedBy?: string,
-  domains: RetentionDomain[] = bothLogs(),
+  domains: RetentionDomain[] = everyLog(),
 ) {
   return heldGestures(gestures, { nodes, domains, node_id: servedBy ?? "" });
 }
@@ -166,13 +166,16 @@ test("a held gesture is let go of exactly when the report shows it", () => {
   expect(Object.keys(held(readmitted, [node({ evicted })]))).toEqual(["node-4:readmit"]);
 });
 
-/** The serving node's own row, applied through `seq` on both logs. */
-const servingNode = (seq: { tracker: number; pages: number }, generation = 1): RetentionNode =>
+/** The serving node's own row, applied through `seq` on every log. */
+const servingNode = (
+  seq: { tracker: number; pages: number; code: number },
+  generation = 1,
+): RetentionNode =>
   node({
     node_id: "node-1",
     live: true,
     domains: Object.fromEntries(
-      (["tracker", "pages"] as const).map((domain) => [
+      (["tracker", "pages", "code"] as const).map((domain) => [
         domain,
         {
           generation,
@@ -193,8 +196,9 @@ const servingNode = (seq: { tracker: number; pages: number }, generation = 1): R
 test("a complete eviction somebody else undid is let go of once the report includes it", () => {
   const complete = { opId: "op", force: false, answer: golden.answers["applied"] };
   const gestures = { "node-4:evict": complete };
-  // THE GOLDEN'S RECORDS: the tracker's at 918280002, the pages log's at 4410.
-  const past = servingNode({ tracker: 918280010, pages: 4420 });
+  // THE GOLDEN'S RECORDS: the tracker's at 918280002, the pages log's at 4410
+  // and the code log's at 77.
+  const past = servingNode({ tracker: 918280010, pages: 4420, code: 80 });
   expect(held(gestures, [node(), past], "node-1")).toEqual({});
   // NOT WHILE THE SERVING NODE IS BEHIND EITHER RECORD — a `pending` record
   // it has not applied is exactly why a report disagrees — nor on another
@@ -202,10 +206,19 @@ test("a complete eviction somebody else undid is let go of once the report inclu
   for (const [why, nodes, servedBy] of [
     [
       "behind the pages record",
-      [node(), servingNode({ tracker: 918280010, pages: 4409 })],
+      [node(), servingNode({ tracker: 918280010, pages: 4409, code: 80 })],
       "node-1",
     ],
-    ["another generation", [node(), servingNode({ tracker: 918280010, pages: 4420 }, 2)], "node-1"],
+    [
+      "behind the code record",
+      [node(), servingNode({ tracker: 918280010, pages: 4420, code: 76 })],
+      "node-1",
+    ],
+    [
+      "another generation",
+      [node(), servingNode({ tracker: 918280010, pages: 4420, code: 80 }, 2)],
+      "node-1",
+    ],
     ["no row of its own", [node()], "node-1"],
     ["no serving node named", [node(), past], undefined],
   ] as const) {
@@ -228,15 +241,22 @@ test("a complete eviction is held while the serving node could not read the evic
   const gestures = {
     "node-4:evict": { opId: "op", force: false, answer: golden.answers["applied"] },
   };
-  const past = servingNode({ tracker: 918280010, pages: 4420 });
+  const past = servingNode({ tracker: 918280010, pages: 4420, code: 80 });
   expect(held(gestures, [node(), past], "node-1")).toEqual({});
   for (const [why, domains] of [
-    ["the pages log unread", [logRow("tracker"), logRow("pages", { evictions_unreadable: true })]],
+    [
+      "the pages log unread",
+      [logRow("tracker"), logRow("pages", { evictions_unreadable: true }), logRow("code")],
+    ],
     [
       "the tracker log unread",
-      [logRow("tracker", { evictions_unreadable: true }), logRow("pages")],
+      [logRow("tracker", { evictions_unreadable: true }), logRow("pages"), logRow("code")],
     ],
-    ["no row for a log the gesture wrote", [logRow("tracker")]],
+    [
+      "the code log unread",
+      [logRow("tracker"), logRow("pages"), logRow("code", { evictions_unreadable: true })],
+    ],
+    ["no row for a log the gesture wrote", [logRow("tracker"), logRow("pages")]],
   ] as const) {
     expect(Object.keys(held(gestures, [node(), past], "node-1", [...domains])), why).toEqual([
       "node-4:evict",
@@ -257,16 +277,23 @@ test("a complete readmission is held while the serving node could not read the e
       answer: { ...golden.answers["pending"]!, evicted: false },
     },
   };
-  // BEHIND BOTH RECORDS, so only the node's own row could release it.
-  const behind = servingNode({ tracker: 1, pages: 1 });
+  // BEHIND EVERY RECORD, so only the node's own row could release it.
+  const behind = servingNode({ tracker: 1, pages: 1, code: 1 });
   expect(held(gestures, [node(), behind], "node-1")).toEqual({});
   for (const [why, domains] of [
-    ["the pages log unread", [logRow("tracker"), logRow("pages", { evictions_unreadable: true })]],
+    [
+      "the pages log unread",
+      [logRow("tracker"), logRow("pages", { evictions_unreadable: true }), logRow("code")],
+    ],
     [
       "the tracker log unread",
-      [logRow("tracker", { evictions_unreadable: true }), logRow("pages")],
+      [logRow("tracker", { evictions_unreadable: true }), logRow("pages"), logRow("code")],
     ],
-    ["no row for a log the gesture wrote", [logRow("tracker")]],
+    [
+      "the code log unread",
+      [logRow("tracker"), logRow("pages"), logRow("code", { evictions_unreadable: true })],
+    ],
+    ["no row for a log the gesture wrote", [logRow("tracker"), logRow("pages")]],
   ] as const) {
     expect(Object.keys(held(gestures, [node(), behind], "node-1", [...domains])), why).toEqual([
       "node-4:readmit",
@@ -277,7 +304,7 @@ test("a complete readmission is held while the serving node could not read the e
 test("a log whose evictions could not be read says so above the node block", () => {
   query.data = report(
     [node()],
-    [logRow("tracker"), logRow("pages", { evictions_unreadable: true })],
+    [logRow("tracker"), logRow("pages", { evictions_unreadable: true }), logRow("code")],
   );
   render(
     <Router>
@@ -290,7 +317,7 @@ test("a log whose evictions could not be read says so above the node block", () 
 
 test("the row offers a new eviction once a readmission elsewhere overtook this one", async () => {
   query.refetch = vi.fn();
-  query.data = report([node(), servingNode({ tracker: 1, pages: 1 })]);
+  query.data = report([node(), servingNode({ tracker: 1, pages: 1, code: 1 })]);
   vi.stubGlobal(
     "fetch",
     vi.fn(
@@ -316,9 +343,9 @@ test("the row offers a new eviction once a readmission elsewhere overtook this o
   expect(screen.getByRole("button", { name: "Eviction sent…" })).toBeTruthy();
 
   // READMITTED FROM THE COMMAND LINE, and the serving node has applied past
-  // both of this gesture's records: node-4 reads counted, and the row is
-  // the node's own state again.
-  query.data = report([node(), servingNode({ tracker: 918280010, pages: 4420 })]);
+  // every one of this gesture's records: node-4 reads counted, and the row
+  // is the node's own state again.
+  query.data = report([node(), servingNode({ tracker: 918280010, pages: 4420, code: 80 })]);
   rerender(
     <Router>
       <RetentionPanels />

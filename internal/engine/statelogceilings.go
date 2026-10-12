@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -118,6 +119,15 @@ const MinDomainCeiling int64 = 1 << 30
 // trailing window — the corpus grows every year the company exists — so an
 // unset one takes the same share of the volume the mutation log derives,
 // whatever the mutation log is set to (config.Stream.VectorsMaxBytes).
+//
+// The code log holds what the mutation log holds — a trailing window of
+// records, as long as a blocked trim lasts — at two thirds of its rate, the
+// reference company's pushes against its tracker writes, so an unset one takes
+// two thirds of the mutation log's ceiling, set or derived
+// (config.Stream.CodeMaxBytes), and a blocked trim fills both in the same
+// time. A push record names its pack bundle and never carries it: the bytes
+// are the object store's, so nothing a repository grows to reaches this
+// ceiling.
 func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (domainCeiling, error) {
 	switch domain.Name() {
 	case tracker.Domain{}.Name():
@@ -135,6 +145,9 @@ func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (dom
 		// is already the floor a scaled ceiling is held at.
 		bytes, explicit := stream.UsageMaxBytes()
 		return domainCeiling{Bytes: bytes, Field: "stream.usage_log_max_bytes", Explicit: explicit}, nil
+	case code.Domain{}.Name():
+		bytes, derived := stream.CodeMaxBytes(free)
+		return domainCeiling{Bytes: bytes, Field: "stream.code_log_max_bytes", Explicit: !derived}, nil
 	}
 	return domainCeiling{}, fmt.Errorf("engine: domain %q is registered and Tier A "+
 		"declares no ceiling for its stream, so it would reserve its own default "+
@@ -158,7 +171,8 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (
 			"path", volume, "error", err.Error(),
 			"detail", "every derived state-log ceiling falls back to its floor; "+
 				"set stream.tracker_log_max_bytes, stream.tracker_vectors_max_bytes, "+
-				"stream.pages_log_max_bytes and stream.usage_log_max_bytes to choose them")
+				"stream.pages_log_max_bytes, stream.usage_log_max_bytes and "+
+				"stream.code_log_max_bytes to choose them")
 	}
 	return sizeCeilings(ctx, host, boot.Stream, free, volume)
 }

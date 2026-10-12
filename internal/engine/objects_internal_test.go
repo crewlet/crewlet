@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
@@ -32,10 +33,19 @@ import (
 // time, instead.
 func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 	t.Parallel()
-	n := &native{trackerObjects: &tracker.Reader{}}
+	n := objectsRuntime()
 	if _, err := collect.Sources(references.All, n.objectEstates()...); err != nil {
 		t.Fatalf("the collector cannot be built from the declared tables: %v", err)
 	}
+}
+
+// objectsRuntime is a runtime as [Engine.startNative] leaves every one that
+// runs a state log: each domain whose rows name objects readable — the
+// tracker's whatever its tools are, and the code log's, which has no backend
+// to choose. Its readers are zero values, because only the estates' names are
+// read here.
+func objectsRuntime() *native {
+	return &native{trackerObjects: &tracker.Reader{}, codeReader: &code.Reader{}}
 }
 
 // EVERY REQUIRED TABLE NAMES ITS OWN DOMAIN'S LOG (ADR-0034). A backup reads
@@ -459,7 +469,17 @@ func TestTheCollectorNeverStartsOnceStopped(t *testing.T) {
 	e := newSandboxNode(t, parseCompany(t, companyWithoutSandboxDoc))
 	e.Stop(context.Background())
 
-	refs, err := collect.Sources(references.All, refusedEstate{name: tracker.ObjectEstate{}.Name()})
+	// A REFUSED ESTATE FOR EVERY DOMAIN A DECLARATION NAMES, so the
+	// references build whatever domains declare tables.
+	var estates []collect.Estate
+	seen := map[string]bool{}
+	for _, ref := range references.All {
+		if !seen[ref.Domain] {
+			seen[ref.Domain] = true
+			estates = append(estates, refusedEstate{name: ref.Domain})
+		}
+	}
+	refs, err := collect.Sources(references.All, estates...)
 	if err != nil {
 		t.Fatalf("the references: %v", err)
 	}

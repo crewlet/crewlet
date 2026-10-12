@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
@@ -237,9 +238,10 @@ const assumedClockSkew = time.Hour
 // once it was minted more than collect.PendingGrace ago, by its own. So the
 // grace has to exceed the bound by more than the two clocks can disagree, or
 // a write could name a key a collection had just read as nobody's. And the
-// bound itself has to outlast the slowest upload the engine accepts — a file
-// of tracker.MaxFileBytes at the objstore.MiBPace floor — or a legal upload
-// would finish only to be refused.
+// bound itself has to outlast the slowest upload the engine accepts — the
+// largest object any declaring domain stores (a file of tracker.MaxFileBytes,
+// a pack bundle of code.MaxPackBytes) at the objstore.MiBPace floor — or a
+// legal upload would finish only to be refused.
 func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 	t.Parallel()
 	if objstore.RecordWithin+assumedClockSkew >= collect.PendingGrace {
@@ -247,14 +249,23 @@ func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 			"collector's grace (%v): a write may name a key the collector deletes",
 			objstore.RecordWithin, assumedClockSkew, collect.PendingGrace)
 	}
-	slowest := objstore.PaceFor(tracker.MaxFileBytes)
-	if slowest >= objstore.RecordWithin {
-		t.Errorf("the largest file at the pacing floor takes %v to upload, and a "+
-			"write may name a key only %v after it was minted", slowest, objstore.RecordWithin)
+	for _, largest := range []struct {
+		name  string
+		bytes int64
+	}{
+		{"tracker.MaxFileBytes", tracker.MaxFileBytes},
+		{"code.MaxPackBytes", code.MaxPackBytes},
+	} {
+		slowest := objstore.PaceFor(largest.bytes)
+		if slowest >= objstore.RecordWithin {
+			t.Errorf("an object of %s (%d bytes) takes %v to upload at the pacing floor, "+
+				"and a write may name a key only %v after it was minted", largest.name,
+				largest.bytes, slowest, objstore.RecordWithin)
+		}
+		t.Logf("the slowest legal upload of %s takes %v of the %v a write may name its "+
+			"key in, and the grace leaves %v for the clocks to disagree by", largest.name,
+			slowest, objstore.RecordWithin, collect.PendingGrace-objstore.RecordWithin)
 	}
-	t.Logf("the slowest legal upload takes %v of the %v a write may name its key in, "+
-		"and the grace leaves %v for the clocks to disagree by",
-		slowest, objstore.RecordWithin, collect.PendingGrace-objstore.RecordWithin)
 }
 
 // retirement is what a RETIRED declaration owes (ADR-0033), reviewed here,

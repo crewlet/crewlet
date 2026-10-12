@@ -339,9 +339,23 @@ func TestABackupCarriesAnObjectNamedAfterItsCopy(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Take: %v", err)
 		}
-		if fmt.Sprint(pages) != fmt.Sprint([]int{backup.DeferredPage, 1}) {
-			t.Fatalf("the deferred records were read in pages of %v, want %d and then 1",
-				pages, backup.DeferredPage)
+		// THE TRACKER'S BACKLOG IN A WHOLE PAGE AND THE SHORT ONE, and
+		// one empty page for each other declaring log, whose copy
+		// deferred nothing.
+		var held []int
+		empty := 0
+		for _, rows := range pages {
+			if rows == 0 {
+				empty++
+				continue
+			}
+			held = append(held, rows)
+		}
+		_, logs := othersDeclared()
+		if fmt.Sprint(held) != fmt.Sprint([]int{backup.DeferredPage, 1}) || empty != logs {
+			t.Fatalf("the deferred records were read in pages of %v, want %d and then 1, "+
+				"and one empty page for each of the %d other declaring logs",
+				pages, backup.DeferredPage, logs)
 		}
 		if o := manifest.Objects; o == nil || o.Replayed != len(rest) || o.Objects != len(rest)+1 {
 			t.Fatalf("manifest objects = %+v, want all %d deferred records' objects carried",

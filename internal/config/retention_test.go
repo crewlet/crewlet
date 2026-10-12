@@ -2,6 +2,8 @@ package config_test
 
 import (
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -241,6 +243,104 @@ func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
 	}
 }
 
+// THE CODE LOG IS DERIVED FROM THE MUTATION LOG'S CEILING — set or derived —
+// at two thirds of it, the rate its push records arrive at beside the
+// tracker's, on the knowledge base's rule: both logs hold a trailing window of
+// records, so a blocked trim fills both in the same time. Each expectation is
+// the mutation log's own ceiling for the row, times two over three, held
+// inside the code log's own bounds.
+func TestCodeLogCeilingIsTwoThirdsOfTheTrackers(t *testing.T) {
+	t.Parallel()
+	const gib = int64(1) << 30
+	for name, tc := range map[string]struct {
+		stream config.Stream
+		free   int64
+		want   int64
+	}{
+		// The mutation log derives its 4 GiB floor on these two.
+		"an unmeasured volume": {free: 0, want: 4 * gib * 2 / 3},
+		"a 16 GiB disk":        {free: 16 * gib, want: 4 * gib * 2 / 3},
+		// A quarter of 200 GiB is 50 GiB.
+		"an ordinary disk": {free: 200 * gib, want: 50 * gib * 2 / 3},
+		// A quarter of a tebibyte is past the 64 GiB clamp.
+		"a large array, at the mutation log's clamp": {free: 1024 * gib, want: 64 * gib * 2 / 3},
+		// THE OPERATOR'S FIGURE FOR THE COMPANY, on a disk that would have
+		// derived far less.
+		"a mutation log an operator sized": {stream: config.Stream{TrackerLogMaxBytes: 900 * gib},
+			free: 8 * gib, want: 600 * gib},
+		"the largest mutation log Tier A accepts": {stream: config.Stream{TrackerLogMaxBytes: config.TrackerLogMaxBytesCeiling},
+			free: 8 * gib, want: config.TrackerLogMaxBytesCeiling * 2 / 3},
+		// AND NEVER BELOW WHAT TIER A WOULD ACCEPT AS A VALUE: two thirds
+		// of the smallest mutation log is under a gibibyte.
+		"the smallest mutation log Tier A accepts": {stream: config.Stream{TrackerLogMaxBytes: config.TrackerLogMaxBytesFloor},
+			free: 4000 * gib, want: config.CodeLogMaxBytesFloor},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, derived := tc.stream.CodeMaxBytes(tc.free)
+			if got != tc.want || !derived {
+				t.Errorf("the code log derives (%d, derived %v), want (%d, true)",
+					got, derived, tc.want)
+			}
+			if got < config.CodeLogMaxBytesFloor || got > config.CodeLogMaxBytesCeiling {
+				t.Errorf("the code log derives %d, outside the %d..%d Tier A accepts",
+					got, config.CodeLogMaxBytesFloor, config.CodeLogMaxBytesCeiling)
+			}
+		})
+	}
+
+	// AN OPERATOR'S OWN NUMBER IS NEITHER DERIVED NOR SCALED.
+	s := config.Stream{CodeLogMaxBytes: 3 * gib, TrackerLogMaxBytes: 900 * gib}
+	if got, derived := s.CodeMaxBytes(200 * gib); got != 3*gib || derived {
+		t.Errorf("a set code-log ceiling reads back (%d, derived %v)", got, derived)
+	}
+}
+
+// THE SCHEMA SPELLS EACH LOG'S BOUNDS A SECOND TIME, as the literals of a
+// struct tag, and the generated schema is what an editor and `crewlet validate
+// --schema` admit a value by — so a tag left behind when its constant moved
+// admits a value validation then refuses. The store floor's tag did exactly
+// that when the floor moved from five gibibytes to six; nothing tied the two.
+// This does, for every field whose bounds are constants.
+func TestTheStoreFloorIsTheSchemasMinimum(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		field    string
+		min, max int64
+	}{
+		{"StoreMaxBytes", config.StoreMaxBytesFloor, config.StoreMaxBytesCeiling},
+		{"TrackerLogMaxBytes", config.TrackerLogMaxBytesFloor, config.TrackerLogMaxBytesCeiling},
+		{"TrackerVectorsMaxBytes", config.TrackerVectorsMaxBytesFloor, config.TrackerVectorsMaxBytesCeiling},
+		{"PagesLogMaxBytes", config.PagesLogMaxBytesFloor, config.PagesLogMaxBytesCeiling},
+		{"UsageLogMaxBytes", config.UsageLogMaxBytesFloor, config.UsageLogMaxBytesCeiling},
+		{"CodeLogMaxBytes", config.CodeLogMaxBytesFloor, config.CodeLogMaxBytesCeiling},
+	} {
+		field, ok := reflect.TypeFor[config.Stream]().FieldByName(tc.field)
+		if !ok {
+			t.Errorf("config.Stream has no field %s", tc.field)
+			continue
+		}
+		bounds := map[string]int64{}
+		for _, part := range strings.Split(field.Tag.Get("js"), ";") {
+			key, value, found := strings.Cut(part, "=")
+			if !found {
+				continue
+			}
+			n, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				t.Errorf("%s's js tag %q: %v", tc.field, part, err)
+				continue
+			}
+			bounds[key] = n
+		}
+		if bounds["min"] != tc.min || bounds["max"] != tc.max {
+			t.Errorf("%s's schema admits %d..%d and validation %d..%d — the tag "+
+				"was left behind when a constant moved", tc.field,
+				bounds["min"], bounds["max"], tc.min, tc.max)
+		}
+	}
+}
+
 // THE VECTOR CHANGELOG IS SIZED FOR THE PEAK, FROM THE VOLUME.
 //
 // The peak is a model change republishing every source at once — the whole
@@ -333,6 +433,10 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		"pages at a gibibyte":      {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib }, true, ""},
 		"pages at 256 GiB":         {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256 * gib }, true, ""},
 		"pages past 256 GiB":       {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256*gib + 1 }, false, "pages_log_max_bytes"},
+		"code below a gibibyte":    {func(b *config.Bootstrap) { b.Stream.CodeLogMaxBytes = gib - 1 }, false, "code_log_max_bytes"},
+		"code at a gibibyte":       {func(b *config.Bootstrap) { b.Stream.CodeLogMaxBytes = gib }, true, ""},
+		"code at a tebibyte":       {func(b *config.Bootstrap) { b.Stream.CodeLogMaxBytes = 1024 * gib }, true, ""},
+		"code past a tebibyte":     {func(b *config.Bootstrap) { b.Stream.CodeLogMaxBytes = 1024*gib + 1 }, false, "code_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()
@@ -401,12 +505,12 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 		says   string
 	}{
 		"unset": {func(*config.Bootstrap) {}, true, ""},
-		// FIVE: four state logs at their one-gibibyte floor, and one for
-		// every stream that reserves nothing. Four was the floor with three.
-		"below five gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 5*gib - 1 }, false, "store_max_bytes"},
-		"at five gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 5 * gib }, true, ""},
-		"at 64 TiB":            {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
-		"past 64 TiB":          {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
+		// SIX: five state logs at their one-gibibyte floor, and one for
+		// every stream that reserves nothing. Five was the floor with four.
+		"below six gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6*gib - 1 }, false, "store_max_bytes"},
+		"at six gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6 * gib }, true, ""},
+		"at 64 TiB":           {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
+		"past 64 TiB":         {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
 		// OTHERWISE A VALID EXTERNAL DOCUMENT, coordination included: a
 		// case whose document has a second problem passes on whichever
 		// of the two fires, which would leave this rule uncovered.
@@ -434,6 +538,14 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
 			b.Stream.UsageLogMaxBytes = 1 * gib
 		}, false, "usage_log_max_bytes"},
+		// AND THE CODE LOG: four ceilings that fit exactly, and the fifth
+		// tips them past it — the message names it beside the others.
+		"tipped past it by the code log": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 49 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+			b.Stream.UsageLogMaxBytes = 1 * gib
+			b.Stream.CodeLogMaxBytes = 1 * gib
+		}, false, "code_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()

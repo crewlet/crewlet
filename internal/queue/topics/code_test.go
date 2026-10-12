@@ -1,0 +1,85 @@
+package topics_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/queue/topics"
+)
+
+// THE SUBJECT AND ITS INVERSE AGREE ON EVERY SHAPE THE CODE LOG CARRIES.
+//
+// The pages log's invariant, on the grammar the code domain composes: a name
+// claim's 32-hex token, a repository's UUIDv7, a node's id, a generation's
+// decimal, the company's one subject and the barrier's empty id.
+func TestACodeSubjectRoundTripsThroughItsInverse(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ kind, id string }{
+		"a name claim":                 {"name", "0f1e2d3c4b5a69788796a5b4c3d2e1f0"},
+		"a repository":                 {"repo", "0190f3c4-5b6a-7c8d-9e0f-0123456789ab"},
+		"an eviction":                  {"eviction", "node-a"},
+		"a generation":                 {"generation", "2"},
+		"the company's activation":     {"company", "activation"},
+		"the barrier, which has no id": {"barrier", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			subject := topics.CodeLogSubject(tc.kind, tc.id)
+			if !strings.HasPrefix(subject, topics.CodeLogPrefix+".") {
+				t.Fatalf("%q is outside the log's own subject space", subject)
+			}
+			kind, id, ok := topics.CodeLogPath(subject)
+			if !ok {
+				t.Fatalf("%q is not recognised as a subject on this log", subject)
+			}
+			if kind != tc.kind || id != tc.id {
+				t.Fatalf("%q parses back as (%q, %q), want (%q, %q)",
+					subject, kind, id, tc.kind, tc.id)
+			}
+		})
+	}
+}
+
+// A CODE SUBJECT WITH NO KIND IS NOT PUBLISHABLE, for the tracker's reason: it
+// would address the log's own prefix, a real subject no applier has a case for.
+func TestACodeSubjectWithNoKindIsRefusedRatherThanBuilt(t *testing.T) {
+	t.Parallel()
+	if got := topics.CodeLogSubject("", "anything"); got != "" {
+		t.Fatalf("a kindless subject built as %q", got)
+	}
+}
+
+// THE INVERSE REFUSES WHAT THE BUILDER COULD NOT HAVE PRODUCED — the other
+// four logs' subjects among them, since five domains share one broker.
+func TestTheCodePathRefusesWhatItDidNotBuild(t *testing.T) {
+	t.Parallel()
+	for _, subject := range []string{
+		"",
+		"crewlet.agent.alice.inbox",
+		topics.CodeLogPrefix,
+		topics.CodeLogPrefix + ".",
+		topics.CodeLogPrefix + ".repo.",
+		topics.TrackerLogPrefix + ".task.1",
+		topics.TrackerVectorsPrefix + ".source.1",
+		topics.PagesLogPrefix + ".page.1",
+		topics.UsageLogPrefix + ".seat.node-a.2026-09-23.a1",
+	} {
+		if kind, id, ok := topics.CodeLogPath(subject); ok {
+			t.Errorf("%q was read as kind %q id %q and is not a subject on the "+
+				"code log", subject, kind, id)
+		}
+	}
+}
+
+// THE CODE WILDCARD COVERS THE GRAMMAR IT IS CREATED FOR.
+func TestTheCodeWildcardCoversItsOwnGrammar(t *testing.T) {
+	t.Parallel()
+	prefix, ok := strings.CutSuffix(topics.CodeLogWildcard, ">")
+	if !ok {
+		t.Fatalf("the wildcard %q is not a wildcard", topics.CodeLogWildcard)
+	}
+	if prefix != topics.CodeLogPrefix+"." {
+		t.Fatalf("the wildcard covers %q and subjects are built under %q",
+			prefix, topics.CodeLogPrefix+".")
+	}
+}

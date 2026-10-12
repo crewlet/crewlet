@@ -767,7 +767,7 @@ stream:
                                     #   `no suitable peers for placement,
                                     #   insufficient storage` — naming whichever
                                     #   stream was provisioned last. Bounds:
-                                    #   5 GiB..64 TiB — the four state logs'
+                                    #   6 GiB..64 TiB — the five state logs'
                                     #   1 GiB floors and one for every stream
                                     #   that reserves nothing — and it must not
                                     #   be smaller than the ceilings declared
@@ -934,19 +934,19 @@ stream:
                                     #   stream, so a full log drops no history —
                                     #   the append is refused, loudly, naming
                                     #   whatever is blocking the trim. ONE
-                                    #   BUDGET FOR ALL THREE LOGS: the broker
+                                    #   BUDGET FOR EVERY STATE LOG: the broker
                                     #   reserves each ceiling in full when it
                                     #   creates the stream, so the derived
-                                    #   ceilings of this field and the two below
+                                    #   ceilings of this field and the four below
                                     #   are scaled down together to fit half of
                                     #   what the broker can grant them, less the
-                                    #   ceiling any of the three that already
+                                    #   ceiling any of them that already
                                     #   exists holds (never below 1 GiB each).
                                     #   A value you set is never scaled, and a
                                     #   boot that cannot reserve it fails
                                     #   naming the field, the
                                     #   bytes it needed and the bytes the broker
-                                    #   had. Every one of the three is the value
+                                    #   had. Every one of them is the value
                                     #   a stream is CREATED with: editing it
                                     #   later changes nothing until
                                     #   `crewlet retention set-capacity` does.
@@ -1003,6 +1003,36 @@ stream:
                                     #   forty seats and twenty schedules.
                                     #   Crossing it refuses the append and the
                                     #   log_headroom alarm names `usage`
+  # code_log_max_bytes: 11453246122 #   the code log's ceiling (1 GiB..1 TiB):
+                                    #   the ordered stream a repository's refs,
+                                    #   packs and settings move on. It runs on
+                                    #   every node that runs a state log,
+                                    #   whether or not the company hosts code.
+                                    #   UNSET DERIVES two thirds of the
+                                    #   mutation log's ceiling, set or derived
+                                    #   (so 2⅔..42⅔ GiB from a volume alone):
+                                    #   once seats push, a company's push
+                                    #   records arrive at about two thirds of
+                                    #   the rate of its tracker writes, so a
+                                    #   blocked trim fills either one in the
+                                    #   same time. A push record names its pack
+                                    #   and never carries it — the bytes are the
+                                    #   object store's — so how large the
+                                    #   repositories grow does not reach this
+                                    #   ceiling. Crossing it refuses the append,
+                                    #   like the mutation log's. The RESERVATION
+                                    #   IS PAID WHETHER OR NOT ANYTHING PUSHES:
+                                    #   below about 500 GiB free the five logs
+                                    #   share three eighths of it, so this one
+                                    #   costs the others room — at 100 GiB free
+                                    #   the mutation log gets 12.5 GiB rather
+                                    #   than 16.2. A company that hosts no code
+                                    #   and is short of broker room sets the
+                                    #   1 GiB floor (1073741824) BEFORE the
+                                    #   first boot; a stream that exists keeps
+                                    #   its ceiling, so after it `crewlet
+                                    #   retention set-capacity` is what lowers
+                                    #   this one and raises another
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,

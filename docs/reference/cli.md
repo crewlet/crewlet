@@ -17,8 +17,8 @@ subcommand below is served by it.
 | `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
-| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's and the pages log — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
-| `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of the tracker's or the pages log, and the refusal prints the numbers. Nothing is written to either log on a refusal; a partial readmission is finished like an eviction |
+| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the pages log and the code log — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
+| `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of the tracker's, the pages or the code log, and the refusal prints the numbers. Nothing is written to any log on a refusal; a partial readmission is finished like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with. A raise the broker has no room for is refused **before** the window opens, and one it refuses at the apply is reported as a refusal rather than as an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void. A restored log holding records written after the restore that this node's rows do not hold is refused unless `-discard` accepts that they are applied on no node |
@@ -945,14 +945,14 @@ read; the watermark block says which instead of listing terms. Each node row
 carries its position's generation (`GEN`), and a position from a generation
 the log has left prints `left gen N` (or `ahead gen N`) in place of a lag,
 since its sequence compares with nothing the log holds now; a node that
-reported its log diverged at its checkpoint is marked `LOG DIVERGED`. `RESERVE` is the top of the ceiling the tracker and pages logs keep for
+reported its log diverged at its checkpoint is marked `LOG DIVERGED`. `RESERVE` is the top of the ceiling the tracker, pages and code logs keep for
 gate records ([the gate reserve](../guides/retention.md#the-gate-reserve)),
-`-` on the vector changelog, which keeps none; `HEADROOM` is what is left of
+`-` on the vector and usage logs, which keep none; `HEADROOM` is what is left of
 the rest, the ceiling ordinary writes are refused at — so a log at `0%` still
 takes an eviction.
 
 A term that does not apply to a domain prints `n/a` rather than `0`: the
-vector log has no wake feed, and an absent term is a different fact from one
+vector, usage and code logs have no wake feed, and an absent term is a different fact from one
 that permits nothing. Where a log does have one, its `feed_ack_floor` is that
 log's own feed — never another domain's.
 
@@ -998,7 +998,7 @@ coming back; eviction is the gesture for one that is not.
 
 `-confirm` repeats the node id, the same shape the other destructive gestures
 use. The trim counts nodes per log, so the eviction is a record on every log it
-counts nodes on — the tracker's log and the pages log — and each answers on its
+counts nodes on — the tracker's log, the pages log and the code log — and each answers on its
 own line with its [three-valued outcome](../guides/replication.md#a-write-has-three-outcomes),
 or `not written` and the reason that stopped it:
 
@@ -1007,9 +1007,11 @@ $ crewlet retention evict node-4 -confirm node-4
 evict node-4 (operation 01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4)
   tracker: applied at CREWLET_TRACKER_LOG 918280002
   pages: applied at CREWLET_PAGES_LOG 4410
+  code: applied at CREWLET_CODE_LOG 2207
   node-4 stays COUNTED for about a minute, so a live node is certain to have read its own tombstone before the trim passes it.
   tracker trim floor 918100000 → 918100000
   pages trim floor 4100 → 4100
+  code trim floor 2100 → 2100
 ```
 
 The command prints the watermark before and after and the instant the
@@ -1019,7 +1021,7 @@ one is certain to have read its own tombstone before the trim passes it.
 The node you ran it on writes every log itself: every data node holds the
 whole estate, so one command reaches every log.
 
-The gesture is **judged once, before either log is written**. A node that still
+The gesture is **judged once, before any log is written**. A node that still
 holds a live presence lease is refused with `409 eviction_refused` — it is
 still reaching the fleet and almost certainly running, and an eviction would
 drop everything it writes and take its copies of the logs it is evicted from
@@ -1104,15 +1106,15 @@ crewlet: the node answered 409: readmission_refused
 ```
 
 The comparison is the one the node's own write fence makes: its **last
-published position** in each log that claims identity — the tracker's and the
-pages log — against the **higher of the published floor and the log's first
+published position** in each log that claims identity — the tracker's, the
+pages log and the code log — against the **higher of the published floor and the log's first
 surviving sequence**, and the node must have applied every record up to the
 one just before it. A node that has never published a position is judged as
 holding nothing; one whose position is from a generation the log has since
 left is refused, since nothing it holds compares with anything the log still
-has. The judgement is made once, for both logs, before either is written, and
-nothing is written to either on a refusal. A readmission that reaches one log
-and not the other is finished with `-op-id`, exactly as an eviction is.
+has. The judgement is made once, for every log, before any is written, and
+nothing is written to any of them on a refusal. A readmission that reaches some
+logs and not others is finished with `-op-id`, exactly as an eviction is.
 
 What to do is let the node catch up, which it does on its own: start it if it
 is not running, and it replays what the log still holds or adopts a peer's
@@ -1153,8 +1155,8 @@ crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 858993459
 
 Changes a log's byte ceiling, raising or lowering it. A log's Tier A ceiling
 (`stream.tracker_log_max_bytes`, `stream.tracker_vectors_max_bytes`,
-`stream.pages_log_max_bytes`, `stream.usage_log_max_bytes`) is not a live
-setting, only the value its stream
+`stream.pages_log_max_bytes`, `stream.usage_log_max_bytes`,
+`stream.code_log_max_bytes`) is not a live setting, only the value its stream
 is created with. A resize is decided against the usage the log is at, and a
 publisher makes that a moving quantity, so this runs with the whole fleet in a
 maintenance mode and costs **three fleet-wide restarts**, two more per retry. The
@@ -1184,9 +1186,9 @@ check that quietly proves nothing.
 A target whose ordinary ceiling is at or below what the log already holds is
 refused before the window opens, naming both numbers and the least target that
 would do: that ceiling would refuse every ordinary append the moment it
-applied. On the tracker and pages logs the ordinary ceiling is the target less
+applied. On the tracker, pages and code logs the ordinary ceiling is the target less
 its [gate reserve](../guides/retention.md#the-gate-reserve), a sixteenth; on
-the vector changelog it is the whole target. A target under a gibibyte is
+the vector and usage logs it is the whole target. A target under a gibibyte is
 refused too — Tier A's floor for every log, and the one the reserve is sized
 against. A target under the current ceiling and above the usage is accepted,
 and is how a log gives a reservation back. A raise the broker cannot
@@ -1279,7 +1281,7 @@ generation on the live stream — the one after every generation the domain has
 used, an evicted peer's included — every other domain's stays where it is, and
 the domain's applier resumes on the node with no restart.
 
-For the tracker and the knowledge base it refuses while any peer has already
+For the tracker, the knowledge base and the code log it refuses while any peer has already
 re-anchored the stream, **naming the peer** — that peer's rows are the fleet's
 history in the new generation, and this node adopts its snapshot instead. A
 peer that is gone for good is released by evicting it first

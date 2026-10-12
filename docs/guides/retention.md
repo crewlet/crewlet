@@ -22,7 +22,7 @@ Four figures per domain, and no others:
 |---|---|
 | `bytes` | what the log holds now |
 | `max_bytes` | the ceiling the **broker** is enforcing |
-| `reserve_bytes` | on the tracker and pages logs, the top of that ceiling kept for gate records — see [the gate reserve](#the-gate-reserve) |
+| `reserve_bytes` | on the tracker, pages and code logs, the top of that ceiling kept for gate records — see [the gate reserve](#the-gate-reserve) |
 | `headroom_fraction` | how much of the ceiling **ordinary writes** are held to is unused: `max_bytes` less `reserve_bytes` |
 
 `max_bytes` is read from the stream's own configuration and never from the
@@ -68,9 +68,9 @@ being counted about a minute after that record lands.
 
 **The estate's logs are trimmed by one node**: the holder of the trim duty,
 `worker:retention`. Only a data node may claim it, since the trim reads the
-estate it holds — and not one whose copy of the tracker or the knowledge base
-is out of service, since the evictions and the arbitration anchors it counts
-are in those rows: such a node
+estate it holds — and not one whose copy of the tracker, the knowledge base or
+the code log is out of service, since the evictions and the arbitration anchors
+it counts are in those rows: such a node
 declines the duty (`retention_duty_declined`), gives its lease back if it holds
 it (`retention_duty_given_back`), and one whose copies serve takes it at its
 next tick ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
@@ -82,7 +82,9 @@ Every node still evaluates its own alarms on every tick, whatever duty it holds.
 log's own change feed opens — the feed's **group** `crewlet-tracker-feed` on
 `CREWLET_TRACKER_LOG`, and its group `crewlet-pages-feed` on
 `CREWLET_PAGES_LOG` — because a record that feed has not acknowledged is one
-nobody has been woken for yet. So a feed that has stopped holds back its own
+nobody has been woken for yet. The code log is trimmed by the same six terms
+and declares no wake feed, so its feed term is absent rather than zero: no
+wake is derived from a code record in this release. So a feed that has stopped holds back its own
 log and no other, and `blocked_by: feed_ack_floor` on a domain names that
 domain's feed.
 
@@ -95,7 +97,8 @@ the group name alone finds nothing.
 A term that **could not be read** blocks, exactly as one that permits nothing
 does. A term nobody could read is not a term that is satisfied, and treating it
 as satisfied is how a trim advances past a node that could not report. A term
-this domain does not **have** — the vector log has no wake feed — is `n/a`
+this domain does not **have** — the vector, usage and code logs have no wake
+feed, so on them the feed term is absent — is `n/a`
 rather than zero, which is a different thing again. And a term that was
 read and **binds nothing** — no hold is pinning the log, or a solo fleet takes
 no snapshots — reads `unbounded` rather than carrying a sequence. Inside the
@@ -273,10 +276,10 @@ the object's next write to the broker to be refused before the write asks the
 log what the object holds. Kept, the anchors would grow by every object the log
 ever carried, on every data node, for the life of the deployment.
 
-So after each tick's purge, on each log that writes anchors — the tracker's and
-the knowledge base's — the trim holder counts the anchors its own copy holds
-below the log's **first surviving record** and appends one `trimmed` record per
-250 of them, at most 128 a tick. Every node's applier removes up to 250
+So after each tick's purge, on each log that writes anchors — the tracker's,
+the knowledge base's and the code log — the trim holder counts the anchors its
+own copy holds below the log's **first surviving record** and appends one
+`trimmed` record per 250 of them, at most 128 a tick. Every node's applier removes up to 250
 anchors per record, lowest first, in the transaction that applies it — the
 same rows on every node, because it is a record on the log rather than a sweep
 each node runs on its own schedule
@@ -298,8 +301,8 @@ each node runs on its own schedule
   holder waits for one record's apply, never for the whole run.
 - **Within a time budget.** The trim holder evaluates its own alarms on the
   same loop that sweeps, so a tick's sweeps share one alarm interval (ten
-  seconds) equally — five seconds each for the tracker's and the knowledge
-  base's logs — and each stops appending when its share is spent, leaving the
+  seconds) equally — a third each for the tracker's, the knowledge base's and
+  the code log — and each stops appending when its share is spent, leaving the
   rest to the next tick. That bounds two things. The holder's alarms are
   evaluated at most one interval late, however slow its applier is. And a data
   node that applies the records more slowly than the holder, which builds the
@@ -321,8 +324,8 @@ each node runs on its own schedule
   re-measures it on yours). A backlog drains at up to 128 records — 32,000
   anchors — per log per tick where records apply quickly. On a large table the
   time budget binds first: at a million anchors a record's apply and append
-  take about 45 ms, so a five-second share appends about a hundred records a
-  tick, two and a half million anchors a day.
+  take about 45 ms, so a share of a third appends about seventy records a
+  tick, 1.7 million anchors a day.
 - **What to watch:** the duty logs `retention_anchors_swept` (`domain`,
   `generation`, `below`, `records`, and `more_remain` when the cap or the time
   budget stopped it with anchors still below) when it appends, and
@@ -535,8 +538,8 @@ See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-opera
 ### A node a peer re-anchored past
 
 When one node [re-anchors](#re-anchoring-a-recreated-or-restored-log) the
-tracker's or the knowledge base's log, it opens the next generation from its
-own rows — and every other node's rows are then a history the log no longer
+tracker's, the knowledge base's or the code log, it opens the next generation
+from its own rows — and every other node's rows are then a history the log no longer
 continues from. Nothing on the log can bring them level, so each of those nodes
 adopts a snapshot from a node in the new generation, **on its own**:
 
@@ -637,10 +640,11 @@ peer re-anchored past](#a-node-a-peer-re-anchored-past)). The row itself
 stays: a readmission is judged by it.
 
 The trim counts nodes **per log**, so an eviction is a record on every log it
-counts nodes on: the tracker's log and the pages log. (The vector log counts
-nothing — a node behind on it is a coverage figure — and gets none.) Every
-node running the state log can make the gesture, whichever backends the
-company uses: a company on an external tracker still runs both logs.
+counts nodes on: the tracker's log, the pages log and the code log. (The
+vector and usage logs claim no identity and count no node — a node behind on
+either is a coverage figure — and get none.) Every node running the state log
+can make the gesture, whichever backends the company uses: a company on an
+external tracker still runs every log.
 
 **The node you run the gesture on writes every log itself**: every data node
 holds the whole estate, so one gesture on any data node reaches every log. A
@@ -658,7 +662,7 @@ almost certainly running — an eviction would drop everything it writes and
 take its copies of the logs it is evicted from out of service. Stop it and wait
 for its `LIVE` column in
 `crewlet retention status` to read `no`; `-force` overrides the refusal for a node wedged in a way
-that still renews its lease. A refusal writes nothing to either log. If this
+that still renews its lease. A refusal writes nothing to any log. If this
 node cannot read the presence leases at all — a coordination fault — the
 eviction is refused as one nobody could judge, and says so; `-force` takes it
 past that too, since the leases are the only thing the judgement reads, and
@@ -668,7 +672,7 @@ alphanumeric first, then letters, digits, `.`, `_` or `-`, at most 64
 characters) is refused before anything is judged.
 
 Past the judgement the record goes to every log at once, and each answers on
-its own line — the tracker's log, then the pages log — with the [three-valued outcome](replication.md#a-write-has-three-outcomes)
+its own line — the tracker's log, then the pages log, then the code log — with the [three-valued outcome](replication.md#a-write-has-three-outcomes)
 every write has — `applied`, `pending` or `unknown` — or `not written` with the
 reason that stopped that log. A log that answered holds its record whatever
 the other did, and the gesture runs to its end **whatever happens to the
@@ -853,11 +857,11 @@ exactly the pin the eviction lifted, while the node itself is missing records
 the log has already lost or is licensed to lose.
 
 The comparison is the one the node's own [write fence](#the-trim-floor) makes,
-made once for every log before either is written: its last published position
-in the tracker's log and the pages log, against the higher of each log's
-published floor and its first surviving sequence. A node that has never
-published a position is judged as holding nothing. Nothing is written to either
-log on a refusal, and the node needs nothing from you but time: start it if it
+made once for every log before any is written: its last published position
+in the tracker's log, the pages log and the code log, against the higher of
+each log's published floor and its first surviving sequence. A node that has
+never published a position is judged as holding nothing. Nothing is written to
+any log on a refusal, and the node needs nothing from you but time: start it if it
 is not running, and it [catches up on its own](#the-join-runbook) — replaying
 what the log still holds, adopting a snapshot where it does not. Readmit it
 once it has applied every record up to the one just before that bound: in
@@ -871,7 +875,7 @@ refusal writes nothing. The node's `GEN` column says whether its position is
 at the log's current generation at all: a position from one the log has left
 prints `left gen N` in place of a lag, because its sequence is in a number
 space that no longer exists and a readmission is refused on it whatever it
-reads. A readmission that reaches one log and not the other is finished the
+reads. A readmission that reaches some logs and not others is finished the
 way an eviction is, with `-op-id`.
 
 The refusal is not what keeps the fleet's data safe, and being refused is not
@@ -912,8 +916,8 @@ evict`](#eviction) — is itself a record on that log, so a
 log that refused it like any other append could never be emptied: the
 eviction was refused, run again, and refused again.
 
-So on the two logs that carry gate records, the tracker's and the knowledge
-base's, **ordinary writes are refused at a soft ceiling** a sixteenth below
+So on the three logs that carry gate records, the tracker's, the knowledge
+base's and the code log, **ordinary writes are refused at a soft ceiling** a sixteenth below
 the broker's, and the top sixteenth — the **gate reserve**, `reserve_bytes`
 in `crewlet retention status` — takes only the records that install or lift a
 gate: an eviction and the readmission that inverts it. A log full for
@@ -928,7 +932,7 @@ for the reserve and is not a node's eviction or readmission — a purge included
 — is refused before anything is sent, and passes none of the fences an
 eviction is excused.
 
-| | tracker and pages logs | vector changelog |
+| | tracker, pages and code logs | vector changelog |
 |---|---|---|
 | ordinary writes and barriers refused at | the ceiling less the reserve | the ceiling |
 | gate records refused at | the ceiling | — (it carries none) |
@@ -951,7 +955,7 @@ soft ceiling left, is there so that never happens.
 
 A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
 `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
-`stream.usage_log_max_bytes`) is not a live
+`stream.usage_log_max_bytes`, `stream.code_log_max_bytes`) is not a live
 setting: it is the value the log's stream is created with, sized with the
 other logs inside what the broker can grant (see
 [Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
@@ -961,7 +965,7 @@ maintenance window**, and the reason is not caution:
 - A resize is decided against the usage the log is at, and a publisher makes
   that a moving quantity. The verb decides it before the window opens: a
   target whose soft ceiling — the target less its
-  [gate reserve](#the-gate-reserve), on the tracker and pages logs; the whole
+  [gate reserve](#the-gate-reserve), on the tracker, pages and code logs; the whole
   target on the vector changelog — is at or below what the log already holds
   is refused, naming both and the least target that would do, because that
   ceiling would refuse every ordinary append the moment it applied. So is a
@@ -1397,8 +1401,9 @@ node pauses. A reanchor that is refused puts the loop back as it was.
 In order, it: checks the confirmation against the live stream; refuses while
 the fleet guards below say so, and on a node evicted from that domain; appends
 the domain's own generation record to the adopted stream (the tracker's and the
-knowledge base's each keep one, applied as `tracker_log_generations` and
-`pages_log_generations`; the vectors keep none); reads the stream's instant
+knowledge base's and the code log each keep one, applied as
+`tracker_log_generations`, `pages_log_generations` and `code_log_generations`;
+the vectors keep none); reads the stream's instant
 again, refusing if it was rebuilt again meanwhile; moves this node's consumer;
 and commits the checkpoint. Every step before the checkpoint can be repeated,
 so a reanchor that failed part-way is finished by running it again: it derives
@@ -1416,7 +1421,7 @@ past the copy, which is on no log any more — so no other node can replay it,
 and each of them adopts a snapshot from a node in the new generation on its
 own ([a node a peer re-anchored past](#a-node-a-peer-re-anchored-past)).
 
-For the tracker and the knowledge base it refuses while any peer has already
+For the tracker, the knowledge base and the code log it refuses while any peer has already
 re-anchored the stream — a peer at a later generation of it — naming the peer:
 that peer's rows are the fleet's history in the new generation, and a second
 reanchor from another node's rows would open the same generation over a

@@ -32,7 +32,9 @@ flowchart LR
     R -->|the object| S
 ```
 
-Today the store holds [a project's files](../guides/work-tracker.md#a-projects-files).
+Today the store holds [a project's files](../guides/work-tracker.md#a-projects-files)
+and the pack bytes of the company's git repositories — one object per push,
+named by its `code_packs` row, a required reference like a file's.
 It is built for more than that — chat attachments and anything else a row can
 name by key — and every consumer follows the same rule: the estate names the
 object, and the store keeps its bytes.
@@ -370,8 +372,9 @@ object is garbage from then on. Instead one data node at a time — the
 `object-collector` fleet duty — runs two passes against the store, both
 judged against the replicated estate the data node holds:
 
-- **Collection, hourly.** It pins the estate (a barrier on the tracker's log,
-  so it reads every row committed when it began), lists the store, and deletes
+- **Collection, hourly.** It pins the estate (a barrier on the log of every
+  domain that declares a table naming objects — the tracker's and the code
+  log — so it reads every row committed when it began), lists the store, and deletes
   every object **stored more than a day ago, whose key was minted more than a
   day ago, that no row — [live or retired](#live-and-retired-references) —
   names**. The collector reads the rows of every domain that declares a table
@@ -429,10 +432,11 @@ judged against the replicated estate the data node holds:
   by object: only what that listing passes over is then asked about by name,
   and a range whose second listing fails too is unanswered, file by file.
 
-A node whose copy of the tracker is out of service does not hold the duty at
-all — its passes would read the rows that name the files through a read that
-copy refuses — and gives the duty back if it holds it, so a node whose copies
-serve takes it at its next minute's turn
+A node whose copy of the tracker or of the code log is out of service does
+not hold the duty at all — its passes would read the rows that name the files
+(a project's files, a push's pack) through a read that copy refuses — and gives
+the duty back if it holds it, so a node whose copies serve takes it at its next
+minute's turn
 ([singleton duties](seat-ownership.md#singleton-duties)).
 
 A pass that fails is tried again ten minutes later. The duty records each pass

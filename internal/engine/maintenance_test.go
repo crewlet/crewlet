@@ -53,6 +53,9 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// every recall scanned, forever.
 		"agent_diary",
 		"agent_diary_long",
+		// The code log's operation ledger, a per-node job for the reason
+		// pages_ops gives below.
+		"code_ops",
 		"conversation_sessions",
 		// THE COORDINATION STORE'S REMOVAL MARKERS. A bucket no clock
 		// ages keeps the marker every removal leaves for the life of
