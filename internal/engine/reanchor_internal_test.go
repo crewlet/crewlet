@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // A REANCHOR'S INPUTS NAME THE STREAM THEY WERE READ FROM, and its instant is
@@ -888,6 +889,59 @@ func TestAReanchorOfThePagesLogIsThePagesOwn(t *testing.T) {
 			WHERE key = 'ENG' AND purpose = 'after' AND version >= ?`,
 			int64(gen)*statelog.GenerationStride) == 1
 	})
+}
+
+// EVERY REGISTERED DOMAIN CAN BE RE-ANCHORED.
+//
+// A reanchor asks the domain for its generation record before it reads
+// anything else, and a registered domain with no answer could never be
+// recovered from a recreated log: the usage log had none, so the verb its
+// stopped applier names refused it every time, and that was found by an
+// operator in the middle of the incident the verb exists for rather than by
+// the build.
+func TestEveryRegisteredDomainCanBeReanchored(t *testing.T) {
+	t.Parallel()
+	for _, domain := range registeredDomains() {
+		if _, err := generationEncoder(domain); err != nil {
+			t.Errorf("%s: %v", domain.Name(), err)
+		}
+	}
+}
+
+// A RECREATED USAGE LOG IS RE-ANCHORED LIKE EVERY OTHER LOG, and its applier
+// resumes in the new generation — where every day a node republishes lands
+// above every row from the old log, which a log rebuilt at the same
+// generation would have the position guard refuse for ever.
+func TestARecreatedUsageLogIsReanchored(t *testing.T) {
+	t.Parallel()
+	e, js := aRunningNode(t)
+	s := e.native.Load().log
+	running := s.Domain(usage.Domain{}.Name())
+	if running == nil {
+		t.Fatal("the node runs no usage log")
+	}
+
+	rebuildLog(t, js, usage.Domain{}.Stream())
+	s.publishPositions(t.Context())
+	stream := usage.Domain{}.Stream().Name
+	view, err := e.ReanchorStatus(t.Context(), stream)
+	if err != nil {
+		t.Fatalf("ReanchorStatus: %v", err)
+	}
+	plan, err := e.Reanchor(t.Context(), ReanchorRequest{
+		Stream: stream, Confirm: statelog.ConfirmationOf(view.CreatedAt), By: "ops-1",
+	})
+	if err != nil {
+		t.Fatalf("Reanchor: %v", err)
+	}
+	waitUntil(t, 10*time.Second, "the usage applier to resume in the new generation", func() bool {
+		r := s.Domain(usage.Domain{}.Name()).runner
+		return r.StreamIdentity() == nil && r.Committed().Generation == plan.Generation
+	})
+	if plan.Generation == 0 {
+		t.Fatal("the reanchor left the usage log at generation 0, where every record " +
+			"the rebuilt log carries sits below every row from the old one")
+	}
 }
 
 // ONE DOMAIN'S LOOP HALTS AND RESUMES WITHOUT THE OTHERS.

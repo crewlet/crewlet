@@ -1403,7 +1403,7 @@ the fleet guards below say so, and on a node evicted from that domain; appends
 the domain's own generation record to the adopted stream (the tracker's and the
 knowledge base's and the code log each keep one, applied as
 `tracker_log_generations`, `pages_log_generations` and `code_log_generations`;
-the vectors keep none); reads the stream's instant
+the vectors and the usage log keep none); reads the stream's instant
 again, refusing if it was rebuilt again meanwhile; moves this node's consumer;
 and commits the checkpoint. Every step before the checkpoint can be repeated,
 so a reanchor that failed part-way is finished by running it again: it derives

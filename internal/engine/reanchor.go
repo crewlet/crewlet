@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // REANCHORING: the one recovery for a stream that was genuinely recreated.
@@ -192,8 +193,9 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 // A SWITCH, like [barrierEncoder] and [stateLog.publisherFor], because what a
 // record on a domain's log looks like is the domain's, and the register is the
 // one place every domain this build runs is named. A registered domain with no
-// case here could never be re-anchored, which is refused by name rather than
-// discovered by an operator mid-incident.
+// case here could never be re-anchored, which
+// TestEveryRegisteredDomainCanBeReanchored refuses at build time rather than an
+// operator discovering it mid-incident — as the usage log once was.
 func generationEncoder(domain statelog.Domain) (statelog.GenerationEncoder, error) {
 	switch domain.Name() {
 	case tracker.Domain{}.Name():
@@ -202,6 +204,8 @@ func generationEncoder(domain statelog.Domain) (statelog.GenerationEncoder, erro
 		return pages.GenerationRecord{}, nil
 	case search.Domain{}.Name():
 		return search.GenerationRecord{}, nil
+	case usage.Domain{}.Name():
+		return usage.GenerationRecord{}, nil
 	case code.Domain{}.Name():
 		return code.GenerationRecord{}, nil
 	}
