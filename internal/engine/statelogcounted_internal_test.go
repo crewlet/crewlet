@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -21,36 +22,57 @@ import (
 // joiner with no row counts, a live node holding no data does not, and an
 // evicted node's row stops counting once its eviction is past the window, as
 // it does in the trim.
+//
+// JUDGED BY NAME, AND WITHOUT THIS NODE. Whether the running node counts
+// itself yet rests on two loops that run on their own clocks after it admits
+// seats — its first positions row, and its presence view's next listing (the
+// view starts listing before the node claims its presence, so its first
+// listing can name nobody) — and neither is what this test is about. Taken as
+// a baseline SIZE that later counts add to, it failed under load: the node
+// was not yet counted when the baseline was read, its own row then satisfied
+// the wait for the joiner, and the joiner arriving later read as an evicted
+// row still counted past its window.
 func TestTheSnapshotLoopCountsWhatTheTrimCounts(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
 	s := e.native.Load().log
 	ctx := t.Context()
 	now := time.Now()
-	count := func(at time.Time) int {
+	// others is every node counted at the instant other than this one.
+	others := func(at time.Time) []string {
 		t.Helper()
 		n, err := e.counted(ctx, s, at)
 		if err != nil {
 			t.Fatalf("counted: %v", err)
 		}
-		return len(n)
+		return slices.DeleteFunc(n, func(id string) bool { return id == s.nodeID })
 	}
-	before := count(now)
 
-	for id, roles := range map[string][]string{
-		"node-joiner": {"data", "seats"},
-		"node-seats":  {"seats"},
+	// The stateless node is claimed FIRST, so any listing that names the
+	// joiner began after both claims and names the stateless node too: the
+	// moment the joiner is counted is a moment the stateless node could have
+	// been, and the check below it is not vacuous.
+	for _, n := range []struct {
+		id    string
+		roles []string
+	}{
+		{"node-seats", []string{"seats"}},
+		{"node-joiner", []string{"data", "seats"}},
 	} {
-		if _, _, err := e.backends.Coord.TryAcquire(ctx, coord.NodeResource(id), coord.AcquireOptions{
-			Owner: id + ":1", TTL: time.Hour, Meta: map[string]any{"roles": roles},
+		if _, _, err := e.backends.Coord.TryAcquire(ctx, coord.NodeResource(n.id), coord.AcquireOptions{
+			Owner: n.id + ":1", TTL: time.Hour, Meta: map[string]any{"roles": n.roles},
 		}); err != nil {
-			t.Fatalf("claim %s's presence: %v", id, err)
+			t.Fatalf("claim %s's presence: %v", n.id, err)
 		}
 	}
 	e.dataView.Invalidate()
 	waitUntil(t, 10*time.Second, "the joiner to be counted", func() bool {
-		return count(now) == before+1
+		return slices.Contains(others(now), "node-joiner")
 	})
+	if got, want := others(now), []string{"node-joiner"}; !slices.Equal(got, want) {
+		t.Fatalf("with a joiner and a stateless node live the fleet counts %v "+
+			"beside this node, want %v", got, want)
+	}
 
 	if err := s.fleet.PutPositions(ctx, coord.NodePositions{
 		NodeID: "node-gone", At: now.UTC(),
@@ -58,19 +80,20 @@ func TestTheSnapshotLoopCountsWhatTheTrimCounts(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish node-gone's row: %v", err)
 	}
-	if got := count(now); got != before+2 {
-		t.Fatalf("with node-gone's row the fleet counts %d, want %d", got, before+2)
+	if got, want := others(now), []string{"node-gone", "node-joiner"}; !slices.Equal(got, want) {
+		t.Fatalf("with node-gone's row the fleet counts %v beside this node, want %v", got, want)
 	}
 	mustApply(t, "evict node-gone", func() (tracker.WriteResult, error) {
 		return e.native.Load().writer.EvictNode(ctx, statelog.NewOpID(now, "evict-node-gone"), "node-gone")
 	})
-	if got := count(now); got != before+2 {
-		t.Errorf("inside the fence window the fleet counts %d, want node-gone still "+
-			"counted (%d), as the trim counts it", got, before+2)
+	if got, want := others(now), []string{"node-gone", "node-joiner"}; !slices.Equal(got, want) {
+		t.Errorf("inside the fence window the fleet counts %v beside this node, "+
+			"want node-gone still counted (%v), as the trim counts it", got, want)
 	}
-	if got := count(now.Add(statelog.EvictionFenceWindow + time.Minute)); got != before+1 {
-		t.Errorf("past the fence window the fleet counts %d, want node-gone's row "+
-			"uncounted (%d), as the trim uncounts it", got, before+1)
+	past := now.Add(statelog.EvictionFenceWindow + time.Minute)
+	if got, want := others(past), []string{"node-joiner"}; !slices.Equal(got, want) {
+		t.Errorf("past the fence window the fleet counts %v beside this node, "+
+			"want node-gone's row uncounted (%v), as the trim uncounts it", got, want)
 	}
 }
 
