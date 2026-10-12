@@ -28,7 +28,17 @@ import (
 // this state lived on the node's own database: a valve that counted per node,
 // a claim a peer could not see, a completion ledger a redelivery to another
 // node walked straight past.
-func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
+//
+// newFleet makes the fresh store one case runs against and answers how a NODE
+// opens a handle on it. Most cases need one handle; the cases about what
+// concurrent writers must agree on spread their writers across several
+// ([fleetHarness.nodes]), because a backend may serialise one handle's writes
+// before its store ever sees them — the KV store sends a node's concurrent
+// writes to one token counter as a single compare-and-swap — and a race run
+// through one handle would then certify nothing about how the store itself
+// arbitrates between nodes. A backend whose store is its handle answers the
+// same handle every time.
+func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet)) {
 	t.Helper()
 	groups := []struct {
 		name  string
@@ -62,9 +72,10 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 			for _, c := range g.cases {
 				t.Run(c.name, func(t *testing.T) {
 					t.Parallel()
-					f := newFleet(t)
+					node := newFleet(t)
+					f := node()
 					if f == nil {
-						t.Fatal("newFleet returned a nil backend")
+						t.Fatal("newFleet opened a nil backend")
 					}
 					// NOT t.Context(), for the reason [newHarness]
 					// states: that one is cancelled before cleanup
@@ -72,7 +83,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 					// that are still mid-call at that point.
 					ctx, cancel := context.WithTimeout(context.Background(), stallBudget)
 					t.Cleanup(cancel)
-					c.fn(&fleetHarness{t: t, ctx: ctx, f: f})
+					c.fn(&fleetHarness{t: t, ctx: ctx, f: f, node: node})
 				})
 			}
 		})
@@ -97,6 +108,24 @@ type fleetHarness struct {
 	t   *testing.T
 	ctx context.Context
 	f   coord.Fleet
+
+	// node opens another handle on f's store, as another node would.
+	node func() coord.Fleet
+}
+
+// nodes is n handles on the case's store, each a node of its own: f, and n-1
+// opened beside it.
+func (h *fleetHarness) nodes(n int) []coord.Fleet {
+	h.t.Helper()
+	out := []coord.Fleet{h.f}
+	for range n - 1 {
+		peer := h.node()
+		if peer == nil {
+			h.t.Fatal("newFleet opened a nil peer")
+		}
+		out = append(out, peer)
+	}
+	return out
 }
 
 // now is the suite's base instant.

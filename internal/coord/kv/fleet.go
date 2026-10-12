@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/period"
@@ -643,6 +643,14 @@ type FleetStore struct {
 	// adopted as it stands, and its age is what it honours. Zero is a bucket
 	// with no age, which reaps nothing and so caps nothing.
 	maxClaim time.Duration
+
+	// lanes is this node's queue of writes to each token counter, so that
+	// its own concurrent writes to one counter are one compare-and-swap,
+	// and patience is how long a write to one goes on racing other nodes'
+	// — the client's own request timeout. See counter.go.
+	lanesMu  sync.Mutex
+	lanes    map[string]*counterLane
+	patience time.Duration
 }
 
 var _ coord.Fleet = (*FleetStore)(nil)
@@ -697,6 +705,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 	store := &FleetStore{
 		js:         js,
 		rateWindow: cfg.RateWindow, freshness: cfg.StatusFreshness,
+		patience: js.Options().DefaultTimeout,
 	}
 	for _, bucket := range []struct {
 		into     *jetstream.KeyValue
@@ -1200,7 +1209,8 @@ func decodeTally(raw []byte) (coord.Tally, error) {
 // listening; on this one, only a write that itself fails leaves the partial
 // ([coord.SeatUncountedError]). It cannot hang in the caller's place: the
 // client bounds every request made on a context with no deadline by its own
-// API timeout, and only a lost race is retried, a bounded number of times.
+// API timeout, and only a race lost to another node is retried, for no longer
+// than the counter's patience (counter.go).
 // The company's own write keeps the caller's context, because before it
 // nothing is recorded: a caller that hung up first is told so with nothing
 // half done, and one that must record a round however it ends passes a
@@ -1472,102 +1482,6 @@ func (f *FleetStore) count(ctx context.Context, scope string, tokens int, window
 		return coord.Tally{}, nil, err
 	}
 	return tally, refusing, nil
-}
-
-// casTally is one read-modify-write of a scope's counter under a
-// compare-and-swap, retried when a peer wrote in between.
-//
-// change is handed the stored counter — the zero Tally and false when the
-// scope has none — and answers the counter to write and whether to write it at
-// all. casTally answers what change last answered, written or not.
-//
-// A LOST RACE WAITS BEFORE IT RETRIES, which no other compare-and-swap in
-// this file does, because no other key is this hot: the org's counter is
-// written by every round of every seat the company runs, and a seat's by each
-// of its own rounds and its coding runs. Retried at once, N writers that lost
-// together race again together, and measured on the embedded broker 32
-// concurrent charges exhausted sixteen immediate retries in four runs of ten —
-// each one a round failed closed as an outage. See [counterRetryDelay].
-//
-// Exhausting the retries is reported as an ERROR, never as a refusal: a
-// charge's caller then fails the round rather than telling an agent it is out
-// of budget, which is the fail-closed direction the contract requires.
-func (f *FleetStore) casTally(ctx context.Context, scope, verb string,
-	change func(stored coord.Tally, found bool) (coord.Tally, bool)) (coord.Tally, error) {
-
-	key := encodeKey(scope)
-	for attempt := range fleetCASRetries {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return coord.Tally{}, unavailable(verb, ctx.Err())
-			case <-time.After(counterRetryDelay(attempt)):
-			}
-		}
-		var (
-			stored   coord.Tally
-			found    bool
-			revision uint64
-		)
-		entry, err := f.get(ctx, f.budgets, key)
-		switch {
-		case errors.Is(err, jetstream.ErrKeyNotFound):
-		case err != nil:
-			return coord.Tally{}, unavailable("read the token counter", err)
-		default:
-			if stored, err = decodeTally(entry.Value()); err != nil {
-				return coord.Tally{}, unavailable("decode the token counter", err)
-			}
-			found, revision = true, entry.Revision()
-		}
-		next, write := change(stored, found)
-		if !write {
-			return next, nil
-		}
-		raw, err := encodeTally(next)
-		if err != nil {
-			return coord.Tally{}, err
-		}
-		if found {
-			_, err = f.budgets.Update(ctx, key, raw, revision)
-		} else {
-			_, err = f.create(ctx, f.budgets, key, raw)
-		}
-		switch {
-		case err == nil:
-			return next, nil
-		case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyExists):
-			continue
-		default:
-			return coord.Tally{}, unavailable(verb, err)
-		}
-	}
-	return coord.Tally{}, contended(verb, scope)
-}
-
-// The counter's retry backoff: a doubling wait from counterRetryBase to
-// counterRetryCeiling, jittered across most of itself.
-//
-// A MILLISECOND TO START, because that is a compare-and-swap's own round trip
-// on a clustered broker — a shorter wait is still inside the write that beat
-// this one — and doubling to a CEILING OF 32 ms, so the sixteen attempts
-// [fleetCASRetries] allows span about a third of a second at worst. That is
-// what a round waits behind a contended counter before it fails closed, and it
-// is small beside the model call the round is about to make; what the wait
-// buys is that the losers of one race do not arrive together at the next. The
-// JITTER is the widest [backoff.Jitter] gives, because a counter's writers
-// lost the same race at the same instant and only the spread separates them.
-// Measured on the embedded broker: 32 concurrent charges on one key, which
-// failed four runs in ten with no wait, succeeded in every one of 200.
-const (
-	counterRetryBase    = time.Millisecond
-	counterRetryCeiling = 32 * time.Millisecond
-	counterRetryJitter  = 0.9
-)
-
-// counterRetryDelay is the wait before the counter's attempt'th retry.
-func counterRetryDelay(attempt int) time.Duration {
-	return backoff.Jitter(backoff.Doubling(attempt, counterRetryBase, counterRetryCeiling), counterRetryJitter)
 }
 
 // tally reads one scope's counter rolled to windows, which is what it would
