@@ -218,6 +218,20 @@ func ProtocolGateCounts(resource string) bool {
 // in logs and lets tests assert the tri-state deliberately.
 var ErrUnavailable = errors.New("coordination store unavailable")
 
+// ErrWriteUnknown marks an [ErrUnavailable] that came AFTER a write was sent:
+// the store's answer to it was lost, so the write may have landed.
+//
+// A WRITE'S OWN THIRD ANSWER, and it exists for the methods that read before
+// they write. A caller of a plain compare-and-set knows its one call was the
+// write, so any error there is unknown and needs no marker; a caller of a
+// read-modify-write cannot tell a read that failed — after which nothing was
+// written — from a put whose reply never came, and the two ask opposite
+// things of it: one is "nothing changed, ask again", the other "it may have
+// changed, look before saying it did not". A method that marks this says so
+// in its contract ([ChatReads] does), and every error such a method returns
+// WITHOUT it changed nothing.
+var ErrWriteUnknown = errors.New("coord: the write was sent and its answer was lost")
+
 // ErrTTLTooLong reports a claim or renew asking for a TTL the store cannot
 // honour.
 //

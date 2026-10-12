@@ -24,7 +24,7 @@ import (
 // own loop, which holds each write in a batch to its own patience
 // (counter.go) — unless what the loop races ends it of itself (below).
 //
-// What this replaced was sixteen immediate attempts for every record, and two
+// What this replaced was sixteen immediate attempts for every record, and three
 // records have writers nothing bounds. The token counter is the hottest key
 // the fleet has, and counter.go measures what sixteen cost there. A
 // credential's cooldown is written by every call refused on that credential
@@ -32,7 +32,10 @@ import (
 // each earlier one that lands first, so a burst of more than sixteen could run
 // it out of attempts with every one answered, leaving the longest cooldown
 // unrecorded and warning that the cooldown was not shared while the fleet held
-// one. The rest race writers something does bound — the two ends of a channel,
+// one. And a person's chat read record is written by every tab and device they
+// read in and by the reconcile, each flushing again as soon as it has landed
+// ([FleetStore.mutateChatRead]), so sixteen held sixteen writers and a
+// seventeenth tab failed the flush. The rest race writers something does bound — the two ends of a channel,
 // a follow's message and the person who ends it, a create that finds the key
 // removed between its refusal and its read — and lose for a whole patience
 // only on a store this engine does not produce; on those the rule costs
