@@ -190,8 +190,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "engine",
       icon: "key",
       title: "The engine refused this browser's token",
-      detail:
-        "Reads and writes are both blocked. Set a token matching one of the api.auth.tokens entries.",
+      detail: "Set a valid token to read or change anything.",
     });
   } else if (!connected) {
     out.push({
@@ -200,8 +199,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "engine",
       icon: "power",
       title: "No connection to the engine",
-      detail:
-        "The page is showing the last state it received and polling a REST snapshot until the socket returns.",
+      detail: "Showing the last state received.",
     });
   }
 
@@ -215,22 +213,26 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "engine",
       icon: "sliders-vertical",
       title: "No company configuration is active",
-      detail:
-        "The engine is running with nothing to run: no seats are spawned, and every inbound webhook is refused with a 503 its sender will retry. Import a company revision.",
+      detail: "Import a company to start.",
       path: ["settings", "config"],
     });
   }
   if (engine?.posture && ["shed", "stuck", "isolated"].includes(engine.posture)) {
+    // A SHED IS THE POSTURE THAT RELEASES THIS NODE'S SEATS, so its row says
+    // so. `stuck` and `isolated` keep naming the posture: an isolated node is
+    // still serving the configuration it has.
+    const shed = engine.posture === "shed";
     out.push({
       id: `posture-${engine.posture}`,
       severity: "critical",
       subject: "engine",
       icon: "server",
-      title: `This node's control-plane posture is "${engine.posture}"`,
-      detail:
-        engine.posture === "shed"
-          ? "It has released its seats because it could not reach the configuration it is supposed to run."
-          : "It cannot converge on the fleet's active configuration.",
+      title: shed
+        ? "This node released its seats"
+        : `This node's control-plane posture is "${engine.posture}"`,
+      detail: shed
+        ? "It can’t reach its configuration."
+        : "It cannot converge on the fleet's active configuration.",
       path: ["settings", "nodes"],
     });
   }
@@ -241,7 +243,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "engine",
       icon: "power",
       title: "This node is draining",
-      detail: `${engine.in_flight ?? 0} turn(s) still in flight. Seats are released as each finishes.`,
+      detail: `${engine.in_flight ?? 0} turns still running.`,
       path: ["settings", "nodes"],
     });
   }
@@ -265,7 +267,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "budget",
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgRefusing.period]} token budget is refusing charges`,
-      detail: `${refusalWords(orgRefusing)} Raise token_budget.${orgRefusing.period}, or wait for ${orgRefusing.window} to turn over at ${orgRefusing.resets_at}.`,
+      detail: `${refusalWords(orgRefusing)} Raise the company limit, or wait until ${orgRefusing.resets_at}.`,
       path: ["spend"],
       at: orgRefusing.refused_at,
     });
@@ -276,7 +278,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "budget",
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgNear.period]} token budget is nearly spent`,
-      detail: `${spentWords(orgNear)} Raise token_budget.${orgNear.period}, or wait for ${orgNear.window} to turn over at ${orgNear.resets_at}.`,
+      detail: `${spentWords(orgNear)} Raise the company limit, or wait until ${orgNear.resets_at}.`,
       path: ["spend"],
     });
   }
@@ -363,7 +365,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
           // round one lower than the seat page it lands on, and "?" for the
           // opening frame — which is the case this row exists for: a first
           // model round that never came back.
-          detail: `${call.phase} · ${roundLabel(call).text} — no update since ${call.updated_at}.`,
+          detail: `${call.phase} · ${roundLabel(call).text}`,
           // THE OVERVIEW, where the seat's current turn is drawn round by
           // round — the profile's default tab, so the path alone opens it.
           path: ["agents", "seats", String(agent.handle ?? agent.id)],
@@ -384,7 +386,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         subject: "budget",
         icon: "coins",
         title: `${agent.role}'s ${PERIOD_ADJECTIVE[refusing.period]} token budget is refusing charges`,
-        detail: `${refusalWords(refusing)} Raise the seat's token_budget.${refusing.period}, or wait for ${refusing.window} to turn over at ${refusing.resets_at}.`,
+        detail: `${tokensOf(refusing)} spent. Raise the limit, or wait until ${refusing.resets_at}.`,
         // THE SETTINGS TAB, where the ceiling that refused is written beside
         // each window's live meter.
         path: ["agents", "seats", String(agent.handle ?? agent.id)],
@@ -420,15 +422,13 @@ export function attentionQueue(input: AttentionInput): Attention[] {
  * sentence simply ends.
  */
 function waitingDetail(run: SandboxRun, now: number): string {
-  const asked = run.question || "A coding run paused on a clarification and cannot continue.";
-  if (run.status === "reseed") {
-    return `${asked} The box was already reclaimed, so answering restarts the work from the question.`;
-  }
+  const asked = run.question || "A coding run needs your answer to continue.";
+  if (run.status === "reseed") return `${asked} Answering restarts the work.`;
   const ttl = run.pause_ttl_seconds;
   const parked = run.paused_at ? Date.parse(run.paused_at) : NaN;
   if (!(ttl > 0) || Number.isNaN(parked)) return asked;
   const left = parked + ttl * 1_000 - now;
-  if (left <= 0) return `${asked} Its box is past its pause window and may be reclaimed.`;
+  if (left <= 0) return `${asked} Answer soon or the work restarts.`;
   // ONE ROUNDED MINUTE TOTAL, split afterwards. Flooring the hours out of
   // `left` and rounding the remainder independently rounds the same value two
   // ways: any remainder at or past 59m30s carries into a sixtieth minute the
@@ -443,10 +443,15 @@ function waitingDetail(run: SandboxRun, now: number): string {
   return `${asked} Its box is reclaimed in ${when}.`;
 }
 
+/** A window's spend against its ceiling: "1,200 of 5,000 tokens". */
+function tokensOf(w: BudgetWindow): string {
+  return `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens`;
+}
+
 /** A refusing window in words: the gate's own stamp where it has one, and the
  *  arithmetic where the window is full but no charge has been turned away yet. */
 function refusalWords(w: BudgetWindow): string {
-  const spent = `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens in ${w.window}.`;
+  const spent = `${tokensOf(w)} in ${w.window}.`;
   return w.refused_at
     ? `Turns are being declined at the budget gate; last refusal ${w.refused_at}. ${spent}`
     : `No further charge fits, so turns are being declined at the gate. ${spent}`;
@@ -454,5 +459,5 @@ function refusalWords(w: BudgetWindow): string {
 
 /** A near window's spend in words. */
 function spentWords(w: BudgetWindow): string {
-  return `${w.used.toLocaleString()} of ${(w.limit ?? 0).toLocaleString()} tokens in ${w.window} are spent.`;
+  return `${tokensOf(w)} in ${w.window} are spent.`;
 }
