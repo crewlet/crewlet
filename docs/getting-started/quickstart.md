@@ -464,10 +464,12 @@ client at `/operator/mcp` with your API token:
 ```
 
 It gets the same tracker and knowledge-base tools a seat holds — eighteen over
-the tracker and five over the pages — and eleven more that no seat is given:
+the tracker and five over the pages — and sixteen more that no seat is given:
 the saved views, the catalogue write, a person's own queue and inbox, the
-trash, and the board drag. Its writes are attributed to the token's own name rather than to a
-seat — so an audit can tell your edit from an agent's. See
+trash, the board drag, answering a parked coding run, pausing and resuming a
+seat, steering a running turn and answering from the knowledge base. Its
+writes are attributed to the token's own name rather than to a seat — so an
+audit can tell your edit from an agent's. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
 The same picture is available over the API:

@@ -116,11 +116,13 @@ another node whose ledger reaches back that far.
 
 The same tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
-with the writes attributed to your token rather than to a seat, and eleven more
+with the writes attributed to your token rather than to a seat, and sixteen more
 beside them that no seat is given: the saved views, the catalogue write, a
-person's own queue and inbox, the trash, and the board drag. That set is built
-once per company as ONE operator catalogue, and every operator transport serves
-it, so what a person can do is the same whichever way they reach the company.
+person's own queue and inbox, the trash, the board drag, answering a parked
+coding run, pausing and resuming a seat, steering a running turn and answering
+from the knowledge base. That set is built once per company as ONE operator
+catalogue, and every operator transport serves it, so what a person can do is
+the same whichever way they reach the company.
 
 Over MCP, each tracker write's answer also carries the **`op_id`** of the
 operation the call was, and the write tools take it back as an argument: an

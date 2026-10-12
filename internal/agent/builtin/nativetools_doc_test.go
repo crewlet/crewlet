@@ -176,7 +176,17 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 	t.Parallel()
 	tracker, pages := nativeTools(t)
 	total := len(tracker) + len(pages)
-	operatorOnly := operatorOnlyTools(t)
+	// WHAT NO SEAT IS GIVEN, counted from the whole catalogue: the tracker's
+	// operator-only tools and the fleet-record ones (a parked run, a paused
+	// seat, a running turn, a question answered from the knowledge base). The
+	// tracker's own set is held to be inside it, which is all it used to count.
+	operatorOnly := everyOperatorOnlyTool(t)
+	for _, name := range operatorOnlyTools(t) {
+		if !slices.Contains(operatorOnly, name) {
+			t.Errorf("the tracker's operator-only %s is missing from the set these "+
+				"pages count as given to no seat", name)
+		}
+	}
 	title := func(word string) string { return strings.ToUpper(word[:1]) + word[1:] }
 
 	guide := readPage(t, "docs/guides/tools-and-mcp.md")
