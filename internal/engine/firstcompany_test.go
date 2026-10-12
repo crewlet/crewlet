@@ -101,7 +101,7 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 		t.Error("the node's new state log has no trim — its logs only grow")
 	}
 	jobs := e.Maintenance().Jobs()
-	for _, job := range []string{"tracker_respread", "tracker_ops", "pages_ops"} {
+	for _, job := range []string{"tracker_respread", "tracker_ops", "pages_ops", "code_ops"} {
 		if !slices.Contains(jobs, job) {
 			t.Errorf("the sweep runs %v, which does not include %s", jobs, job)
 		}

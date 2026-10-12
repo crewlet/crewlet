@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -201,6 +202,8 @@ func generationEncoder(domain statelog.Domain) (statelog.GenerationEncoder, erro
 		return pages.GenerationRecord{}, nil
 	case search.Domain{}.Name():
 		return search.GenerationRecord{}, nil
+	case code.Domain{}.Name():
+		return code.GenerationRecord{}, nil
 	}
 	return nil, fmt.Errorf("engine: domain %q is registered and has no "+
 		"generation record, so a recreated log of it could never be re-anchored",

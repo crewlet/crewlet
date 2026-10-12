@@ -1412,7 +1412,7 @@ type Stream struct {
 	// EMBEDDED ONLY, for the reason `store_dir` and `debug` are: it is
 	// handed to the server this process STARTS. An external cluster's
 	// account limits are its own operator's to set.
-	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=5368709120;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
+	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=6442450944;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
 
 	// Cluster makes the embedded server a MEMBER of a cluster with its
 	// peers: the fleet's broker is those members, and every other node
@@ -1601,6 +1601,28 @@ type Stream struct {
 	// stop replicating and the log's headroom alarm names this domain —
 	// rather than dropping the oldest day.
 	UsageLogMaxBytes int64 `yaml:"usage_log_max_bytes,omitempty" json:"usage_log_max_bytes,omitempty" js:"min=1073741824;max=68719476736" desc:"Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a node's seats and schedules."`
+
+	// CodeLogMaxBytes is the byte ceiling on the code log — the ordered
+	// stream a repository's refs, packs and settings move on.
+	//
+	// UNSET DERIVES IT beside the mutation log's, at two thirds of that
+	// log's ceiling as set or derived, clamped to 1 GiB..1 TiB. The ratio is
+	// the record rate: once seats push, a company's push records arrive at
+	// about two thirds of the rate of its tracker's, so a blocked trim
+	// reaches either ceiling in the same time.
+	//
+	// It shares the state logs' one budget, and what the mutation log's
+	// field says about it holds here unchanged: the value is the one the
+	// stream is CREATED with, a derived value is scaled with the others to
+	// fit the broker and a set one is not, and crossing it refuses the
+	// append rather than shedding history. The log runs on every node that
+	// runs a state log, whether or not the company hosts code, as every
+	// domain's log does — so its derived ask is paid by every company:
+	// below about 500 GiB free it comes out of the other logs' share (at
+	// 100 GiB the mutation log is created at 12.5 GiB rather than 16.2). A
+	// company that hosts no code and is short of broker room sets the floor
+	// here before the first boot, which the other logs then divide.
+	CodeLogMaxBytes int64 `yaml:"code_log_max_bytes,omitempty" json:"code_log_max_bytes,omitempty" js:"min=1073741824;max=1099511627776" desc:"Byte ceiling on the code log, the ordered stream a repository's refs, packs and settings move on; unset derives two thirds of the mutation log's ceiling, set or derived, 1 GiB..1 TiB. Reserved whether or not the company hosts code: one that hosts none and is short of broker room sets 1073741824 before the first boot."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
@@ -2010,6 +2032,8 @@ func (s *Stream) validate(path Path) error {
 		PagesLogMaxBytesFloor, PagesLogMaxBytesCeiling)
 	bytesInRange(&p, path, "usage_log_max_bytes", s.UsageLogMaxBytes,
 		UsageLogMaxBytesFloor, UsageLogMaxBytesCeiling)
+	bytesInRange(&p, path, "code_log_max_bytes", s.CodeLogMaxBytes,
+		CodeLogMaxBytesFloor, CodeLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
 	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
@@ -2034,19 +2058,20 @@ func (s *Stream) validate(path Path) error {
 	// the refusal itself, which names this limit, what was already spoken
 	// for, and the field the ceiling came from.
 	declared := s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes +
-		s.UsageLogMaxBytes
+		s.UsageLogMaxBytes + s.CodeLogMaxBytes
 	if s.StoreMaxBytes > 0 && declared > s.StoreMaxBytes {
 		p.add(at(path, "store_max_bytes"), ErrConflict,
 			"%d bytes is smaller than the stream ceilings declared inside it "+
 				"(tracker_log_max_bytes %d + tracker_vectors_max_bytes %d + "+
-				"pages_log_max_bytes %d + usage_log_max_bytes %d = %d): the broker "+
+				"pages_log_max_bytes %d + usage_log_max_bytes %d + "+
+				"code_log_max_bytes %d = %d): the broker "+
 				"refuses a stream whose ceiling it cannot back, so this node would "+
 				"fail to provision one of them. Raise store_max_bytes, or lower the "+
 				"ceilings — and leave headroom, because the state logs reserve only "+
 				"a share of this limit and every other stream on the broker grows "+
 				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
-			s.PagesLogMaxBytes, s.UsageLogMaxBytes, declared)
+			s.PagesLogMaxBytes, s.UsageLogMaxBytes, s.CodeLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an

@@ -1,0 +1,253 @@
+package code
+
+import (
+	"strconv"
+	"time"
+	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// HOW MANY BYTES A ROW ENCODES TO, computed rather than encoded.
+//
+// A page is held to MaxPageBytes of encoded rows, and the first way of knowing
+// a row's size was to json.Marshal it and throw the encoding away: 0.78–0.83
+// µs and three allocations a ref, on every row of every snapshot page on the
+// serving node — about an eighth of the 5.7–6.4 µs a page spends a ref — and
+// then the answer is encoded again on the estate wire, or not at all when it
+// is served in process. Computed, it is 0.08–0.09 µs and none
+// (BenchmarkServeASnapshotPage, doc.go's measured section). A push row was
+// worse: its commands are read as their stored JSON, decoded, and were
+// encoded again only to be measured.
+//
+// So each row type sums its own encoding: a fixed overhead for its keys and
+// punctuation, and each value's encoded length by encoding/json's rules — a
+// string's escapes, a number's digits, a time's RFC 3339 spelling, an omitted
+// field omitted. EXACT rather than a bound, because a bound that is too high
+// cuts pages short and one too low lets a page past its budget; the
+// equality with json.Marshal is what rowbytes_test.go holds, over every field
+// of every type filled at random, so a field added to a row without its term
+// here fails that test rather than a reply ceiling.
+
+// stringBytes is the length of s encoded as a JSON string by the
+// encoding/json this module builds with, quotes included: `"` and `\` and the
+// five control characters with short escapes take two bytes; every other
+// control character and `<`, `>` and `&` (escaped for HTML) take six, as do
+// U+2028 and U+2029 (escaped for JavaScript); each byte that is not UTF-8 is
+// written as U+FFFD itself, three; everything else is itself. Which of those
+// an encoder escapes, and how, is ITS choice — the encoder behind
+// json.Marshal writes a byte of invalid UTF-8 as three bytes where the one
+// before it wrote six — so FuzzStringBytes holds this to the encoder rather
+// than to a reading of it.
+func stringBytes(s string) int {
+	n := 2
+	for i := 0; i < len(s); {
+		if b := s[i]; b < utf8.RuneSelf {
+			n += int(asciiBytes[b])
+			i++
+			continue
+		}
+		c, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case c == utf8.RuneError && size == 1:
+			n += utf8.RuneLen(utf8.RuneError)
+		case c == ' ' || c == ' ':
+			n += 6
+		default:
+			n += size
+		}
+		i += size
+	}
+	return n
+}
+
+// asciiBytes is what each ASCII byte encodes to, a table rather than a switch
+// because a ref is almost all ASCII and this is the loop every row's size
+// spends its time in.
+var asciiBytes = func() (t [utf8.RuneSelf]uint8) {
+	for b := range t {
+		switch {
+		case b == '"' || b == '\\' || b == '\b' || b == '\f' || b == '\n' || b == '\r' || b == '\t':
+			t[b] = 2
+		case b < 0x20 || b == '<' || b == '>' || b == '&':
+			t[b] = 6
+		default:
+			t[b] = 1
+		}
+	}
+	return t
+}()
+
+// intBytes is the length of n written in decimal.
+func intBytes(n int64) int {
+	var buf [20]byte
+	return len(strconv.AppendInt(buf[:0], n, 10))
+}
+
+// uintBytes is the length of n written in decimal.
+func uintBytes(n uint64) int {
+	var buf [20]byte
+	return len(strconv.AppendUint(buf[:0], n, 10))
+}
+
+// timeBytes is the length of t as encoding/json writes it: RFC 3339 with the
+// nanoseconds' trailing zeros trimmed, quoted.
+func timeBytes(t time.Time) int {
+	var buf [64]byte
+	return len(t.AppendFormat(buf[:0], time.RFC3339Nano)) + 2
+}
+
+// boolBytes is the length of a JSON boolean.
+func boolBytes(b bool) int {
+	if b {
+		return len("true")
+	}
+	return len("false")
+}
+
+// field is the length of one member `"key":` plus its value of length v,
+// with the comma that separates it from the member before when it is not the
+// first.
+func field(key string, v int, first bool) int {
+	n := len(key) + 3 + v
+	if !first {
+		n++
+	}
+	return n
+}
+
+// positionBytes is the length of a statelog.Position.
+func positionBytes(p statelog.Position) int {
+	return 2 + field("stream", stringBytes(p.Stream), true) +
+		field("generation", uintBytes(uint64(p.Generation)), false) +
+		field("seq", uintBytes(p.Seq), false)
+}
+
+// stringsBytes is the length of a list of strings.
+func stringsBytes(ss []string) int {
+	n := 2
+	for i, s := range ss {
+		if i > 0 {
+			n++
+		}
+		n += stringBytes(s)
+	}
+	return n
+}
+
+// encodedBytes is the length of the ref's JSON encoding.
+func (r RefRow) encodedBytes() int {
+	n := 2 + field("ref", stringBytes(r.Ref), true)
+	if r.OID != "" {
+		n += field("oid", stringBytes(r.OID), false)
+	}
+	return n + field("position", positionBytes(r.Position), false)
+}
+
+// encodedBytes is the length of the pack's JSON encoding. The object is a
+// key's canonical spelling, thirty-six bytes, quoted.
+func (r PackRow) encodedBytes() int {
+	return 2 + field("pack_id", stringBytes(r.PackID), true) +
+		field("part", stringBytes(r.Part), false) +
+		field("object", len(r.Object.String())+2, false) +
+		field("hash", stringBytes(string(r.Hash)), false) +
+		field("size", intBytes(r.Size), false) +
+		field("index_bytes", intBytes(r.IndexBytes), false) +
+		field("reverse_bytes", intBytes(r.ReverseBytes), false) +
+		field("git_checksum", stringBytes(r.GitChecksum), false) +
+		field("objects", intBytes(r.Objects), false) +
+		field("kind", stringBytes(r.Kind), false) +
+		field("state", stringBytes(r.State), false) +
+		field("added", positionBytes(r.Added), false)
+}
+
+// encodedBytes is the length of the protection's JSON encoding.
+func (p Protection) encodedBytes() int {
+	n := 2 + field("pattern", stringBytes(p.Pattern), true)
+	if p.AllowForce {
+		n += field("allow_force", boolBytes(true), false)
+	}
+	if p.AllowDelete {
+		n += field("allow_delete", boolBytes(true), false)
+	}
+	return n + field("direct_push", stringBytes(string(p.DirectPush)), false)
+}
+
+// members is the length of the repository's own members, without the braces
+// that close them — what a RepoSummary flattens beside its own.
+func (r RepoRef) members() int {
+	n := field("id", stringBytes(r.ID), true) +
+		field("name", stringBytes(r.Name), false) +
+		field("status", stringBytes(string(r.Status)), false) +
+		field("managed_by", stringBytes(string(r.ManagedBy)), false) +
+		field("owner", 2+field("kind", stringBytes(string(r.Owner.Kind)), true)+
+			field("ref", stringBytes(r.Owner.Ref), false), false) +
+		field("default_branch", stringBytes(r.DefaultBranch), false)
+	if r.Description != "" {
+		n += field("description", stringBytes(r.Description), false)
+	}
+	if len(r.Protections) > 0 {
+		list := 2 + len(r.Protections) - 1
+		for _, p := range r.Protections {
+			list += p.encodedBytes()
+		}
+		n += field("protections", list, false)
+	}
+	if !r.DeletedAt.IsZero() {
+		n += field("deleted_at", timeBytes(r.DeletedAt), false)
+	}
+	return n + field("refs", intBytes(r.Refs), false) +
+		field("live_packs", intBytes(r.LivePacks), false) +
+		field("live_bytes", intBytes(r.LiveBytes), false) +
+		field("position", positionBytes(r.Position), false)
+}
+
+// encodedBytes is the length of the listing row's JSON encoding.
+func (s RepoSummary) encodedBytes() int {
+	n := 2 + s.RepoRef.members()
+	if s.Head != "" {
+		n += field("head", stringBytes(s.Head), false)
+	}
+	n += field("pushes", intBytes(s.Pushes), false)
+	if !s.LastPushAt.IsZero() {
+		n += field("last_push_at", timeBytes(s.LastPushAt), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the push row's JSON encoding, given the
+// length of its commands' encoding — which a row read from the store has
+// already, as the column it was decoded from: the stored commands ARE
+// encoding/json's encoding of the same list, so it is never encoded again
+// to be measured.
+func (row PushRow) encodedBytes(commands int) int {
+	n := 2 + field("push_id", stringBytes(row.PushID), true) +
+		field("repo_id", stringBytes(row.RepoID), false) +
+		field("position", positionBytes(row.Position), false) +
+		field("at", timeBytes(row.At), false) +
+		field("actor", stringBytes(row.Actor), false) +
+		field("actor_kind", stringBytes(row.ActorKind), false)
+	if row.ActorSeat != "" {
+		n += field("actor_seat", stringBytes(row.ActorSeat), false)
+	}
+	if row.Node != "" {
+		n += field("node", stringBytes(row.Node), false)
+	}
+	if row.Atomic {
+		n += field("atomic", boolBytes(true), false)
+	}
+	n += field("commands", commands, false)
+	if row.PackID != "" {
+		n += field("pack_id", stringBytes(row.PackID), false)
+	}
+	if row.PackBytes != 0 {
+		n += field("pack_bytes", intBytes(row.PackBytes), false)
+	}
+	if len(row.Introduced) > 0 {
+		n += field("introduced", stringsBytes(row.Introduced), false)
+	}
+	if row.IntroducedCount != 0 {
+		n += field("introduced_count", intBytes(int64(row.IntroducedCount)), false)
+	}
+	return n + field("received_at", timeBytes(row.ReceivedAt), false)
+}

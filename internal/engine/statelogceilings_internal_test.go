@@ -41,6 +41,7 @@ func TestTheGateReserveAtEveryFloorAbsorbsItsFleet(t *testing.T) {
 		"the division's MinDomainCeiling":             MinDomainCeiling,
 		"Tier A's stream.tracker_log_max_bytes floor": config.TrackerLogMaxBytesFloor,
 		"Tier A's stream.pages_log_max_bytes floor":   config.PagesLogMaxBytesFloor,
+		"Tier A's stream.code_log_max_bytes floor":    config.CodeLogMaxBytesFloor,
 	} {
 		reserve := statelog.GateReserve(uint64(floor))
 		if reserve < peers+gateRoom {
@@ -51,6 +52,26 @@ func TestTheGateReserveAtEveryFloorAbsorbsItsFleet(t *testing.T) {
 				statelog.GateReserveFleet-1, int64(statelog.MaxAppendBytes),
 				gateRoom, peers+gateRoom)
 		}
+	}
+}
+
+// THE STORE'S FLOOR FITS EVERY REGISTERED DOMAIN: a broker limit at Tier A's
+// smallest store_max_bytes holds every registered log at the division's floor
+// plus a gibibyte for what reserves nothing and grows against the same number
+// — the mailboxes, the event stream and every coordination bucket.
+//
+// READ FROM THE REGISTER rather than a count, because the floor was five
+// gibibytes while there were four domains, and the fifth made the smallest
+// store Tier A accepts one the engine's own logs could not fit: a domain added
+// without raising the floor fails here rather than on the smallest disk an
+// operator was told is enough.
+func TestTheStoreFloorFitsEveryRegisteredDomain(t *testing.T) {
+	t.Parallel()
+	domains := int64(len(registeredDomains()))
+	if need := domains*MinDomainCeiling + gib; config.StoreMaxBytesFloor < need {
+		t.Errorf("Tier A's store_max_bytes floor is %d bytes, and %d registered logs at "+
+			"the division's %d-byte floor plus a gibibyte for the streams that reserve "+
+			"nothing need %d", config.StoreMaxBytesFloor, domains, MinDomainCeiling, need)
 	}
 }
 
@@ -617,8 +638,9 @@ func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, fr
 // The broker's cap there is three quarters of the volume, 5.7 GiB. The tracker
 // and vector logs were scaled into half of the free space, 1.9 GiB each, and
 // the pages log then reserved its fixed 4 GiB on top: 7.8 GiB against 5.7.
-// Every log is sized inside one budget now, and all four fit — the usage
-// log at its 1 GiB default beside the three that failed.
+// Every log is sized inside one budget now, and all five fit — the usage
+// log at its 1 GiB default and the code log at its 1 GiB floor beside the three
+// that failed: five floors, 5 GiB of the 5.7.
 func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	t.Parallel()
 	// 7.6 GiB, in tenths so the arithmetic stays in integers.

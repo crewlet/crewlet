@@ -66,7 +66,7 @@ func everyLog() *stateLog {
 // offers.
 func collectorReferences(t *testing.T) collect.References {
 	t.Helper()
-	refs, err := collect.Sources(references.All, (&native{trackerObjects: &tracker.Reader{}}).objectEstates()...)
+	refs, err := collect.Sources(references.All, objectsRuntime().objectEstates()...)
 	if err != nil {
 		t.Fatalf("the collector's references: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestADutyDeclinesWhileACopyItDecidesFromIsOutOfService(t *testing.T) {
 			},
 		},
 		"the trim": {
-			decidesFrom: []string{trackerName, pagesName},
+			decidesFrom: []string{trackerName, pagesName, codeName},
 			turn: func(t *testing.T, e *Engine, claim *countingClaim) {
 				r := &retention{state: everyLog(), nodeID: "node-a", claim: claim.claim,
 					giveBack: claim.giveBack, copies: e.copyOutOfService}
@@ -111,7 +111,7 @@ func TestADutyDeclinesWhileACopyItDecidesFromIsOutOfService(t *testing.T) {
 			},
 		},
 		"the object collector": {
-			decidesFrom: []string{trackerName},
+			decidesFrom: []string{trackerName, codeName},
 			turn: func(t *testing.T, e *Engine, claim *countingClaim) {
 				e.collectorTurn(t.Context(), claim.claim,
 					newCollectorDuty(nil, copiesNamedBy(refs), claim.giveBack))
@@ -185,7 +185,7 @@ func TestEveryDutyNamesTheDomainsItDecidesFrom(t *testing.T) {
 	}
 
 	var named []string
-	for _, estate := range (&native{trackerObjects: &tracker.Reader{}}).objectEstates() {
+	for _, estate := range objectsRuntime().objectEstates() {
 		named = append(named, estate.Name())
 	}
 	if collector := copiesNamedBy(collectorReferences(t)); !sameNames(collector, named) {

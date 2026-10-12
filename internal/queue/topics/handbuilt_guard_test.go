@@ -104,6 +104,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		// hand-built subject would come from.
 		"crewlet.tracker.log.task.x", "crewlet.tracker.vectors.>",
 		"crewlet.pages.log.%s.%s", "crewlet.usage.log.day",
+		"crewlet.code.log.repo.x",
 	} {
 		if _, hit := violation(markers, positive); !hit {
 			t.Errorf("control: %q is a hand-built name and the matcher did not flag it", positive)
@@ -115,6 +116,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 	for _, built := range []string{
 		topics.TrackerLogSubject("task", "x"),
 		topics.PagesLogSubject("page", "x"),
+		topics.CodeLogSubject("repo", "x"),
 		topics.LogSubject(topics.UsageLogPrefix, "day", "x"),
 		topics.TrackerVectorsWildcard,
 	} {

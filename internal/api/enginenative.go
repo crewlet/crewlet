@@ -92,7 +92,7 @@ func (n engineNative) Purger() (TaskPurger, bool) {
 // NOT THE TRACKER'S WRITER, which is what this once was: that wrote the
 // tracker's log alone, so an eviction lifted one log's pin and left the pages
 // log counting the node for ever — and a company whose tracker is external,
-// which still runs both logs, could not evict anybody at all.
+// which still runs every log, could not evict anybody at all.
 //
 // The nil check converts: a nil *engine.NodeGate is answered false rather than
 // handed over inside the interface, where it would pass the route's check and

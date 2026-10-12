@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -96,5 +97,21 @@ func TestAFeedThatDisagreesWithItsDeclarationIsRefused(t *testing.T) {
 				t.Errorf("the refusal does not say which domain or why: %v", err)
 			}
 		})
+	}
+}
+
+// THE CODE LOG RUNS NO WAKE FEED, AND DECLARES NONE: a push wakes nobody in
+// this build, so no consumer of its log waits on a group, and the trim waits
+// for none. Pinned rather than left to the register's sweep above, so the
+// build that makes a push wake a seat changes this test as well as a default.
+func TestTheCodeLogRunsNoFeedAndDeclaresNone(t *testing.T) {
+	t.Parallel()
+	if group := (code.Domain{}).FeedGroup(); group != "" {
+		t.Fatalf("the code log declares the wake feed %q", group)
+	}
+	translator, opener, err := (&Engine{}).feedFor(&runningLog{domain: code.Domain{}})
+	if err != nil || translator != nil || opener != nil {
+		t.Fatalf("feedFor(code) = (%v, %v, %v), want no feed and no error",
+			translator, opener, err)
 	}
 }

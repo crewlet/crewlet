@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -430,7 +431,7 @@ func (r *retention) tick(ctx context.Context) {
 // register or the log itself.
 //
 // THE TWO SETS ARE NAMED APART although they are the same logs today — the
-// tracker's and the knowledge base's — because a log that writes anchors and
+// tracker's, the knowledge base's and the code log — because a log that writes anchors and
 // claims no identity is a domain somebody can add, and a copy of it out of
 // service would have the trim count anchors on rows nobody can trust.
 func (r *retention) decidesFrom() []string {
@@ -984,18 +985,20 @@ type evictionLister interface {
 	Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error)
 }
 
-// The two identity-claiming domains this build registers, held to the
+// The three identity-claiming domains this build registers, held to the
 // interface at compile time so a reshaped method is a build failure rather
 // than a boot refusal.
 var (
 	_ evictionLister = tracker.Domain{}
 	_ evictionLister = pages.Domain{}
+	_ evictionLister = code.Domain{}
 
-	// AND BOTH READ THEIR GATE RECORDS OFF THE LOG — an eviction and the
+	// AND EACH READS ITS GATE RECORDS OFF THE LOG — an eviction and the
 	// readmission that lifts it — which [stateLog.startLog] refuses a
 	// registered identity-claiming domain for lacking.
 	_ statelog.EvictionProbe = tracker.Domain{}
 	_ statelog.EvictionProbe = pages.Domain{}
+	_ statelog.EvictionProbe = code.Domain{}
 )
 
 // tombstones is every eviction this node has applied for one domain's log.

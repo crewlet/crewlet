@@ -57,31 +57,42 @@ has to finish it to see what it did.
 
 ### The room the stream's volume needs
 
-The engine's own tracker, knowledge base, vector index and usage history each
-keep a log on the stream, and each log's byte ceiling is **reserved** on the volume
+The engine's own tracker, knowledge base, vector index, usage history and
+code host each keep a log on the stream, and each log's byte ceiling is **reserved** on the volume
 holding `stream.store_dir` when its stream is created: the embedded broker
 grants a ceiling in full, up front, or refuses to create the stream at all.
 Its limit is three quarters of that volume's free space.
 
-The node sizes the four ceilings together to fit half of that limit, and
+The node sizes the five ceilings together to fit half of that limit, and
 never below 1 GiB each, so:
 
-- **A first boot needs at least 5⅓ GiB free on that volume.** Three quarters
-  of 5⅓ GiB is the four 1 GiB floors. Below it the node refuses to boot with an
+- **A first boot needs at least 6⅔ GiB free on that volume.** Three quarters
+  of 6⅔ GiB is the five 1 GiB floors. Below it the node refuses to boot with an
   error naming the log it could not reserve, the bytes it needed, the bytes
   the broker had left, and the Tier A field that sets the ceiling.
 - **More room buys longer logs, up to a point.** Unset, the mutation log and
   the vector changelog each ask for a quarter of the free space (4..64 GiB),
-  the knowledge base's log for a quarter of the mutation log's, and the usage
-  log for a fixed 1 GiB — its size is a count of node-days rather than a rate,
-  so more disk buys it nothing. They are scaled down together whenever they
-  ask for more than half the free space, which on a first boot is every volume
-  with less than about 290 GiB free (at their 64 GiB clamps the four ask for
-  145 GiB); from there up each log gets what it asked for.
+  the knowledge base's log for a quarter of the mutation log's, the code log
+  for two thirds of the mutation log's, and the usage log for a fixed 1 GiB —
+  its size is a count of node-days rather than a rate, so more disk buys it
+  nothing. They are scaled down together whenever they ask for more than half
+  the broker's limit — three eighths of the free space on a first boot — which
+  is every volume with less than about 500 GiB free (with the mutation log at
+  its 64 GiB clamp the five ask for 187⅔ GiB: 64 + 64 + 16 + 1 + 42⅔); from
+  there up each log gets what it asked for.
+- **The code log's ask is paid whether or not anything pushes.** Below about
+  500 GiB free it comes out of the other logs' share: at 100 GiB free the
+  mutation log and the vector changelog are created at 12.5 GiB each rather
+  than 16.2, at 256 GiB at 32.6 rather than 42.2 — 23 % shorter windows for a
+  blocked trim — and the knowledge base's log by the same proportion. A
+  company that hosts no code and is short of room sets
+  `stream.code_log_max_bytes: 1073741824` before the first boot; the
+  [replication guide](replication.md#what-the-code-logs-reservation-costs)
+  has the table and what to do once the streams exist.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
-  `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes` or
-  `stream.usage_log_max_bytes` later,
+  `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
+  `stream.usage_log_max_bytes` or `stream.code_log_max_bytes` later,
   changes nothing about streams that already exist; `crewlet retention
   set-capacity` is what changes a running log's ceiling. A log created later —
   one a new version adds — is sized from what the existing logs' ceilings leave
@@ -413,9 +424,9 @@ than something a reconnect policy should paper over.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the seven engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the four state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the five state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
-`CREWLET_PAGES_LOG`, `CREWLET_USAGE_LOG`), a stream per extra subject namespace a company
+`CREWLET_PAGES_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_CODE_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
 call, measured at 1.7 ms), the twenty-one `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
@@ -528,8 +539,8 @@ metadata group, so a member stalled against a group that has not settled
 waits there, where nothing used to report it at all. The read of each state
 log's ceiling that sizes the logs before any of them is created is the same
 kind of lookup and says so the same way (`statelog_ceiling_read_slow`); the
-four are asked at once, so a broker that answers none of them costs one
-lookup ceiling rather than four in a row. The object store's
+five are asked at once, so a broker that answers none of them costs one
+lookup ceiling rather than five in a row. The object store's
 bucket is looked up and created as one step, and writes one line over the two
 (`natsobj_bucket_slow`). A probe that went unanswered is named as such
 (`jetstream_stream_lookup_unanswered`, `jetstream_consumer_lookup_unanswered`,

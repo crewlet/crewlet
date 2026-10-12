@@ -4,11 +4,12 @@
  * # One gesture, every identity-claiming log, and each log's own answer
  *
  * The engine judges the gesture once and then writes its record to every log
- * the trim counts nodes on — the tracker's and the pages log — and each log
- * answers on its own, with the three-valued outcome every write has (D134) or
- * the refusal that stopped it. So this dialog renders ONE ROW PER LOG, and the
- * summary above them is driven by `complete` — whether every log holds the
- * record — and by what the unfinished logs say to do:
+ * the trim counts nodes on — every identity-claiming log: the tracker's, the
+ * pages log and the code log — and each log answers on its own, with the
+ * three-valued outcome every write has (D134) or the refusal that stopped it.
+ * So this dialog renders ONE ROW PER LOG, and the summary above them is driven
+ * by `complete` — whether every log holds the record — and by what the
+ * unfinished logs say to do:
  *
  *   - `applied` — durable at the position AND in this node's own rows.
  *   - `pending` — durable at the position, NOT applied here yet. It is not a
@@ -381,10 +382,11 @@ export function GateDialog({
                 <InlineCode>{node}</InlineCode> is counted again and the trim waits for it once
                 more. This is refused, with nothing written, until the node has applied every record
                 up to the one just before the higher of each log&apos;s published floor and its
-                first surviving sequence, in the tracker&apos;s log and the pages log: counting a
-                node the floor has passed would put back the pin the eviction lifted. A refused node
-                catches up on its own — replaying what the log still holds, adopting a snapshot
-                where it does not — and can be readmitted once it has.
+                first surviving sequence, in every identity-claiming log (the tracker&apos;s, the
+                pages log and the code log): counting a node the floor has passed would put back the
+                pin the eviction lifted. A refused node catches up on its own — replaying what the
+                log still holds, adopting a snapshot where it does not — and can be readmitted once
+                it has.
               </>
             )}
           </p>

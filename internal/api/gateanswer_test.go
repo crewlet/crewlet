@@ -23,7 +23,9 @@ import (
 const gateAnswerGolden = "testdata/gate_answer.json"
 
 // gateAnswerScenarios is one gesture per shape a log's answer can take, each
-// over the two identity-claiming logs a real node runs.
+// over the three identity-claiming logs a real node runs — the tracker's, the
+// pages log and the code log, in the order the engine registers them — with
+// the shape under test on the pages log, between two logs that applied.
 //
 // The ids are the engine's own grammar and DERIVED, so the file is stable: a
 // dashboard fixture carrying `op-7` is an id no node sends and the route
@@ -43,9 +45,12 @@ func gateAnswerScenarios() map[string]engine.GateResult {
 		return d
 	}
 	at := statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 4410}
+	code := engine.DomainGate{Domain: "code", Stream: "CREWLET_CODE_LOG",
+		OpID: step("code"), Outcome: statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1, Seq: 77}}
 	result := func(pagesAnswer engine.DomainGate) engine.GateResult {
 		return engine.GateResult{Node: "node-4", OpID: gesture,
-			Domains: []engine.DomainGate{tracker, pages(pagesAnswer)}}
+			Domains: []engine.DomainGate{tracker, pages(pagesAnswer), code}}
 	}
 	return map[string]engine.GateResult{
 		"applied": result(engine.DomainGate{
@@ -135,7 +140,7 @@ func renderGateScenarios(t *testing.T) []byte {
 // THE GATE ANSWER'S SHAPE IS PINNED IN ONE FILE BOTH SIDES READ.
 //
 // The dashboard's evict dialog read a top-level `outcome` for as long as the
-// route had stopped writing one, so every gesture — one applied on both logs
+// route had stopped writing one, so every gesture — one applied on every log
 // included — rendered as "no acknowledgement, this is the case to retry", and
 // its suite passed on fixtures it had typed itself. The golden is what the
 // route renders; the dashboard's suite loads the same file, so a change to the

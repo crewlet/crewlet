@@ -528,10 +528,11 @@ Without a placement host — the single-node case — the answer is always yes: 
 A duty whose one tick can outlast its lease — the embedding duty's index training, the object collector's audit of a large store — **renews the lease while the tick runs**, four times a lease, and the tick is stopped the moment a renewal answers that another node holds the duty, or once none has confirmed it for the lease less one renewal, past which another node could hold it. A renewal the store does not answer — refused, or held on to while the coordination stream's leader moves — is neither: the last confirmation still keeps every other node out, and no renewal waits longer than one renewal interval for its answer, so the next is asked inside that window and one unanswered renewal costs the tick nothing; a tick stopped either way publishes or records nothing more.
 
 A duty that decides from a domain's rows — the trim (the evictions the
-tracker's and the knowledge base's rows hold), the embedding duty (the
-tracker's, the knowledge base's and the vectors' rows) and the object
-collector (the tracker's) — is declined by a node whose copy of any of them is
-out of service: it does not claim it, it gives the duty's lease back if it
+tracker's, the knowledge base's and the code log's rows hold), the embedding
+duty (the tracker's, the knowledge base's and the vectors' rows) and the
+object collector (the tracker's and the code log's, whose rows name the
+objects it collects) — is declined by a node whose copy of any of them is out
+of service: it does not claim it, it gives the duty's lease back if it
 holds it, and a node whose copies serve takes the duty at its own next tick
 rather than once the lease lapses
 ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).

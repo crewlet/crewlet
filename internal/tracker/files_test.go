@@ -57,7 +57,7 @@ func (r *roundTrip) referenced(t *testing.T, among ...objstore.Key) map[objstore
 	t.Helper()
 	// THROUGH THE DECLARED LIST, exactly as the engine builds the
 	// collector's sources, so this reads the statement the collector runs.
-	sources, err := collect.Sources(references.All, tracker.ObjectEstate{Reader: r.reader})
+	sources, err := collect.Sources(trackerTables(), tracker.ObjectEstate{Reader: r.reader})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,6 +73,20 @@ func (r *roundTrip) referenced(t *testing.T, among ...objstore.Key) map[objstore
 		out[k] = true
 	}
 	return out
+}
+
+// trackerTables is the declared tables the tracker writes — the declarations
+// the collector reads THROUGH THIS DOMAIN'S ESTATE, out of the one list every
+// domain declares into, so a table another domain declares is read through
+// that domain's estate and never asked of this one.
+func trackerTables() []objstore.ReferenceTable {
+	var own []objstore.ReferenceTable
+	for _, ref := range references.All {
+		if ref.Domain == (tracker.Domain{}).Name() {
+			own = append(own, ref)
+		}
+	}
+	return own
 }
 
 // readWatch is this domain as the collector reads it, and whether one of its
@@ -96,7 +110,7 @@ func (w *readWatch) Read(ctx context.Context, at statelog.Position, fn func(*sql
 func (r *roundTrip) every(t *testing.T) map[objstore.Key][]objstore.Reference {
 	t.Helper()
 	watch := &readWatch{ObjectEstate: tracker.ObjectEstate{Reader: r.reader}}
-	sources, err := collect.Sources(references.All, watch)
+	sources, err := collect.Sources(trackerTables(), watch)
 	if err != nil {
 		t.Fatal(err)
 	}

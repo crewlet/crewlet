@@ -18,7 +18,9 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // gate holds every call that passes it until it is opened, counting how many
@@ -468,11 +470,33 @@ func TestABackupWalksItsCopyAPageAtATime(t *testing.T) {
 		t.Fatalf("Take: %v", err)
 	}
 	// FOUR WHOLE PAGES AND THE SHORT ONE THAT ENDS THE WALK — and no read
-	// past it.
-	if read := pages.Load(); read != 5 {
-		t.Fatalf("the backup read the copy in %d pages, want 5", read)
+	// past it — plus the one empty page that ends the walk of every other
+	// domain's table, of which this copy holds no row.
+	tables, _ := othersDeclared()
+	if read, want := pages.Load(), int32(5+tables); read != want {
+		t.Fatalf("the backup read the copy in %d pages, want %d: five of the "+
+			"tracker's and one for each of the %d other declared tables", read, want, tables)
 	}
 	restoresWhole(t, filepath.Join(dir, "objects"), held)
+}
+
+// othersDeclared is how many Required tables every domain but the tracker
+// declares, and how many logs write them — the copies these cases take hold
+// none of their rows, so a backup walks each such table in one empty page and
+// reads each such log's deferred records in one.
+func othersDeclared() (tables, logs int) {
+	seen := map[string]bool{}
+	for _, ref := range references.All {
+		if ref.Standing != objstore.Required || ref.Domain == (tracker.Domain{}).Name() {
+			continue
+		}
+		tables++
+		if !seen[ref.Log] {
+			seen[ref.Log] = true
+			logs++
+		}
+	}
+	return tables, logs
 }
 
 // A KEY THE COPY NAMES AS TWO OBJECTS REFUSES THE BACKUP. A key is minted for

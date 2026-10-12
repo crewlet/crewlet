@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/backoff"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsprovision"
@@ -862,7 +863,9 @@ func (s *stateLog) haltAppliers() {
 // because the order is load-bearing for the operator surfaces and an
 // init-order registration is exactly the thing nobody can read off the source.
 func registeredDomains() []statelog.Domain {
-	return []statelog.Domain{tracker.Domain{}, search.Domain{}, pages.Domain{}, usage.Domain{}}
+	return []statelog.Domain{
+		tracker.Domain{}, search.Domain{}, pages.Domain{}, usage.Domain{}, code.Domain{},
+	}
 }
 
 // registeredNames is every registered domain's name, in the register's order.
@@ -968,9 +971,9 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	}
 	at := checkpoint.At
 	// THE SEQUENCE'S CONTEXT, not the caller's: this is a replicated create
-	// like the stream above it, and the four domains share one ceiling so
-	// a wedged metadata group cannot spend a full per-create budget four
-	// times over. Everything else here takes the ordinary boot context.
+	// like the stream above it, and every registered domain shares one ceiling
+	// so a wedged metadata group cannot spend a full per-create budget once
+	// per domain. Everything else here takes the ordinary boot context.
 	consumer, err := host.DomainConsumer(provisionCtx, spec.Name, s.nodeID, at.Seq)
 	if err != nil {
 		return nil, fmt.Errorf("engine: open %s's consumer: %w", domain.Name(), err)
@@ -1202,6 +1205,17 @@ func (s *stateLog) publisherOver(domain statelog.Domain, spec statelog.StreamSpe
 		// evicted node's usage is still what its seats did, and a fence
 		// here would erase that from every peer.
 		deps.Rows, deps.Fence, deps.Gates = rows, usage.NewFence(), usage.NewGates()
+	case code.Domain{}.Name():
+		rows, err := code.NewRows(s.estate().Reader(), spec)
+		if err != nil {
+			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
+		}
+		fence := code.NewFence(s.estate().Reader(), s.nodeID)
+		fence.Floor = s.floorOf(domain.Name())
+		fence.Ends = s.logEndsOf(domain.Name(), appendTo, runner)
+		fence.Committed = runner.Committed
+		deps.Rows, deps.Fence, deps.Gates = rows, fence, code.NewGates(s.estate().Reader())
+		evicted = fence.Evicted
 	default:
 		return nil, nil, fmt.Errorf("engine: domain %q is registered and has no "+
 			"write authority, so nothing could ever append to its log",
@@ -1232,6 +1246,8 @@ func barrierEncoder(domain statelog.Domain) func(statelog.Envelope) ([]byte, err
 		return tracker.EncodeBarrier
 	case pages.Domain{}.Name():
 		return pages.EncodeBarrier
+	case code.Domain{}.Name():
+		return code.EncodeBarrier
 	}
 	return nil
 }
@@ -1252,6 +1268,8 @@ func trimmedEncoder(domain statelog.Domain) func(statelog.Envelope) ([]byte, err
 		return tracker.EncodeTrimmed
 	case pages.Domain{}.Name():
 		return pages.EncodeTrimmed
+	case code.Domain{}.Name():
+		return code.EncodeTrimmed
 	}
 	return nil
 }
@@ -2172,6 +2190,8 @@ func (s *stateLog) applierFor(domain statelog.Domain) (statelog.Applier, error) 
 		return pages.NewApplier(s.skills, s.nudgeSkills), nil
 	case usage.Domain{}.Name():
 		return usage.NewApplier(), nil
+	case code.Domain{}.Name():
+		return code.NewApplier(), nil
 	}
 	return nil, fmt.Errorf("engine: domain %q is registered and has no applier, "+
 		"so its records would be consumed and produce no rows on this node",

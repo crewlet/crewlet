@@ -6,7 +6,7 @@
  * test regenerates (`internal/api/testdata/gate_answer.json`). The suite this
  * replaced typed its own fixtures — a top-level `outcome`, an op id of `op-7`
  * no node mints — and passed for as long as the route had stopped writing that
- * shape, while the dialog rendered every gesture, one applied on both logs
+ * shape, while the dialog rendered every gesture, one applied on every log
  * included, as "no acknowledgement, this is the case to retry".
  */
 

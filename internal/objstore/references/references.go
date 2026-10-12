@@ -74,14 +74,17 @@
 package references
 
 import (
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // All is every replicated table whose rows keep objects alive — required and
-// retired alike.
+// retired alike: a project's files, and the pack bundles the company's
+// repositories' pushes stored.
 var All = []objstore.ReferenceTable{
 	tracker.FileObjectReferences,
+	code.PackReferences,
 }
 
 // ObjectColumn is the name every referencing table gives its key column, and

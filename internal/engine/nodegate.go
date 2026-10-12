@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -763,12 +764,28 @@ func gateLogFor(running *runningLog, publisher *statelog.Publisher, db store.Rep
 
 			// THE OPERATOR AS THE PAGE STORE NAMES ONE, which is the
 			// credential's own id — the same spelling the tracker's
-			// record carries, so both logs name the same person.
+			// record carries, so every log names the same person.
 			actor := pages.Actor{Handle: by, Kind: pages.AuthorOperator, OperatorID: by}
 			if readmit {
 				return kb.ReadmitNode(ctx, actor, opID, node)
 			}
 			return kb.EvictNode(ctx, actor, opID, node)
+		}
+	case code.Domain{}.Name():
+		host, err := code.NewStore(code.StoreOptions{Publisher: publisher, DB: db, NodeID: nodeID})
+		if err != nil {
+			return gateLog{}, fmt.Errorf("engine: the node gate's writer for %s: %w", name, err)
+		}
+		gl.write = func(ctx context.Context, by, opID, node string,
+			readmit bool) (statelog.Result, error) {
+
+			// THE OPERATOR'S CREDENTIAL ID, the spelling the other two
+			// logs' records carry, so all three name the same person.
+			actor := code.Actor{ID: by, Kind: code.ActorOperator, OperatorID: by}
+			if readmit {
+				return host.ReadmitNode(ctx, actor, opID, node)
+			}
+			return host.EvictNode(ctx, actor, opID, node)
 		}
 	default:
 		return gateLog{}, fmt.Errorf("engine: domain %q claims identity and the node "+

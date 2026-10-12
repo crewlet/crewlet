@@ -1,0 +1,134 @@
+package code
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// PurgeStep takes ONE step of purging a deleted repository past its retention,
+// and reports whether the purge is complete. Each step is one record bounded
+// by [PurgePartRows] and, for the push rows, by [PurgePartBytes]: a part while
+// more remains than one record may delete, then the purge itself — the gate
+// that writes the deletion marker and releases the name — once what remains
+// fits both. A caller steps until done.
+//
+// Inside retention it is [ErrNotYet]; on a repository that is not deleted,
+// [ErrNotDeleted]; on one already purged, done with nothing written; on an id
+// nobody has, [ErrRepoNotFound]. retention is the caller's epoch's value, never
+// defaulted here.
+func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Duration) (bool, error) {
+	if retention <= 0 {
+		return false, fmt.Errorf("%w: retention: %v is not a retention", ErrInvalid, retention)
+	}
+	// THE NAME IS READ BEFORE THE DECIDE, because the request's scope is
+	// stated before the decide runs and the purge releases the name's
+	// claim; the decide holds the row to it. A repository's name never
+	// changes, so the two reads agree.
+	name, found, err := s.repoName(ctx, repoID)
+	if err != nil {
+		return false, err
+	}
+	subject := RepoSubject(repoID)
+	scope := []string{RepoPath(repoID)}
+	if found {
+		scope = append([]string{NamePath(NameToken(name))}, scope...)
+	}
+	opID := statelog.NewOpID(time.Now(), "code.purge")
+	at := s.now()
+	var done, wrote bool
+	result, err := s.publisher.Publish(ctx, statelog.Request{
+		Subject: subject.statelog(), Scope: statelog.ScopeSet{Paths: scope},
+		OpID: opID, Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			done, wrote = false, false
+			row, present, readErr := repoIn(ctx, tx, repoID)
+			if readErr != nil {
+				return statelog.Decision{}, readErr
+			}
+			if !present {
+				var marked int
+				if markErr := tx.QueryRowContext(ctx, purgedSQL, repoID).Scan(&marked); markErr != nil {
+					return statelog.Decision{}, fmt.Errorf("code: read %s's deletion marker: %w", repoID, markErr)
+				}
+				if marked == 0 {
+					return statelog.Decision{}, fmt.Errorf("%w: %s", ErrRepoNotFound, repoID)
+				}
+				done = true
+				return statelog.Decision{}, nil
+			}
+			switch {
+			case row.Name != name:
+				return statelog.Decision{}, fmt.Errorf("code: repository %s is named %q "+
+					"and this purge was scoped to %q", repoID, row.Name, name)
+			case row.Status == RepoStatusActive || row.Status == RepoStatusArchived:
+				return statelog.Decision{}, fmt.Errorf("%w: %s is %s", ErrNotDeleted, row.Name, row.Status)
+			case row.Status == RepoStatusDeleted && row.DeletedAt.Valid &&
+				store.DecodeTime(row.DeletedAt.Int64).Add(retention).After(s.now()):
+				return statelog.Decision{}, fmt.Errorf("%w: %s was deleted at %s", ErrNotYet,
+					row.Name, store.DecodeTime(row.DeletedAt.Int64).Format(time.RFC3339))
+			}
+			var remaining int
+			var pushBytes int64
+			if countErr := tx.QueryRowContext(ctx, remainingSQL, repoID, PurgePartRows+1, repoID,
+				PurgePartRows+1, repoID, PurgePartRows+1, repoID, PurgePartRows+1).Scan(&remaining,
+				&pushBytes); countErr != nil {
+				return statelog.Decision{}, fmt.Errorf("code: count %s's rows: %w", repoID, countErr)
+			}
+			wrote = true
+			actor := Actor{ID: s.nodeID, Kind: ActorSystem}
+			if remaining > PurgePartRows || pushBytes > PurgePartBytes {
+				return recordFor(stamp, subject, OpPurgePart, []string{RepoPath(repoID)}, opID,
+					actor, PurgePart{RepoID: repoID, Part: row.PurgeParts + 1}, at)
+			}
+			done = true
+			return recordFor(stamp, subject, OpPurge, scope, opID, actor,
+				Purge{RepoID: repoID, Name: row.Name, Reason: "deleted past code.deleted_retention_days"}, at)
+		},
+	})
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("code: purge repository %s: %w", repoID, err)
+	case wrote && result.Outcome == statelog.OutcomeUnknown:
+		return false, fmt.Errorf("code: whether the purge step on %s landed is unknown "+
+			"(operation %s); the next pass decides it again", repoID, opID)
+	}
+	return done, nil
+}
+
+// repoName is a repository's name, read outside any decision; false when this
+// node holds no row of it.
+func (s *Store) repoName(ctx context.Context, id string) (string, bool, error) {
+	var name string
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, repoNameSQL, id).Scan(&name)
+	})
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("code: read repository %s's name: %w", id, err)
+	}
+	return name, true, nil
+}
+
+// The purge's decide statements. remainingSQL is the tracker's BOUNDED COUNT:
+// the decide needs "more than PurgePartRows", never the total, so each table
+// is counted at most PurgePartRows + 1 deep — and beside it what the push
+// rows among them weigh, summed over the same depth from code_pushes_repo_idx,
+// which carries every row's width: past PurgePartRows pushes the count alone
+// already forms a part, and short of it the sum is the whole.
+const (
+	repoNameSQL  = `SELECT name FROM code_repos WHERE id = ?`
+	remainingSQL = `SELECT
+		(SELECT COUNT(*) FROM (SELECT 1 FROM code_pushes WHERE repo_id = ? LIMIT ?))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_refs WHERE repo_id = ? LIMIT ?))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs WHERE repo_id = ? LIMIT ?)),
+		(SELECT COALESCE(SUM(row_bytes), 0) FROM
+			(SELECT row_bytes FROM code_pushes WHERE repo_id = ? LIMIT ?))`
+)
