@@ -332,7 +332,7 @@ test("the monthly budget is drawn in the engine's state, with its reset", async 
   const meter = screen.getByRole("meter", { name: "This month" });
   expect(meter.getAttribute("aria-valuetext")).toMatch(/refusing charges, resets Oct 1/);
   expect(screen.getByText(/70M of 80M · resets Oct 1/)).toBeTruthy();
-  expect(screen.getByText(/Refusing charges/)).toBeTruthy();
+  expect(screen.getByText("Full until Oct 1.")).toBeTruthy();
 });
 
 const UNCAPPED = { meter_id: "n:1", seq: 1, timezone: "UTC", org: { windows: [] } };
@@ -671,7 +671,7 @@ test("recent turns link to the turn list by tokens, over the same window where i
   await settle();
   const link = screen.getByRole("link", { name: "Recent turns by tokens →" });
   expect(link.getAttribute("href")).toBe("#/live/turns?sort=-tokens&window=30d");
-  expect(screen.getByText(/the last 30 days: the turn list keeps no older/)).toBeTruthy();
+  expect(screen.getByText("the last 30 days")).toBeTruthy();
 });
 
 // A REFUSED WINDOW HAS NO LIST TO WAIT FOR. The list's question starts where
@@ -745,7 +745,9 @@ test("people are their own rows, and say they take no turns", async () => {
   const grid = screen.getByText("By agent").closest(".spend-card") as HTMLElement;
   expect(within(grid).getByText(/maya/i)).toBeTruthy();
   expect(within(grid).getByText(/ana/i)).toBeTruthy();
-  expect(within(grid).getAllByLabelText(/A person takes no turns/).length).toBeGreaterThan(0);
+  expect(
+    within(grid).getAllByLabelText(/Auxiliary model spend for this person/).length,
+  ).toBeGreaterThan(0);
 });
 
 // THE AUXILIARY MODEL'S SPEND IS NAMED FOR WHAT IT WAS FOR, in the words the

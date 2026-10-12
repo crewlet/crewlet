@@ -180,8 +180,7 @@ export function ExpensiveTasks() {
         <div className="spend-card-head">
           <h2 className="spend-title">Most expensive tasks</h2>
           <span className="spend-caption">
-            {words ? `${words} · ` : ""}tasks last changed in this window · each task&rsquo;s tokens
-            over its whole life
+            {words ? `${words} · ` : ""}tasks changed in this window · lifetime tokens
           </span>
         </div>
         <QueryState error={answer.error} detail={answer.detail} loading={false}>
@@ -202,7 +201,7 @@ export function ExpensiveTasks() {
             onRowActivate={peekRow<WorkSummary>((r) => open(itemRef(r)))}
             empty={{
               title: "No task last changed in this window has spent tokens",
-              hint: "A task appears here once an agent's turn is charged to it.",
+              hint: "Tasks appear once agents spend tokens on them.",
             }}
             columns={[
               {
@@ -252,8 +251,8 @@ export function ExpensiveTasks() {
             footer={
               answer.data && answer.data.total_hint > rows.length ? (
                 <span className="spend-caption">
-                  The {rows.length} that spent the most, of {fmtExact(answer.data.total_hint)}
-                  {answer.data.total_capped ? "+" : ""} last changed in this window
+                  Top {rows.length} of {fmtExact(answer.data.total_hint)}
+                  {answer.data.total_capped ? "+" : ""}
                 </span>
               ) : undefined
             }

@@ -116,11 +116,7 @@ export function Spend() {
           mime="text/csv;charset=utf-8"
           text={() => (rollup ? spendCsv(rollup, lines, `${rollup.from}..${rollup.to}`) : "")}
           disabled={!rollup}
-          title={
-            rollup
-              ? `The rollup and the by-agent table for ${words}, as CSV (tokens only)`
-              : "Nothing to export until the window has answered"
-          }
+          title={rollup ? "Download as CSV" : "Nothing to export until the window has answered"}
         />
       </PageActions>
 

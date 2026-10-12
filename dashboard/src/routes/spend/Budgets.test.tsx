@@ -234,8 +234,8 @@ test("each bar is the state the engine served, whatever its fill", async () => {
   expect(tone("PM's daily token budget")).not.toBe("danger");
   expect(tone("PM's weekly token budget")).toBe("warning");
   expect(tone("PM's monthly token budget")).toBe("danger");
-  // And the threshold the page states is the one the engine served.
-  expect(screen.getByText(/near at 90% of its ceiling/)).toBeTruthy();
+  // And the zone the page states is the one the engine counts the windows in.
+  expect(screen.getByText("Token limits per day, week and month (UTC).")).toBeTruthy();
 });
 
 // A CHECK, THEN THE SAVE — and a seat is written as the seat, read at the
@@ -380,7 +380,7 @@ test("a reader who cannot change the configuration sees why, on every ceiling", 
 test("a counter nobody could read says so, and draws no figures", async () => {
   mount(answer({ durable: false, org: { windows: [] }, seats: [] }));
   await settle();
-  expect(screen.getByText(/could not be READ/)).toBeTruthy();
+  expect(screen.getByText("Couldn’t read current spend. Try again shortly.")).toBeTruthy();
   expect(screen.queryByRole("meter")).toBeNull();
 });
 

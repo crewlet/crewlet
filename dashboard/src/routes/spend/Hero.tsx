@@ -60,8 +60,7 @@ export function Hero({
           // keeps, and one past it is refused rather than drawn short — so the
           // reader is told where the history ends before they ask past it.
           <span className="spend-caption">
-            History from {companyDateLabel(rollup.horizon.floor)} · {rollup.horizon.days} days, on
-            every node alike
+            History from {companyDateLabel(rollup.horizon.floor)} · {rollup.horizon.days} days
           </span>
         )}
       </div>

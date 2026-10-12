@@ -5868,8 +5868,8 @@ table first; the width is the page column's, not the window's.
   from its overlay, `exhausted` where the engine says `refusing`) and tokens per
   ended turn. A PERSON the auxiliary model spent for (`person: true` — their
   questions answered with `answer_knowledge`, and the background passes of a
-  unit they lead) is a row of their own, keyed by their handle, and says in its
-  turns and per-turn cells that a person takes no turns. A row opens the seat
+  unit they lead) is a row of their own, keyed by their handle, whose turns and
+  per-turn cells say it is auxiliary model spend for that person. A row opens the seat
   in the peek; on a phone a seat is one compact row of two lines, at every
   density: name, tokens and share, then turns · today · per turn, each with its
   unit, and today as its percentage alone (the day's bar is for scanning the
@@ -5914,9 +5914,9 @@ refusing it, since when. **The company** comes first, as three tiles, because
 everything a seat spends is the company's spend too and its ceiling binds every
 seat at once; **Agent seats** follow as one table with a column per window, so
 the one seat near its ceiling is found down a column. A window's bar is a kit
-`Meter` handed the engine's `state` — the page states the engine's
-`near_fraction` in its lede and divides nothing itself — and a window with no
-ceiling draws no bar, because a bar needs something to be a fraction of. A
+`Meter` handed the engine's `state`, and the page divides nothing itself; a
+window with no ceiling draws no bar, because a bar needs something to be a
+fraction of. A
 counter nobody could read (`durable: false`) says so and draws no figures.
 
 **Every ceiling is editable in place by an operator.** The pencil beside it
