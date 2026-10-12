@@ -9235,6 +9235,15 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-4);
 }
+/* THE FACTS STAND ON THE CARD'S FLOOR. The hero is stretched to the chart's
+   height wherever it sits beside it, and stacked from the top its parts ended
+   14 to 53px short of the chart's own (most at compact, where the chart's
+   plot does not shrink with the density). The budget and the tiles sit at the
+   bottom, level with the chart's split control, and the spare height opens
+   between them and the figure. */
+.spend-hero > .spend-budget {
+  margin-top: auto;
+}
 .spend-hero-figure {
   display: flex;
   flex-direction: column;
@@ -9267,12 +9276,20 @@ a.live-row:focus-visible {
 .spend-refusing {
   color: var(--color-feedback-danger-ink);
 }
-/* THE TWO FIGURES INSIDE THE HERO are a block inside a card — the elevated
-   rung, which is exactly what `--color-surface-elevated` is for. */
+/* THE FIGURES INSIDE THE HERO are blocks inside a card, on the elevated rung,
+   which is exactly what `--color-surface-elevated` is for. AS MANY COLUMNS AS
+   THERE ARE TILES: each is absent when it has nothing to say (no cache
+   reported, a tracker that is not the engine's), and a lone tile in a
+   two-column row left half the row empty. With neither, the row is not drawn,
+   so it adds no gap under the budget. */
 .spend-tiles {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 10px;
+}
+.spend-tiles:empty {
+  display: none;
 }
 .spend-tile {
   display: flex;
@@ -9324,7 +9341,12 @@ a.live-row:focus-visible {
     contain: inline-size;
   }
 }
+/* THE SPLIT CONTROL STANDS ON THE CARD'S FLOOR, level with the hero's tiles,
+   where the hero is the taller of the two (a refusal or a long comparison
+   under its figure). The plot cannot take the spare height: its height is a
+   fixed length the kit's chart is handed. */
 .spend-chart-foot {
+  margin-top: auto;
   display: flex;
   flex-wrap: wrap;
   align-items: center;

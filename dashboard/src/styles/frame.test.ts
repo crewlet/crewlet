@@ -1678,6 +1678,25 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".spend-list .spend-bars")).toMatch(/--crewlet-bar-list-label-width:\s*50%/);
   });
 
+  // THE TOP ROW ENDS ON ONE LINE. The hero stacked its parts from the top and
+  // ended 14 to 53px short of the chart beside it, a strip of nothing under
+  // its tiles; where the hero is the taller, the chart's split control stood
+  // above a strip of its own.
+  test("the hero's facts and the chart's split control stand on their cards' floors", () => {
+    expect(block(css, ".spend-hero > .spend-budget")).toMatch(/margin-top:\s*auto/);
+    expect(block(css, ".spend-chart-foot")).toMatch(/margin-top:\s*auto/);
+  });
+
+  // A LONE TILE TAKES THE ROW. A tile with nothing to say is not drawn, and
+  // the one left in a two-column row stood beside half a row of nothing.
+  test("the hero's tiles take one column each, and with none the row is not drawn", () => {
+    const tiles = block(css, ".spend-tiles");
+    expect(tiles).toMatch(/grid-auto-flow:\s*column/);
+    expect(tiles).toMatch(/grid-auto-columns:\s*minmax\(0, 1fr\)/);
+    expect(tiles).not.toMatch(/grid-template-columns/);
+    expect(block(css, ".spend-tiles:empty")).toMatch(/display:\s*none/);
+  });
+
   test("a card without its partner takes the whole row", () => {
     expect(block(css, ".spend-pair > :only-child")).toMatch(/grid-column:\s*1 \/ -1/);
   });

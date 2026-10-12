@@ -5831,14 +5831,17 @@ beside the **auxiliary model**. The two rows under the hero share one pair of
 tracks (1.7 : 1), so the gutter runs down the page as one line: the wide track
 holds what is read along a row, the seats' table and the tasks' titles, and the
 narrow one the ranked lists, which a wide track only stretches. The three
-ranked lists give their words one column, half the card, so their bars start
-at one x down the page and a team's name is not cut at the kit's 128px. Every
-card in a row stretches to the tallest, so the row's edges line up and nothing
-leaves a hole under it. A stretched card keeps its content at the top and its foot on
-the floor, the stacked lists' last card takes what the stack leaves, and a card
-whose partner is absent (no task spend to rank on a tracker that is not the
-engine's) takes the whole row. Below a page column of 900px every row stacks,
-the table first; the width is the page column's, not the window's.
+ranked lists give their words one column, half the card, so their bars start at
+one x down the page and a team's name is not cut at the kit's 128px. Every card
+in a row stretches to the tallest, so the row's edges line up and nothing
+leaves a hole under it. A stretched card keeps its content at the top and its
+foot on the floor, the stacked lists' last card takes what the stack leaves,
+and a card whose partner is absent (no task spend to rank on a tracker that is
+not the engine's) takes the whole row. In the top row the hero's figure stays
+at its top while the budget and the tiles stand on its floor, level with the
+chart's split control; a tile with nothing to say is not drawn, and the other
+takes the tiles' whole row. Below a page column of 900px every row stacks, the
+table first; the width is the page column's, not the window's.
 
 - **The hero** is the window's tokens, the change against the window before it
   (the engine's `previous=true`, cut on the company's calendar, and "nothing

@@ -824,3 +824,34 @@ test("every ranked list takes the one label width, so the bars start at one x", 
     expect(card.querySelector("ul")?.classList.contains("spend-bars"), title).toBe(true);
   }
 });
+
+// THE TILES' ROW HOLDS ONLY THE TILES THAT SPEAK, and with neither it is empty,
+// which the sheet takes out of the hero (`.spend-tiles:empty`): drawn, an
+// empty row added a gap under the budget at the hero's foot.
+test("the hero's tiles row holds only the tiles that have something to say", async () => {
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(1_000),
+    work_items: new QueryError("unknown_query"),
+    viewer: VIEWER,
+  });
+  await settle();
+  // No cache was reported and the tracker is not the engine's: neither tile.
+  expect(document.querySelector(".spend-tiles")!.childNodes).toHaveLength(0);
+  cleanup();
+
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(1_000),
+    work_items: (p: Record<string, unknown>) =>
+      items([], {
+        totals: p.totals
+          ? [
+              { key: "spend_tokens:median", column: "spend_tokens", op: "median", value: 96_000 },
+              { key: "spend_tokens:count", column: "spend_tokens", op: "count", value: 14 },
+            ]
+          : [],
+      }),
+    viewer: VIEWER,
+  });
+  await settle();
+  expect(document.querySelectorAll(".spend-tiles > .spend-tile")).toHaveLength(1);
+});
