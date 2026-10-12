@@ -311,9 +311,9 @@ test("a node missing from the answer is named above the list", async () => {
     event_series: series(1),
   });
   await screen.findByText("one turn");
-  const note = await screen.findByText(/is missing one node/);
+  const note = await screen.findByText(/is missing 1 node\./);
   expect(note.closest(".coverage-note")?.textContent).toContain(
-    "node-b — no answer inside the fleet read budget",
+    "node-b: no answer inside the fleet read budget",
   );
   expect(note.closest(".coverage-note")?.textContent).not.toContain("node-a");
 });

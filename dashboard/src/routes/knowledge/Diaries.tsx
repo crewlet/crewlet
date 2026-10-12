@@ -86,8 +86,11 @@ export function Diaries() {
       </PageNote>
       <CoverageNote
         coverage={[overview.data?.coverage]}
-        what="this list"
-        lost="the agents each of them holds are listed without their counts"
+        what="Diaries"
+        lost={{
+          one: "Its agents are listed without counts",
+          many: "Their agents are listed without counts",
+        }}
       />
       <QueryState
         error={overview.error}

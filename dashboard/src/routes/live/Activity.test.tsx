@@ -468,6 +468,6 @@ test("a log missing a node names it", async () => {
       : { bucket: "hour", bars: [], total: 0, failed: 0, by_category: {}, coverage },
   );
   expect(screen.getByText("node-b")).toBeTruthy();
-  expect(screen.getByText(/This log is missing one node/)).toBeTruthy();
+  expect(screen.getByText(/This log is missing 1 node\./)).toBeTruthy();
   location.hash = "#/";
 });

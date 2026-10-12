@@ -377,7 +377,7 @@ test("the Activity card names a node missing from the seat's events", async () =
     },
   });
   const card = cardOf("Activity");
-  const note = await within(card).findByText(/is missing one node/);
+  const note = await within(card).findByText(/is missing 1 node\./);
   expect(note.closest(".coverage-note")?.textContent).toContain("node-b");
 });
 

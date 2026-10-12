@@ -273,7 +273,10 @@ export function BackupRecord({ answer }: { answer: BackupsAnswer }) {
         <CoverageNote
           coverage={[answer.coverage]}
           what="this history"
-          lost="the backups each of them took are not here"
+          lost={{
+            one: "The backups it took are not here",
+            many: "The backups they took are not here",
+          }}
         />
         <DataGrid<BackupRunRow>
           name="history"
