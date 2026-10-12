@@ -482,7 +482,7 @@ export function emptyOriginReason(
     case "failing":
       return failed
         ? `Failed to start. On ${failed.node}: ${failureLine(failed)}`
-        : "Every instance a node launched failed to start.";
+        : "Failed to start.";
     case "partial":
       return failed
         ? `Not running on this node. On ${failed.node}: ${failureLine(failed)}`

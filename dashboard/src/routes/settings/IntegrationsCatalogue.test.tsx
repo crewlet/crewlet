@@ -233,7 +233,7 @@ test("without an operator token every form action is disabled with its reason", 
   expect(connect.getAttribute("aria-disabled")).toBe("true");
   expect(connect.getAttribute("aria-describedby")).toBeTruthy();
   expect(document.body.textContent).toContain("Setting up integrations needs an operator token.");
-  expect(document.body.textContent).toContain("Setting an integration up needs an operator token.");
+  expect(document.body.textContent).toContain("Setting up integrations needs an operator token.");
   fireEvent.click(connect);
   expect(screen.queryByRole("dialog")).toBeNull();
   const datadog = await tile("Datadog");

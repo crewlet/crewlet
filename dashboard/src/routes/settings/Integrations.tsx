@@ -1312,7 +1312,7 @@ function rosterOf(tools: SetupToolState[]): SetupToolState | undefined {
 export function formBlocked(sections: unknown[], guarded: boolean): string | undefined {
   if (sections.length > 0) return undefined;
   return guarded
-    ? "Setting an integration up needs an operator token."
+    ? "Setting up integrations needs an operator token."
     : "The engine did not say what this integration needs, so there is no form to open.";
 }
 
