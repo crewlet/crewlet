@@ -336,7 +336,7 @@ The engine prompts never name these tools (see [Tool Capabilities](tool-capabili
 
 | Tool (example) | Surface | Purpose |
 |------|---------|---------|
-| `slack_conversations_postMessage` | Slack | DM or channel post; conversational updates, questions, handoffs |
+| `slack_conversations_add_message` | Slack | DM or channel post; conversational updates, questions, handoffs |
 | `jira_add_comment` / `jira_update_issue` | Jira | In-ticket collaboration and reassignment |
 | `confluence_add_footer_comment` / `confluence_add_comment` | Confluence | Page discussion; `@mention` uses the [platform-mentions skill](tool-skills.md) markup. The exact comment tool name is mcp-atlassian-version dependent; the LLM discovers whichever name the deployed server registered via `list_mcp_server_tools` |
 | `request_copilot_review` | GitHub | Request an automated review on an existing PR (an un-promoted lightweight option; code authoring goes through the [code sandbox](code-sandbox.md), not here) |
