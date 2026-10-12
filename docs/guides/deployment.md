@@ -75,9 +75,10 @@ never below 1 GiB each, so:
   the knowledge base's log for a quarter of the mutation log's, and the usage
   log for a fixed 1 GiB — its size is a count of node-days rather than a rate,
   so more disk buys it nothing. They are scaled down together whenever they
-  ask for more than half the free space, which on a first boot is every volume
-  with less than about 290 GiB free (at their 64 GiB clamps the four ask for
-  145 GiB); from there up each log gets what it asked for.
+  ask for more than that half — half of three quarters, so three eighths of
+  the free space — which on a first boot is every volume with less than about
+  387 GiB free (at their clamps the four ask for 145 GiB, three eighths of
+  387); from there up each log gets what it asked for.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes` or

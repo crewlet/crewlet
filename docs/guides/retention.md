@@ -1530,9 +1530,9 @@ Two excursions are designed for and do not alarm:
 
 1. **A full re-embedding.** A width change republishes every vector, which at
    year five bottoms the vector log's headroom at about 51 % at the 16 GiB a
-   64 GiB volume asks for — about 43 % at the 13.8 GiB it is created with
+   64 GiB volume asks for — about 23 % at the 10.2 GiB it is created with
    once the one budget scales every log to fit the broker there — and at about
-   88 % at the 64 GiB a volume of about 290 GiB or more gets. The alarm threshold is
+   88 % at the 64 GiB a volume of about 387 GiB or more gets. The alarm threshold is
    10 %, clear of each. The corpus is the company's whole history — about
    17 MB per agent seat per year — so a larger or older company sets
    `stream.tracker_vectors_max_bytes` at about twice it: 34 MB per agent seat
