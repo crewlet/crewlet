@@ -1478,8 +1478,11 @@ const (
 // position the gate was judged at and NOT a dropped record of this operation
 // ([Unavailable.Dropped]), because the record there may be a healthy peer's
 // that applied everywhere and this write's own append may never have landed.
-// And a record that cannot be read is one whose writer nobody here can name,
-// which is `unknown` rather than a guess in either direction.
+// What it does say of that append — that if it landed it applies nowhere — is
+// a reading of the ledger's silence, so it is said only where the ledger
+// vouches, and is `unknown` where it cannot. And a record that cannot be read
+// is one whose writer nobody here can name, which is `unknown` rather than a
+// guess in either direction.
 //
 // # And whether it is this operation's
 //
@@ -1581,6 +1584,25 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 	reason, gated, err := p.voided(ctx, req, at, ours, writer, gen)
 	if err != nil {
 		return Result{}, err
+	}
+	if gated && !ours {
+		// ANOTHER OPERATION'S RECORD, AT WHICH THE GATE HOLDS THIS NODE, so
+		// the gate says nothing of the record at `at`, and what a refusal
+		// would say of this write's own append — below `at`, applying
+		// nowhere, if it landed — is the LEDGER'S SILENCE read: an append
+		// that landed before this node's eviction applied, and only its row
+		// says so. So it is asked here, where the record is not this
+		// operation's, and not on the ours arm, where the gate's answer is
+		// about the record itself. A ledger that cannot vouch answers as the
+		// unvouched arm below does, never with a refusal that called a write
+		// which may have applied one that applies nowhere.
+		vouched, vouchErr := p.vouches(ctx, req)
+		if vouchErr != nil {
+			return Result{}, vouchErr
+		}
+		if !vouched {
+			return Result{Outcome: OutcomeUnknown, OpID: req.OpID, Unvouched: true}, nil
+		}
 	}
 	if gated {
 		// THE WRITE APPLIED NOWHERE AND NEVER WILL. A refusal rather than

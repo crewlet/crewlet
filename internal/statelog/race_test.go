@@ -517,6 +517,55 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		}
 	})
 
+	t.Run("an operation minted before a sweep during its own write, held at another's record, answers unknown", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		first, err := h.write(probeSubject("a"), "op-0", "one")
+		if err != nil {
+			t.Fatalf("the first write: %v", err)
+		}
+		h.anchorAt(probeSubject("a"), first.Position.Seq)
+
+		// As above — the ledger swept during the write past the
+		// operation's mint instant, and a peer's record of another
+		// operation newest on the subject — and THIS NODE'S EVICTION is
+		// below that record. The gate says nothing about the peer's
+		// record, which applied; what a refusal would say of this
+		// write's own append — that it applies nowhere — is the ledger's
+		// silence read, and an append that landed below the eviction
+		// applied, its row among those the sweep took.
+		h.applier.mu.Lock()
+		h.applier.auto = false
+		h.applier.mu.Unlock()
+		h.applier.advance(statelog.Position{Stream: probeStream, Generation: 1, Seq: 1_000})
+		h.gates.holdWriter("node-a", statelog.ReasonEvicted)
+		h.appends.fail(errors.New("no response from stream"), false)
+		minted := time.Now()
+		h.appends.mu.Lock()
+		h.appends.beforeLastSeq = func() {
+			h.sweep(minted.Add(time.Hour))
+			if _, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
+				probeRecord(statelog.Stamp{Gen: 1, Writer: "node-b"}, probeSubject("a"),
+					statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "peer")); err != nil {
+				t.Errorf("the peer's write: %v", err)
+			}
+		}
+		h.appends.mu.Unlock()
+
+		op := statelog.NewOpID(minted, "write-a")
+		res, err := h.write(probeSubject("a"), op, "two")
+		if err != nil {
+			t.Fatalf("write = %v, want unknown — the ledger cannot vouch for this "+
+				"operation, so nothing here can say its append applies nowhere; it "+
+				"may have applied below this node's eviction", err)
+		}
+		if res.Outcome != statelog.OutcomeUnknown || !res.Unvouched || !res.Position.IsZero() ||
+			res.OpID != op {
+			t.Fatalf("result = %+v, want unknown, unvouched, under %s and naming no position",
+				res, op)
+		}
+	})
+
 	t.Run("a lost acknowledgement whose record is the newest answers applied from the record whatever the ledger lost", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
