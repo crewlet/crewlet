@@ -67,19 +67,3 @@ func TestBrowserOriginIsWhatABrowserSends(t *testing.T) {
 		}
 	}
 }
-
-// THE PATH IS THE ONE PART OF THE ADDRESS THE ENGINE SHARES WITH THE SITE
-// URL: the server routes under the Site URL's path whatever host a request
-// arrives on, so the host may differ and the path may not.
-func TestPathMatchingIgnoresTheHost(t *testing.T) {
-	if !mattermost.PathMatches("https://example.com/chat", "https://example.com/chat/") {
-		t.Error("two spellings of one subpath disagree")
-	}
-	if mattermost.PathMatches("https://example.com/chat", "https://example.com") {
-		t.Error("a path disagreement was not reported")
-	}
-	if !mattermost.PathMatches("http://mattermost.chat.svc.cluster.local:8065/chat",
-		"https://chat.example.com/chat") {
-		t.Error("an in-cluster address under the Site URL's path was reported")
-	}
-}

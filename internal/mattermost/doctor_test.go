@@ -3,7 +3,10 @@ package mattermost_test
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"path"
 	"slices"
 	"strings"
 	"testing"
@@ -147,7 +150,7 @@ func TestAnUnsetSiteURLIsReported(t *testing.T) {
 	srv.siteURL = " "
 	report := doctorAgainst(t, srv, nil)
 	f := finding(t, report, "site url")
-	want, _ := mattermost.JudgeSiteURL("", "")
+	want, _ := mattermost.JudgeSiteURL("")
 	if f.OK || f.Detail != want.Detail || !strings.Contains(f.Detail, "System Console") {
 		t.Errorf("finding = %+v", f)
 	}
@@ -181,21 +184,41 @@ func TestASiteURLNoBrowserCanMatchIsReported(t *testing.T) {
 	}
 }
 
-// A PATH MISMATCH IS THE ENGINE'S PROBLEM, not the browsers': the server
-// routes under its Site URL's path on every host, so the engine's address
-// has to share it — and the finding names the field to change.
-func TestAPathMismatchIsReportedAsTheEnginesAddress(t *testing.T) {
+// A URL THE SERVER REDIRECTS STOPS THE RUN AT THE FIRST QUESTION, naming the
+// address to set: a Mattermost served under a Site URL path redirects every
+// request outside it, and the engine follows no redirect — so nothing below
+// could be asked, and an operator needs the address, not a list of failures.
+func TestAURLTheServerRedirectsStopsTheRunNamingTheAddress(t *testing.T) {
 	t.Parallel()
 	srv := newChatServer()
-	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
-		srv.siteURL = o.Config.URL + "/chat"
-	})
-	f := finding(t, report, "site url")
-	if f.OK {
-		t.Fatal("a path mismatch passed")
+	api := http.StripPrefix("/chat", http.HandlerFunc(srv.serve))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/chat/") {
+			r.URL.Path = path.Join("/chat", r.URL.Path)
+			http.Redirect(w, r, r.URL.String(), http.StatusFound)
+			return
+		}
+		api.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	client, err := mattermost.NewClient(mattermost.ClientOptions{URL: server.URL, Token: adminToken})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(f.Detail, "integrations.mattermost.url") {
-		t.Errorf("the detail does not name the address to change: %q", f.Detail)
+	cfg := enabledChat()
+	cfg.URL = server.URL
+	report, err := mattermost.Doctor(t.Context(), mattermost.DoctorOptions{
+		Client: client, Config: cfg, Dial: (&dials{}).dial,
+	})
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	f := finding(t, report, "reachable")
+	if f.OK || !report.Stopped() {
+		t.Fatalf("a redirected url did not stop the run: %+v", report.Findings)
+	}
+	if want := "set the url to " + server.URL + "/chat"; !strings.Contains(f.Detail, want) {
+		t.Errorf("the finding does not say %q: %q", want, f.Detail)
 	}
 }
 

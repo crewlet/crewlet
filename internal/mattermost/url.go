@@ -89,22 +89,8 @@ func defaultPort(scheme string) string {
 	return ""
 }
 
-// PathMatches reports whether the address the engine dials is under the path
-// the server is served at.
-//
-// THE SERVER ROUTES UNDER ITS SITE URL'S PATH, WHATEVER HOST A REQUEST
-// ARRIVES ON: Mattermost mounts every route under the Site URL's subpath
-// (server/channels/app/server.go, `RootRouter.PathPrefix(subpath)`), answers
-// a request outside a subpath with a redirect into it, and an API call under
-// a path it does not serve with a 404 (web/static.go). The redirect rescues
-// only the reads: the websocket and every GET follow it, and every write
-// arrives as a GET, because that is what an HTTP client turns a redirected
-// POST into. So the HOST the engine dials may be anything that reaches the
-// server, and the PATH may not.
-func PathMatches(configured, reported string) bool {
-	return urlPath(configured) == urlPath(reported)
-}
-
+// urlPath is an address's path, without a trailing slash: the empty string
+// for one served at its root.
 func urlPath(raw string) string {
 	u, err := url.Parse(NormalizeURL(raw))
 	if err != nil {

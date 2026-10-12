@@ -719,7 +719,10 @@ type Mattermost struct {
 	// the Site URL people browse: any route to the same server works (an
 	// in-cluster Service, a private name), because the engine's sockets
 	// carry no Origin and nothing a person opens is built from this value.
-	// Only its path is held to the Site URL's, which the server routes on.
+	// What it must be is an address the server answers its API at without a
+	// redirect — under the Site URL's path, which the server routes on
+	// whatever host a request arrives at — because the engine follows none
+	// (internal/mattermost/client.go says why).
 	URL string `yaml:"url,omitempty" json:"url,omitempty" desc:"Instance base URL, e.g. https://chat.example.com."`
 
 	// Team is the team slug agents belong to. Required when enabled —

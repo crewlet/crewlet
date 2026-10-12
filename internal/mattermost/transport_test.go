@@ -312,10 +312,8 @@ func TestAnotherRouteToTheServerIsNotWarnedAbout(t *testing.T) {
 	if got := tr.StatusRefresh(); got != 2*time.Second {
 		t.Fatalf("StatusRefresh = %v: the instance was never read", got)
 	}
-	for _, event := range []string{"mattermost_site_url", "mattermost_url_path"} {
-		if strings.Contains(logs.String(), event) {
-			t.Errorf("a different route to the server was reported:\n%s", logs)
-		}
+	if strings.Contains(logs.String(), "mattermost_site_url") {
+		t.Errorf("a different route to the server was reported:\n%s", logs)
 	}
 }
 

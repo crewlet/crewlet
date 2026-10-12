@@ -176,23 +176,33 @@ server's in-cluster Service — `http://mattermost.chat.svc.cluster.local:8065`
   come from the server's own Site URL. So does every link in the web app,
   which people reach at the Site URL anyway.
 
-Only the **path** has to match. Mattermost serves every route under its Site
-URL's path, whatever host a request arrives on: a Site URL of
+Only the **path** has to be the server's. Mattermost serves every route under
+its Site URL's path, whatever host a request arrives on: a Site URL of
 `https://example.com/chat` needs
-`url: http://mattermost.chat.svc.cluster.local:8065/chat`. A request under
-another path is redirected into it, which rescues the websocket and the
-reads and no write: a redirected POST arrives as a GET. The engine says so at
-start (`mattermost_url_path_mismatch`).
+`url: http://mattermost.chat.svc.cluster.local:8065/chat`.
 
-The engine reads the Site URL once when the transport starts, and warns about
-what the server itself cannot use — never about the Site URL differing from
-the address it dials:
+**The engine follows no redirect.** Go's HTTP client follows one by
+resending a write as a `GET` without its body — a bot's rename arrives as a
+read of the bot and is answered `200` — and the agents' Mattermost MCP
+server, which the examples give the same address, follows none at all, so
+an engine that followed one would hear every message while its agents could
+answer none. A `url` the server redirects therefore fails every call, with
+an error naming where the server sent it and the `url` to set: one outside
+the Site URL's path, which Mattermost redirects into it, or `http://` behind
+a proxy that sends it to `https://`. A `url` under a path the server has no
+route for at all — any path, on a server whose Site URL has none — is
+answered with the web app's page, and the error says that instead of
+failing to decode it.
+
+The engine reads the server's configuration once when the transport starts,
+and warns about what the server itself cannot use — never about the Site URL
+differing from the address it dials:
 
 | Event | When | What breaks |
 |---|---|---|
 | `mattermost_site_url_unset` | SiteURL is empty | Mattermost's email links, email batching and OAuth sign-in. Browsers keep their live feed |
 | `mattermost_site_url_refuses_browsers` | SiteURL is not an absolute http(s) address — `localhost:8065` and `/mattermost` pass Mattermost's own validation — or spells out a default port | Every person's live feed, and every link the server builds; the agents keep working |
-| `mattermost_url_path_mismatch` | `url` is under another path than the Site URL | Every write the engine makes — typing indicators, provisioning, teardown |
+| `mattermost_instance_unread` | The configuration could not be read through `url`. A redirect, or a web page where the API's JSON should be, is named in its `error` with the `url` to set | When it is the `url`: every call the engine makes, so no seat connects |
 
 Each carries the same sentence [`crewlet mattermost doctor`](#checking-an-install-crewlet-mattermost-doctor)
 prints for it.
@@ -558,8 +568,8 @@ inbound path, in the order it breaks:
 
 | Check | Why it is here |
 |---|---|
-| `/system/ping`, unauthenticated | Reachability — a bad credential must not make a healthy server look dead |
-| `SiteURL` | The [one setting](#the-site-url) whose failure has no error message: unset, not an absolute http(s) address, a default port spelled out, or a path `integrations.mattermost.url` does not share. A Site URL on another *host* than `url` is not a finding — see [The address the engine dials](#the-address-the-engine-dials) |
+| `/system/ping`, unauthenticated | Reachability — a bad credential must not make a healthy server look dead — and that `url` is where the server answers its API: a redirect, or a web page in its place, stops the run and names the `url` to set (see [The address the engine dials](#the-address-the-engine-dials)) |
+| `SiteURL` | The [one setting](#the-site-url) whose failure has no error message: unset, not an absolute http(s) address, or a default port spelled out. A Site URL on another address than `url` is not a finding — see [The address the engine dials](#the-address-the-engine-dials) |
 | A **browser-shaped** websocket upgrade | Sent to `url`'s host, under the Site URL's path, *with* the `Origin` a browser at the Site URL sends, which is the only difference between a browser and the engine — this is the check that predicts what a human sees, `AllowCorsFrom` included, which no unprivileged read can show. It cannot see a proxy standing in front of the Site URL |
 | The configured team | Channels are team-scoped, so a team that does not resolve is a company where no bot can be placed |
 | Per seat: its own credential, a real socket, its channels | A token can be valid for REST and still not open a socket, and a bot receives nothing from channels it has not joined. The socket is opened exactly as the engine opens it, with no `Origin` |
@@ -1122,14 +1132,15 @@ to the server than people do — an internal DNS name, say — and never point
 | The websocket fails and the Site URL *is* correct | Something in front of Mattermost drops the `Upgrade` header | Forward `Upgrade` / `Connection` in the reverse proxy (`proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`) |
 | The engine logs `mattermost_site_url_refuses_browsers` | SiteURL is not an absolute http(s) address (`localhost:8065`, `chat.example.com:8065` and `/mattermost` all pass Mattermost's own validation), or spells out its scheme's default port; no browser's `Origin` matches it | Set it to the address in the address bar, scheme included and default port left out |
 | The engine logs `mattermost_site_url_unset` | SiteURL is empty. Live updates still work; Mattermost's email links, email batching and OAuth sign-in do not | Set it, as above |
-| The engine logs `mattermost_url_path_mismatch`; agents hear messages but no typing indicator shows and provisioning fails | `integrations.mattermost.url` is under another path than the Site URL. Mattermost redirects the engine's requests into its own path, which the websocket and reads survive and every write does not | Give `url` the Site URL's path; its host may stay whatever reaches the server |
+| The engine logs `the server redirects it to …` and no seat connects | `integrations.mattermost.url` is not where the server serves its API: outside the Site URL's path, or `http://` where a proxy sends it to `https://`. Neither the engine nor the agents' MCP server follows a redirect | Set `url` — and the MCP server's `MATTERMOST_URL`, the same variable in the examples — to the address the error names; its host may stay whatever reaches the server |
+| The engine logs `answered with text/html rather than the API's JSON` | `url` carries a path the server has no route for, so Mattermost answers its web app's page there | Give `url` the Site URL's path |
 | One bot stays silent while others work | Its token was revoked, or its account disabled | `crewlet mattermost doctor <company.yaml>`, then re-run the provisioner |
 | An agent receives messages but never answers in Mattermost | The `mcp-server-mattermost` MCP server is missing, so the turn completes with no tool to send with | Check `uvx mcp-server-mattermost` resolves |
 | Every agent is deaf after a restart, and the log has `mattermost_ws_auth_rejected` | Personal access tokens were disabled server-wide, or the tokens were revoked | Re-enable under System Console → Integrations, re-run the provisioner |
 
 `crewlet mattermost doctor <company.yaml>` checks all of the above in one
-pass: reachability, the Site URL (on its own, and against the path of your
-configured `url`), a **browser-shaped** websocket upgrade (with the `Origin`
+pass: reachability (and that `url` is answered without a redirect), the
+Site URL, a **browser-shaped** websocket upgrade (with the `Origin`
 a browser at the Site URL sends, which is what distinguishes a browser from
 the engine), and one real authenticated socket per seat, opened as the engine
 opens it. It exits non-zero when anything is wrong.

@@ -33,14 +33,24 @@ import (
 // upgrade with no Origin is admitted either way.
 //
 // So what is observable from the public configuration, and wrong whatever
-// address anybody dials, is three things: no Site URL at all; one no browser
-// can match — not an absolute http(s) address, which the server's own
+// address anybody dials, is two things: no Site URL at all, and one no
+// browser can match — not an absolute http(s) address, which the server's own
 // validation lets through (url.ParseRequestURI takes `chat.example.com:8065`
 // as a scheme and an opaque rest, and `/mattermost` as a path), or one that
-// spells out its scheme's default port, which no browser's Origin carries;
-// and a path the engine's address does not share (see [PathMatches]).
+// spells out its scheme's default port, which no browser's Origin carries.
 // AllowCorsFrom is not in the public configuration, so a fault that hangs on
 // it is the doctor's live browser probe to find, never this judgement's.
+//
+// # Nor the engine's path
+//
+// Mattermost serves its API under its Site URL's path whatever host a
+// request arrives on, so an engine address under another path misses it —
+// but comparing the two paths predicts that wrongly in both directions: a
+// proxy that maps a path of its own onto the server's is fine and differs,
+// and a proxy that redirects http to https breaks every write and does not.
+// What happens instead is observed where it happens, on every call: the
+// client refuses a redirect, naming the address the server sent it to, and
+// names a web page answered where the API's JSON should be (client.go).
 
 // SiteURLFault is one thing wrong with a server's Site URL.
 type SiteURLFault struct {
@@ -58,17 +68,11 @@ const (
 	// EventSiteURLRefusesBrowsers is a Site URL whose own browsers the
 	// server's origin check refuses.
 	EventSiteURLRefusesBrowsers = "mattermost_site_url_refuses_browsers"
-	// EventURLPathMismatch is an engine address outside the path the
-	// server is served under.
-	EventURLPathMismatch = "mattermost_url_path_mismatch"
 )
 
-// JudgeSiteURL reports the first thing wrong with the Site URL a server
-// reports, for an engine that dials configured, and false when nothing is.
-//
-// ONE FAULT, THE FIRST TO FIX: a server with no usable Site URL has no path
-// worth comparing against.
-func JudgeSiteURL(configured, reported string) (SiteURLFault, bool) {
+// JudgeSiteURL reports what is wrong with the Site URL a server reports, and
+// false when nothing is.
+func JudgeSiteURL(reported string) (SiteURLFault, bool) {
 	site := NormalizeURL(reported)
 	switch {
 	case site == "":
@@ -99,23 +103,11 @@ func JudgeSiteURL(configured, reported string) (SiteURLFault, bool) {
 		return SiteURLFault{Event: EventSiteURLRefusesBrowsers, Detail: fmt.Sprintf(
 			"ServiceSettings.SiteURL %s spells out its scheme's default port. "+
 				"A browser never sends a default port in its Origin, and the "+
-				"server compares the Origin's host with the Site URL's exactly "+
-				"as written, so it refuses every person's websocket (unless "+
+				"server compares the Origin's host with the Site URL's, port "+
+				"included, so it refuses every person's websocket (unless "+
 				"AllowCorsFrom admits their origin) and nobody sees a message "+
 				"until they reload, while the agents, whose sockets carry no "+
 				"Origin, keep working. Remove the port", site)}, true
-	case !PathMatches(configured, site):
-		return SiteURLFault{Event: EventURLPathMismatch, Detail: fmt.Sprintf(
-			"the server is served under %q, the path of its SiteURL %s, and "+
-				"this company dials %s. Mattermost routes every request under "+
-				"that path whatever host it arrives on, so unless something in "+
-				"front of the server rewrites the path, it redirects the "+
-				"engine's requests into it: the websocket and the reads "+
-				"follow, and every write — a typing indicator, a provisioning "+
-				"pass, a teardown — arrives as a GET and fails. Give "+
-				"integrations.mattermost.url the Site URL's path; its host may "+
-				"stay whatever reaches the server",
-			pathOrRoot(site), site, NormalizeURL(configured))}, true
 	}
 	return SiteURLFault{}, false
 }
@@ -130,13 +122,4 @@ func spellsDefaultPort(site string) bool {
 	}
 	port := u.Port()
 	return port != "" && port == defaultPort(u.Scheme)
-}
-
-// pathOrRoot is a server's path for a sentence, where the empty path reads
-// as nothing at all.
-func pathOrRoot(site string) string {
-	if p := urlPath(site); p != "" {
-		return p
-	}
-	return "/"
 }

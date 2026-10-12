@@ -158,7 +158,8 @@ services:
       # the same address to the company config's ${MATTERMOST_URL}, because
       # here the engine reaches the server the way people do; that is a
       # convenience, not a rule — the engine sends no Origin, so any route
-      # to the server under the same path works for it. An MM_* variable
+      # to the server that answers under the same path, without a
+      # redirect, works for it. An MM_* variable
       # is authoritative over stored config, so this cannot be corrected in
       # the System Console or over the API; the container has to be
       # recreated.

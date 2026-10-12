@@ -423,7 +423,7 @@ func (t *Transport) readInstance(ctx context.Context) {
 		// public name is the ordinary deployment, and a warning that it
 		// blinds browsers fired on every one of them.
 		reported := SiteURL(conf)
-		if fault, ok := JudgeSiteURL(t.cfg.URL, reported); ok {
+		if fault, ok := JudgeSiteURL(reported); ok {
 			log.WarnContext(ctx, fault.Event,
 				"url", t.cfg.URL, "reported", reported, "detail", fault.Detail)
 		}

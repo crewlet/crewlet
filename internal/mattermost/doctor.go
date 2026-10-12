@@ -37,9 +37,10 @@ import (
 // People browse the Site URL; the engine may reach the same server by any
 // route, and an in-cluster Service dialled while people browse a public
 // name is the ordinary deployment on Kubernetes. So the "site url" check is
-// [JudgeSiteURL] — the one sentence the running transport logs too — and
-// the only thing it holds the configured url to is the PATH, which the
-// server routes on whatever host a request arrives at.
+// [JudgeSiteURL] — the one sentence the running transport logs too. A url
+// the server does not serve its API at is not a comparison either: the
+// client refuses the redirect, or names the web page, that it is answered
+// with, and the first check to ask says so.
 //
 // # So it dials, rather than only reading settings
 //
@@ -161,7 +162,8 @@ func Doctor(ctx context.Context, opts DoctorOptions) (*Report, error) {
 	// word they both use.
 	if err := opts.Client.Ping(ctx); err != nil {
 		report.fatal("reachable",
-			"%s did not answer: %v — nothing below could be asked", opts.Client.URL(), err)
+			"%s did not answer as Mattermost's API: %v — nothing below could be "+
+				"asked", opts.Client.URL(), err)
 		return report, nil
 	}
 	report.add("reachable", true, "%s answers", opts.Client.URL())
@@ -268,12 +270,12 @@ func resolveSeats(opts DoctorOptions) []seatCredential {
 // checkSiteURL judges the address the server believes it is served at.
 //
 // THE SAME JUDGEMENT THE TRANSPORT LOGS ([JudgeSiteURL]), so a doctor run and
-// a running node never disagree about one server. A Site URL whose ORIGIN
-// differs from this company's url is not a finding: people browse the one
-// and the engine dials the other, and only their paths have to agree.
+// a running node never disagree about one server. A Site URL on another
+// address than this company's url is not a finding: people browse the one
+// and the engine dials the other.
 func checkSiteURL(report *Report, configured string, conf map[string]string) {
 	reported := SiteURL(conf)
-	if fault, ok := JudgeSiteURL(configured, reported); ok {
+	if fault, ok := JudgeSiteURL(reported); ok {
 		report.add("site url", false, "%s", fault.Detail)
 		return
 	}
