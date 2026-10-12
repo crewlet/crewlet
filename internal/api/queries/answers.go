@@ -633,7 +633,7 @@ func Register(r *Registry, s Sources) {
 		r.Register("decisions", s.decisions)
 	}
 	if s.Usage != nil {
-		// WHO READ A PAGE, from every node's days — see pagereads.go.
+		// WHO READ A PAGE, from every data node's days — see pagereads.go.
 		// Gated on the USAGE domain rather than on the native pages: a
 		// read is recorded with its backend, so a company on Confluence
 		// has readers too.

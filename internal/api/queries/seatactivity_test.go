@@ -76,7 +76,7 @@ func hist(ds ...time.Duration) usage.Hist {
 	return h
 }
 
-// EVERY NODE'S DAYS, SUMMED EXACTLY. A seat's page counted the rows of the
+// EVERY DATA NODE'S DAYS, SUMMED EXACTLY. A seat's page counted the rows of the
 // phase history it had loaded — at most fifty, from the answering node's own
 // log — so the number stopped at fifty and described one node. Two nodes'
 // days for one seat, one of them outside the window, must come back as the
