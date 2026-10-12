@@ -62,10 +62,12 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{BackupMaxAge: 24 * time.Hour},
 			"no verified backup has been recorded",
 		},
+		// THE TERM IS NOT THE MEASUREMENT: it rides on the log the alarm
+		// stands on (AlarmDomain.Term), and the sentence says how long.
 		"a trim that cannot advance": {
 			statelog.KindTrimBlocked,
 			statelog.Reading{TrimBlockedFor: time.Hour, TrimBlockedBy: "snapshot_floor"},
-			"snapshot_floor",
+			"has not advanced for 1h",
 		},
 		"a deferral past the grace": {
 			statelog.KindDeferredOld,

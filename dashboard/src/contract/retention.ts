@@ -28,3 +28,11 @@ export type RetentionIdentityCause =
  * space that no longer exists.
  */
 export type RetentionGenerationState = "current" | "left" | "ahead" | "unknown";
+
+/**
+ * The six terms of a domain's trim, by the names the engine, the CLI and the
+ * retention guide use: `statelog.TermNames`. A term this union does not name
+ * would be drawn with no words of its own.
+ */
+export type RetentionTermName =
+  "applied" | "min_hold" | "backup_floor" | "snapshot_floor" | "feed_ack_floor" | "age_floor";

@@ -410,6 +410,42 @@ type Alarm struct {
 	// and a remedy that lived on one of them would be missing from the
 	// other two.
 	Remedy string `json:"remedy"`
+
+	// Domains is every log this alarm stands on, for a condition that is a
+	// property of a log rather than of the node: the logs nearing their
+	// ceiling, the logs whose trim is held, and under [KindBackupAge] the
+	// logs whose trim the missing or stale backup is holding. Empty for a
+	// node-wide condition.
+	//
+	// ONE ALARM PER KIND, WITH ITS LOGS IN IT, rather than one alarm per log.
+	// The kind is the alarm's identity on every other surface: the gauge
+	// carries one series per kind, and the log writes one line when a kind
+	// starts and one when it clears. A report that raised `trim_blocked`
+	// once per log told the health count four while the gauge and the log
+	// said one, and drew one cause as four problems on the operator's
+	// screen. Detail is the most pressing log's measurement; each entry here
+	// carries its own.
+	Domains []AlarmDomain `json:"domains,omitempty"`
+}
+
+// AlarmDomain is one log an alarm stands on, and what was measured there.
+type AlarmDomain struct {
+	// Domain is the log's registered name.
+	Domain string `json:"domain"`
+
+	// Detail is this log's own measurement, in the operator's units.
+	Detail string `json:"detail"`
+
+	// Term is the trim term holding this log, where the alarm is about its
+	// trim. It is the term's own name, which is what `crewlet retention
+	// status` prints and the retention guide is indexed by.
+	Term TermName `json:"term,omitempty"`
+
+	// Since is when this log's trim stopped advancing, where the alarm is
+	// about its trim. An instant rather than an age, so a reader renders
+	// the age against its own clock instead of trusting one frozen at the
+	// evaluation.
+	Since time.Time `json:"since,omitzero"`
 }
 
 // rule is one row of the table.
@@ -520,13 +556,24 @@ var table = []rule{
 			"advance at all until there is one.",
 	},
 	{
+		// THE TERM IS NOT IN THE SENTENCE. It is a field of the log the
+		// alarm stands on ([AlarmDomain.Term]), because one alarm carries
+		// every held log and two of them can be held by different terms.
 		kind: KindTrimBlocked,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("the trim has not advanced for %s: %s",
-				spoken(r.TrimBlockedFor), r.TrimBlockedBy), r.TrimBlockedBy != ""
+			if r.TrimBlockedBy == "" {
+				return "", false
+			}
+			// A BLOCK SEEN FIRST ON THIS TICK has no duration to report,
+			// and "for 0ms" reads as a measurement of nothing.
+			if r.TrimBlockedFor < time.Second {
+				return "the trim stopped advancing on this evaluation", true
+			}
+			return fmt.Sprintf("the trim has not advanced for %s", spoken(r.TrimBlockedFor)), true
 		},
-		remedy: "The blocking term names what to fix. Until it is fixed the log " +
-			"grows toward its ceiling.",
+		remedy: "The term holding each log names what to fix, and `crewlet " +
+			"retention status` prints it with its detail. Until it is fixed " +
+			"the log grows toward its ceiling.",
 	},
 	{
 		kind: KindDeferredOld,
@@ -587,7 +634,7 @@ var table = []rule{
 				"corpus", r.SearchScopedFraction*100), r.SearchScopedFraction > 0
 		},
 		remedy: "A node did not cover its bucket range, so part of the corpus " +
-			"went unscanned — it was unreachable, or its own lexical index has " +
+			"went unscanned: it was unreachable, or its own lexical index has " +
 			"not finished its first lap, which is what a node that joined a " +
 			"few minutes ago looks like and clears itself. The answers were " +
 			"complete for what was searched and silent about what was not; the " +
@@ -606,7 +653,7 @@ var table = []rule{
 				r.HistoryPartialFraction > 0
 		},
 		remedy: "Turn-level history lives only on the node that published it, so " +
-			"a partial answer is missing that node's rows — every answer names " +
+			"a partial answer is missing that node's rows, and every answer names " +
 			"the node in its `coverage`. A node that has left the fleet is gone " +
 			"with its detail, and the aggregates survive it in the usage domain; " +
 			"a live node that keeps missing the budget is slow on its own store " +
@@ -650,7 +697,7 @@ var table = []rule{
 		remedy: "The 1-bit first stage is failing this corpus, index or not: " +
 			"`crewlet search eval` against a backup's copy of the estate " +
 			"measures the full scan beside the index in every query shape and " +
-			"will say the same. The remedy is the evaluation's — raise " +
+			"will say the same. The remedy is the evaluation's: raise " +
 			"BinaryOversample, then an int8 first stage, both code changes (see " +
 			"docs/guides/search.md). No index is installed meanwhile, so " +
 			"searches answer from the full scan at the recall the evaluation " +
@@ -670,8 +717,8 @@ var table = []rule{
 		// named here to the line the applier writes.
 		remedy: "A gated record is recoverable by nothing. Each drop's " +
 			"`statelog_record_gated` log line names the `gate` that dropped it, " +
-			"the record's `position` and `kind`, and the `writer` — the node " +
-			"that wrote it; this is worth reading today.",
+			"the record's `position` and `kind`, and the `writer` (the node " +
+			"that wrote it); this is worth reading today.",
 	},
 	{
 		// NOT `feed_dead_letters`, WHICH NAMED A PATH THIS ENGINE DOES
@@ -689,8 +736,8 @@ var table = []rule{
 				"last day", r.FeedUnreadable), r.FeedUnreadable > 0
 		},
 		remedy: "A record no build on this node can read. It redelivers for ever " +
-			"rather than being dropped, so the wakes behind it are waiting too — " +
-			"upgrade the node past it, or the feed stops moving.",
+			"rather than being dropped, so the wakes behind it are waiting too. " +
+			"Upgrade the node past it, or the feed stops moving.",
 	},
 	{
 		kind: KindMaintenanceOpen,
@@ -716,7 +763,7 @@ var table = []rule{
 					bytesHuman(r.StoreBytes)),
 				r.StoreBytes > 0 && float64(r.FreeBytes) < VolumeHeadroomFactor*float64(r.StoreBytes)
 		},
-		remedy: "Add space to the volume the alarm names — or, where it could not be " +
+		remedy: "Add space to the volume the alarm names. Where it could not be " +
 			"measured, fix what stops it being read. A backup, a vacuum and a peer's " +
 			"join all need the room, and each fails partway through without it.",
 	},
@@ -764,7 +811,7 @@ var table = []rule{
 		remedy: "The backend lost or changed bytes it had acknowledged: check its " +
 			"own health (the NATS bucket OBJ_crewlet_files on the data nodes, or " +
 			"the S3 bucket) and restore those files from a backup, or upload them " +
-			"again — see docs/guides/backup.md. `crewlet objects status` names them.",
+			"again (see docs/guides/backup.md). `crewlet objects status` names them.",
 	},
 }
 

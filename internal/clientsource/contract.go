@@ -171,6 +171,7 @@ var contract = []Entry{
 	{"RetentionTrimFloorState", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
 	{"RetentionGenerationState", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
 	{"RetentionIdentityCause", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
+	{"RetentionTermName", ReadUnion, "internal/statelog.TestTheDashboardKnowsEveryRetentionReportState"},
 
 	// coverage.ts
 	{"Coverage", ReadInterface, "internal/eventfan.TestTheDashboardDeclaresExactlyTheCoverageTheEngineSends"},

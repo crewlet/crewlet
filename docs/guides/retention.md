@@ -149,7 +149,9 @@ The **backup-age alarm** (`backup_age`) ages the same point the trim reads,
 under the same policy: under `operator` a node's nightly copies are fresh
 while the trim waits on an acknowledgement, and the alarm fires on the missing
 acknowledgement rather than staying green beside a log that cannot be trimmed.
-**Settings › Backups & retention** marks that point **counted · newest**.
+It names every log whose trim it is holding, and those logs raise no
+`trim_blocked` of their own: the backup is the one thing to do about all of
+them. **Settings › Backups & retention** marks that point **counted · newest**.
 
 An **unverified** copy satisfies neither. A file that exists and was never
 opened is not a backup, and deleting the log's only copy of a record against
@@ -813,7 +815,7 @@ The **usage log** refuses the same way, and what it costs is different: no read
 appends to it, so nothing a seat does is refused — what stops is the
 replication of each node's days. Every node keeps re-deriving its day and
 retrying on every tick, nothing is lost from any node's own event log, and the
-`log_headroom` alarm names the domain (`usage: …`) long before the ceiling. Its
+`log_headroom` alarm names the domain (`log_headroom on usage`) long before the ceiling. Its
 size is a count of node-days rather than a rate — one message per (node, day,
 seat or schedule) for 181 days — so a log that fills has outgrown its census:
 raise `stream.usage_log_max_bytes` as below.
@@ -1050,7 +1052,7 @@ checkpoint was committed under. On a difference the applier **stops** rather
 than resuming — the log line names both instants and this verb — the node's
 reads and writes refuse `wrong_stream` with that reason, it stops serving the
 estate — its seats read it from a peer — and `crewlet retention status` leads with `NOT READY <domain>:
-wrong_stream (recreated) — …` carrying the same sentence, both instants
+wrong_stream (recreated): …` carrying the same sentence, both instants
 included (the dashboard shows the same refusal above the domain's block). A checkpoint past the log's end is caught as `wrong_stream` too,
 because a position the log has never reached is a position on another stream.
 
@@ -1062,7 +1064,7 @@ is where the log **ends**: below the checkpoint of a node whose own database is
 newer. Such a node refuses every read and every write of that domain with
 `wrong_stream` from the moment it boots, logs `statelog_ahead_of_log` with both
 numbers, and `crewlet retention status` on that node leads with `NOT READY
-<domain>: wrong_stream (ahead_of_log) — …` naming both. Its writes have
+<domain>: wrong_stream (ahead_of_log): …` naming both. Its writes have
 to refuse, not only its reads: whatever it appended would land at the log's
 next sequence, which is one its own applier has already passed and will never
 apply.

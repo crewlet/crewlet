@@ -341,12 +341,12 @@ func TestRetentionStatusNamesARefusedDomainAndAStalePeer(t *testing.T) {
 		t.Fatalf("retention status: %v", err)
 	}
 	first := strings.SplitN(strings.TrimSpace(stdout), "\n", 2)[0]
-	if first != "NOT READY tracker: wrong_stream (recreated) — tracker's rows are "+
+	if first != "NOT READY tracker: wrong_stream (recreated): tracker's rows are "+
 		"keyed to the stream created at 2031-04-01" {
 		t.Errorf("the first line is %q, want the refusal naming its finding", first)
 	}
 	for _, want := range []string{
-		"WRITES REFUSED tracker: log_truncated — peer node-4",
+		"WRITES REFUSED tracker: log_truncated: peer node-4",
 		"could not read tracker's evictions",
 		"left gen 0",
 		"LOG DIVERGED",
@@ -384,6 +384,51 @@ func TestRetentionStatusExitsNonZeroOnAnAlarm(t *testing.T) {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("stderr never mentions %q:\n%s", want, stderr)
 		}
+	}
+}
+
+// AN ALARM NAMES THE LOGS IT STANDS ON. One log is folded into the headline,
+// since its measurement IS the headline's; several are a line each, with the
+// term holding each one, under the alarm whose remedy covers them all.
+func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
+	t.Parallel()
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.Alarms = []statelog.Alarm{
+		{
+			Kind:   statelog.KindBackupAge,
+			Detail: "no verified backup has been recorded, and the policy asks for one every 24h",
+			Remedy: "Run `crewlet backup` against any node.",
+			Domains: []statelog.AlarmDomain{
+				{Domain: "tracker", Detail: "the trim has not advanced for 46h", Term: statelog.TermBackupFloor},
+				{Domain: "pages", Detail: "the trim has not advanced for 46h", Term: statelog.TermBackupFloor},
+			},
+		},
+		{
+			Kind:    statelog.KindLogHeadroom,
+			Detail:  "3% of the log's byte ceiling for ordinary writes is left",
+			Remedy:  "Raise the log's ceiling.",
+			Domains: []statelog.AlarmDomain{{Domain: "vectors", Detail: "3% of the log's byte ceiling for ordinary writes is left"}},
+		},
+	}
+	node.report = report
+
+	_, stderr, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err == nil {
+		t.Fatal("two active alarms exited zero")
+	}
+	for _, want := range []string{
+		"backup_age: no verified backup has been recorded",
+		"  tracker (backup_floor): the trim has not advanced for 46h",
+		"  pages (backup_floor): the trim has not advanced for 46h",
+		"log_headroom on vectors: 3% of the log's byte ceiling for ordinary writes is left",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr never says %q:\n%s", want, stderr)
+		}
+	}
+	if strings.Count(stderr, "3% of the log's byte ceiling") != 1 {
+		t.Errorf("the single log's measurement is printed twice:\n%s", stderr)
 	}
 }
 
@@ -684,7 +729,7 @@ func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
 		t.Fatalf("an unvouched gesture exited zero:\n%s", stdout)
 	}
 	for _, want := range []string{
-		"pages: unknown — this node cannot tell",
+		"pages: unknown (this node cannot tell",
 		"run it through another node the fleet still counts: -url <that node> -op-id " + gesture,
 	} {
 		if !strings.Contains(stdout, want) {

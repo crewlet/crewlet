@@ -42,21 +42,16 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { useQuery } from "~/lib/useQuery.ts";
 import {
-  DomainBlock,
+  Checks,
   DomainRefusals,
   DomainSize,
   FloorFact,
-  noConclusion,
-  Terms,
   TrimStatus,
+  useRetentionReport,
 } from "./Retention.tsx";
 import type { RetentionGenerationState } from "~/contract/retention.ts";
 import type { RetentionNode } from "~/protocol/index.ts";
-
-/** How often the retention document is re-read, matching the fleet's own. */
-const POLL_MS = 30_000;
 
 /** One node's position in THIS domain, flattened out of the per-node map. */
 interface Position {
@@ -73,10 +68,7 @@ interface Position {
 }
 
 export function DomainScreen({ name }: { name: string }) {
-  const { data, loading, error } = useQuery("retention", undefined, {
-    enabled: name !== "",
-    pollMs: POLL_MS,
-  });
+  const { data, loading, error } = useRetentionReport(name !== "");
 
   const domain = data?.domains?.find((d) => d.domain === name);
 
@@ -180,15 +172,10 @@ export function DomainScreen({ name }: { name: string }) {
                 <Card.Header icon={<LayersGlyph size="sm" />}>
                   <Card.Title>What the trim may remove</Card.Title>
                 </Card.Header>
-                {/* THE SIX TERMS, each with its own sentence and its own
-                    remedy — the same block the fleet card draws, so the card
-                    and the page can never disagree about whether this log is
-                    advancing. */}
-                <Terms
-                  terms={domain.terms}
-                  snapshotBlocked={domain.snapshot_blocked_by}
-                  empty={noConclusion(domain)}
-                />
+                {/* THE SIX CHECKS, the same block the log's row draws on the
+                    section page, so the two can never disagree about whether
+                    this log is advancing or what holds it. */}
+                <Checks domain={domain} />
               </Card>
 
               <Card padding="none">
@@ -320,6 +307,3 @@ export function DomainScreen({ name }: { name: string }) {
     </>
   );
 }
-
-/** Re-exported so the fleet card and this page are one import away. */
-export { DomainBlock };

@@ -456,3 +456,25 @@ func TestTrimRacesATransfer(t *testing.T) {
 		}
 	})
 }
+
+// ONE COUNTED NODE IS NOBODY'S STRAGGLER.
+//
+// "node-1 is the furthest behind of 1 counted node(s)" told the operator of a
+// healthy single-node company that a fleet member was behind and should be
+// brought back or evicted.
+func TestTheAppliedTermOnASingleNodeNamesNoStraggler(t *testing.T) {
+	t.Parallel()
+	in := baseInputs()
+	in.Counted = in.Counted[:1]
+	terms := in.Terms()
+	applied := terms[0]
+	if applied.Name != statelog.TermApplied {
+		t.Fatalf("the first term is %q, want applied", applied.Name)
+	}
+	if strings.Contains(applied.Detail, "behind") || strings.Contains(applied.Detail, "(s)") {
+		t.Errorf("the applied term on one node reads %q", applied.Detail)
+	}
+	if !strings.Contains(applied.Detail, "only counted node") {
+		t.Errorf("the applied term on one node reads %q, want it to say the node is the only one", applied.Detail)
+	}
+}

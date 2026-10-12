@@ -509,6 +509,19 @@ export function fmtBytes(n: number | null | undefined): string {
 // Text
 // ---------------------------------------------------------------------------
 
+/**
+ * A clause as a sentence: its first letter capitalised and a full stop after
+ * it. The engine writes a measurement as a clause, so its log line can carry
+ * it after a colon ("backup_age: no verified backup has been recorded"); a
+ * screen that prints it on its own line prints it as a sentence.
+ */
+export function asSentence(clause: string): string {
+  const s = clause.trim();
+  if (s === "") return s;
+  const head = s.charAt(0).toUpperCase() + s.slice(1);
+  return /[.!?]$/.test(head) ? head : `${head}.`;
+}
+
 /** A human label from a snake_case or dotted engine identifier. */
 export function humanize(key: string | null | undefined): string {
   if (!key) return "";

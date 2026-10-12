@@ -188,9 +188,12 @@ func TestTheHeadroomAlarmNamesItsDomain(t *testing.T) {
 	if len(fired) != 1 {
 		t.Fatalf("one domain is at 3%% headroom and %d headroom alarm(s) fired", len(fired))
 	}
-	if !strings.HasPrefix(fired[0].Detail, "vectors: ") {
-		t.Errorf("the headroom alarm reads %q and does not name the log that is "+
-			"filling", fired[0].Detail)
+	if d := fired[0].Domains; len(d) != 1 || d[0].Domain != "vectors" {
+		t.Errorf("the headroom alarm names %+v, not the log that is filling", d)
+	}
+	if !strings.Contains(fired[0].Detail, "3%") {
+		t.Errorf("the headroom alarm reads %q, which is not the filling log's measurement",
+			fired[0].Detail)
 	}
 }
 
@@ -238,12 +241,14 @@ func TestAReservedLogsHeadroomIsOfItsOrdinaryCeiling(t *testing.T) {
 	var fired []string
 	for _, a := range rep.Alarms {
 		if a.Kind == statelog.KindLogHeadroom {
-			fired = append(fired, a.Detail)
+			for _, d := range a.Domains {
+				fired = append(fired, d.Domain)
+			}
 		}
 	}
-	if len(fired) != 1 || !strings.HasPrefix(fired[0], "tracker: ") {
-		t.Fatalf("the headroom alarm fired %q, want it on tracker alone — the "+
-			"one within a tenth of the ceiling its writes are refused at", fired)
+	if len(fired) != 1 || fired[0] != "tracker" {
+		t.Fatalf("the headroom alarm stands on %q, want tracker alone: the one "+
+			"within a tenth of the ceiling its writes are refused at", fired)
 	}
 }
 

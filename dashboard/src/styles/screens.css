@@ -810,6 +810,44 @@
   padding-inline-start: var(--spacing-5);
 }
 
+/* ---- Backups & retention ------------------------------------------------ */
+
+/* An alarm's measurement, the logs it stands on and its remedy, spaced by the
+   column's gap rather than by margins of their own. */
+.alarm-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.alarm-body > p {
+  margin: 0;
+}
+.alarm-logs {
+  margin: 0;
+  padding-inline-start: var(--spacing-5);
+}
+
+/* A log per row, flush to the card's edges like a list's rows: each on the
+   card's own inset and ruled from the one above, its refusals above its
+   disclosure. */
+.log-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+}
+.log-row + .log-row {
+  border-top: 1px solid var(--color-border-default);
+}
+
+/* A check's words over its term's own name: side by side, "Slowest node
+   applied" read as a phrase. Neither wraps, since the name is an identifier. */
+.check-name {
+  display: flex;
+  flex-direction: column;
+  white-space: nowrap;
+}
+
 /* ---- Seat cards --------------------------------------------------------- */
 
 .seat-grid {
