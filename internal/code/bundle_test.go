@@ -2,6 +2,7 @@ package code_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -65,7 +66,8 @@ func TestTheIndexSizesAreWhatGitWrites(t *testing.T) {
 // a sealed real pack passes in every chunking, and every disagreement — a
 // byte of a section's magic, version or hash id, a checksum, a count, a
 // length, a size past MaxPackBytes or a pack section too short to be one — is
-// ErrBadBundle, refused by the clause written for it.
+// ErrBadBundle, refused by the clause written for it; and so is a stream a
+// byte shorter or a byte longer than the row's size.
 func TestABundleIsTheOneItsRowDescribes(t *testing.T) {
 	t.Parallel()
 	b, ref := realBundle(t)
@@ -194,8 +196,21 @@ func TestABundleIsTheOneItsRowDescribes(t *testing.T) {
 		})
 	}
 
-	if _, err := seal(t, ref, b.Bytes[:len(b.Bytes)-1], 4096); !errors.Is(err, code.ErrBadBundle) {
-		t.Fatalf("a bundle one byte short sealed: %v", err)
+	// A STREAM OF ANY OTHER LENGTH THAN THE ROW'S IS NO SEAL, longer as much
+	// as shorter: a seal that took a longer stream would pass an object
+	// carrying trailing bytes no row describes to the receiver's proposal
+	// and to a cache's install.
+	for name, bytes := range map[string][]byte{
+		"one byte short": b.Bytes[:len(b.Bytes)-1],
+		"one byte long":  append(append([]byte(nil), b.Bytes...), 0),
+	} {
+		_, err := seal(t, ref, bytes, 4096)
+		if !errors.Is(err, code.ErrBadBundle) {
+			t.Fatalf("a bundle %s sealed: %v", name, err)
+		}
+		if want := fmt.Sprintf("%d bytes passed", len(bytes)); !strings.Contains(err.Error(), want) {
+			t.Fatalf("a bundle %s was refused with %q, want the count %q", name, err, want)
+		}
 	}
 	tiny := ref
 	tiny.Size, tiny.IndexBytes, tiny.ReverseBytes = 10, 4, 4
