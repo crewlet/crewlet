@@ -32,11 +32,23 @@ const (
 	// the window closes, so ordinary jitter never registers.
 	WatchdogBeatsPerThreshold = 5
 
-	// WatchdogExitCode marks a node that ended itself — a wedged duty, or
-	// one that declared it can never turn again ([Watchdog.Fail]) — distinct
-	// from any ordinary failure so an orchestrator's restart logs say what
-	// happened. The line on stderr says which of the two it was.
+	// WatchdogExitCode marks a self-terminated wedge, distinct from any
+	// ordinary failure so an orchestrator's restart logs say what happened.
 	WatchdogExitCode = 75
+
+	// FailExitCode marks a node ended by a duty that DECLARED it cannot go on
+	// ([Watchdog.Fail]): today, the embedded broker's own Fatalf.
+	//
+	// A CODE OF ITS OWN rather than the wedge's, because an orchestrator's
+	// restart log is often all a deployment keeps — one that discards stderr
+	// keeps nothing else — and the two send a reader to opposite places: a
+	// wedge is this process, a declaration is the broker's store, its disk or
+	// its settings. It is sysexits' EX_UNAVAILABLE, "a service is
+	// unavailable", whose description also covers a catchall where something
+	// does not work and the program does not know why: the service is the
+	// broker this node runs, and why it stopped is nats-server's to say, in
+	// the line on stderr.
+	FailExitCode = 69
 )
 
 // beatCeiling is the longest a duty guarded at threshold goes between two
@@ -418,20 +430,29 @@ func (w *Watchdog) worst(now time.Time) (name string, lag time.Duration, anyLive
 // somewhere, and that is more machinery than a wedged process has earned.
 func hardExit(s Stall) {
 	fmt.Fprintln(os.Stderr, exitNotice(s))
-	os.Exit(WatchdogExitCode)
+	os.Exit(s.exitCode())
+}
+
+// exitCode is the code a node ending for s leaves with: [FailExitCode] for a
+// duty that declared it cannot go on, [WatchdogExitCode] for a wedge.
+func (s Stall) exitCode() int {
+	if s.Cause != nil {
+		return FailExitCode
+	}
+	return WatchdogExitCode
 }
 
 // exitNotice is the one line a node that ends itself leaves on stderr: what
-// stopped, and why that ends the process.
+// stopped, why that ends the process, and the code it ends with.
 func exitNotice(s Stall) string {
 	if s.Cause != nil {
 		return fmt.Sprintf("crewlet: %s declared it cannot go on: %v; exiting so "+
 			"this node is restarted rather than left serving on it (code %d)",
-			s.Duty, s.Cause, WatchdogExitCode)
+			s.Duty, s.Cause, s.exitCode())
 	}
 	return fmt.Sprintf("crewlet: %s stalled %.1fs past the seat lease TTL; exiting "+
 		"so peers can take over cleanly (code %d)",
-		s.Duty, s.Lag.Seconds(), WatchdogExitCode)
+		s.Duty, s.Lag.Seconds(), s.exitCode())
 }
 
 var _ Pulse = (*Host)(nil)

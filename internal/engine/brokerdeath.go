@@ -34,9 +34,9 @@ const brokerDuty = "embedded broker"
 // the stop, giving the leases back — rides the thing that is dead, so a drain
 // could only spend the time a turn takes on work none of which lands. So the
 // node ends through the engine's one unilateral exit, [seat.Watchdog.Fail]:
-// the reason on stderr, the watchdog's exit code, and an orchestrator that
-// restarts it at once — and a restart is what brings the broker back, from
-// whatever its store holds.
+// the reason on stderr, an exit code of its own ([seat.FailExitCode]), and an
+// orchestrator that restarts it at once — and a restart is what brings the
+// broker back, from whatever its store holds.
 //
 // NOR THROUGH [Engine.Fatal], which is how this node leaves when NATS closes a
 // broker connection for good: `crewlet run` drains then, as a signal's stop
