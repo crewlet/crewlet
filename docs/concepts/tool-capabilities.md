@@ -203,7 +203,7 @@ mcp_servers:
   - name: atlassian          # shared by Jira + Confluence
     shared: false
     command: uvx
-    args: ["mcp-atlassian"]
+    args: ["mcp-atlassian==0.23.1"]
     tool_annotations:
       jira_add_comment:       { read_only: false, open_world: true }
       confluence_create_page: { read_only: false, open_world: true }

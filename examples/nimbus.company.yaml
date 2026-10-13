@@ -559,7 +559,7 @@ knowledge:
 # THERE IS NO TRACKER OR WIKI SERVER HERE, and nothing is missing: the
 # engine's own tracker and knowledge base are BUILTIN tools, granted to
 # every seat without a server to run, a process to supervise or a token to
-# mint.  A company on Jira and Confluence adds the official
+# mint.  A company on Jira and Confluence adds the community
 # ``mcp-atlassian`` server here and a per-seat credential in each role's
 # ``mcp_env``; see docs/integrations/jira.md.
 mcp_servers:
