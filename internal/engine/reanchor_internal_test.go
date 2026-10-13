@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -389,9 +390,9 @@ func TestALogRecreatedBetweenBootsIsReanchoredWithoutARestart(t *testing.T) {
 			"record, and nothing else will ever deliver this one", n)
 	}
 
-	// NO OTHER DOMAIN MOVED — judged by what a reanchor writes, since each
-	// of these logs goes on taking framework records of its own meanwhile
-	// ([notReanchored]).
+	// NO OTHER DOMAIN MOVED — judged by what a reanchor of ANOTHER log could
+	// break, never by its sequence alone: each of these logs goes on taking
+	// framework records of its own meanwhile ([notReanchored]).
 	for name, before := range untouched {
 		notReanchored(t, e2, name, before, "a reanchor of the tracker's log")
 		other := e2.native.Load().log.Domain(name).runner
@@ -1090,9 +1091,13 @@ func readCursorRow(t *testing.T, e *Engine, domain string) cursorRow {
 }
 
 // notReanchored fails the test where a domain's checkpoint moved the way only a
-// reanchor moves one: into another GENERATION, or keyed to a stream other than
-// the one it was keyed to before — or, where it was keyed to none, other than
-// the domain's own live log — or BACKWARDS.
+// reanchor moves one: into another GENERATION, onto another stream, or keyed to
+// a stream other than the one it was keyed to before — or, where it was keyed
+// to none, other than the domain's own live log — or BACKWARDS. And it fails
+// where the checkpoint moved forward across any record but a FRAMEWORK one
+// ([statelog.FrameworkScope] — a barrier, a trimmed record), which write no
+// domain row: anything else past before is a write the case did not make, or a
+// reanchor that reached a log it was not asked about.
 //
 // THE SEQUENCE IS NOT HELD EQUAL, because a running log's checkpoint advances
 // on records no test writes: the object collector's pin is a linearizable read,
@@ -1102,12 +1107,14 @@ func readCursorRow(t *testing.T, e *Engine, domain string) cursorRow {
 // captured a checkpoint and demanded it back exactly failed whenever one landed
 // in between — about one run in three once the collector pinned the code log.
 // What a reanchor writes is ONE checkpoint, a generation and the instant it is
-// keyed to ([statelog.Reanchor]), so those are held exactly, and a sequence
-// only ever moves forward within a generation.
+// keyed to ([statelog.Reanchor]), so those are held exactly, a sequence only
+// ever moves forward within a generation, and every record it moves across is
+// read back and held to the framework's scope.
 func notReanchored(t *testing.T, e *Engine, domain string, before cursorRow, during string) {
 	t.Helper()
 	got := readCursorRow(t, e, domain)
-	stats, err := e.native.Load().log.Domain(domain).log.Stats(t.Context())
+	running := e.native.Load().log.Domain(domain)
+	stats, err := running.log.Stats(t.Context())
 	if err != nil {
 		t.Fatalf("read %s's log: %v", domain, err)
 	}
@@ -1118,6 +1125,9 @@ func notReanchored(t *testing.T, e *Engine, domain string, before cursorRow, dur
 	case got.at.Seq < before.at.Seq:
 		t.Errorf("%s's checkpoint went back from %s to %s during %s", domain,
 			before.at, got.at, during)
+	case before.at.Stream != "" && got.at.Stream != before.at.Stream:
+		t.Errorf("%s's checkpoint named stream %q and now names %q, after %s",
+			domain, before.at.Stream, got.at.Stream, during)
 	case !before.created.IsZero() &&
 		statelog.IdentityOf(before.created, got.created, true) != statelog.StreamSame:
 		t.Errorf("%s's checkpoint was keyed to the stream created at %s and is now "+
@@ -1127,6 +1137,24 @@ func notReanchored(t *testing.T, e *Engine, domain string, before cursorRow, dur
 		t.Errorf("%s's checkpoint is keyed to the stream created at %s, and its own "+
 			"log was created at %s, after %s", domain, got.created,
 			stats.CreatedAt, during)
+	}
+	for seq := before.at.Seq + 1; seq <= got.at.Seq; seq++ {
+		subject, payload, _, ok, err := running.log.At(t.Context(), seq)
+		if err != nil || !ok {
+			t.Errorf("%s's record %d, applied since the checkpoint was read, cannot be "+
+				"read back (found %v): %v", domain, seq, ok, err)
+			continue
+		}
+		env, err := running.domain.Envelope(payload)
+		if err != nil {
+			t.Errorf("%s's record %d on %s does not decode: %v", domain, seq, subject, err)
+			continue
+		}
+		if !slices.Equal(env.Scope.Paths, []string{statelog.FrameworkScope}) {
+			t.Errorf("%s's checkpoint moved across record %d, a %q on %s — not a "+
+				"framework record, so something wrote the log during %s",
+				domain, seq, env.Kind, subject, during)
+		}
 	}
 }
 
