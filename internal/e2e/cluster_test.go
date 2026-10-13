@@ -431,10 +431,10 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	// It cannot close the race — nothing can, short of never letting the
 	// port go — but it shortens the window from however long a broker
 	// takes to get there down to microseconds, and it names the CAUSE. Its
-	// partner is the engine's own post-bind check, which is what catches a
-	// port lost inside that window: together they turn a member that comes
-	// up, serves clients and silently never routes into an immediate,
-	// named retry.
+	// partner is the broker's own refusal of a bind that fails inside that
+	// window — a Fatalf in nats-server, which the start reports at once as
+	// [jetstream.ErrRoutePortTaken] — and together they turn a lost port
+	// into an immediate, named retry.
 	//
 	// THE SAME HOST THE MEMBER BINDS, set by [memberBootstrap] — a probe
 	// against a different address answers about a port the server never
@@ -511,14 +511,24 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	}, stops, nil
 }
 
-// refusal names what failed to come up, and marks a refused CONFIG as not
-// worth another attempt: it is refused identically on every one — the same
-// file parses the same way — so a fresh mesh would spend the whole start
-// budget re-asking a question already answered, and then report it as a
-// cluster that never came up.
+// refusal names what failed to come up, and marks a refusal that repeats as
+// not worth another attempt: it is refused identically on every one, so a
+// fresh mesh would spend the whole start budget re-asking a question already
+// answered, and then report it as a cluster that never came up.
+//
+// Two refusals repeat. A refused CONFIG — the same file parses the same way.
+// And a broker that declared itself dead ([jetstream.ErrBrokerDied]): what
+// nats-server calls fatal is a fact about the configuration or the host, a
+// store directory it cannot use or an address it cannot read — except a port
+// somebody else took between this mesh reserving it and the member binding
+// it, which the broker reports as [jetstream.ErrRoutePortTaken] or
+// [jetstream.ErrLeafPortTaken] and is the race the attempts are for.
 func refusal(what string, err error) error {
 	var fault *config.Fault
-	if errors.As(err, &fault) {
+	died := errors.Is(err, jetstream.ErrBrokerDied) &&
+		!errors.Is(err, jetstream.ErrRoutePortTaken) &&
+		!errors.Is(err, jetstream.ErrLeafPortTaken)
+	if errors.As(err, &fault) || died {
 		return fmt.Errorf("%w: %s: %w", errNotRetryable, what, err)
 	}
 	return fmt.Errorf("%s: %w", what, err)
@@ -1675,4 +1685,40 @@ func TestAPartitionedMemberIsSilentRatherThanSlow(t *testing.T) {
 		back, _ := scatter(askEach)
 		return len(back) == len(peers)
 	})
+}
+
+// A REFUSAL THAT REPEATS ENDS THE CASE; A LOST PORT IS RETRIED.
+//
+// The mesh retries by default, so what it must not retry is the short list
+// known to repeat: a refused config, and a broker that declared itself dead.
+// Before the broker's Fatalf was carried, a member whose store was refused
+// waited out its readiness budget and was then reported as having lost its
+// route port — so a store no attempt could fix was retried as a port race.
+// A port taken during the start is still a death, and still the race.
+func TestARefusalThatRepeatsIsNotRetried(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		in        error
+		retryable bool
+	}{
+		"a refused config": {&config.Fault{Kind: config.ErrShape, Detail: "not a port"}, false},
+		"a store the broker refused": {
+			fmt.Errorf("embedded nats server could not start: %w", jetstream.ErrBrokerDied), false},
+		"a route port taken during the start": {
+			fmt.Errorf("%w: ...: %w", jetstream.ErrRoutePortTaken, jetstream.ErrBrokerDied), true},
+		"a leaf port taken during the start": {
+			fmt.Errorf("%w: ...: %w", jetstream.ErrLeafPortTaken, jetstream.ErrBrokerDied), true},
+		"a provision that timed out": {context.DeadlineExceeded, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			out := refusal("open backends", tc.in)
+			if !errors.Is(out, tc.in) {
+				t.Errorf("the refusal's own error was dropped: %v", out)
+			}
+			if got := !errors.Is(out, errNotRetryable); got != tc.retryable {
+				t.Errorf("%v: retryable=%v, want %v", tc.in, got, tc.retryable)
+			}
+		})
+	}
 }

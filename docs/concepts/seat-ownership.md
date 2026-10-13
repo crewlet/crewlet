@@ -475,6 +475,12 @@ So every node runs a **watchdog**: each duty stamps a beat as it turns, a separa
 
 Single node or fleet, it is armed the same way. With one node no peer is waiting on anything the wedged process still holds, but a wedged engine is a dead engine either way, and leaving is what lets a supervisor notice.
 
+### A broker that declares itself dead
+
+The watchdog's exit has one other caller, and it does not wait for a beat to stop: a node's **embedded broker** declaring, after its boot, that it cannot go on. nats-server does that through its own fatal log call, after which it has returned from whatever failed and left the rest undone; a standalone nats-server exits the process at that call. Every seat's mailbox, every acknowledgement and every lease on an embedded fleet ride that broker, so a node left running on it answers `/health` while nothing it does can land — and a drain would only spend the time a turn takes on work none of which is recorded. So the engine ends the node at once through the same exit: the broker's reason on stderr, exit code **75**, and an `embedded_broker_died` line at `error` through the ordinary log first, so a log file holds the reason as well.
+
+It differs from a stall in one way: **it is not disarmed for a shutdown.** The watchdog stands down for a drain because exiting through one abandons the seat release; a dead broker has already taken that release away, so there is nothing for a stand-down to protect. Once the engine's own teardown has begun, though, the broker is the engine's to shut down — or, lent to it, its owner's — and a declaration after that ends nothing. During the boot a broker's fatal is not an exit at all: the boot fails with the broker's reason (see [the deployment guide](../guides/deployment.md#a-broker-that-declares-itself-dead)).
+
 ## Sandbox control is owner-routed
 
 A detached coding run outlives the node that started it, so its completion has to reach whichever node owns the seat *now*. Each seat has a control topic, `crewlet.agent.{handle}.control`, attached and detached alongside the inbox — so routing emerges from who subscribes, exactly as it does for the inbox, rather than from any "which node" computation.

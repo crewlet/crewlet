@@ -846,15 +846,15 @@ roles:
 //
 // # Why this needs a guard of its own
 //
-// Because nats-server does not fail on it. A member whose configured route
-// port is held by something else logs the listener error and carries on
-// serving clients: the node comes up, answers its health check, and simply
-// never forms a route to a peer. What an operator sees a minute later is the
-// readiness wait expiring and naming the CLUSTER — "JetStream has not
-// established contact with a meta leader" — which sends them to debug peers, a
-// firewall and a network path that are all fine.
-//
-// There is no other symptom. The port is the only thing that knows.
+// Because it was once the only symptom there was. nats-server reports a route
+// listener that cannot bind through its fatal log call and carries on, and
+// before the engine acted on that call the member came up, answered its health
+// check and simply never formed a route to a peer — reported a minute later as
+// the readiness wait expiring and naming the CLUSTER, which sent an operator
+// to debug peers, a firewall and a network path that were all fine. The bind
+// failure now refuses the start by itself; this holds the refusal to name the
+// port and the setting, which is the one fact an operator cannot derive from
+// anywhere else.
 func TestANodeRefusesToStartWhenItsRoutePortIsTaken(t *testing.T) {
 	t.Parallel()
 
@@ -884,9 +884,9 @@ func TestANodeRefusesToStartWhenItsRoutePortIsTaken(t *testing.T) {
 	backends, err := openBackends(t, b)
 	if err == nil {
 		backends.Close(context.Background())
-		t.Fatal("a node whose route port was taken started anyway — it serves " +
-			"clients, answers health checks and never forms a route, which " +
-			"from outside is indistinguishable from a slow cluster")
+		t.Fatal("a node whose route port was taken started anyway — a member " +
+			"that cannot route is, from outside, indistinguishable from a slow " +
+			"cluster")
 	}
 	// THE PORT IS IN THE MESSAGE, because that is the one fact an operator
 	// cannot derive from anywhere else.

@@ -125,6 +125,9 @@ type embeddedServer struct {
 	// started is closed when ns.Start has returned. Every shutdown waits for
 	// it; see [shutdownAndClean].
 	started <-chan struct{}
+	// death is the server's own declaration that it cannot go on, made by
+	// its logger's Fatalf — see [Death] and [Server.Death].
+	death *Death
 	// inProcess is true when nothing listens on a socket, which is the
 	// solo case: connections are made through an in-memory pipe, so the
 	// broker cannot be reached from outside the process at all.
@@ -208,6 +211,33 @@ func (s *Server) Conn() (*nats.Conn, error) {
 	return s.embedded.connect()
 }
 
+// Death is this broker's own declaration that it cannot go on: closed when
+// its nats-server calls Fatalf, carrying nats-server's reason. Nil once the
+// server is shut down.
+//
+// # What it means after the boot
+//
+// During the boot a Fatalf fails [StartServer] itself; this is for every
+// moment after it, and the answer is the one stock nats-server gives: the
+// process ends. A broker that has called itself dead is not one a node can
+// keep serving on — it carries every seat's mailbox, every acknowledgement and
+// every lease — and nothing the server does after a Fatalf promises to
+// recover, since it returned from the step that failed and left the rest
+// undone. The engine owns the process, so the engine ends it
+// (internal/engine's watch, through the seat watchdog's exit); this package
+// only declares.
+//
+// None of nats-server v2.15.1's own Fatalf call sites is reachable after the
+// boot on the options this package sets — every listener is bound, and so
+// checked, before [StartServer] returns — so this is the contract for the
+// next one rather than a path anything walks today.
+func (s *Server) Death() *Death {
+	if s.embedded == nil {
+		return nil
+	}
+	return s.embedded.death
+}
+
 // AwaitClusterReady waits until this member can serve a stream of replicas
 // copies: its JetStream current, routed to replicas-1 peers, and the metadata
 // leader answering it. It is the wait [Server.Client] makes before a client
@@ -277,28 +307,6 @@ func (e *embeddedServer) routePeers() []string {
 	return peers
 }
 
-// ClusterPort is the port this member's ROUTE listener actually bound, and 0
-// when it bound none.
-//
-// # Why a caller needs to ask
-//
-// A member whose route port is already taken does not fail to start: the
-// server logs the listener error and carries on serving clients, so every
-// readiness check passes and the member simply never forms a route. From the
-// outside that is indistinguishable from a cluster that is merely slow to
-// converge — which is how it was found, as a harness waiting out its whole
-// budget for peers that could never arrive.
-func (s *Server) ClusterPort() int {
-	if s.embedded == nil {
-		return 0
-	}
-	addr := s.embedded.ns.ClusterAddr()
-	if addr == nil {
-		return 0
-	}
-	return addr.Port
-}
-
 // AnyPort is the [Config.LeafPort] that binds the leaf listener on whichever
 // port the OS hands out — nats-server's own spelling of that request — and
 // [Server.LeafPort] reads back which one it was.
@@ -322,7 +330,7 @@ const AnyPort = -1
 // READ OFF THE SERVER'S OWN REPORT (Varz), the one place nats-server says it:
 // it writes the port it bound back into its options before it reports ready,
 // and offers no listener address for leaves the way it does for routes
-// ([Server.ClusterPort]).
+// (nats-server's ClusterAddr).
 func (s *Server) LeafPort() int {
 	if s.embedded == nil {
 		return 0
@@ -616,27 +624,24 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	}
 	clustered := opts.Cluster.Name != ""
 
-	// THE ROUTE PORT IS PROBED BEFORE THE SERVER IS ASKED FOR IT, because
-	// nats-server does not report this failure in any way an operator can
-	// act on.
+	// THE ROUTE AND LEAF PORTS ARE PROBED BEFORE THE SERVER IS ASKED FOR
+	// THEM, because the server binds them LAST.
 	//
-	// A member whose configured route port is held by something else does
-	// not fail: the listener error goes to the log and the server carries
-	// on. It then never becomes READY either — ReadyForConnections waits
-	// for the cluster listener as well as the client one — so the boot
-	// spends its whole clustered accept budget and fails with a message
-	// about peers being unreachable. Measured: two minutes, and it sends
-	// whoever reads it to debug a network path that is fine.
+	// nats-server opens its leaf listener after JetStream has recovered its
+	// store, and its route listener after that, from a goroutine Start
+	// leaves behind. A bind that fails there is a Fatalf, and the wait below
+	// ends on it with the port named — but only once the store recovery
+	// before it has run, which on a large store is minutes of work thrown
+	// away over a setting that could have been read in microseconds. Before
+	// that Fatalf was carried at all ([Death]), a taken route port had no
+	// symptom but the readiness wait expiring two minutes later and blaming
+	// the network.
 	//
-	// The probe cannot close the race and does not try; what it buys is the
-	// common case, named, in microseconds. The accept-timeout message below
-	// covers the rest.
-	// THE LEAF LISTENER THE SAME WAY, and for the same reason: a member
-	// whose leaf port is taken logs the bind failure and never becomes
-	// ready, and the boot spends its budget reporting something else. Not
+	// The probe cannot close the race and does not try: a port taken between
+	// it and the bind is the Fatalf's to report ([deathError]). Not
 	// [AnyPort], which names no port to probe: the OS hands out a free one.
-	// Refused as [ErrLeafPortTaken], never the route listener's sentinel:
-	// the remedy is a different setting on a different listener.
+	// Each refused under its own sentinel, never the other's: the remedy is a
+	// different setting on a different listener.
 	if opts.LeafNode.Port > 0 {
 		free, probeErr := PortAvailable(ctx, opts.LeafNode.Host, opts.LeafNode.Port)
 		switch {
@@ -685,7 +690,18 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	// Trace is never enabled: it is a line per protocol message, and the
 	// engine publishes every event through here. Debug is the operator's
 	// own answer rather than the log level's — see [Config.Debug].
-	ns.SetLoggerV2(newNATSLogger(cfg.ServerName), cfg.Debug, false, false)
+	//
+	// AND IT IS HOW A FATALF REACHES THIS FUNCTION: the logger declares the
+	// broker's death, and the waits below end on it — see [Death].
+	death := newDeath()
+	ns.SetLoggerV2(newNATSLogger(cfg.ServerName, death), cfg.Debug, false, false)
+	// THE LISTENERS A DEATH IS JUDGED AGAINST, read BEFORE Start: the server
+	// writes the ports it bound back into these same options as it binds
+	// them, from Start's goroutine.
+	listeners := listenerSpecs{
+		route: listenerSpec{port: opts.Cluster.Port, host: opts.Cluster.Host},
+		leaf:  listenerSpec{port: opts.LeafNode.Port, host: opts.LeafNode.Host},
+	}
 	// START IS JOINED, and every shutdown of this server waits for it: see
 	// [shutdownAndClean] for what a Shutdown that overlaps it leaves behind.
 	started := make(chan struct{})
@@ -703,23 +719,31 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	// store's recovery waits for the recovery, says so, and a second
 	// interrupt is the operator's way out (cmd/crewlet hands the signals back
 	// at the first).
+	//
+	// AND IT ENDS ON THE BROKER'S OWN DEATH, which is the one answer the
+	// readiness wait cannot give: a Fatalf leaves a server that will never be
+	// ready, and waiting for it spent the whole budget and then blamed the
+	// network, or — on a clustered member, where Start returns before the
+	// route listener — a route port nobody had taken.
 	budget := acceptBudget(clustered)
 	ready := make(chan bool, 1)
 	go func() { ready <- ns.ReadyForConnections(budget) }()
 	select {
 	case ok := <-ready:
-		if !ok {
-			// FORMED BEFORE THE SHUTDOWN, which is the whole reason this
-			// is one expression rather than a branch below: Shutdown
-			// closes the route listener and clears ClusterAddr, so read
-			// afterwards it answers nil on every clustered member and
-			// every readiness failure there is would be reported as a
-			// port collision.
-			err := notReadyError(budget, clustered, opts.Cluster.Port,
-				opts.Cluster.Host, ns.ClusterAddr() != nil)
+		// A DEATH THAT CAME WITH READINESS is still a death: one Fatalf in
+		// nats-server's Start does not return, and the server goes on to
+		// report itself ready past the failure it called fatal.
+		if cause := death.Err(); cause != nil {
 			shutdownAndClean(ns, started, scratch)
-			return nil, err
+			return nil, deathError(cause, listeners)
 		}
+		if !ok {
+			shutdownAndClean(ns, started, scratch)
+			return nil, notReadyError(budget, clustered)
+		}
+	case <-death.Done():
+		shutdownAndClean(ns, started, scratch)
+		return nil, deathError(death.Err(), listeners)
 	case <-ctx.Done():
 		select {
 		case <-started:
@@ -738,44 +762,107 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		return nil, fmt.Errorf("start embedded nats: %w", ctx.Err())
 	}
 	return &embeddedServer{
-		ns: ns, started: started, inProcess: opts.DontListen, scratch: scratch,
-		clustered: clustered, leaf: len(opts.LeafNode.Remotes) > 0, system: system,
+		ns: ns, started: started, death: death, inProcess: opts.DontListen,
+		scratch: scratch, clustered: clustered, leaf: len(opts.LeafNode.Remotes) > 0,
+		system: system,
 	}, nil
 }
 
-// notReadyError says what a readiness failure MEANS, which is not one thing:
-// a member that never bound its route listener has a different problem, a
-// different remedy and a different thing to go and look at from one whose
-// peers did not answer.
+// notReadyError is a server that neither became ready inside its budget nor
+// declared itself dead.
 //
-// routed is whether the route listener was bound, and it is the caller's to
-// read BEFORE it shuts the server down — see the call site. It is a plain
-// argument rather than a *server.Server for that reason: a helper handed the
-// server could read it at the wrong moment, which is the bug this shape
-// removes.
-func notReadyError(budget time.Duration, clustered bool,
-	routePort int, routeHost string, routed bool) error {
+// IT NAMES NO LISTENER, because there is no longer any evidence that one
+// failed. Every listener nats-server cannot bind is a Fatalf, which ends the
+// wait at once as [deathError]; what is left at the budget is a server still
+// doing what it was doing — recovering its store, or standing its listeners
+// up on a host too busy to schedule it. Inferring a taken route port from a
+// listener that was merely not bound YET is what reported a refused store as a
+// port collision.
+func notReadyError(budget time.Duration, clustered bool) error {
+	return fmt.Errorf("embedded nats server did not become ready within %v "+
+		"(clustered: %v): it was still starting — recovering its file store or "+
+		"opening its listeners — and declared no failure", budget, clustered)
+}
 
-	// THE ROUTE LISTENER FIRST, because when it is the cause every other
-	// word here is a wrong lead. The pre-bind probe catches the ordinary
-	// case; this catches the port lost in the window between that probe
-	// and the bind, and it is the only evidence of it — the listener error
-	// went to the log and the server carried on serving clients.
-	if clustered && routePort != 0 && !routed {
-		return fmt.Errorf(
-			"%w: embedded nats server bound no route listener within %v, "+
-				"so stream.cluster.port %d on %s was taken while this member "+
-				"was starting and it can never form a route to a peer",
-			ErrRoutePortTaken, budget, routePort, routeHostLabel(routeHost))
+// listenerSpec is one listener a member was configured to open: its port, 0
+// for none, and the address it binds.
+type listenerSpec struct {
+	port int
+	host string
+}
+
+// listenerSpecs is the two listeners a taken port is reported against, each
+// with its own sentinel and its own setting.
+type listenerSpecs struct{ route, leaf listenerSpec }
+
+// deathError is what a broker that declared itself dead during its boot means
+// to whoever started it.
+//
+// A PORT SOMEBODY ELSE HOLDS keeps its sentinel. The probes before the start
+// catch the ordinary case; this is the port lost in the window between the
+// probe and the bind, and it is the one fatal that a different number fixes —
+// which is why the harnesses retry on [ErrRoutePortTaken] and
+// [ErrLeafPortTaken] and on no other [ErrBrokerDied]. It is recognised from the
+// error VALUE nats-server handed its Fatalf, never from its sentence: the bind
+// failure names the address it could not bind and wraps EADDRINUSE.
+//
+// EVERYTHING ELSE IS NATS-SERVER'S OWN REASON, wrapped once. It names what
+// failed — "Can't start JetStream: storage directory is not writable" — far
+// better than any summary of it could.
+func deathError(cause error, listeners listenerSpecs) error {
+	var op *net.OpError
+	if errors.Is(cause, syscall.EADDRINUSE) && errors.As(cause, &op) {
+		if addr, ok := op.Addr.(*net.TCPAddr); ok {
+			switch listeners.bound(addr) {
+			case &listeners.route:
+				return fmt.Errorf("%w: stream.cluster.port %d on %s was taken "+
+					"while this member was starting, so its route listener could "+
+					"not bind and it could never form a route to a peer — free "+
+					"that port or give this node a different one: %w",
+					ErrRoutePortTaken, listeners.route.port,
+					routeHostLabel(listeners.route.host), cause)
+			case &listeners.leaf:
+				return fmt.Errorf("%w: stream.leaf.port %d on %s was taken "+
+					"while this member was starting, so no stateless node could "+
+					"join the fleet through it — free that port or give this "+
+					"node a different one: %w", ErrLeafPortTaken,
+					listeners.leaf.port, routeHostLabel(listeners.leaf.host), cause)
+			}
+		}
 	}
-	// THE BUDGET IS IN THE MESSAGE, and whether this member was waiting on
-	// peers: "did not become ready" alone sends an operator to the disk
-	// when a route was the problem.
-	return fmt.Errorf(
-		"embedded nats server did not become ready within %v (clustered: %v). "+
-			"A clustered member also waits for its routes to dial and for "+
-			"the metadata group to elect a leader, so check that the members "+
-			"named in stream.cluster.peers are reachable", budget, clustered)
+	return fmt.Errorf("embedded nats server could not start: %w", cause)
+}
+
+// bound names which configured listener a failed bind was for, or nil.
+//
+// BY PORT, and by address only where the port alone cannot tell: Tier A lets
+// the two share a number only on addresses that cannot overlap, so two
+// candidates are told apart by the address the bind was for. A host given as
+// a name cannot be compared with the address it resolved to, and is answered
+// nil rather than guessed at — the caller then reports nats-server's own
+// sentence, which names the port.
+func (l *listenerSpecs) bound(addr *net.TCPAddr) *listenerSpec {
+	var hits []*listenerSpec
+	for _, spec := range []*listenerSpec{&l.route, &l.leaf} {
+		if spec.port > 0 && spec.port == addr.Port {
+			hits = append(hits, spec)
+		}
+	}
+	switch len(hits) {
+	case 0:
+		return nil
+	case 1:
+		return hits[0]
+	}
+	for _, spec := range hits {
+		if spec.host == "" && (len(addr.IP) == 0 || addr.IP.IsUnspecified()) {
+			return spec
+		}
+		if ip := net.ParseIP(spec.host); ip != nil && ip.Equal(addr.IP) {
+			return spec
+		}
+	}
+	return nil
 }
 
 // awaitClusterReady waits for this member to be able to serve the writes the
@@ -1292,11 +1379,11 @@ var ErrLeafPortTaken = errors.New("leaf listener port taken")
 // A PROBE, NOT A RESERVATION: it binds, reads the answer and lets go, so the
 // port is free again — and available to somebody else — the instant it
 // returns. Nothing can close that window short of never releasing the port,
-// and closing it is not what this is for. What it buys is the difference
-// between a named failure in microseconds and a two-minute readiness timeout
-// blaming the network, on the one condition that has no other symptom: a
-// clustered member whose route listener cannot bind starts anyway, serves
-// clients, answers health checks and silently never routes.
+// and closing it is not what this is for. What it buys is a taken port named
+// before the server starts: the server binds its route and leaf listeners only
+// after it has recovered its store, so the same port refused by the server's
+// own bind ([deathError]) is refused only once that recovery has been paid
+// for.
 //
 // host empty means every interface, which is what an unset stream.cluster.host
 // binds.
