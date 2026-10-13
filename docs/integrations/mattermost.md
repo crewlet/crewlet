@@ -936,16 +936,23 @@ the engine deliberately does not listen for them: every seat's socket would
 hear each one, nothing replays one a socket missed while it was down, and the
 answer they would prompt is the same request.
 
-**A name that holds no person is reported, never guessed at.** If the server
-answers without it — nobody holds that name, or nobody the bots may see — or
-the name belongs to a **bot**, nothing is registered for the seat (a bot's
-name registered for a person would present that agent's every post as the
-person's word), and:
+**A name that holds no person is reported, never guessed at.** Whatever is
+registered for a person is attributed to them with their authority, so
+nothing is registered for the seat when the name holds no account of the
+person's own. The `reason` says which:
+
+| `reason` | The name… |
+|---|---|
+| `no_account` | is one the server answers without: nobody holds it, or nobody the bots may see |
+| `agent_account` | holds the account one of this company's own seats posts as, bot or not — registered, every post that agent made would reach its colleagues as the person's word |
+| `bot_account` | holds another bot's account |
+| `shared_account` | holds the account another human seat's name holds too. The duplicate check compares the contact as written, so two `${VAR}` references that resolve to one name pass it; one account is not two people, so it is registered for neither |
+
+And for each one:
 
 - the engine logs `mattermost_person_unknown` with the seat's handle, the
-  name and a `reason` (`no_account` or `bot_account`), once, when it
-  happens — and `mattermost_person_found` when the name holds the person
-  again;
+  name and the `reason`, once, when it happens — and
+  `mattermost_person_found` when the name holds the person again;
 - the integration's status carries a `contact_unknown`
   [finding](../concepts/integration-reconcile.md#what-a-pass-reports) about
   that seat: *degraded*, owed by the **operator**, because the fix is the
@@ -953,12 +960,39 @@ person's word), and:
   person joining the server. Reported whether or not the engine provisions
   the bots.
 
-A name that comes to belong to a **different** account (the person renamed
-themselves and somebody else took the name) moves the seat to that account,
-because the chart names the name — logged as
-`mattermost_person_account_changed` with both ids. A request that **fails**
-changes nothing: `mattermost_people_unread` is logged and the last answer
-stands, because a server mid-restart says nothing about who anybody is.
+A request that **fails** changes nothing: `mattermost_people_unread` is
+logged and the last answer stands, because a server mid-restart says nothing
+about who anybody is.
+
+**Whoever holds the name is the person.** That is what the chart says when
+it names a person by username, and it is the rule the rest of the
+integration already follows: an agent mentions and messages whoever holds
+`@jane`, and a person who joins after boot is recognised by it. So anyone
+who can take a name on the server — by signing up under it, or renaming
+themselves to it once it is free — is treated as the seat that names it,
+with that seat's authority. Keep a person's username in the company
+document current, and treat a Mattermost server whose members you would not
+trust with each other's names accordingly.
+
+A name that comes to hold a **different** account — the person renamed
+themselves and somebody else took the name, or the account was deleted and
+made again — moves the seat to that account on every node alike, because
+each one asks the same server: a node that kept the old account would
+attribute a post differently from a node started after the move. The move is
+**said** instead of refused:
+
+- the engine logs `mattermost_person_account_changed` with both ids, when
+  it sees it;
+- the integration's status carries a `contact_moved` finding about that
+  seat, naming the account the name held when the company was last applied
+  and the one it holds now: *degraded*, owed by the **operator**, until the
+  next **apply**. If the account is not the person's, correct the name. If
+  it is, re-apply the company unchanged (`POST /config/reload`) — any apply
+  states the names again and clears it, the re-activation a provisioning
+  pass makes on its own after sealing a credential it minted included, so
+  the log line is the record that outlasts the finding. A node started
+  after the move has no earlier account to compare with and reports
+  nothing; every node running when it happened sees it within the minute.
 
 A bot holding the built-in `system_user` role can see every account. If the
 bots' role has had `view_members` taken away, the server answers only for
@@ -1222,7 +1256,8 @@ to the server than people do — an internal DNS name, say — and never point
 | The engine logs `the server redirects it to …` and no seat connects | `integrations.mattermost.url` is not where the server serves its API: outside the Site URL's path, or `http://` where a proxy sends it to `https://`. Neither the engine nor the agents' MCP server follows a redirect | Set `url` — and the MCP server's `MATTERMOST_URL`, the same variable in the examples — to the address the error names; its host may stay whatever reaches the server |
 | The engine logs `answered with text/html rather than the API's JSON` | `url` carries a path the server has no route for, so Mattermost answers its web app's page there | Give `url` the Site URL's path |
 | One bot stays silent while others work | Its token was revoked, or its account disabled | `crewlet mattermost doctor <company.yaml>`, then re-run the provisioner |
-| A person's messages reach the agents as a stranger's; the engine logs `mattermost_person_unknown` and the integration reports `contact_unknown` | The human seat's `contact.mattermost_user_id` names no account the bots can see — a typo, a rename, a person who has not joined — or names a bot | Write the username their profile shows; see [How a person's post is recognised](#how-a-persons-post-is-recognised) |
+| A person's messages reach the agents as a stranger's; the engine logs `mattermost_person_unknown` and the integration reports `contact_unknown` | The human seat's `contact.mattermost_user_id` names no account the bots can see — a typo, a rename, a person who has not joined — or names an agent's or a bot's account, or the account another human seat's name holds too | Write the username their profile shows; see [How a person's post is recognised](#how-a-persons-post-is-recognised) |
+| The engine logs `mattermost_person_account_changed` and the integration reports `contact_moved` | The person's username now holds another account than when the company was last applied: they renamed and somebody took the name, or the account was made again | If the account is theirs, `POST /config/reload`; if not, write the username their profile shows now |
 | An agent receives messages but never answers in Mattermost | The `mcp-server-mattermost` MCP server is missing, so the turn completes with no tool to send with | Check `uvx mcp-server-mattermost` resolves |
 | Every agent is deaf after a restart, and the log has `mattermost_ws_auth_rejected` | Personal access tokens were disabled server-wide, or the tokens were revoked | Re-enable under System Console → Integrations, re-run the provisioner |
 

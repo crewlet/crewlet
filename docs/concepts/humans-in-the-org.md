@@ -50,7 +50,7 @@ units:
 |-------|----------|-------------|
 | `kind: human` | yes | Marks the seat as human |
 | `contact.slack_user_id` | one identity | Slack member ID (`U…`) — `<@…>` mentions and the channel an agent DMs on escalation |
-| `contact.mattermost_user_id` | one identity | [Mattermost](../integrations/mattermost.md) **username**: the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID. Lowercased, because Mattermost stores every username in lowercase and finds one without case. A post names its author by that ID instead, so the engine asks the server which account holds the name — at connect, on every apply and every minute — and attributes that account's posts to the seat; a name no account holds is reported (see [How a person's post is recognised](../integrations/mattermost.md#how-a-persons-post-is-recognised)) |
+| `contact.mattermost_user_id` | one identity | [Mattermost](../integrations/mattermost.md) **username**: the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID. Lowercased, because Mattermost stores every username in lowercase and finds one without case. A post names its author by that ID instead, so the engine asks the server which account holds the name — at connect, on every apply and every minute — and attributes that account's posts to the seat, with its authority: whoever holds the name is the person. A name that holds no account of the person's own, or comes to hold another account, is reported (see [How a person's post is recognised](../integrations/mattermost.md#how-a-persons-post-is-recognised)) |
 | `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID. One ID covers Jira assignments, Confluence `<ri:user>` mentions and webhook sender attribution on both |
 | `contact.github_login` | one identity | GitHub username: review requests, sender attribution. Lowercased |
 | `contact.gitlab_username` | one identity | GitLab username: assignment, review and mention routing, sender attribution. Lowercased |
@@ -438,7 +438,10 @@ A seat's kind is ordinary configuration, applied like any other change
   apply builds a new party registry and reconciles the human contact IDs
   into it. A Mattermost username is the exception that needs the server:
   the new registry gets the account the name last resolved to at once, and
-  a new or changed name is asked about straight after the apply.
+  a new or changed name is asked about straight after the apply. The apply
+  also anchors each name to the account it holds, so a name later found
+  holding another account is reported as moved (`contact_moved`) until the
+  next apply.
 
 ## Identity Resolution (party registry)
 
@@ -471,9 +474,12 @@ lock, and it holds two kinds of entry:
   user ID, so the name registered as written matched no post and every
   person on Mattermost read as a stranger. The Mattermost transport asks
   the server which account holds each name and registers that account's
-  user ID — at connect, on every apply and every minute — and a name no
-  person holds is logged (`mattermost_person_unknown`) and reported on the
-  integration's status as `contact_unknown`. See
+  user ID — at connect, on every apply and every minute. A name that holds
+  no account of the person's own (nobody's, an agent's or a bot's, or one
+  another human seat's name holds too) is registered for nobody, logged
+  (`mattermost_person_unknown`) and reported on the integration's status as
+  `contact_unknown`; a name that comes to hold another account moves the
+  seat with it and is reported as `contact_moved`. See
   [How a person's post is recognised](../integrations/mattermost.md#how-a-persons-post-is-recognised).
 - **Agent identities** are registered by the integrations: the code host's
   and the tracker's are derived from each seat's credentials and rebuilt on

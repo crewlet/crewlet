@@ -32,6 +32,7 @@ var knownKinds = []FindingKind{
 	FindingUnknownTier,
 	FindingGrantShort,
 	FindingContactUnknown,
+	FindingContactMoved,
 	FindingGrantExcess,
 	FindingRegistrationOrphaned,
 	FindingCoveragePartial,
@@ -359,6 +360,10 @@ func TestTheSeverityOrderIsPinned(t *testing.T) {
 		// problem with an agent: each agent still works whole, and what is
 		// lost is one person's name on what they write.
 		FindingContactUnknown,
+		// AND ONE WHOSE NAME NOW HOLDS ANOTHER ACCOUNT, last of the real
+		// problems: the name still attributes what is written, and what is
+		// in question is whose account it now is.
+		FindingContactMoved,
 		// THE ADVISORIES, the expiring credential first because it is the
 		// only note with a deadline on it.
 		FindingCredentialExpiring,
@@ -382,10 +387,10 @@ func TestTheSeverityOrderIsPinned(t *testing.T) {
 	// report a healthy company as broken; ranked below the advisory, one
 	// spare permission would hide a finding this binary cannot read.
 	unknown := FindingKind("a-kind-from-a-newer-build").severity()
-	if unknown <= FindingContactUnknown.severity() || unknown >= FindingCredentialExpiring.severity() {
+	if unknown <= FindingContactMoved.severity() || unknown >= FindingCredentialExpiring.severity() {
 		t.Errorf("an unknown kind ranks %d, want between the last real problem %s (%d) "+
 			"and the first advisory %s (%d)",
-			unknown, FindingContactUnknown, FindingContactUnknown.severity(),
+			unknown, FindingContactMoved, FindingContactMoved.severity(),
 			FindingCredentialExpiring, FindingCredentialExpiring.severity())
 	}
 }

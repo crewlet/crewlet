@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -57,11 +59,48 @@ import (
 //
 // A name the server answered for maps to that account's id. A name it answered
 // WITHOUT — no account holds it, or none the bots may see — is withdrawn and
-// reported, and so is one a BOT holds: registered, every post that bot made
-// would reach the agents as the person's. And a request that FAILED changes
-// nothing, because a server mid-restart says nothing about who anybody is,
-// and treating it as "nobody" would make every person a stranger for as long
-// as the outage lasted.
+// reported. And a request that FAILED changes nothing, because a server
+// mid-restart says nothing about who anybody is, and treating it as "nobody"
+// would make every person a stranger for as long as the outage lasted.
+//
+// # An account is one person's, or nobody's
+//
+// What is registered for a person is attributed to them with their authority,
+// so an account that is not the person's own is refused rather than
+// registered, and reported naming why ([absence]):
+//
+//   - an account one of this company's own seats posts as, bot or not, and
+//     any other BOT's: registered, every post that agent made would reach its
+//     colleagues as the person's word — and the person would win, since a
+//     lookup consults the people's namespace before the bots';
+//   - an account that ANOTHER person's name holds too. The duplicate check
+//     compares what the chart declares, so two `${VAR}`s that resolve to one
+//     name pass it; and one account cannot be two people, so it is
+//     registered for neither rather than for whichever came first, which
+//     would be a guess.
+//
+// # The name is the authority, and a move is said
+//
+// Whoever holds the name on the server is the person, which is what the chart
+// says when it names them by it: the agents already mention and message
+// whoever holds `@jane`, and a person who joins after boot is recognised by
+// exactly this rule. So a name that comes to hold ANOTHER account — the
+// person renamed themselves and somebody took the name, or the account was
+// made again — moves the seat to that account on every node alike, since each
+// one asks the same server. A node that remembered the old account and
+// refused the new one would answer differently from a node started after the
+// move, and one post would then reach a seat as the founder's on one node and
+// a stranger's on another.
+//
+// The move is SAID instead: logged when it is seen, and reported on the
+// integration's status ([integration.FindingContactMoved]) against the
+// account the name held when the company last stated it — the last apply, or
+// the first answer since — until the next apply states it again. ANY apply:
+// the re-activation a provisioning pass makes after sealing a credential it
+// minted clears it too, which is why the log line, not the finding, is the
+// record of a move. In memory, so a node started after the move has nothing
+// to compare against; every node running when it happened sees it within a
+// [PeopleRefresh].
 
 // PeopleRefresh is how often a node asks the server again which account each
 // person's username names.
@@ -118,17 +157,32 @@ type people struct {
 	// into, replaced whole by an apply.
 	want []Person
 
-	// accounts is the user id the server last answered for each name, and
-	// absent why it holds no person under the others it was asked about.
-	// Facts about the server, not about the org — which is what lets an
-	// apply fill a fresh registry from them before asking again. Pruned to
-	// want's names on every answer, so a name the chart dropped is not
-	// carried for ever.
-	accounts map[string]string
-	absent   map[string]absence
+	// held is the account the server last answered for each name, and
+	// missing the names it last answered without. Facts about the SERVER,
+	// not about the org — which is what lets an apply judge a fresh
+	// registry from them before asking again. Pruned to want's names, so a
+	// name the chart dropped is not carried for ever.
+	held    map[string]User
+	missing map[string]bool
+
+	// agents is the account each of this company's seats posts as, by user
+	// id, read when the seats are identified and before the people are
+	// first asked about.
+	agents map[string]string
+
+	// anchor is the account each name held when the company last stated it:
+	// the first registered for it since the last apply, or the one it held
+	// at that apply. Kept while the name holds nobody, so a name that comes
+	// back on another account is seen to have moved.
+	anchor map[string]string
+
+	// reported is every person's standing as last registered, logged and
+	// reported, in want's order.
+	reported []standing
 }
 
-// absence is why a name the chart gives a person holds no person.
+// absence is why a name the chart gives a person holds no account that is
+// registered for them.
 type absence string
 
 const (
@@ -136,29 +190,84 @@ const (
 	// nobody the bots may see.
 	noAccount absence = "no_account"
 
-	// botAccount is a name a BOT holds. Never registered for the person,
-	// because what it would attribute to them is that bot's every post —
-	// an agent's words presented to its colleagues as a person's, with the
-	// person's authority behind them.
+	// agentAccount is the account one of this company's own seats posts as.
+	agentAccount absence = "agent_account"
+
+	// botAccount is a name a BOT holds that no seat here posts as.
 	botAccount absence = "bot_account"
+
+	// sharedAccount is an account another person's name holds too.
+	sharedAccount absence = "shared_account"
 )
 
-// unknownPerson is a person whose name holds no person, and why.
-type unknownPerson struct {
-	Person
-	why absence
+// move is a name now holding another account than the company last stated.
+type move struct {
+	from, to string
 }
 
-// unknown is the people whose name the last answer said holds no person, in
-// want's order.
-func (p *people) unknown() []unknownPerson {
-	var out []unknownPerson
+// standing is what is known about one person.
+type standing struct {
+	Person
+	// id is the account registered for them, empty when there is none.
+	id string
+	// why is why there is none, empty when id is set or the server has not
+	// answered for the name yet.
+	why absence
+	// with names who else holds the account: the agent seat's handle for
+	// agentAccount, the other people's for sharedAccount.
+	with string
+	// moved is set while the name holds another account than its anchor.
+	moved move
+}
+
+// standings judges every person from what the server last said. Pure: no
+// field changes.
+func (p *people) standings() []standing {
+	out := make([]standing, 0, len(p.want))
+	claims := map[string][]string{}
 	for _, person := range p.want {
-		if why := p.absent[person.Username]; why != "" {
-			out = append(out, unknownPerson{Person: person, why: why})
+		s := standing{Person: person}
+		user, held := p.held[person.Username]
+		switch {
+		case p.missing[person.Username]:
+			s.why = noAccount
+		case !held:
+			// Not answered yet, which is not "nobody holds it".
+		case p.agents[user.ID] != "":
+			s.why, s.with = agentAccount, p.agents[user.ID]
+		case user.IsBot:
+			s.why = botAccount
+		default:
+			s.id = user.ID
+			claims[user.ID] = append(claims[user.ID], person.Handle)
+		}
+		out = append(out, s)
+	}
+	for i := range out {
+		s := &out[i]
+		if others := slices.DeleteFunc(slices.Clone(claims[s.id]), func(h string) bool {
+			return h == s.Handle
+		}); s.id != "" && len(others) > 0 {
+			s.id, s.why, s.with = "", sharedAccount, strings.Join(others, ", ")
+			continue
+		}
+		if from := p.anchor[s.Username]; s.id != "" && from != "" && from != s.id {
+			s.moved = move{from: from, to: s.id}
 		}
 	}
 	return out
+}
+
+// prune drops every fact about a name the chart no longer gives anybody.
+func (p *people) prune() {
+	current := map[string]bool{}
+	for _, person := range p.want {
+		current[person.Username] = true
+	}
+	stale := func(name string) bool { return !current[name] }
+	maps.DeleteFunc(p.held, func(name string, _ User) bool { return stale(name) })
+	maps.DeleteFunc(p.missing, func(name string, _ bool) bool { return stale(name) })
+	maps.DeleteFunc(p.anchor, func(name, _ string) bool { return stale(name) })
 }
 
 // pokePeople asks the refresh loop to ask the server again now. Never
@@ -269,133 +378,159 @@ func (t *Transport) resolvePeople(ctx context.Context, clients []*Client) {
 			found[name] = u
 		}
 	}
-	t.settlePeople(ctx, names, found)
+	t.mu.Lock()
+	for _, name := range names {
+		if user, ok := found[name]; ok {
+			t.people.held[name] = user
+			delete(t.people.missing, name)
+		} else {
+			delete(t.people.held, name)
+			t.people.missing[name] = true
+		}
+	}
+	t.mu.Unlock()
+	t.publishPeople()
 }
 
-// settlePeople records one answer, registers it, and says what moved.
-func (t *Transport) settlePeople(ctx context.Context, asked []string, found map[string]User) {
+// publishPeople judges every person from what is known, registers the result
+// and says what moved.
+//
+// NO I/O, so an apply can call it on the way past. Held whole under
+// [Transport.registering], from the judgement to the last word said, so an
+// apply and an answer each publish what they read and the later one always
+// publishes last.
+func (t *Transport) publishPeople() {
+	t.registering.Lock()
+	defer t.registering.Unlock()
 	t.mu.Lock()
-	before, wasAbsent := maps.Clone(t.people.accounts), maps.Clone(t.people.absent)
-	unknownBefore := t.people.unknown()
-	if t.people.accounts == nil {
-		t.people.accounts, t.people.absent = map[string]string{}, map[string]absence{}
-	}
-	for _, name := range asked {
-		user, ok := found[name]
-		switch {
-		case !ok:
-			delete(t.people.accounts, name)
-			t.people.absent[name] = noAccount
-		case user.IsBot:
-			delete(t.people.accounts, name)
-			t.people.absent[name] = botAccount
-		default:
-			t.people.accounts[name] = user.ID
-			delete(t.people.absent, name)
+	t.people.prune()
+	now := t.people.standings()
+	for _, s := range now {
+		if s.id != "" && t.people.anchor[s.Username] == "" {
+			t.people.anchor[s.Username] = s.id
 		}
 	}
-	current := map[string]bool{}
-	for _, person := range t.people.want {
-		current[person.Username] = true
-	}
-	maps.DeleteFunc(t.people.accounts, func(name, _ string) bool { return !current[name] })
-	maps.DeleteFunc(t.people.absent, func(name string, _ absence) bool { return !current[name] })
-	want := slices.Clone(t.people.want)
-	now, nowAbsent := maps.Clone(t.people.accounts), maps.Clone(t.people.absent)
-	unknownAfter := t.people.unknown()
-	onChange := t.onPeople
+	before := t.people.reported
+	t.people.reported = now
+	lookup, onChange := t.registry, t.onPeople
 	t.mu.Unlock()
 
-	t.registerPeople()
-
-	// SAID ON THE TRANSITION, never on every answer: an ask a minute that
-	// repeated a missing person on each one would bury the line that
-	// matters under fifty-nine copies of it an hour.
-	if !maps.Equal(before, now) || !maps.Equal(wasAbsent, nowAbsent) {
-		log.InfoContext(ctx, "mattermost_people_resolved", "people", len(want),
-			"found", len(now), "unknown", len(nowAbsent))
-	}
-	for _, person := range want {
-		name := person.Username
-		switch why := nowAbsent[name]; {
-		case why != "" && why != wasAbsent[name]:
-			log.WarnContext(ctx, "mattermost_person_unknown",
-				"handle", person.Handle, "username", name, "reason", string(why),
-				"detail", why.sentence(person))
-		case now[name] != "" && wasAbsent[name] != "":
-			log.InfoContext(ctx, "mattermost_person_found",
-				"handle", person.Handle, "username", name, "user_id", now[name])
-		case now[name] != "" && before[name] != "" && before[name] != now[name]:
-			// THE NAME NOW BELONGS TO ANOTHER ACCOUNT: the person it
-			// named renamed themselves and somebody took the name, or
-			// the account was deleted and made again. The chart says
-			// the name, so the name's holder is who this seat is — but
-			// it is a change of who a colleague is, and said as one.
-			log.WarnContext(ctx, "mattermost_person_account_changed",
-				"handle", person.Handle, "username", name,
-				"user_id", now[name], "previous_user_id", before[name])
+	if lookup != nil {
+		if reg := lookup(); reg != nil {
+			registerPeople(reg, now)
 		}
 	}
-	if onChange != nil && !slices.Equal(unknownBefore, unknownAfter) {
+	sayPeople(before, now)
+	if onChange != nil && !slices.EqualFunc(peopleFindings(before), peopleFindings(now),
+		integration.Finding.Same) {
 		onChange()
 	}
 }
 
-// sentence is what is wrong with a person's name, for the log line and the
-// finding alike, so the two never describe one person two ways.
-func (why absence) sentence(person Person) string {
-	if why == botAccount {
-		return fmt.Sprintf("%s's contact.mattermost_user_id is %q, which is a "+
-			"bot's account, so it is not registered for them: what it posts "+
-			"would reach the agents as %s's word", person.Handle, person.Username,
-			person.Handle)
-	}
-	return fmt.Sprintf("%s's contact.mattermost_user_id is %q, and no Mattermost "+
-		"account by that name is visible to this company's bots, so every post %s "+
-		"writes reaches the agents from a stranger and a mention of the name "+
-		"renders as plain text", person.Handle, person.Username, person.Handle)
-}
-
-// registerPeople writes what is known about each person into the live
-// registry: the account their name holds, or nothing.
+// registerPeople writes each person's standing into a registry: the account
+// they hold, or nothing.
 //
-// NO I/O, so an apply can call it on the way past. A person with no known
-// account has whatever id this transport registered for them withdrawn — the
-// only writer of a person's id in this namespace is this transport, so the id
-// the registry holds for their handle is the one to take back.
-func (t *Transport) registerPeople() {
-	t.registering.Lock()
-	defer t.registering.Unlock()
-	t.mu.Lock()
-	lookup := t.registry
-	want := slices.Clone(t.people.want)
-	accounts := maps.Clone(t.people.accounts)
-	t.mu.Unlock()
-	if lookup == nil {
-		return
+// EVERY WITHDRAWAL BEFORE ANY REGISTRATION, as the human reconcile does, so
+// an account moving from one person to another in one answer is a withdraw
+// and a register rather than a collision with itself. The only writer of a
+// person's id in this namespace is this transport, so the id the registry
+// holds for their handle is the one to take back.
+func registerPeople(reg *notify.Registry, people []standing) {
+	for _, s := range people {
+		if held := reg.ExternalID(Backend, s.Handle); held != "" && held != s.id {
+			reg.Unregister(Backend, held, s.Handle)
+		}
 	}
-	reg := lookup()
-	if reg == nil {
-		return
-	}
-	for _, person := range want {
-		id := accounts[person.Username]
-		if id == "" {
-			if held := reg.ExternalID(Backend, person.Handle); held != "" {
-				reg.Unregister(Backend, held, person.Handle)
-			}
+	for _, s := range people {
+		if s.id == "" {
 			continue
 		}
-		if err := reg.Register(Backend, id, person.Handle); err != nil {
-			log.Warn("mattermost_person_not_registered", "handle", person.Handle,
-				"username", person.Username, "user_id", id, "error", err.Error())
+		if err := reg.Register(Backend, s.id, s.Handle); err != nil {
+			log.Warn("mattermost_person_not_registered", "handle", s.Handle,
+				"username", s.Username, "user_id", s.id, "error", err.Error())
 		}
 	}
 }
 
-// PeopleFindings is what the last answer said about the people, in the
-// integration vocabulary: one [integration.FindingContactUnknown] per person
-// whose name the server answered without.
+// sayPeople logs what changed between two publications.
+//
+// SAID ON THE TRANSITION, never on every answer: an ask a minute that
+// repeated a missing person on each one would bury the line that matters
+// under fifty-nine copies of it an hour.
+func sayPeople(before, now []standing) {
+	if slices.Equal(before, now) {
+		return
+	}
+	was := make(map[string]standing, len(before))
+	for _, s := range before {
+		was[s.Handle] = s
+	}
+	found, unknown := 0, 0
+	for _, s := range now {
+		prev := was[s.Handle]
+		switch {
+		case s.why != "":
+			unknown++
+			if s.why != prev.why || s.with != prev.with || s.Username != prev.Username {
+				log.Warn("mattermost_person_unknown", "handle", s.Handle,
+					"username", s.Username, "reason", string(s.why),
+					"detail", s.sentence())
+			}
+		case s.id != "":
+			found++
+			if prev.why != "" {
+				log.Info("mattermost_person_found", "handle", s.Handle,
+					"username", s.Username, "user_id", s.id)
+			}
+		}
+		if s.moved != (move{}) && s.moved != prev.moved {
+			log.Warn("mattermost_person_account_changed", "handle", s.Handle,
+				"username", s.Username, "user_id", s.moved.to,
+				"previous_user_id", s.moved.from, "detail", s.movedSentence())
+		}
+	}
+	log.Info("mattermost_people_resolved", "people", len(now), "found", found,
+		"unknown", unknown)
+}
+
+// sentence is what is wrong with a person's name, for the log line and the
+// finding alike, so the two never describe one person two ways.
+func (s standing) sentence() string {
+	switch s.why {
+	case agentAccount:
+		return fmt.Sprintf("%s's contact.mattermost_user_id is %q, the account the "+
+			"agent seat %s posts as, so it is not registered for them: what that "+
+			"agent posts would reach its colleagues as %s's word", s.Handle,
+			s.Username, s.with, s.Handle)
+	case botAccount:
+		return fmt.Sprintf("%s's contact.mattermost_user_id is %q, which is a "+
+			"bot's account, so it is not registered for them: what it posts "+
+			"would reach the agents as %s's word", s.Handle, s.Username, s.Handle)
+	case sharedAccount:
+		return fmt.Sprintf("%s's contact.mattermost_user_id is %q, and it names the "+
+			"same Mattermost account as the contact of %s: one account is not two "+
+			"people, so it is registered for neither, and what it posts reaches "+
+			"the agents from a stranger", s.Handle, s.Username, s.with)
+	default:
+		return fmt.Sprintf("%s's contact.mattermost_user_id is %q, and no Mattermost "+
+			"account by that name is visible to this company's bots, so every post %s "+
+			"writes reaches the agents from a stranger and a mention of the name "+
+			"renders as plain text", s.Handle, s.Username, s.Handle)
+	}
+}
+
+// movedSentence is what a name moving to another account means.
+func (s standing) movedSentence() string {
+	return fmt.Sprintf("%s's contact.mattermost_user_id is %q, which named the "+
+		"Mattermost account %s when the company was last applied and names %s "+
+		"now: every post that account makes reaches the agents as %s's, with "+
+		"their authority", s.Handle, s.Username, s.moved.from, s.moved.to, s.Handle)
+}
+
+// PeopleFindings is what the transport last published about the people, in
+// the integration vocabulary: an [integration.FindingContactUnknown] per
+// person no account is registered for, and an
+// [integration.FindingContactMoved] per person whose name has moved.
 //
 // FROM THE ANSWER THE TRANSPORT ACTS ON, never a second ask: the reconcile
 // pass that reports it runs on one node with an administrator's token, which
@@ -407,24 +542,47 @@ func (t *Transport) PeopleFindings() []integration.Finding {
 		return nil
 	}
 	t.mu.Lock()
-	unknown := t.people.unknown()
+	reported := t.people.reported
 	t.mu.Unlock()
-	out := make([]integration.Finding, 0, len(unknown))
-	for _, person := range unknown {
-		remedy := "Write the username their Mattermost profile shows — a renamed " +
-			"account keeps its posts and loses its old name — or have them join " +
-			"the server. If the account exists, check that the bots' role still " +
-			"holds view_members: without it a bot sees only the people it shares " +
-			"a team or channel with"
-		if person.why == botAccount {
-			remedy = "Write the username of the person's own account, not an agent's"
+	return peopleFindings(reported)
+}
+
+// peopleFindings is the findings a publication reports.
+func peopleFindings(people []standing) []integration.Finding {
+	var out []integration.Finding
+	for _, s := range people {
+		if s.why != "" {
+			remedy := "Write the username their Mattermost profile shows — a renamed " +
+				"account keeps its posts and loses its old name — or have them join " +
+				"the server. If the account exists, check that the bots' role still " +
+				"holds view_members: without it a bot sees only the people it shares " +
+				"a team or channel with"
+			switch s.why {
+			case agentAccount, botAccount:
+				remedy = "Write the username of the person's own account, not an agent's"
+			case sharedAccount:
+				remedy = "Give each of these seats the username of their own account. " +
+					"The duplicate check compares the contact as written, so two " +
+					"${VAR} references that resolve to one name pass it"
+			}
+			out = append(out, integration.Finding{
+				Kind:    integration.FindingContactUnknown,
+				Subject: s.Handle,
+				Detail:  s.sentence(),
+				Remedy:  remedy,
+			})
 		}
-		out = append(out, integration.Finding{
-			Kind:    integration.FindingContactUnknown,
-			Subject: person.Handle,
-			Detail:  person.why.sentence(person.Person),
-			Remedy:  remedy,
-		})
+		if s.moved != (move{}) {
+			out = append(out, integration.Finding{
+				Kind:    integration.FindingContactMoved,
+				Subject: s.Handle,
+				Detail:  s.movedSentence(),
+				Remedy: "If that account is not theirs, write the username their " +
+					"profile shows now. If it is — the account was made again — " +
+					"POST /config/reload, which re-applies the company unchanged; " +
+					"any apply clears this",
+			})
+		}
 	}
 	return out
 }
