@@ -214,7 +214,9 @@ internal/
 │                         #   wrapper — a built environment, an allowlisted
 │                         #   configuration, slot lanes, process groups and
 │                         #   deadlines — and gitproc/gittest/ the client git
-│                         #   every test drives
+│                         #   every test drives. codefault/ names the fault
+│                         #   points of the push and sync paths, in the order
+│                         #   a push reaches them
 ├── eventfan/             # The fleet's turn-level history, read from every
 │                         #   node at query time, with coverage on every answer
 ├── search/               # Both halves of knowledge search — the BM25 index
