@@ -133,7 +133,13 @@ func ValidRepoName(name string) bool {
 // Lowercase only, because git prints ids that way and an id is compared byte
 // for byte everywhere the engine stores one: an upper-case spelling would be
 // a second id for the same object.
-func ValidOID(oid string) bool {
+//
+// It reads the bytes of a line as it reads a string, because the one rule is
+// also asked of every line of a file — a cache's packed-refs, merged after
+// every push, up to code.MaxRefsPerRepo lines — where a string made of each
+// id only to ask it would be an allocation a line, and a second copy of the
+// rule the cheaper way round.
+func ValidOID[S ~string | ~[]byte](oid S) bool {
 	if len(oid) != OIDHexLen {
 		return false
 	}
