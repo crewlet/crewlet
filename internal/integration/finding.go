@@ -379,6 +379,8 @@ func (f FindingKind) sentence(subject string) string {
 		return "an agent holds more access than its role asks for" + about
 	case FindingRegistrationOrphaned:
 		return "this engine registered something that it no longer manages" + about
+	case FindingCoveragePartial:
+		return "this integration covers less than it could reach, as it was asked to" + about
 	default:
 		return "this integration reported " + string(f) + about
 	}
