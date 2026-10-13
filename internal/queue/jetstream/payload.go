@@ -123,7 +123,7 @@ func serverOf(nc *nats.Conn, embedded bool) string {
 // that PONG and the client reads its socket in order.
 //
 // Bounded by the connection's own handshake budget, because it finishes the
-// handshake: the accept budget on an embedded member, [externalHandshake] on
+// handshake: the listener budget on an embedded member, [externalHandshake] on
 // an operator's server.
 func announcedMaxPayload(nc *nats.Conn) (int64, error) {
 	if err := nc.FlushTimeout(nc.Opts.Timeout); err != nil {

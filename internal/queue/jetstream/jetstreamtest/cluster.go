@@ -248,8 +248,8 @@ const ClusterStartAttempts = 4
 //
 // It bounds the LOOP, and it does so by bounding each attempt within it: every
 // attempt is handed a context carrying what is LEFT of the budget, so a member
-// start that would otherwise wait out its own clustered accept budget is
-// interrupted instead. Consulted only between attempts — which is how this was
+// start that would otherwise wait out its store recovery — which the start
+// does not bound — and then its listener budget is interrupted instead. Consulted only between attempts — which is how this was
 // first written — it bounded how MANY were made and nothing about how long one
 // took, and a single sequential three-member attempt could outlast the whole
 // ceiling before the loop ever looked at it.
@@ -371,8 +371,9 @@ func withFreshPorts(ctx context.Context, t testing.TB, what string,
 	// THE DEADLINE IS HANDED TO THE ATTEMPT, not merely consulted after
 	// it. Checked only between attempts it bounded how many were made and
 	// nothing about how long one took: a member start reaching
-	// [js.StartServer] on an unbounded context waits its own clustered
-	// accept budget, and the members are started in sequence, so a single
+	// [js.StartServer] on an unbounded context waits out its whole store
+	// recovery and then its listener budget, and the members are started
+	// in sequence, so a single
 	// attempt could outlast this whole ceiling before the loop below ever
 	// looked at it. A budget the thing it bounds cannot observe is a
 	// comment, not a bound.

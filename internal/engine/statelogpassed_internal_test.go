@@ -424,7 +424,7 @@ func serveDonor(t *testing.T, e *Engine, nc *nats.Conn, deps statelog.DonorDeps)
 //
 // [awaitDonor] once bounded its whole wait by one [statelog.OfferWindow] from
 // the moment Serve was started, so a donor whose handshake ran longer than that
-// — which the embedded broker's accept budget exists to allow on a loaded host
+// — which the embedded broker's listener budget exists to allow on a loaded host
 // — failed every case standing it up, as a donor no join would hear, while
 // every join asked once its connection was open would have been answered. This
 // donor's dial takes a second longer than the window and has to be awaited.
