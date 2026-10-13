@@ -6236,8 +6236,8 @@ instance's own keys are on its `tools_discovered` log line
 {
   "nodes": [{"id": "node-1", "reported": true}, {"id": "node-2", "reported": true}],
   "servers": [
-    {"name": "github", "configured": true, "shared": false, "transport": "stdio",
-     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "url": "",
+    {"name": "github", "configured": true, "shared": false, "transport": "http",
+     "command": "", "args": [], "url": "https://api.githubcopilot.com/mcp/",
      "state": "partial", "started": 3, "failed": 1, "tools": 26,
      "unlisted_annotations": [],
      "nodes": [
