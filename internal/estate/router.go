@@ -118,7 +118,10 @@ type RouterOptions struct {
 //
 // A KEYED operation — a push — keeps the demotions and nothing else of this
 // order: it is asked in [rendezvous.Order] of its KEY over every data node,
-// this one at its place, with no sticky node ([Router.keyedOrder]).
+// this one at its place, with no sticky node ([Router.keyedOrder]) — and with
+// one demotion of its own, since no sticky node moves it off a node that
+// refused: a node that ran nothing for it is asked last for that operation
+// ([Router.markDeclined]).
 type Router struct {
 	self      string
 	queue     Asker
@@ -144,6 +147,9 @@ type Router struct {
 	// passedOver is when each node that answered `out_of_service` for a
 	// set of copies may be asked ahead of the rest for it again.
 	passedOver map[nodeCopy]time.Time
+	// declined is when each node that ran nothing for a KEYED operation —
+	// answered `no_backend` — may be asked ahead of the rest for it again.
+	declined map[nodeOp]time.Time
 	// admitted caches a REMOTE node's answer to the admission question —
 	// see [Router.Serves] — nil until one has been asked.
 	admitted *admission
@@ -151,6 +157,9 @@ type Router struct {
 
 // nodeCopy is one node's copies of what an operation reads ([opSpec.copies]).
 type nodeCopy struct{ node, copies string }
+
+// nodeOp is one node's serving of one operation, by its name.
+type nodeOp struct{ node, op string }
 
 // admission is one cached answer to [Router.Serves].
 type admission struct {
@@ -182,7 +191,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 		local: opts.Local, session: opts.Session, seams: opts.Seams, now: now,
 		readBudget: ReadAttempt, writeBudget: writeAttempt, admissionBudget: admissionAsk,
 		sticky: map[string]string{}, suspect: map[string]time.Time{},
-		passedOver: map[nodeCopy]time.Time{},
+		passedOver: map[nodeCopy]time.Time{}, declined: map[nodeOp]time.Time{},
 	}, nil
 }
 
@@ -227,6 +236,11 @@ const writeAttempt = 60 * time.Second
 // One window rather than two, because the remedy is the same — a node not
 // worth asking first — and a second number would be a second opinion about
 // how long that lasts.
+//
+// AND HOW LONG A NODE THAT RAN NOTHING FOR A KEYED OPERATION IS ASKED LAST FOR
+// IT ([Router.markDeclined]), for the same reason again: what makes a
+// committer refuse — a maintenance window, a stop, an eviction, a log it is
+// behind — lasts minutes, not one request.
 const suspectFor = 30 * time.Second
 
 // admissionTrust is how long a remote data node's answer to the admission
@@ -608,11 +622,26 @@ func (r *Router) settle(spec *opSpec, x exchange, node string, rep reply, w *wal
 			w.lagging = append(w.lagging, node)
 		case unservedOutOfService:
 			r.markOutOfService(node, spec.copies)
+		case unservedNoBackend:
+			// A KEYED ORDER HAS NO STICKY NODE to move the next request
+			// off a node that ran nothing, so it is remembered: without
+			// it, every later push to each repository the node ranks first
+			// for sent it the whole proposal again — encoded, decoded and
+			// refused — before the runner-up was asked, for as long as
+			// the node refused (a maintenance window, a stop). An
+			// unkeyed operation moves off it by its sticky node instead.
+			if x.key != "" {
+				r.markDeclined(node, spec.name)
+			}
 		}
 		w.note("%s: %s", node, rep.Detail)
 		return nil, false, nil
 	}
-	r.markAnswered(node, spec.copies)
+	op := ""
+	if x.key != "" {
+		op = spec.name
+	}
+	r.markAnswered(node, spec.copies, op)
 	if rep.Err != nil {
 		failure := decodeError(rep.Err)
 		if unvouched(spec, nil, failure) {
@@ -752,7 +781,7 @@ func (r *Router) order(copies string, nodes []string) []string {
 	// from its answer leaves the rest in rendezvous order.
 	nodes = slices.DeleteFunc(rendezvous.Order(r.self, nodes),
 		func(n string) bool { return n == r.self || n == "" })
-	class := r.classes(copies, true)
+	class := r.classes(copies, "", true)
 	slices.SortStableFunc(nodes, func(a, b string) int { return class(a) - class(b) })
 	return nodes
 }
@@ -765,16 +794,16 @@ func (r *Router) orderFor(spec *opSpec, key string, nodes []string) []string {
 	if key == "" {
 		return r.order(spec.copies, nodes)
 	}
-	return r.keyedOrder(spec.copies, key, nodes)
+	return r.keyedOrder(spec.copies, spec.name, key, nodes)
 }
 
-// keyedOrder is the order a KEYED operation asks the data nodes in:
+// keyedOrder is the order a KEYED operation, op, asks the data nodes in:
 // [rendezvous.Order] on the KEY over every data node — THIS ONE INCLUDED where
 // it holds the estate, since the node the key prefers may be this one, and an
 // empty id never — with every node that answered `out_of_service` for the
-// operation's copies inside [suspectFor] after the rest and every node that
-// went silent inside it last, the key's order kept within each by a STABLE
-// sort.
+// operation's copies or ran nothing for op inside [suspectFor] after the rest
+// and every node that went silent inside it last, the key's order kept within
+// each by a STABLE sort.
 //
 // NO STICKY NODE: which node answered last says nothing about where a
 // repository's pushes should meet, and every node computing the same order
@@ -782,7 +811,7 @@ func (r *Router) orderFor(spec *opSpec, key string, nodes []string) []string {
 // whole burst commits it in a few records, where two committers each holding
 // part of it contend on its one subject and each round one loses costs it a
 // re-decide and a re-append of its whole batch.
-func (r *Router) keyedOrder(copies, key string, nodes []string) []string {
+func (r *Router) keyedOrder(copies, op, key string, nodes []string) []string {
 	candidates := slices.DeleteFunc(slices.Clone(nodes), func(n string) bool {
 		return n == "" || n == r.self
 	})
@@ -792,7 +821,7 @@ func (r *Router) keyedOrder(copies, key string, nodes []string) []string {
 	// rendezvous.Order keeps duplicates, adjacent: a placement listing a
 	// node twice names it once here.
 	ordered := slices.Compact(rendezvous.Order(key, candidates))
-	class := r.classes(copies, false)
+	class := r.classes(copies, op, false)
 	slices.SortStableFunc(ordered, func(a, b string) int { return class(a) - class(b) })
 	return ordered
 }
@@ -800,11 +829,12 @@ func (r *Router) keyedOrder(copies, key string, nodes []string) []string {
 // classes is how the router's memory ranks each node for an operation reading
 // copies, lowest asked first: the STICKY node for those copies (where stay is
 // set — never for a keyed order), then every other node, then every node that
-// answered `out_of_service` for them inside [suspectFor], then every SUSPECT
-// node. It sweeps out every window that has lapsed. ONE reading of the memory
-// for both orders, so a node demoted for the unkeyed walk is demoted alike for
-// the keyed one.
-func (r *Router) classes(copies string, stay bool) func(node string) int {
+// answered `out_of_service` for them — or, for a keyed operation op, ran
+// nothing for it — inside [suspectFor], then every SUSPECT node. It sweeps out
+// every window that has lapsed. ONE reading of the memory for both orders, so
+// a node demoted for the unkeyed walk is demoted alike for the keyed one; op
+// is empty for an unkeyed order, which no decline is remembered for.
+func (r *Router) classes(copies, op string, stay bool) func(node string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	sticky := ""
@@ -827,6 +857,14 @@ func (r *Router) classes(copies string, stay bool) func(node string) int {
 			delete(r.passedOver, c)
 		case c.copies == copies:
 			passedOver[c.node] = true
+		}
+	}
+	for d, until := range r.declined {
+		switch {
+		case !now.Before(until):
+			delete(r.declined, d)
+		case d.op == op:
+			passedOver[d.node] = true
 		}
 	}
 	return func(n string) int {
@@ -881,14 +919,28 @@ func (r *Router) markOutOfService(node, copies string) {
 	}
 }
 
+// markDeclined asks node last for [suspectFor] for op, a KEYED operation it
+// answered `no_backend` for: it ran nothing for it, and what made it refuse
+// outlasts one request. Every other place it holds stays — so does the node,
+// which answered.
+func (r *Router) markDeclined(node, op string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.declined[nodeOp{node: node, op: op}] = r.now().Add(suspectFor)
+}
+
 // markAnswered makes node the one asked first for the operations that read
-// copies: it ran one, so its copies of them serve.
-func (r *Router) markAnswered(node, copies string) {
+// copies: it ran one, so its copies of them serve — and, where it ran the
+// keyed operation op, it serves that again too.
+func (r *Router) markAnswered(node, copies, op string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sticky[copies] = node
 	delete(r.suspect, node)
 	delete(r.passedOver, nodeCopy{node: node, copies: copies})
+	if op != "" {
+		delete(r.declined, nodeOp{node: node, op: op})
+	}
 }
 
 // unvouched reports an idempotent write's answer that is NOT final: an

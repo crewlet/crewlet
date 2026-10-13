@@ -81,7 +81,10 @@
 // its place in the key's order, in-process, never ahead of the node the key
 // prefers; and a committer that refuses before it appends anything — stopping,
 // a node in a maintenance mode, a refusal about this node — ran nothing, so
-// the runner-up is asked with the same push id. A committer answers INSIDE THE
+// the runner-up is asked with the same push id, and the refusing node is asked
+// LAST for pushes for the next [suspectFor]: a keyed order has no sticky node
+// to move the next push off it, and what made it refuse outlasts one request.
+// A committer answers INSIDE THE
 // ATTEMPT that asked it, whose end the request carries: it starts a push's
 // batch only while a whole batch and its answer still fit before that end, and
 // answers it busy, undecided, the moment they do not — so an asker never hands
