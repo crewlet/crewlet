@@ -74,7 +74,7 @@ const (
 )
 
 // newSyncWorld is a sync world over a store of the given backend.
-func newSyncWorld(t *testing.T, backend string) *syncWorld {
+func newSyncWorld(t testing.TB, backend string) *syncWorld {
 	t.Helper()
 	w := &syncWorld{
 		world: newWorld(t), client: gittest.NewClient(t), log: newFakeLog(), repos: map[string]*fixture{},
@@ -116,13 +116,13 @@ func (w *syncWorld) wire(o *cache.Options) {
 
 // open boots a cache over the world — Prepare, a pool, Open — reading its log
 // and its store; it is stopped when the case ends.
-func (w *syncWorld) open(t *testing.T, mutate ...func(*cache.Options)) *cache.Cache {
+func (w *syncWorld) open(t testing.TB, mutate ...func(*cache.Options)) *cache.Cache {
 	t.Helper()
 	return w.world.open(t, append([]func(*cache.Options){w.wire}, mutate...)...)
 }
 
 // reopen is a restart: c stopped, and the same directory booted again.
-func (w *syncWorld) reopen(t *testing.T, c *cache.Cache, mutate ...func(*cache.Options)) *cache.Cache {
+func (w *syncWorld) reopen(t testing.TB, c *cache.Cache, mutate ...func(*cache.Options)) *cache.Cache {
 	t.Helper()
 	c.Stop(context.Background())
 	return w.open(t, mutate...)
@@ -130,7 +130,7 @@ func (w *syncWorld) reopen(t *testing.T, c *cache.Cache, mutate ...func(*cache.O
 
 // repo makes a repository in the log with a work tree of its own; its id is
 // the n'th of a fixed series, so a failing case names the same id each run.
-func (w *syncWorld) repo(t *testing.T, n int) string {
+func (w *syncWorld) repo(t testing.TB, n int) string {
 	t.Helper()
 	id := uuid.NewSHA1(uuid.NameSpaceOID, []byte("repo-"+strconv.Itoa(n))).String()
 	w.log.create(id, "repo-"+strconv.Itoa(n))
@@ -141,13 +141,13 @@ func (w *syncWorld) repo(t *testing.T, n int) string {
 // push commits files on repo's work tree and stores the commit's new objects
 // as ONE pack, written to the log with ref moved to the commit. It answers
 // the commit and its row.
-func (w *syncWorld) push(t *testing.T, repo, ref string, files map[string]string) (string, code.PackRow) {
+func (w *syncWorld) push(t testing.TB, repo, ref string, files map[string]string) (string, code.PackRow) {
 	t.Helper()
 	return w.pushAs(t, repo, ref, files, "")
 }
 
 // pushAs is push under the given pack id ("" mints one).
-func (w *syncWorld) pushAs(t *testing.T, repo, ref string, files map[string]string, packID string) (string, code.PackRow) {
+func (w *syncWorld) pushAs(t testing.TB, repo, ref string, files map[string]string, packID string) (string, code.PackRow) {
 	t.Helper()
 	oid, row := w.commit(t, repo, files, packID)
 	row.Added = w.log.write(repo, []code.PackRow{row}, map[string]string{ref: oid})
@@ -156,7 +156,7 @@ func (w *syncWorld) pushAs(t *testing.T, repo, ref string, files map[string]stri
 
 // commit is a push's commit and its stored pack, its row not yet written: a
 // case writes it at the moment it chooses (w.log.write).
-func (w *syncWorld) commit(t *testing.T, repo string, files map[string]string, packID string) (string, code.PackRow) {
+func (w *syncWorld) commit(t testing.TB, repo string, files map[string]string, packID string) (string, code.PackRow) {
 	t.Helper()
 	f := w.repos[repo]
 	f.n++
@@ -171,7 +171,7 @@ func (w *syncWorld) commit(t *testing.T, repo string, files map[string]string, p
 
 // pack packs the objects tip reaches that no earlier push did into a bundle
 // in the store, and answers its row.
-func (w *syncWorld) pack(t *testing.T, f *fixture, tip, packID string) code.PackRow {
+func (w *syncWorld) pack(t testing.TB, f *fixture, tip, packID string) code.PackRow {
 	t.Helper()
 	bare := gittest.Empty(t)
 	revs := []string{tip}
@@ -187,6 +187,33 @@ func (w *syncWorld) pack(t *testing.T, f *fixture, tip, packID string) code.Pack
 	return w.storeBundle(t, b, packID)
 }
 
+// packInto commits files on repo's work tree and packs the commit's new
+// objects into dir's objects/pack — a push's scratch, as its receive-pack
+// would leave it — answering the commit and the pack's checksum. Nothing is
+// stored and no row is written: a case does each at the moment it chooses
+// (w.storeBundle, w.log.write).
+func (w *syncWorld) packInto(t testing.TB, repo, dir string, files map[string]string) (string, string) {
+	t.Helper()
+	f := w.repos[repo]
+	f.n++
+	if files == nil {
+		files = map[string]string{fmt.Sprintf("f%03d.txt", f.n): fmt.Sprintf("push %d of %s\n", f.n, repo)}
+	}
+	oid := w.client.Commit(t, f.work, files, fmt.Sprintf("push %d", f.n))
+	revs := []string{oid}
+	for _, old := range f.tips {
+		revs = append(revs, "^"+old)
+	}
+	cs := gittest.Pack(t, w.client, dir, f.work, revs...)
+	f.tips = append(f.tips, oid)
+	f.head = oid
+	b := gittest.Bundle(t, dir, cs)
+	w.mu.Lock()
+	w.bundles[cs] = b
+	w.mu.Unlock()
+	return oid, cs
+}
+
 // bundle is the bundle a push stored under checksum cs.
 func (w *syncWorld) bundle(cs string) gittest.Bundled {
 	w.mu.Lock()
@@ -195,7 +222,7 @@ func (w *syncWorld) bundle(cs string) gittest.Bundled {
 }
 
 // storeBundle stores a bundle's bytes and answers the row naming them.
-func (w *syncWorld) storeBundle(t *testing.T, b gittest.Bundled, packID string) code.PackRow {
+func (w *syncWorld) storeBundle(t testing.TB, b gittest.Bundled, packID string) code.PackRow {
 	t.Helper()
 	obj, err := w.store.Put(t.Context(), bytes.NewReader(b.Bytes), int64(len(b.Bytes)),
 		objstore.PutMeta{ContentType: code.BundleContentType})
@@ -214,7 +241,7 @@ func (w *syncWorld) storeBundle(t *testing.T, b gittest.Bundled, packID string) 
 
 // tag tags repo's newest commit: annotated, a tag object pushed as its own
 // pack; lightweight, a ref and no pack. It answers what the ref names.
-func (w *syncWorld) tag(t *testing.T, repo, name string, annotated bool) string {
+func (w *syncWorld) tag(t testing.TB, repo, name string, annotated bool) string {
 	t.Helper()
 	f := w.repos[repo]
 	ref := "refs/tags/" + name
@@ -230,7 +257,7 @@ func (w *syncWorld) tag(t *testing.T, repo, name string, annotated bool) string 
 }
 
 // sync is a linearizable sync that must succeed, released when the case ends.
-func (w *syncWorld) sync(t *testing.T, c *cache.Cache, repo string) cache.Synced {
+func (w *syncWorld) sync(t testing.TB, c *cache.Cache, repo string) cache.Synced {
 	t.Helper()
 	s, err := c.Sync(t.Context(), repo, statelog.Freshness{Level: statelog.ReadLinearizable})
 	if err != nil {
@@ -241,7 +268,7 @@ func (w *syncWorld) sync(t *testing.T, c *cache.Cache, repo string) cache.Synced
 }
 
 // dir is repo's current incarnation's directory in c.
-func (w *syncWorld) dir(t *testing.T, c *cache.Cache, repo string) string {
+func (w *syncWorld) dir(t testing.TB, c *cache.Cache, repo string) string {
 	t.Helper()
 	n, ok := cache.Repos(c)[repo]
 	if !ok {
@@ -255,14 +282,14 @@ func (w *syncWorld) dir(t *testing.T, c *cache.Cache, repo string) string {
 // outside the image grammar. The maintainer's outputs — the multi-pack-index
 // and the commit-graph — are left out: whether one is on disk is the
 // maintainer's schedule, not the rows'.
-func (w *syncWorld) image(t *testing.T, c *cache.Cache, repo string) string {
+func (w *syncWorld) image(t testing.TB, c *cache.Cache, repo string) string {
 	t.Helper()
 	return imageOf(t, w.dir(t, c, repo))
 }
 
 // rebuilt is the image of a FRESH cache — its own directory and pool —
 // synced linearizably from nothing at the log's position now.
-func (w *syncWorld) rebuilt(t *testing.T, repo string) string {
+func (w *syncWorld) rebuilt(t testing.TB, repo string) string {
 	t.Helper()
 	layout, err := cache.Prepare(t.Context(), filepath.Join(t.TempDir(), "reference"))
 	if err != nil {
@@ -292,7 +319,7 @@ var (
 	maintainer = regexp.MustCompile(`^multi-pack-index(-[0-9a-f]{40}\.(bitmap|rev))?$`)
 )
 
-func imageOf(t *testing.T, dir string) string {
+func imageOf(t testing.TB, dir string) string {
 	t.Helper()
 	var b strings.Builder
 	for _, name := range []string{"HEAD", "config", "packed-refs"} {
@@ -482,7 +509,7 @@ func histogramCount(rec *metrics.Recorder, name, attr, value string) uint64 {
 }
 
 // packFiles is the pack files in an incarnation, sorted.
-func packFiles(t *testing.T, dir string) []string {
+func packFiles(t testing.TB, dir string) []string {
 	t.Helper()
 	var out []string
 	for _, name := range names(t, filepath.Join(dir, "objects", "pack")) {
@@ -494,7 +521,7 @@ func packFiles(t *testing.T, dir string) []string {
 }
 
 // runGit runs one git process in dir through pool, as the host would.
-func runGit(t *testing.T, pool *gitproc.Pool, dir string, stdin string, args ...string) (string, error) {
+func runGit(t testing.TB, pool *gitproc.Pool, dir string, stdin string, args ...string) (string, error) {
 	t.Helper()
 	cmd := gitproc.Cmd{Dir: dir, Args: args, Class: gitproc.ClassRead, Deadline: time.Minute}
 	if stdin != "" {
@@ -505,7 +532,7 @@ func runGit(t *testing.T, pool *gitproc.Pool, dir string, stdin string, args ...
 }
 
 // tmpEmpty fails t when the cache's tmp/ holds anything.
-func (w *syncWorld) tmpEmpty(t *testing.T) {
+func (w *syncWorld) tmpEmpty(t testing.TB) {
 	t.Helper()
 	if got := names(t, w.path("tmp")); len(got) != 0 {
 		t.Errorf("tmp/ holds %v after the round, want nothing", got)
@@ -513,7 +540,7 @@ func (w *syncWorld) tmpEmpty(t *testing.T) {
 }
 
 // statOK reports whether path exists, failing t on any other error.
-func statOK(t *testing.T, path string) bool {
+func statOK(t testing.TB, path string) bool {
 	t.Helper()
 	_, err := os.Lstat(path)
 	switch {

@@ -150,8 +150,9 @@ func (c *Cache) measureScratch(ctx context.Context) {
 }
 
 // total is what the cache holds against its budget: every incarnation's
-// files, current and retiring, the downloads in flight in tmp/, and scratch/
-// as the janitor last measured it.
+// files, current and retiring, the downloads and staged adoptions in tmp/,
+// and scratch/ as the janitor last measured it — a scratch file a staging
+// links is counted in tmp/ alone, since it has two names.
 func (c *Cache) total() int64 {
 	return c.heldBytes.Load() + c.tmpBytes.Load() + c.scratchBytes.Load()
 }

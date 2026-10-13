@@ -40,6 +40,10 @@ type round struct {
 	// beside it, which replaces it once converged. Fixed once the round runs.
 	rebuild RebuildReason
 	of      *incarnation
+	// whole, on a rebuild, is the packs of `of` its asker has just held to
+	// their rows, which the rebuild links in rather than downloads
+	// (seedRebuild). Fixed once the round runs.
+	whole []string
 }
 
 // waiter is one caller of a round.
@@ -168,7 +172,7 @@ func (c *Cache) entryFor(repoID string) *entry {
 	defer c.mu.Unlock()
 	e := c.entries[repoID]
 	if e == nil {
-		e = &entry{id: repoID}
+		e = newEntry(repoID)
 		c.entries[repoID] = e
 	}
 	return e
@@ -308,8 +312,11 @@ func (c *Cache) start(e *entry) {
 // round found the repository purged, which answers everybody. The failure is
 // also recorded on that incarnation (failedRebuild), which is what the next
 // Rebuild of it is refused by.
+//
+// The body runs holding the entry's write lock: nothing changes what the
+// directory holds beside a round (entry.write).
 func (c *Cache) run(e *entry, r *round) {
-	inc, kind, err := c.converge(e, r.fresh, r.rebuild)
+	inc, kind, err := c.converging(e, r)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	requeue := r.rebuild != "" && err != nil && !e.dead
@@ -325,6 +332,21 @@ func (c *Cache) run(e *entry, r *round) {
 	}
 	e.running = nil
 	c.start(e)
+}
+
+// converging is converge holding ALL of the entry's write lock, waited for
+// under the cache's lifetime: whatever else holds the lock holds it for a
+// listing or a few links, never for anything that waits on a round, so only
+// Stop ends the wait — and a round whose wait Stop ended is one converge would
+// refuse. Every pack an adoption handed the round meanwhile is installed
+// before the lock goes (releaseWrite), and so before the round's callers are
+// answered.
+func (c *Cache) converging(e *entry, r *round) (*incarnation, SyncKind, error) {
+	if err := c.acquireWrite(c.life, e); err != nil {
+		return nil, "", ErrStopped
+	}
+	defer c.releaseWrite(e, writeExclusive)
+	return c.converge(e, r.fresh, r.rebuild, r.of, r.whole)
 }
 
 // converge is one round's body, in order — every step's name is the field
@@ -371,7 +393,12 @@ func (c *Cache) run(e *entry, r *round) {
 //
 // A FIRST incarnation that fails is kept, with no state, so the next round —
 // full, because it has none — reuses every pack it installed.
-func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReason) (_ *incarnation, _ SyncKind, err error) {
+//
+// A rebuild of `of` is SEEDED with whole, the packs of it its asker has just
+// held to their rows (seedRebuild), before its first install.
+func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReason, of *incarnation,
+	whole []string) (_ *incarnation, _ SyncKind, err error) {
+
 	if !c.enter() {
 		return nil, "", ErrStopped
 	}
@@ -447,6 +474,11 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			}
 			if rebuild != "" {
 				building = inc
+				if replaced != nil && replaced == of {
+					if err = c.seedRebuild(e, replaced, inc, whole); err != nil {
+						return nil, "", fmt.Errorf("cache: sync %s: seeding the rebuild: %w", e.id, err)
+					}
+				}
 			}
 		}
 		linearizable := fresh.Level == statelog.ReadLinearizable

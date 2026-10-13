@@ -1,0 +1,255 @@
+package cache_test
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
+)
+
+// A SCRATCH IS A REPOSITORY THE POOL ACCEPTS, and a push's receive-pack runs
+// there rather than in the cache: HEAD the incarnation's, the engine's own
+// config, NO refs, and one alternate — the incarnation's objects — so a thin
+// pack is completed and checked against the cache without a byte of it
+// entering the cache. Its one pack is what Pack names; it pins the
+// incarnation it leans on, so the budget never evicts the alternate from
+// under a push; and a push id names one scratch, once.
+func TestAScratchIsARepositoryThePoolAccepts(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	tip, _ := w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	pushID := uuid.Must(uuid.NewV7()).String()
+
+	sc, err := c.NewScratch(t.Context(), s, pushID)
+	if err != nil {
+		t.Fatalf("NewScratch: %v", err)
+	}
+	if want := w.path("scratch", pushID+".git"); sc.Dir != want {
+		t.Errorf("the scratch is at %s, want %s", sc.Dir, want)
+	}
+	if got, want := read(t, filepath.Join(sc.Dir, "HEAD")), read(t, filepath.Join(s.Dir, "HEAD")); got != want {
+		t.Errorf("the scratch's HEAD is %q, want the incarnation's %q", got, want)
+	}
+	if got := read(t, filepath.Join(sc.Dir, "config")); got != gitproc.RepoConfig {
+		t.Errorf("the scratch's config is %q, want gitproc.RepoConfig", got)
+	}
+	if got := names(t, filepath.Join(sc.Dir, "refs")); !slices.Equal(got, []string{"heads", "tags"}) {
+		t.Errorf("refs/ holds %v, want heads and tags", got)
+	}
+	for _, d := range []string{"refs/heads", "refs/tags"} {
+		if got := names(t, filepath.Join(sc.Dir, d)); len(got) != 0 {
+			t.Errorf("%s holds %v: a scratch holds no refs", d, got)
+		}
+	}
+	if exists(filepath.Join(sc.Dir, "packed-refs")) {
+		t.Error("a scratch holds a packed-refs: its refs are empty")
+	}
+	if got, want := read(t, filepath.Join(sc.Dir, "objects", "info", "alternates")), s.Dir+"/objects\n"; got != want {
+		t.Errorf("the scratch's alternates is %q, want %q", got, want)
+	}
+	if _, err := runGit(t, w.pool, sc.Dir, "", "rev-parse", "--git-dir"); err != nil {
+		t.Errorf("the pool refused to run git in the scratch: %v", err)
+	}
+	if _, err := runGit(t, w.pool, sc.Dir, "", "cat-file", "-e", tip); err != nil {
+		t.Errorf("the cache's tip is not readable through the scratch's alternate: %v", err)
+	}
+
+	if path, cs, ok, err := sc.Pack(); err != nil || ok || path != "" || cs != "" {
+		t.Errorf("Pack of an empty scratch = %q, %q, %t, %v; want nothing", path, cs, ok, err)
+	}
+	_, first := w.packInto(t, repo, sc.Dir, nil)
+	path, cs, ok, err := sc.Pack()
+	want := filepath.Join(sc.Dir, "objects", "pack", "pack-"+first+".pack")
+	if err != nil || !ok || path != want || cs != first {
+		t.Errorf("Pack = %q, %q, %t, %v; want %s and %s", path, cs, ok, err, want, first)
+	}
+	_, second := w.packInto(t, repo, sc.Dir, nil)
+	if _, _, _, err := sc.Pack(); err == nil || !strings.Contains(err.Error(), first) || !strings.Contains(err.Error(), second) {
+		t.Errorf("Pack of a scratch holding two packs = %v, want an error naming %s and %s", err, first, second)
+	}
+	packDir := filepath.Join(sc.Dir, "objects", "pack")
+	for _, ext := range []string{".pack", ".idx", ".rev"} {
+		if err := os.Remove(filepath.Join(packDir, "pack-"+second+ext)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(filepath.Join(packDir, "pack-"+first+".pack")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := sc.Pack(); err == nil || !strings.Contains(err.Error(), "pack-"+first+".idx") {
+		t.Errorf("Pack of a scratch holding an .idx without its .pack = %v, want an error naming it", err)
+	}
+
+	if _, err := c.NewScratch(t.Context(), s, pushID); !errors.Is(err, cache.ErrInvalid) {
+		t.Errorf("a second scratch under one push id = %v, want ErrInvalid", err)
+	}
+	s.Release()
+	cache.SetMaxBytes(c, 1)
+	cache.JanitorPass(c)
+	if _, held := cache.Repos(c)[repo]; !held {
+		t.Fatal("the budget evicted the incarnation a push's scratch leans on")
+	}
+
+	sc.Remove()
+	sc.Remove()
+	if exists(sc.Dir) {
+		t.Errorf("%s is still there after Remove", sc.Dir)
+	}
+	cache.JanitorPass(c)
+	if _, held := cache.Repos(c)[repo]; held {
+		t.Error("with its scratch removed, the repository over the budget was not evicted")
+	}
+	if got := names(t, w.path("trash")); len(got) != 0 {
+		t.Errorf("trash/ holds %v after a pass", got)
+	}
+}
+
+// A SCRATCH IS NAMED BY A SYNC OF THIS CACHE: its alternate is an
+// incarnation the scratch pins, and only the Synced this cache handed out
+// says which one — so a zero Synced, another cache's, a push id that is not
+// a canonical UUID (it becomes a path component) and a stopped cache are each
+// refused before anything is written under scratch/.
+func TestAScratchIsRefusedWhatIsNotOneOfThisCachesSyncs(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+
+	other := newSyncWorld(t, onMemory)
+	otherRepo := other.repo(t, 1)
+	other.push(t, otherRepo, "refs/heads/main", nil)
+	oc := other.open(t)
+	foreign := other.sync(t, oc, otherRepo)
+
+	pushID := uuid.Must(uuid.NewV7()).String()
+	for name, try := range map[string]func() (*cache.Scratch, error){
+		"a zero Synced":        func() (*cache.Scratch, error) { return c.NewScratch(t.Context(), cache.Synced{}, pushID) },
+		"another cache's sync": func() (*cache.Scratch, error) { return c.NewScratch(t.Context(), foreign, pushID) },
+		"an upper-case id": func() (*cache.Scratch, error) {
+			return c.NewScratch(t.Context(), s, strings.ToUpper(pushID))
+		},
+		"an id that is no UUID": func() (*cache.Scratch, error) { return c.NewScratch(t.Context(), s, "../x") },
+		"a view of a zero Synced": func() (*cache.Scratch, error) {
+			return c.AdvertiseView(t.Context(), cache.Synced{})
+		},
+		"a view of another cache's sync": func() (*cache.Scratch, error) {
+			return c.AdvertiseView(t.Context(), foreign)
+		},
+	} {
+		if _, err := try(); !errors.Is(err, cache.ErrInvalid) {
+			t.Errorf("NewScratch of %s = %v, want ErrInvalid", name, err)
+		}
+	}
+	if got := names(t, w.path("scratch")); len(got) != 0 {
+		t.Errorf("refused scratches left %v under scratch/", got)
+	}
+	if got := cache.Pins(c, repo); got != 1 {
+		t.Errorf("the incarnation has %d pins after refused scratches, want the sync's one", got)
+	}
+
+	c.Stop(context.Background())
+	if _, err := c.NewScratch(t.Context(), s, pushID); !errors.Is(err, cache.ErrStopped) {
+		t.Errorf("NewScratch after Stop = %v, want ErrStopped", err)
+	}
+	if _, err := c.AdvertiseView(t.Context(), s); !errors.Is(err, cache.ErrStopped) {
+		t.Errorf("AdvertiseView after Stop = %v, want ErrStopped", err)
+	}
+}
+
+// A SCRATCH OUTLIVING ITS CACHE IS SAFE TO REMOVE: once Stop has begun the
+// directory is the next Open's, so a Remove after it moves nothing — the
+// next boot moves every scratch of this process aside — and still gives the
+// pin back.
+func TestAScratchOutlivingItsCacheIsSafeToRemove(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	sc, err := c.NewScratch(t.Context(), s, uuid.Must(uuid.NewV7()).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Release()
+	c.Stop(context.Background())
+	sc.Remove()
+	if !exists(sc.Dir) {
+		t.Error("a Remove after Stop moved the scratch: the directory is the next Open's")
+	}
+	if got := cache.Pins(c, repo); got != 0 {
+		t.Errorf("the incarnation has %d pins after its last scratch was removed, want 0", got)
+	}
+	w.open(t)
+	if got := names(t, w.path("scratch")); len(got) != 0 {
+		t.Errorf("the next boot left %v under scratch/", got)
+	}
+}
+
+// AN ADVERTISEMENT VIEW IS A SNAPSHOT OF THE REFS: its packed-refs is the
+// incarnation's own file under a second name, so receive-pack lists the
+// cache's refs without running in the cache — and a sync that replaces the
+// cache's packed-refs by rename meanwhile leaves the view naming what it
+// named, because a rename gives the old name a new file and leaves the old
+// file where the view's link points.
+func TestAnAdvertisementViewIsASnapshotOfTheRefs(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	old, _ := w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	view, err := c.AdvertiseView(t.Context(), s)
+	if err != nil {
+		t.Fatalf("AdvertiseView: %v", err)
+	}
+	defer view.Remove()
+	if !strings.HasPrefix(filepath.Base(view.Dir), "adv-") || filepath.Dir(view.Dir) != w.path("scratch") {
+		t.Errorf("the view is at %s, want scratch/adv-<uuid>.git", view.Dir)
+	}
+	vi, err := os.Stat(filepath.Join(view.Dir, "packed-refs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci, err := os.Stat(filepath.Join(s.Dir, "packed-refs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(vi, ci) {
+		t.Error("the view's packed-refs is not the incarnation's own file")
+	}
+
+	tip, _ := w.push(t, repo, "refs/heads/main", nil)
+	w.sync(t, c, repo)
+	if got := read(t, filepath.Join(s.Dir, "packed-refs")); !strings.Contains(got, tip+" refs/heads/main") {
+		t.Fatalf("the sync did not move main in the cache:\n%s", got)
+	}
+	if got := read(t, filepath.Join(view.Dir, "packed-refs")); !strings.Contains(got, old+" refs/heads/main") {
+		t.Errorf("the view's packed-refs moved with the cache's:\n%s", got)
+	}
+	res, err := w.pool.Run(t.Context(), gitproc.Cmd{
+		Dir: view.Dir, Args: []string{"receive-pack", "--stateless-rpc", "--advertise-refs", view.Dir},
+		Class: gitproc.ClassTransfer, Deadline: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("receive-pack's advertisement in the view: %v", err)
+	}
+	advert := string(res.Stdout)
+	if !strings.Contains(advert, old+" refs/heads/main") || strings.Contains(advert, tip+" refs/heads/main") {
+		t.Errorf("the view's advertisement does not list main at the old tip %s:\n%s", old, advert)
+	}
+}

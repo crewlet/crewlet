@@ -76,6 +76,52 @@ func BeforePeel(o *Options, f func(dir string)) {
 	o.knobs.peeling = f
 }
 
+// BeforeVerifyWaits makes Verify call f with the incarnation's directory as it
+// is about to wait for the repository's rounds before listing it.
+func BeforeVerifyWaits(o *Options, f func(dir string)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.verifyWaits = f
+}
+
+// WhileVerifyLists makes Verify call f with the incarnation's directory while
+// it lists it: with the repository's rounds held off and no maintenance run
+// allowed to start on it.
+func WhileVerifyLists(o *Options, f func(dir string)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.verifyListing = f
+}
+
+// BeforeVerifyFsck makes Verify call f with the incarnation's directory as its
+// fsck is about to ask for a maintenance slot.
+func BeforeVerifyFsck(o *Options, f func(dir string)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.verifyFsck = f
+}
+
+// WhileAdopting makes every adoption that takes its share of the repository's
+// directory call f with the repository's id before it links.
+func WhileAdopting(o *Options, f func(repo string)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.adopting = f
+}
+
+// AdoptionSyncFails makes the directory sync of every adoption's links fail
+// with err, after the links are made.
+func AdoptionSyncFails(o *Options, err error) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.adoptSync = func(string) error { return err }
+}
+
 // MaintainerPass runs one maintainer pass as work of the cache's own (a
 // stopped cache runs none), waits for every run it started to end, and
 // answers the repositories whose runs ran every step to its end.
@@ -144,6 +190,17 @@ func MaintainerTicksFrom(o *Options, ticks <-chan time.Time) {
 		o.knobs = &knobs{}
 	}
 	o.knobs.maintTicks = ticks
+}
+
+// MaintainerKicked reports whether a kick is waiting for the maintainer, and
+// takes it: a case that answers the kicks itself sees each one once.
+func MaintainerKicked(c *Cache) bool {
+	select {
+	case <-c.maintKicks:
+		return true
+	default:
+		return false
+	}
 }
 
 // Maintaining reports whether a maintenance run is in flight on repoID.

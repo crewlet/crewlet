@@ -7,7 +7,8 @@ import (
 )
 
 // ServeConfig is the configuration every git process in a cache runs with —
-// the host's upload-pack, and this package's own peel and index — as
+// the host's upload-pack, and this package's own: a round's peel and index,
+// Missing's cat-file, the maintainer's index and graph, Verify's fsck — as
 // gitproc call-site pairs: ONE value, so no process reads a cache with
 // another idea of it.
 //
@@ -39,4 +40,32 @@ func (c *Cache) ServeConfig() []gitproc.KV {
 		{Key: "uploadpack.allowRefInWant", Value: "true"},
 		{Key: "uploadpack.keepAlive", Value: "5"},
 	}
+}
+
+// noAlternateRefs is a ref prefix no ref can begin with: a component that
+// begins with a dot is no ref name git or gitref admits, so whatever
+// repository a view leans on, none of its refs matches it.
+const noAlternateRefs = "refs/.none"
+
+// AdvertiseConfig is what a push ADVERTISEMENT's receive-pack adds, in an
+// advertisement view (AdvertiseView), to the receive configuration every
+// receive-pack runs with: core.alternateRefsPrefixes naming a prefix no ref
+// has (noAlternateRefs), so the view's receive-pack does not list the refs
+// of its one alternate. The alternate is the incarnation, and the view's
+// packed-refs IS the incarnation's file, so every tip that listing finds is
+// one the view already advertises, and receive-pack prints nothing more for
+// it; but the listing is a second for-each-ref over the same refs, and it
+// doubled the advertisement's cost — every push pays it once, before its
+// POST (BenchmarkAdvertise, the same bytes out of every arm: 26 ms in a view
+// against 14 ms in the cache at 10 000 refs, 222 ms against 112 ms at
+// code.MaxRefsPerRepo, and with this 18 ms and 117 ms). A prefix filter,
+// which runs nothing: git still starts the listing's process, which then
+// reads nothing.
+//
+// NEVER for a push's scratch (NewScratch): its refs are empty, so its
+// receive-pack's connectivity check — rev-list --not --all --alternate-refs —
+// has the alternate's refs as its ONLY negative tips, and with them filtered
+// out it would walk the repository's whole history on every push.
+func (c *Cache) AdvertiseConfig() []gitproc.KV {
+	return []gitproc.KV{{Key: "core.alternateRefsPrefixes", Value: noAlternateRefs}}
 }

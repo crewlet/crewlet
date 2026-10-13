@@ -42,8 +42,10 @@ type Cache struct {
 	// the suite can narrow both before a sync (export_test.go).
 	fetchConcurrency int
 	fetches          *fetchSlots
-	// tmpBytes is what downloads in flight hold in tmp/, until each file
-	// is renamed into place or removed.
+	// tmpBytes is what tmp/ holds for the cache's own work: downloads in
+	// flight, until each file is renamed into place or removed, and the
+	// pushed packs adoptions staged for a round or a listing to install
+	// (adopt.go), until each is installed or dropped.
 	tmpBytes atomic.Int64
 	// heldBytes is what every incarnation holds — current and retiring, from
 	// the moment it is made or indexed until it is discarded — and
@@ -285,7 +287,9 @@ func (c *Cache) index(b *boot) (int, error) {
 		}
 		c.heldBytes.Add(inc.diskBytes + inc.metaBytes)
 		c.heldRepos.Add(1)
-		c.entries[k.id] = &entry{id: k.id, current: inc}
+		e := newEntry(k.id)
+		e.current = inc
+		c.entries[k.id] = e
 	}
 	return trashed, nil
 }

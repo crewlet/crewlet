@@ -19,6 +19,7 @@ const (
 	BackupAge                        = "crewlet.backup.age"
 	BackupDuration                   = "crewlet.backup.duration"
 	BackupHolds                      = "crewlet.backup.holds"
+	CodeCacheAdoptions               = "crewlet.code.cache.adoptions"
 	CodeCacheBytes                   = "crewlet.code.cache.bytes"
 	CodeCacheRebuildRefusals         = "crewlet.code.cache.rebuild.refusals"
 	CodeCacheRebuilds                = "crewlet.code.cache.rebuilds"

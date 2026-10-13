@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -18,13 +20,15 @@ import (
 // request once on the answer.
 //
 // A REBUILD IS THE NEXT INCARNATION, built BESIDE the one readers hold: a
-// whole read at the log's head, every pack downloaded again, into
-// repos/<id>.<n+1>.git, which becomes current only once it has converged. The
-// one it replaces is RETIRED — its maintenance cancelled, its directory moved
-// into trash/ with its last reader — so a git process already running there
-// finishes on the files it opened, rather than meeting another directory's
-// files under its GIT_DIR half way through its run. A rebuild that fails
-// leaves the old incarnation current and moves the partial one into trash/.
+// whole read at the log's head, every pack downloaded again — but those an
+// operator's repair has just found whole, which it links (seedRebuild) —
+// into repos/<id>.<n+1>.git, which becomes current only once it has
+// converged. The one it replaces is RETIRED — its maintenance cancelled, its
+// directory moved into trash/ with its last reader — so a git process
+// already running there finishes on the files it opened, rather than meeting
+// another directory's files under its GIT_DIR half way through its run. A
+// rebuild that fails leaves the old incarnation current and moves the
+// partial one into trash/.
 //
 // IT COSTS ONE REBUILD HOWEVER MANY REQUESTS FAILED. A request that failed on
 // an incarnation already replaced is answered from the current one with no
@@ -76,10 +80,14 @@ const (
 	// log that went back can give — a broker restored from an older copy.
 	// Counted by the round that reads it whole.
 	RebuildRewound RebuildReason = "rewound"
+	// RebuildVerify is an operator's repair: [Cache.Verify] found the cache
+	// holding something its rows do not say, and was asked to repair it.
+	// The cache's own, never a git process's: Rebuild refuses it.
+	RebuildVerify RebuildReason = "verify"
 )
 
 // RebuildReasons is every [RebuildReason].
-var RebuildReasons = []RebuildReason{RebuildCorrupt, RebuildMissing, RebuildStream, RebuildRewound}
+var RebuildReasons = []RebuildReason{RebuildCorrupt, RebuildMissing, RebuildStream, RebuildRewound, RebuildVerify}
 
 // Valid reports whether r is one of [RebuildReasons].
 func (r RebuildReason) Valid() bool { return slices.Contains(RebuildReasons, r) }
@@ -98,15 +106,30 @@ func (r RebuildReason) Valid() bool { return slices.Contains(RebuildReasons, r) 
 // rebuildRefusal). ctx bounds the caller's wait and nothing else: the rebuild
 // runs on for anybody else waiting on it.
 func (c *Cache) Rebuild(ctx context.Context, failed Synced, reason RebuildReason) (Synced, error) {
-	switch {
-	case reason != RebuildCorrupt && reason != RebuildMissing:
+	if reason != RebuildCorrupt && reason != RebuildMissing {
 		return Synced{}, fmt.Errorf("%w: a rebuild's reason is what the host's git process in the cache was "+
 			"classified as, %q or %q, and %q is not", ErrInvalid, RebuildCorrupt, RebuildMissing, reason)
-	case failed.inc == nil || failed.entry == nil:
-		return Synced{}, fmt.Errorf("%w: a rebuild names the Synced a sync of this cache handed out", ErrInvalid)
-	case c.isStopped():
+	}
+	if err := c.handedOut(failed, "a rebuild"); err != nil {
+		return Synced{}, err
+	}
+	if c.isStopped() {
 		return Synced{}, ErrStopped
 	}
+	return c.rebuild(ctx, failed, reason, true, nil)
+}
+
+// rebuild is Rebuild's body, for a failed this cache handed out and a reason
+// already judged: refuse says whether the rules a rebuild is refused by
+// apply. Verify's repair is the one caller that passes false — an operator
+// asked for it, and verify has just named the damage a rebuild is for — and
+// it still joins a rebuild of the incarnation already queued or running,
+// and still counts as an attempt of the incarnation's line. whole is the
+// checksums of the packs of failed's incarnation the caller has just held to
+// their rows (seedRebuild) — Verify's; nil from a git process's failure,
+// which says nothing of which pack is damaged.
+func (c *Cache) rebuild(ctx context.Context, failed Synced, reason RebuildReason, refuse bool,
+	whole []string) (Synced, error) {
 	e := failed.entry
 	now := c.now()
 	e.mu.Lock()
@@ -125,11 +148,11 @@ func (c *Cache) Rebuild(ctx context.Context, failed Synced, reason RebuildReason
 		if quiet {
 			failed.inc.rebuilds, failed.inc.unmoved = 0, false
 		}
-		if rule := rebuildRefusal(e, failed.inc, now); rule != "" {
+		if rule := rebuildRefusal(e, failed.inc, now); refuse && rule != "" {
 			return Synced{}, c.refuseRebuild(e, failed, reason, rule, now)
 		}
 		e.lastRebuild = now
-		r = c.queueRebuild(e, failed.inc, reason)
+		r = c.queueRebuild(e, failed.inc, reason, whole)
 	}
 	w := newWaiter(statelog.Freshness{Level: statelog.ReadLinearizable})
 	w.rebuild = true
@@ -242,18 +265,62 @@ func rebuilding(e *entry, inc *incarnation) *round {
 // left behind the rebuild: a whole read at the log's head answers whatever
 // its callers asked for, so they are handed the rebuilt incarnation — and
 // should the rebuild fail, each of them is queued again for an ordinary
-// round (Cache.run), never answered with the rebuild's failure.
-func (c *Cache) queueRebuild(e *entry, inc *incarnation, reason RebuildReason) *round {
+// round (Cache.run), never answered with the rebuild's failure. whole seeds
+// the rebuild (seedRebuild).
+func (c *Cache) queueRebuild(e *entry, inc *incarnation, reason RebuildReason, whole []string) *round {
 	linearizable := statelog.Freshness{Level: statelog.ReadLinearizable}
 	if e.next == nil {
 		e.next = &round{fresh: linearizable}
 	} else {
 		e.next.fresh = merge(e.next.fresh, linearizable)
 	}
-	e.next.rebuild, e.next.of = reason, inc
+	e.next.rebuild, e.next.of, e.next.whole = reason, inc, whole
 	r := e.next
 	c.start(e)
 	return r
+}
+
+// seedRebuild links into a rebuild's new incarnation every pack of the one it
+// replaces whose checksum is in whole — the packs Verify has just held WHOLE
+// to their rows: every section at its row's size, the bundle hashing to the
+// row's Hash — so the rebuild's install finds them installed and asks the
+// object store only for the rest. An operator's repair of one damaged pack
+// among thousands is then one GET, not one a pack the repository holds.
+//
+// A LINK IS EXACTLY AS GOOD AS A DOWNLOAD HERE. Both incarnations are this
+// cache's, on one filesystem; a pack's files are read-only and nothing
+// writes one in place, so the link IS the bytes Verify hashed; and the
+// rebuild's own full round then holds each to its row's sizes and removes
+// whatever no row still names, as it does a download. What a link cannot
+// bring is a pack Verify did not find whole — damaged, missing, or never
+// asked about — which is why only whole is linked, and why the rebuild a
+// request's failure asks for, which says nothing of which pack is damaged,
+// links nothing.
+//
+// A pack gone from replaced since Verify held it — a round removed it — is
+// passed over, and one that cannot be linked for any other reason is logged
+// and left to the download, which needs nothing from it. The directory is
+// synced once every link is made, as an install's renames are, before any
+// ref names what they hold.
+func (c *Cache) seedRebuild(e *entry, replaced, inc *incarnation, whole []string) error {
+	from := filepath.Join(replaced.dir, "objects", "pack")
+	into := filepath.Join(inc.dir, "objects", "pack")
+	seeded := 0
+	for _, cs := range whole {
+		linked, err := linkBundle(filepath.Join(from, "pack-"+cs), into, cs, nil)
+		switch {
+		case linked:
+			seeded++
+		case err != nil && !errors.Is(err, fs.ErrNotExist):
+			c.log.Warn("code_cache_rebuild_seed_failed", "repo", e.id, "pack", "pack-"+cs, "error", err)
+		}
+	}
+	if seeded == 0 {
+		return nil
+	}
+	c.log.Info("code_cache_rebuild_seeded", "repo", e.id, "incarnation", inc.n, "packs", seeded,
+		"whole", len(whole))
+	return syncDir(into)
 }
 
 // promote makes a rebuild's incarnation inc current in place of old, which is

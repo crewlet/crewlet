@@ -554,13 +554,34 @@ func TestARebuildReasonIsTheHostsToGive(t *testing.T) {
 	w.push(t, repo, "refs/heads/main", nil)
 	c := w.open(t)
 	s := w.sync(t, c, repo)
-	for _, reason := range []cache.RebuildReason{cache.RebuildStream, cache.RebuildRewound, "x", ""} {
+	for _, reason := range []cache.RebuildReason{cache.RebuildStream, cache.RebuildRewound, cache.RebuildVerify, "x", ""} {
 		if _, err := c.Rebuild(t.Context(), s, reason); !errors.Is(err, cache.ErrInvalid) {
 			t.Errorf("Rebuild(%q) = %v, want ErrInvalid", reason, err)
 		}
 	}
 	if _, err := c.Rebuild(t.Context(), cache.Synced{}, cache.RebuildCorrupt); !errors.Is(err, cache.ErrInvalid) {
 		t.Errorf("Rebuild of a zero Synced = %v, want ErrInvalid", err)
+	}
+	// Another cache's Synced names an entry and an incarnation this cache
+	// does not hold: rebuilt through them, the repository would be read
+	// whole into the other cache's directory and counted here.
+	other := newSyncWorld(t, onMemory)
+	otherRepo := other.repo(t, 1)
+	other.push(t, otherRepo, "refs/heads/main", nil)
+	oc := other.open(t)
+	foreign := other.sync(t, oc, otherRepo)
+	if _, err := c.Rebuild(t.Context(), foreign, cache.RebuildCorrupt); !errors.Is(err, cache.ErrInvalid) {
+		t.Errorf("Rebuild of another cache's Synced = %v, want ErrInvalid", err)
+	}
+	if got := cache.Repos(oc)[otherRepo]; got != 1 {
+		t.Errorf("a refused rebuild left the other cache's incarnation %d current, want 1", got)
+	}
+	for name, rec := range map[string]*metrics.Recorder{"this cache": w.rec, "the other cache": other.rec} {
+		for _, reason := range cache.RebuildReasons {
+			if got := counter(rec, metrics.CodeCacheRebuilds, "reason", string(reason)); got != 0 {
+				t.Errorf("%s counted %d rebuilds under %s, want none", name, got, reason)
+			}
+		}
 	}
 	if got := cache.Repos(c)[repo]; got != 1 {
 		t.Errorf("a refused rebuild left incarnation %d current, want 1", got)

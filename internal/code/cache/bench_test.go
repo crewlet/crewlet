@@ -190,6 +190,56 @@ func BenchmarkPlace(b *testing.B) {
 	}
 }
 
+// BenchmarkAdvertise is a push's advertisement — receive-pack --stateless-rpc
+// --advertise-refs, through the pool — over a repository of refs refs:
+// in=cache runs it in the incarnation itself, the floor; in=view in an
+// advertisement view with no configuration of its own, where receive-pack
+// also lists its alternate's refs — the incarnation's, the same packed-refs —
+// for the .have lines it then has none of to print; in=view-config in the
+// view with Cache.AdvertiseConfig, which is how the host runs it. The three
+// print the same bytes (checked once an arm), so the figures differ by the
+// alternate's listing alone. refs=100000 is code.MaxRefsPerRepo.
+func BenchmarkAdvertise(b *testing.B) {
+	quiet(b)
+	for _, refs := range []int{10_000, 100_000} {
+		w := newSyncWorld(b, onMemory)
+		repo := w.repo(b, 1)
+		tip, _ := w.push(b, repo, "refs/heads/main", nil)
+		many := make(map[string]string, refs)
+		for i := range refs - 1 {
+			many[fmt.Sprintf("refs/heads/topic/%06d", i)] = tip
+		}
+		w.log.write(repo, nil, many)
+		c := w.open(b)
+		s := w.sync(b, c, repo)
+		view, err := c.AdvertiseView(b.Context(), s)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Cleanup(view.Remove)
+		want := advertise(b, w.pool, s.Dir, nil)
+		for _, arm := range []struct {
+			in     string
+			dir    string
+			config []gitproc.KV
+		}{
+			{"cache", s.Dir, nil},
+			{"view", view.Dir, nil},
+			{"view-config", view.Dir, c.AdvertiseConfig()},
+		} {
+			b.Run(fmt.Sprintf("refs=%d/in=%s", refs, arm.in), func(b *testing.B) {
+				if got := advertise(b, w.pool, arm.dir, arm.config); got != want {
+					b.Fatalf("the advertisement in %s is not the cache's own (%d bytes against %d)",
+						arm.in, len(got), len(want))
+				}
+				for b.Loop() {
+					advertise(b, w.pool, arm.dir, arm.config)
+				}
+			})
+		}
+	}
+}
+
 // syncDirectory fsyncs dir, as the cache's syncDir does.
 func syncDirectory(b *testing.B, dir string) {
 	f, err := os.Open(dir)

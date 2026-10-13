@@ -61,6 +61,33 @@
 // delta reads whole — and a node that may have met it is restarted: its first
 // rounds read every repository whole.
 //
+// # A push never runs in a cache
+//
+// receive-pack writes what a client sends, and a cache holds nothing a row
+// does not name: under protocol v2 any object present is fetchable by id, so
+// a pack a push left in a cache before its row applied — a push the committer
+// refused, one whose node died before its record landed — would be served by
+// this node alone, and a later push could connect against it and land a ref
+// no other node can materialise. So a push's receive-pack runs in a SCRATCH
+// repository ([Cache.NewScratch]) whose one alternate is the cache's objects
+// and whose refs are empty: a thin pack is completed and checked against
+// everything the cache holds without a byte of it entering the cache. Its
+// advertisement runs in a VIEW ([Cache.AdvertiseView]) whose packed-refs is
+// the incarnation's own file under a second name, a snapshot no sync's rename
+// can move. Both pin the incarnation they lean on, so the budget never evicts
+// it from under a push. The pushed pack enters the cache only once its row has
+// applied: by [Cache.Adopt], a hard link of the scratch's three files, or, as
+// on every other node, through a sync. Adoptions share the directory, since
+// each links files of its own and group commit answers a repository's pushes
+// together, and an adoption never waits: one that meets a round or a listing
+// writing the directory stages its files in tmp/ and hands them over, and
+// that writer installs them — in place of the pack's GET, when it was about
+// to download it — before it lets the directory go. So the node that took a
+// push downloads it only when a round that read the push's row had already
+// begun that pack's GET before the adoption handed it the staging, or when
+// the links fail. [Cache.Missing] is a fetch's question beside it: which of
+// its wants the cache lacks, which sends the fetch to one linearizable sync.
+//
 // # The byte path is shaped for S3
 //
 // Packs come from the object store, which in production is S3: GETs are
@@ -142,6 +169,19 @@
 // repository with no rebuild asked of it for [RebuildQuiet] meets its next
 // failure as new damage.
 //
+// [Cache.Verify] is the operator's side of it: every pack the rows name
+// hashed against its row as the bundle the push stored, every file outside
+// the image named, packed-refs held to the digest written with it, and git's
+// connectivity check in a free maintenance slot — refused rather than queued
+// when there is none. It stops no maintenance run — one in flight finishes,
+// the files it holds while it runs admitted — and none starts on the
+// repository while it checks, so the slot its fsck needs is not taken from
+// under it. Asked to repair, it rebuilds the repository — linking in every
+// pack it has just found whole and downloading only the rest, so one damaged
+// pack costs one GET — and checks the rebuild the same way; a rebuild it has
+// seen whole has ended the damage it was for, so that incarnation's next
+// failure is rebuilt at once.
+//
 // # Background work never takes a person's slot
 //
 // The maintainer writes a multi-pack-index with its bitmap and a commit-graph
@@ -166,7 +206,7 @@
 //	  lock                          this process's claim (internal/filelock)
 //	  repos/<id>.<n>.git/           a repository's INCARNATION: a bare repository
 //	    crewlet-state.json          what the directory reflects, renamed in last
-//	  scratch/                      a request's own repositories (a push's scratch)
+//	  scratch/                      a request's own repositories: a push's scratch, a view
 //	  tmp/                          every file before its rename into place
 //	  trash/                        what is being removed, by the janitor
 //	  hooks/proc-receive            the hook every push's receive-pack runs
@@ -261,5 +301,9 @@
 // have spent around fifteen seconds warm before it could serve. A step that
 // renames 300 durable files into one directory costs 30 µs a file with one
 // directory sync after the step and 274 µs a file with a sync after every
-// rename, which is why durable.go syncs a step's directory once.
+// rename, which is why durable.go syncs a step's directory once. A push's
+// advertisement in a view costs about what it does in the cache once the
+// view stops listing its alternate's refs (AdvertiseConfig): 18 ms against
+// 14 ms at 10 000 refs and 117 ms against 112 ms at code.MaxRefsPerRepo
+// (100 000), where the listing doubled it, to 26 ms and 222 ms.
 package cache

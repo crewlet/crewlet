@@ -102,6 +102,21 @@ type knobs struct {
 	// maintTicks, when set, is where the maintainer takes its ticks from, in
 	// place of a ticker of MidxDebounce.
 	maintTicks <-chan time.Time
+	// verifyWaits runs as Verify is about to wait for the repository's
+	// rounds before listing the incarnation at dir.
+	verifyWaits func(dir string)
+	// verifyListing runs while Verify lists the incarnation at dir — the
+	// repository's rounds held off and no maintenance run let start on it.
+	verifyListing func(dir string)
+	// verifyFsck runs as Verify's fsck is about to ask for its maintenance
+	// slot in the incarnation at dir.
+	verifyFsck func(dir string)
+	// adopting runs while an adoption holds its share of the repository's
+	// directory, before it links: a case holds adoptions there together.
+	adopting func(repo string)
+	// adoptSync, when set, is the directory sync an adoption's links are
+	// made durable by, in place of the real one: a case makes it fail.
+	adoptSync func(dir string) error
 }
 
 // validate refuses an Options value naming the field and what to set,

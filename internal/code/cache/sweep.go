@@ -41,14 +41,36 @@ import (
 // entries — so the steady-state work of a sync is proportional to what moved,
 // never to the directory.
 
+// THE GRAMMAR, one predicate a directory: what the sweep keeps and Verify
+// admits, written once so the two never disagree about what a cache is.
+
 // The root's image: each name and whether it is a directory.
 var rootImage = map[string]bool{
 	"HEAD": false, "config": false, "packed-refs": false, stateName: false,
 	"refs": true, "objects": true,
 }
 
+// inRoot admits an entry of an incarnation's root.
+func inRoot(name string, dir bool) bool {
+	isDir, ok := rootImage[name]
+	return ok && isDir == dir
+}
+
+// inRefs admits an entry of refs/: heads/ and tags/, each to stay empty.
+func inRefs(name string, dir bool) bool { return dir && (name == "heads" || name == "tags") }
+
+// inObjects admits an entry of objects/: pack/ and info/.
+func inObjects(name string, dir bool) bool { return dir && (name == "pack" || name == "info") }
+
+// inInfo admits an entry of objects/info/: the maintainer's commit-graph.
+func inInfo(name string, dir bool) bool { return !dir && name == "commit-graph" }
+
 // midxFile matches the multi-pack-index's files.
 var midxFile = regexp.MustCompile(`^multi-pack-index(-[0-9a-f]{40}\.(bitmap|rev))?$`)
+
+// packFileName matches a pack's three files, its checksum the first group:
+// which of them the image keeps is the rows' to say.
+var packFileName = regexp.MustCompile(`^pack-([0-9a-f]{40})\.(pack|idx|rev)$`)
 
 // tidy is the sweep's first half: every directory of the image made, every
 // entry outside it but the pack files moved into trash/, config made
@@ -59,10 +81,7 @@ func (c *Cache) tidy(inc *incarnation, snap snapshot) (bool, error) {
 	// image, and a directory made through it would be made wherever it
 	// points.
 	t := &trashing{c: c}
-	t.outside(inc.dir, func(name string, dir bool) bool {
-		isDir, ok := rootImage[name]
-		return ok && isDir == dir
-	})
+	t.outside(inc.dir, inRoot)
 	if t.err != nil {
 		return t.moved, t.err
 	}
@@ -71,18 +90,12 @@ func (c *Cache) tidy(inc *incarnation, snap snapshot) (bool, error) {
 			return t.moved, err
 		}
 	}
-	t.outside(filepath.Join(inc.dir, "refs"), func(name string, dir bool) bool {
-		return dir && (name == "heads" || name == "tags")
-	})
+	t.outside(filepath.Join(inc.dir, "refs"), inRefs)
 	for _, d := range []string{"refs/heads", "refs/tags"} {
 		t.outside(filepath.Join(inc.dir, d), func(string, bool) bool { return false })
 	}
-	t.outside(filepath.Join(inc.dir, "objects"), func(name string, dir bool) bool {
-		return dir && (name == "pack" || name == "info")
-	})
-	t.outside(filepath.Join(inc.dir, "objects", "info"), func(name string, dir bool) bool {
-		return !dir && name == "commit-graph"
-	})
+	t.outside(filepath.Join(inc.dir, "objects"), inObjects)
+	t.outside(filepath.Join(inc.dir, "objects", "info"), inInfo)
 	if t.err != nil {
 		return t.moved, t.err
 	}

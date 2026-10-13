@@ -358,11 +358,15 @@ func (f *maintFlight) count() int {
 
 // maintainable reports whether e's current incarnation is due for a run now;
 // e.mu is held. See DUE above: never while a round is in flight or another run
-// is, never on an incarnation this process has not read whole, and never on
-// one leaving the cache.
+// is, never while Verify checks the repository (its fsck takes a maintenance
+// slot it is refused rather than queued for, so a run started under it would
+// take the lane's last slot from the person who asked — a one-slot lane's
+// only one), never on an incarnation this process has not read whole, and
+// never on one leaving the cache.
 func maintainable(e *entry, now time.Time) bool {
 	inc := e.current
-	if e.dead || inc == nil || inc.retired || !inc.converged || e.running != nil || e.maint != nil {
+	if e.dead || inc == nil || inc.retired || !inc.converged || e.running != nil || e.maint != nil ||
+		e.verifying > 0 {
 		return false
 	}
 	if inc.packs < 1 || (!indexDue(inc) && inc.midx.Graph) {
@@ -589,23 +593,50 @@ func (c *Cache) runMaintenance(ctx context.Context, inc *incarnation, p runPlan)
 // where most of its time is — leaves it behind.
 var tmpBitmap = regexp.MustCompile(`^tmp_bitmap_[A-Za-z0-9]+$`)
 
-// clearMaintenanceDebris removes what a maintenance run that did not succeed
-// may have left in inc: the index's and the graph's lock files — git removes
-// its own when it is asked to stop, and leaves them when it is killed — and a
-// bitmap's temporary file. The run was the only writer of either in the
-// incarnation, since no round runs a git writer beside it, so anything of
-// theirs still there is its own. A removal that fails is logged; the
-// incarnation's next full round sweeps whatever is outside its image.
-func (c *Cache) clearMaintenanceDebris(inc *incarnation) {
-	packDir := filepath.Join(inc.dir, "objects", "pack")
-	paths := []string{
-		filepath.Join(packDir, "multi-pack-index.lock"),
-		filepath.Join(inc.dir, "objects", "info", "commit-graph.lock"),
+// The directories of an incarnation a maintenance run writes in, relative to
+// it.
+var (
+	packRel = filepath.Join("objects", "pack")
+	infoRel = filepath.Join("objects", "info")
+)
+
+// maintenanceWriting reports whether name, an entry of the incarnation's
+// directory rel (packRel or infoRel), is a file a maintenance run holds only
+// WHILE IT RUNS: the multi-pack-index's lock and the commit-graph's — each
+// written whole and renamed over its file as the step ends — and a bitmap's
+// temporary file. ONE LIST for the two readers that must agree on it: Verify,
+// which admits them in an incarnation a run is writing (a writer's own files
+// are no damage), and clearMaintenanceDebris, which removes them after a run
+// that did not succeed (a killed git leaves them). Nothing else writes them,
+// so outside a run each is damage the sweep removes.
+func maintenanceWriting(rel, name string) bool {
+	switch rel {
+	case packRel:
+		return name == "multi-pack-index.lock" || tmpBitmap.MatchString(name)
+	case infoRel:
+		return name == "commit-graph.lock"
 	}
-	if list, err := os.ReadDir(packDir); err == nil {
+	return false
+}
+
+// clearMaintenanceDebris removes what a maintenance run that did not succeed
+// may have left in inc (maintenanceWriting): the index's and the graph's
+// lock files — git removes its own when it is asked to stop, and leaves them
+// when it is killed — and a bitmap's temporary file. The run was the only
+// writer of either in the incarnation, since no round runs a git writer
+// beside it, so anything of theirs still there is its own. A removal that
+// fails is logged; the incarnation's next full round sweeps whatever is
+// outside its image.
+func (c *Cache) clearMaintenanceDebris(inc *incarnation) {
+	var paths []string
+	for _, rel := range []string{packRel, infoRel} {
+		list, err := os.ReadDir(filepath.Join(inc.dir, rel))
+		if err != nil {
+			continue
+		}
 		for _, d := range list {
-			if tmpBitmap.MatchString(d.Name()) {
-				paths = append(paths, filepath.Join(packDir, d.Name()))
+			if maintenanceWriting(rel, d.Name()) {
+				paths = append(paths, filepath.Join(inc.dir, rel, d.Name()))
 			}
 		}
 	}

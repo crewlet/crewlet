@@ -23,12 +23,16 @@ var (
 	// nodes pointed at one git.cache_dir.
 	ErrCacheInUse = errors.New("cache: another process holds this cache directory")
 
-	// ErrStopped is a sync asked of a cache that has been stopped.
+	// ErrStopped is work asked of a cache that has been stopped: a sync, a
+	// scratch, an adoption, a check of missing objects. What lets go of
+	// something — a Release, a scratch's Remove — stays safe after Stop.
 	ErrStopped = errors.New("cache: stopped")
 
 	// ErrInvalid is an argument a cache refuses, wrapped with the argument
-	// and why: a repository id that is not a canonical UUID (it becomes a
-	// path component), a floor on another log.
+	// and why: a repository or push id that is not a canonical UUID (each
+	// becomes a path component), a floor on another log, a Synced or a
+	// scratch another cache handed out, an object id that is not one, a
+	// pack whose row and scratch disagree.
 	ErrInvalid = errors.New("cache: refused")
 
 	// ErrBadSnapshot is a snapshot row this build cannot install: a ref or
