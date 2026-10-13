@@ -231,6 +231,12 @@ func TestClassifyFallsBackToASentence(t *testing.T) {
 		if !strings.Contains(got.Detail, "api-gateway") {
 			t.Errorf("%s: detail %q does not name its subject", kind, got.Detail)
 		}
+		// A KIND THIS BUILD DEFINES HAS A SENTENCE OF ITS OWN. The default
+		// is for a kind a newer peer wrote, and it can only repeat the
+		// kind's name back.
+		if strings.Contains(got.Detail, string(kind)) {
+			t.Errorf("%s falls back to the unknown kind's sentence: %q", kind, got.Detail)
+		}
 	}
 }
 
