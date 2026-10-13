@@ -155,9 +155,12 @@
 // node, from a WATCHED view of the presence leases that lists once per
 // heartbeat and answers UNKNOWN rather than an empty or stale fleet once its
 // last listing is older than a lease survives; a node it named that went silent
-// is reported ([Placement.Unanswered]) so it drops out at once. An unknown
-// placement fails the request with the placement's own reason: "give a node the
-// data role" is the wrong remedy for a fleet whose coordination blinked.
+// is reported ([Placement.Unanswered]) so it drops out at once — silent through
+// a wait of the router's own, because a caller that hung up or gave a request
+// less than an attempt has said nothing about the node it was asking
+// ([Router.ask]). An unknown placement fails the request with the placement's
+// own reason: "give a node the data role" is the wrong remedy for a fleet whose
+// coordination blinked.
 //
 // # Read-your-writes: ONE floor table per node, consulted for local reads too
 //

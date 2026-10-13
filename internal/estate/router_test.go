@@ -607,6 +607,136 @@ func TestAnUnansweredReadMovesOnAndTheSilentNodeIsAskedLast(t *testing.T) {
 	}
 }
 
+// A CALLER THAT STOPS WAITING SUSPECTS NO NODE: silence is evidence that a
+// node is gone only through a wait the ROUTER chose for it, and a caller that
+// hung up, or gave the request less than a read attempt, has said nothing about
+// the node it was asking. Suspected for it, a healthy node would be asked last
+// by every request this router makes for suspectFor — and for a keyed
+// operation, every repository it commits sent to the runner-up — and dropped
+// from the placement's next answer.
+func TestACallerThatStopsWaitingSuspectsNoNode(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// stop ends the caller's wait once the node has the request.
+		stop func(cancel context.CancelFunc)
+		// within is the caller's own deadline, zero for none.
+		within time.Duration
+	}{
+		{name: "the caller hangs up", stop: func(cancel context.CancelFunc) { cancel() }},
+		{name: "the caller's deadline is shorter than an attempt", stop: func(context.CancelFunc) {},
+			within: 300 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t, "data-a", "data-b")
+			hang := make(chan struct{})
+			t.Cleanup(func() { close(hang) })
+			firstName, first := f.first(t, f.client)
+			first.set(func(n *fakeNode) { n.hang = hang })
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tc.within > 0 {
+				ctx, cancel = context.WithTimeout(ctx, tc.within)
+				defer cancel()
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := f.client.Work().Tasks(ctx, tracker.Query{}, time.Now())
+				done <- err
+			}()
+			if err := whileHeld(t, first, done, func() { tc.stop(cancel) }); err == nil {
+				t.Fatal("a read whose caller stopped waiting answered, want the caller's own ending")
+			}
+			f.placement.mu.Lock()
+			told := slices.Clone(f.placement.unanswered)
+			f.placement.mu.Unlock()
+			if len(told) != 0 {
+				t.Errorf("the placement was told %v went unanswered — the caller stopped "+
+					"waiting, the node did not stop answering", told)
+			}
+			if next, _ := f.first(t, f.client); next != firstName {
+				t.Errorf("%s is asked after %s now: a node its caller stopped waiting for was "+
+					"suspected", firstName, next)
+			}
+		})
+	}
+}
+
+// whileHeld runs stop once node holds the request its caller sent — a node
+// that hangs ([fakeNode.hang]) — and answers what the caller's wait ended
+// with. A caller whose wait ended before the node held its request is the
+// case's premise failing, never a pass.
+func whileHeld(t *testing.T, node *fakeNode, done <-chan error, stop func()) error {
+	t.Helper()
+	for !node.askedFor("hung") {
+		select {
+		case err := <-done:
+			t.Fatalf("the premise: the caller's wait ended (%v) before %s held its request",
+				err, node.name)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	stop()
+	return <-done
+}
+
+// A WRITE'S SILENCE THROUGH A WHOLE WRITE ATTEMPT IS EVIDENCE, under a caller's
+// own longer deadline too: such a write waits the caller's deadline rather than
+// the router's attempt (budgetFor), and a node silent for a whole attempt of
+// the router's own is one it judges gone rather than slow, whoever stopped
+// waiting first — and one silent for less is not. The router's clock is moved
+// on while the node holds the request, so the case waits no write attempt out.
+func TestAWritesSilenceThroughAWholeAttemptIsEvidence(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		silent  time.Duration
+		suspect bool
+	}{
+		{name: "a whole write attempt", silent: Production().WriteAttempt, suspect: true},
+		{name: "less than a write attempt", silent: Production().WriteAttempt - time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t, "data-a", "data-b")
+			var clock atomic.Int64
+			clock.Store(time.Now().UnixNano())
+			opts := RouterOptions{Queue: f.start(t), Self: "agent-2", Placement: f.placement,
+				Session: NewSession(), Timing: Production(),
+				Now: func() time.Time { return time.Unix(0, clock.Load()) }}
+			r, err := NewRouter(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hang := make(chan struct{})
+			t.Cleanup(func() { close(hang) })
+			firstName, first := f.first(t, r)
+			first.set(func(n *fakeNode) { n.hang = hang })
+
+			ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := r.WriterAs(swe).CreateTask(ctx, "op-silent", tracker.Task{Project: "ENG"}, nil)
+				done <- err
+			}()
+			if err := whileHeld(t, first, done, func() { clock.Add(int64(tc.silent)) }); err == nil {
+				t.Fatal("a write whose caller's deadline passed answered, want its ending")
+			}
+			f.placement.mu.Lock()
+			told := slices.Contains(f.placement.unanswered, firstName)
+			f.placement.mu.Unlock()
+			if told != tc.suspect {
+				t.Errorf("silent for %v of the router's %v write attempt, %s was reported "+
+					"unanswered: %v, want %v", tc.silent, Production().WriteAttempt, firstName,
+					told, tc.suspect)
+			}
+		})
+	}
+}
+
 // A ROUTER REFUSES A TIMING WITH ANY FIELD UNSET, BY THE FIELD IT LACKS, and
 // takes Production whole.
 //
@@ -756,12 +886,21 @@ func TestProductionsReadAttemptHoldsALinearizableReadsWaits(t *testing.T) {
 // waiting out a whole production attempt per case. The first node this router
 // asks takes the read and never answers; the next answers it, a whole attempt
 // of this router's later and well inside production's.
+//
+// AND THE WEDGED NODE IS SUSPECTED, because the wait that ran out on it was the
+// router's own. The router's clock is held still, so what marks it is the
+// attempt's own end and never how long the read took by that clock.
 func TestAWedgedNodeCostsAReadTheRoutersOwnReadAttempt(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
 	timing := Production()
 	timing.ReadAttempt = minReadAttempt + time.Second
-	r := f.routerTimed(t, "agent-2", nil, timing)
+	still := time.Now()
+	r, err := NewRouter(RouterOptions{Queue: f.start(t), Self: "agent-2", Placement: f.placement,
+		Session: NewSession(), Timing: timing, Now: func() time.Time { return still }})
+	if err != nil {
+		t.Fatal(err)
+	}
 	hang := make(chan struct{})
 	t.Cleanup(func() { close(hang) })
 	firstName, first := f.first(t, r)
@@ -782,6 +921,15 @@ func TestAWedgedNodeCostsAReadTheRoutersOwnReadAttempt(t *testing.T) {
 		t.Fatalf("a read waited %s on wedged %s, want about its router's %s read attempt "+
 			"and under %s — the router waited a timing it was not built with",
 			waited, firstName, timing.ReadAttempt, bound)
+	}
+	// SUSPECTED, which a caller's own ending never makes it
+	// (TestACallerThatStopsWaitingSuspectsNoNode).
+	f.placement.mu.Lock()
+	told := slices.Contains(f.placement.unanswered, firstName)
+	f.placement.mu.Unlock()
+	if !told {
+		t.Errorf("%s held a read through its router's whole attempt and was not reported "+
+			"unanswered", firstName)
 	}
 }
 
@@ -2216,6 +2364,16 @@ func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("admission waited on every wedged data node in turn, past its bound")
+	}
+	// AND THE NODE IT WAS ASKING IS SUSPECTED: the bound is the router's own,
+	// so a node silent through it is evidence, and the next sweep — a
+	// heartbeat later — asks the others first.
+	f.placement.mu.Lock()
+	told := slices.Clone(f.placement.unanswered)
+	f.placement.mu.Unlock()
+	if len(told) == 0 {
+		t.Error("no wedged data node was reported unanswered: admission's own bound ran out " +
+			"on one, and the next sweep would ask it first again")
 	}
 }
 

@@ -35,8 +35,9 @@ type Placement interface {
 	// fleet with no data node in it.
 	Holders() ([]string, error)
 
-	// Unanswered tells the placement a node it named did not answer, so a
-	// node that left on a clean stop is gone from the next answer rather
+	// Unanswered tells the placement a node it named did not answer — through
+	// a wait of the router's own, never one its caller ended ([Router.ask]) —
+	// so a node that left on a clean stop is gone from the next answer rather
 	// than from the one a heartbeat later. It must not block.
 	Unanswered(node string)
 }
@@ -79,8 +80,9 @@ type RouterOptions struct {
 	// answers in-process.
 	Seams ServerSeams
 
-	// Now is the clock the suspect cooldown and the admission cache read,
-	// injected for tests. Nil is the wall clock.
+	// Now is the clock the suspect cooldown, the admission cache and a
+	// silent node's wait ([Router.ask]) read, injected for tests. Nil is the
+	// wall clock.
 	Now func() time.Time
 
 	// Timing is how long the router waits on a data node: [Production] on
@@ -734,7 +736,7 @@ func (r *Router) askFor(ctx context.Context, spec *opSpec, actor *Actor, x excha
 	rep, answered, err := r.ask(ctx, node, spec.lane.subject(node), request{
 		Op: spec.name, Args: x.encoded, Actor: actor,
 		Floors: floors, From: r.self, AcceptLagging: acceptLagging,
-	}, budget)
+	}, budget, r.wholeAttempt(spec))
 	if err != nil {
 		return reply{}, false, fmt.Errorf("estate: %s: %w", spec.name, err)
 	}
@@ -824,16 +826,24 @@ func (x exchange) record(rep reply) {
 	}
 }
 
-// budgetFor is one attempt's budget on one data node: the router's
-// [Timing.ReadAttempt] for a read, and for a write its [Timing.WriteAttempt] —
-// or, where the caller has a deadline, that deadline, since a gesture the
-// caller gave five minutes must not be abandoned after one.
+// budgetFor is one attempt's budget on one data node: the router's own attempt
+// ([Router.wholeAttempt]) — or, for a write whose caller has a deadline, that
+// deadline (zero), since a gesture the caller gave five minutes must not be
+// abandoned after one.
 func (r *Router) budgetFor(ctx context.Context, spec *opSpec) time.Duration {
+	if _, bounded := ctx.Deadline(); bounded && spec.class != opRead {
+		return 0
+	}
+	return r.wholeAttempt(spec)
+}
+
+// wholeAttempt is the router's own attempt on one data node for spec's class:
+// [Timing.ReadAttempt] for a read and [Timing.WriteAttempt] for a write — what
+// a request waits where nothing shorter bounds it, and what a node's silence
+// must last to be evidence it is gone rather than slow ([Router.ask]).
+func (r *Router) wholeAttempt(spec *opSpec) time.Duration {
 	if spec.class == opRead {
 		return r.timing.ReadAttempt
-	}
-	if _, bounded := ctx.Deadline(); bounded {
-		return 0
 	}
 	return r.timing.WriteAttempt
 }
@@ -872,12 +882,27 @@ func (r *Router) floorsFor(spec *opSpec) []statelog.Position {
 }
 
 // ask sends one request to one node, on the subject of the lane its operation
-// is answered on ([opSpec.lane]). answered is false for a node that said
-// nothing — suspected, and reported to the placement — and err is set only
-// where the request could not be made at all, which no other node would fare
-// better with.
-func (r *Router) ask(ctx context.Context, node, subject string, req request, budget time.Duration) (
-	reply, bool, error) {
+// is answered on ([opSpec.lane]), waiting budget ([Router.budgetFor]). answered
+// is false for a node that said nothing, and err is set only where the request
+// could not be made at all, which no other node would fare better with.
+//
+// A NODE THAT SAID NOTHING IS SUSPECTED — asked last for [suspectFor] and
+// reported to the placement — only where its silence is evidence it is gone
+// rather than slow, which is a matter of whose wait ended: the ask ended with
+// the attempt still live (nothing serves the node's subject), a budget of the
+// router's own ran out on it ([errAttemptSpent]), or it stayed silent for a
+// whole attempt of its class (whole) under a caller's longer deadline. Through
+// either wait a node that is only behind has answered: it ends every wait it
+// makes a reply's margin short of the deadline it was handed
+// ([statelog.WithReplyMargin]) and says it is behind. A caller
+// that hung up, or gave the request less than an attempt, has said nothing
+// about the node it was asking; suspected for it, a healthy node was asked
+// last by every request this router made for half a minute — and for a keyed
+// operation that sends every repository it commits to the runner-up, whose
+// committer then contends with it on the repository's subject — and dropped
+// from the placement's answer.
+func (r *Router) ask(ctx context.Context, node, subject string, req request,
+	budget, whole time.Duration) (reply, bool, error) {
 
 	attempt, cancel := attemptContext(ctx, budget)
 	defer cancel()
@@ -886,6 +911,7 @@ func (r *Router) ask(ctx context.Context, node, subject string, req request, bud
 	if err != nil {
 		return reply{}, false, fmt.Errorf("encode the request: %w", err)
 	}
+	sent := r.now()
 	replies, err := r.queue.Ask(attempt, subject, raw, 1)
 	if err != nil {
 		// THE ASK COULD NOT BE MADE AT ALL — a queue that is not live,
@@ -893,7 +919,10 @@ func (r *Router) ask(ctx context.Context, node, subject string, req request, bud
 		return reply{}, false, err
 	}
 	if len(replies) == 0 {
-		r.markSuspect(node)
+		if attempt.Err() == nil || errors.Is(context.Cause(attempt), errAttemptSpent) ||
+			r.now().Sub(sent) >= whole {
+			r.markSuspect(node)
+		}
 		return reply{}, false, nil
 	}
 	var rep reply
@@ -1029,15 +1058,22 @@ func (r *Router) classes(copies, op string, stay bool) func(node string) int {
 	}
 }
 
-// attemptContext is one attempt's context: the caller's, capped by budget.
+// attemptContext is one attempt's context: the caller's, capped by budget —
+// ended by [errAttemptSpent] where the cap is what ends it.
 //
 // A ZERO budget is the caller's own deadline, unchanged.
 func attemptContext(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
 	if deadline, ok := ctx.Deadline(); budget == 0 || (ok && time.Until(deadline) < budget) {
 		return context.WithCancel(ctx)
 	}
-	return context.WithTimeout(ctx, budget)
+	return context.WithTimeoutCause(ctx, budget, errAttemptSpent)
 }
+
+// errAttemptSpent is the cause a budget of the router's OWN ends a wait with —
+// one attempt on one data node, or the admission question's whole — told apart
+// from the caller's own ending ([Router.ask]), because a node's silence is
+// evidence about the node only through a wait the router chose for it.
+var errAttemptSpent = errors.New("estate: the router's own budget for the request ran out")
 
 // markSuspect asks node last for every domain for [suspectFor], and takes away
 // every domain's sticky place it held: a node that said nothing is no node to
@@ -1177,7 +1213,7 @@ func (r *Router) Serves(ctx context.Context) (tracker, pages bool, err error) {
 	if cached != nil && r.now().Sub(cached.at) < admissionTrust {
 		return cached.tracker, cached.pages, cached.err
 	}
-	asked, cancel := context.WithTimeout(ctx, r.timing.AdmissionAsk)
+	asked, cancel := context.WithTimeoutCause(ctx, r.timing.AdmissionAsk, errAttemptSpent)
 	defer cancel()
 	out, err := call(asked, r, opPing, nil, struct{}{})
 	r.mu.Lock()
