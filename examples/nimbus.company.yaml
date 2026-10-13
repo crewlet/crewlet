@@ -598,6 +598,16 @@ mcp_servers:
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"
     shared: true
+    # 0.2.22 advertises no annotation on any of its five tools, and each
+    # only reads the web.  Unannotated, every one counts as a possible
+    # delivery, so a turn that only searched could pass the delivery
+    # check; these say what the server does not.
+    tool_annotations:
+      tavily_search:   { read_only: true, open_world: true }
+      tavily_extract:  { read_only: true, open_world: true }
+      tavily_crawl:    { read_only: true, open_world: true }
+      tavily_map:      { read_only: true, open_world: true }
+      tavily_research: { read_only: true, open_world: true }
 
 # Root-level seats — above all units.  The founder is a HUMAN seat at
 # the top of the chart: agents know who she is (identity prompts say

@@ -506,11 +506,18 @@ and disarms the retry, so nothing is started behind the release.
 
 ```yaml
 mcp_servers:
-  # stdio, shared by all agents
+  # stdio, shared by all agents; it advertises no annotations, so these say
+  # its tools only read (see Tool annotation overrides below)
   - name: tavily
     command: npm
     args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
     env: { TAVILY_API_KEY: "${TAVILY_API_KEY}" }
+    tool_annotations:
+      tavily_search:   { read_only: true, open_world: true }
+      tavily_extract:  { read_only: true, open_world: true }
+      tavily_crawl:    { read_only: true, open_world: true }
+      tavily_map:      { read_only: true, open_world: true }
+      tavily_research: { read_only: true, open_world: true }
   # stdio, per-role (Jira + Confluence share one mcp-atlassian)
   - name: atlassian
     shared: false
