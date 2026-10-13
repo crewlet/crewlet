@@ -595,14 +595,15 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	var strays []string
 	if snap.full {
 		// The sweep's pack half is DECIDED here and done once the refs are
-		// in; an index that may name a pack it will remove goes now, so the
-		// round's index — over exactly the snapshot's packs — is written
-		// before the refs' peel reads them.
-		var dropped bool
-		if strays, dropped, err = c.packStrays(inc, snap); err != nil {
+		// in; an index that may name a pack it will remove goes now, and so
+		// does whatever in objects/pack is no pack's file, so the round's
+		// index — over exactly the snapshot's packs — is written before the
+		// refs' peel reads them, with no dead writer's lock to refuse it.
+		var moved bool
+		if strays, moved, err = c.packStrays(inc, snap); err != nil {
 			return res, fmt.Errorf("cache: sync %s: sweep: %w", e.id, err)
 		}
-		res.trashed = res.trashed || dropped
+		res.trashed = res.trashed || moved
 		indexed = c.indexRound(ctx, e, inc, snap)
 	}
 

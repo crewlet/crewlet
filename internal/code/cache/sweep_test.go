@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 )
 
@@ -46,5 +47,61 @@ func TestADeltaSweepsNothing(t *testing.T) {
 		if statOK(t, path) {
 			t.Errorf("the first round of a new process left %s, outside the image", path)
 		}
+	}
+}
+
+// A FULL ROUND SWEEPS A DEAD WRITER'S FILES BEFORE ITS INDEX: a maintenance
+// run killed with its node leaves the index's lock and a bitmap's temporary
+// file in objects/pack (git removes them only when it is asked to stop), and
+// no reader of any ref reads either. Left there until the refs were in, the
+// lock refused the round's own index — git writes no index over another
+// writer's lock — and the index's failure path then removed it from under
+// the sweep that had listed it, so the sweep's move failed and the round with
+// it: the first sync of the repository after the crash answered an error. A
+// file of objects/pack that is no pack's goes with the round's first half;
+// only the pack files wait for the refs.
+func TestAFullRoundSweepsADeadWritersFilesBeforeItsIndex(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	for range cache.MidxPacks - 1 {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	c := w.open(t)
+	dir := w.sync(t, c, repo).Dir
+	w.push(t, repo, "refs/heads/main", nil)
+	packDir := filepath.Join(dir, "objects", "pack")
+	if statOK(t, filepath.Join(packDir, "multi-pack-index")) {
+		t.Fatal("a round under MidxPacks packs wrote an index: the case needs one with none")
+	}
+
+	c.Stop(t.Context())
+	dead := []string{
+		filepath.Join(packDir, "multi-pack-index.lock"),
+		filepath.Join(packDir, "tmp_bitmap_Xq3vRk"),
+		filepath.Join(dir, "objects", "info", "commit-graph.lock"),
+	}
+	for _, path := range dead {
+		write(t, path, "half written\n")
+	}
+	c = w.open(t)
+	s, err := c.Sync(t.Context(), repo, linearizable)
+	if err != nil {
+		t.Fatalf("the first sync after a crash that left a maintenance run's files: %v", err)
+	}
+	defer s.Release()
+	for _, path := range dead {
+		if statOK(t, path) {
+			t.Errorf("the full round left %s, a dead writer's", path)
+		}
+	}
+	if !statOK(t, filepath.Join(s.Dir, "objects", "pack", "multi-pack-index")) {
+		t.Errorf("the full round of %d packs answered with no index: a dead writer's lock refused it", cache.MidxPacks)
+	}
+	if got := w.logs.lines(t, "code_cache_round_index_skipped"); len(got) != 0 {
+		t.Errorf("the round's index was skipped: %v", got)
+	}
+	if got, want := w.image(t, c, repo), w.rebuilt(t, repo); got != want {
+		t.Errorf("the image after the crash:\n%s\nwant a fresh cache's:\n%s", got, want)
 	}
 }
