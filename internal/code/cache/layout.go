@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"syscall"
 
 	"github.com/google/uuid"
 
@@ -386,12 +387,28 @@ func toTrash(root, path, label string) error {
 	return os.Rename(path, filepath.Join(root, trashDir, label))
 }
 
+// nameRule is which files a measure of a tree counts.
+type nameRule int
+
+const (
+	// allNames counts every regular file and symbolic link, each as itself:
+	// repos/, tmp/ and trash/, where every name the cache gives a file is
+	// its only one or the one the measure means.
+	allNames nameRule = iota
+	// soleNames counts a regular file only when it has no other name:
+	// scratch/, where a file with a second name is one of an incarnation's
+	// own linked in — an advertisement view's packed-refs, an adopted
+	// push's pack before its scratch goes — and its bytes are counted
+	// where that incarnation is. A symbolic link counts as itself.
+	soleNames
+)
+
 // sizeUnder sums the sizes of the regular files and symbolic links at and
-// under root, each as itself — a link is never followed, so a link out of the
-// cache never counts what it points at. A missing root is zero; an entry
-// that cannot be read is handed to skipped and left out. An ended ctx stops
-// the walk and is its error.
-func sizeUnder(ctx context.Context, root string, skipped func(path string, err error)) (int64, error) {
+// under root that rule counts, each as itself — a link is never followed, so
+// a link out of the cache never counts what it points at. A missing root is
+// zero; an entry that cannot be read is handed to skipped and left out. An
+// ended ctx stops the walk and is its error.
+func sizeUnder(ctx context.Context, root string, rule nameRule, skipped func(path string, err error)) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if cerr := ctx.Err(); cerr != nil {
@@ -413,7 +430,12 @@ func sizeUnder(ctx context.Context, root string, skipped func(path string, err e
 			}
 			return nil
 		}
-		if info.Mode().IsRegular() || info.Mode()&fs.ModeSymlink != 0 {
+		switch {
+		case info.Mode()&fs.ModeSymlink != 0:
+			total += info.Size()
+		case !info.Mode().IsRegular():
+		case rule == soleNames && namedTwice(info):
+		default:
 			total += info.Size()
 		}
 		return nil
@@ -422,4 +444,12 @@ func sizeUnder(ctx context.Context, root string, skipped func(path string, err e
 		return 0, fmt.Errorf("cache: measuring %s: %w", root, err)
 	}
 	return total, nil
+}
+
+// namedTwice reports whether the file info describes has another name: a
+// link count over one, which every platform this builds for answers in its
+// stat (one that answers none is taken to have only its own).
+func namedTwice(info fs.FileInfo) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && st.Nlink > 1
 }

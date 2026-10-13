@@ -35,6 +35,10 @@ type world struct {
 	logs   *logs
 	// gitPath is the git every boot's pool runs; "" is the one on PATH.
 	gitPath string
+	// processes is every boot's pool's MaxProcesses; 0 is two, whose
+	// maintenance lane is ONE slot — the lane a case holds whole by holding
+	// one process.
+	processes int
 }
 
 // newWorld prepares a fresh cache directory and a real gitproc pool over the
@@ -60,20 +64,23 @@ func (w *world) prepare(t *testing.T, dir string) {
 		t.Fatalf("Prepare: %v", err)
 	}
 	t.Cleanup(layout.Release)
-	w.layout, w.pool = layout, newPoolOf(t, layout, w.gitPath)
+	w.layout, w.pool = layout, newPoolOf(t, layout, w.gitPath, w.processes)
 }
 
 // reboot prepares w's directory again: the boot's Prepare.
 func (w *world) reboot(t *testing.T) { w.prepare(t, w.layout.Dir) }
 
 // newPool is a real pool over layout's HOME.
-func newPool(t *testing.T, layout cache.Layout) *gitproc.Pool { return newPoolOf(t, layout, "") }
+func newPool(t *testing.T, layout cache.Layout) *gitproc.Pool { return newPoolOf(t, layout, "", 0) }
 
 // newPoolOf is a pool over layout's HOME running the git at path ("" is the
-// one on PATH).
-func newPoolOf(t *testing.T, layout cache.Layout, path string) *gitproc.Pool {
+// one on PATH) with processes slots (0 is two).
+func newPoolOf(t *testing.T, layout cache.Layout, path string, processes int) *gitproc.Pool {
 	t.Helper()
-	pool, err := gitproc.New(t.Context(), gitproc.Options{Path: path, Home: layout.Home, MaxProcesses: 2})
+	if processes == 0 {
+		processes = 2
+	}
+	pool, err := gitproc.New(t.Context(), gitproc.Options{Path: path, Home: layout.Home, MaxProcesses: processes})
 	if err != nil {
 		t.Fatalf("gitproc.New over %s: %v", layout.Home, err)
 	}
@@ -116,6 +123,41 @@ func (w *world) open(t *testing.T, mutate ...func(*cache.Options)) *cache.Cache 
 	t.Cleanup(func() { c.Stop(context.Background()) })
 	return c
 }
+
+// clock is a case's own time: what the cache reads as now — a last use, a
+// rebuild's cooldown, the maintainer's debounce and interval — moved only
+// when the case moves it.
+type clock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func newClock() *clock { return &clock{at: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)} }
+
+// Now is the clock's time; a cache's Options.Now.
+func (c *clock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+// Add moves the clock on by d and answers the new time.
+func (c *clock) Add(d time.Duration) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
+	return c.at
+}
+
+// Set puts the clock at t.
+func (c *clock) Set(t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = t
+}
+
+// on is an Options mutation that runs the cache on the clock.
+func (c *clock) on(o *cache.Options) { o.Now = c.Now }
 
 // path is a path under the cache's root.
 func (w *world) path(parts ...string) string {

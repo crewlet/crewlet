@@ -53,8 +53,11 @@ type Synced struct {
 	// Release unpins Dir. Idempotent: a second call does nothing.
 	Release func()
 
-	// inc is which incarnation Dir is.
-	inc *incarnation
+	// inc is which incarnation Dir is, and entry the repository it is one
+	// of: what Rebuild reads to tell whether that incarnation is still the
+	// one readers are handed.
+	inc   *incarnation
+	entry *entry
 }
 
 // entry is one repository's place in the cache. Lock order is ALWAYS
@@ -75,9 +78,26 @@ type entry struct {
 	// running is the round in flight, and next the one queued behind it:
 	// at most one of each (sync.go).
 	running, next *round
-	// dead: the repository was purged and the entry left the cache; a
-	// caller that finds it so looks the repository up again.
+	// dead: the repository was purged or evicted and the entry left the
+	// cache; a caller that finds it so looks the repository up again.
 	dead bool
+	// maint is the maintenance running on an incarnation of the repository,
+	// if any (maintain.go): one at a time a repository.
+	maint *maintRun
+	// lastAdded is when a round last added packs: the maintainer's debounce.
+	lastAdded time.Time
+	// uncoveredSince is when the oldest pack the maintainer's index does not
+	// cover arrived — set by the round that adds packs while none wait, and
+	// cleared by a run whose index covers every pack — and zero when none
+	// waits: the debounce's ceiling (MidxMaxWait).
+	uncoveredSince time.Time
+	// lastRebuild is when the last rebuild ATTEMPT started; lastAsked when a
+	// rebuild of the current incarnation was last ASKED for, whether it was
+	// refused, joined or started — the quiet that ends a line of attempts
+	// (RebuildQuiet) is measured from it; and refusedLogged is when a
+	// refusal was last logged: a repository failing on every request logs a
+	// refusal once a RebuildCooldown, never once a request.
+	lastRebuild, lastAsked, refusedLogged time.Time
 
 	// stateMu serialises persisting the state.
 	stateMu sync.Mutex
@@ -108,7 +128,21 @@ type incarnation struct {
 	// reread is why its next full round reads it whole again — a log
 	// recreated or gone back under it (Cache.reread) — counted when that
 	// round completes; "" for none.
-	reread string
+	reread RebuildReason
+	// rebuilds is how many rebuild attempts in a row stand behind this
+	// incarnation without having ended the failure that asked for them: none
+	// for one no rebuild made, one more than its predecessor's for a
+	// rebuild's product, and one more for each rebuild of it that failed —
+	// IN A ROW: a rebuild asked for after RebuildQuiet with none asked
+	// starts the line again from none.
+	// unmoved: what it holds is what the last of those attempts read — it IS
+	// that rebuild's product, or that rebuild failed definitively on its
+	// rows — and nothing has written into it since: no round moved its packs
+	// or its refs, wrote its index or swept a file out of it, and the
+	// maintainer wrote no index and no graph into it. Cleared, too, with the
+	// line. Both are what Rebuild refuses by (rebuild.go).
+	rebuilds int
+	unmoved  bool
 
 	// state is the state as last persisted; nil when there is none.
 	state *state
@@ -122,6 +156,12 @@ type incarnation struct {
 	refsDigest string
 	refs       int
 	packs      int
+	// objects is how many objects its packs hold, as their rows count them:
+	// set whole by every full round and raised by each pack a delta installs,
+	// so it is exact on every incarnation this process has converged — the
+	// only ones the maintainer runs on, whose memory it estimates by it.
+	// Never persisted: a boot's first round is a full one.
+	objects int64
 	// diskBytes is the pack files and packed-refs; metaBytes the
 	// maintainer's files. Set only through setSize, which keeps the cache's
 	// total in step.
@@ -178,41 +218,71 @@ func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
 		Kind:     kind,
 		Release:  sync.OnceFunc(func() { c.release(e, inc) }),
 		inc:      inc,
+		entry:    e,
 	}
 }
 
 // release is a reader letting inc go. The last release of a RETIRED
 // incarnation moves its directory into trash/ and kicks the janitor; the
 // removal itself is the janitor's, so a request that lets go of a 20 GiB
-// directory returns at once. Safe after Stop.
+// directory returns at once. The last release of a current incarnation while
+// the cache is over its budget kicks the janitor too: a repository too large
+// to keep is served while a request holds it, and evicted as soon as none
+// does rather than at the next tick. Safe after Stop.
 func (c *Cache) release(e *entry, inc *incarnation) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	inc.pins--
 	inc.lastUsed = c.now()
-	if inc.pins == 0 && inc.retired {
+	gone := c.unpin(e, inc)
+	e.mu.Unlock()
+	c.trash(gone)
+}
+
+// unpin drops one pin on inc; the entry's mu is held. With the last one, a
+// retired incarnation is discarded, and unpin answers the directory its
+// caller moves into trash/ once it has let go of the entry (Cache.trash);
+// and a current one while the cache is over its budget kicks the janitor,
+// since it was not evictable while held. What a reader's release and the
+// maintainer's share — a maintenance run's pin keeps a repository from the
+// budget exactly as a reader's does, so its end must not leave the eviction
+// to the tick — but the maintainer's pin is no USE, so it leaves lastUsed as
+// it was and the budget's order is the readers' alone.
+func (c *Cache) unpin(e *entry, inc *incarnation) string {
+	inc.pins--
+	switch {
+	case inc.pins > 0:
+	case inc.retired:
 		e.retiring = slices.DeleteFunc(e.retiring, func(r *incarnation) bool { return r == inc })
-		c.discard(inc)
+		return c.discard(inc)
+	case c.total() > c.maxBytes:
+		c.kick()
 	}
+	return ""
 }
 
 // retire takes inc out of service — a rebuild replaced it, or the repository
-// was purged; the entry's mu is held. Unpinned, its directory goes into
-// trash/ at once; pinned, it waits in retiring for its last reader.
-func (c *Cache) retire(e *entry, inc *incarnation) {
+// was purged or evicted; the entry's mu is held. A maintenance run on it is
+// cancelled — what it writes is about to be thrown away — without waiting for
+// it, since its pin keeps the directory until it has ended. Unpinned, it is
+// discarded at once, and retire answers the directory its caller moves into
+// trash/ once it holds no lock (Cache.trash); pinned, it waits in retiring for
+// its last reader, and retire answers "".
+func (c *Cache) retire(e *entry, inc *incarnation) string {
 	if inc.retired {
-		return
+		return ""
 	}
 	inc.retired = true
+	if m := e.maint; m != nil && m.inc == inc {
+		m.cancel()
+	}
 	if e.current == inc {
 		e.current = nil
 		c.heldRepos.Add(-1)
 	}
 	if inc.pins > 0 {
 		e.retiring = append(e.retiring, inc)
-		return
+		return ""
 	}
-	c.discard(inc)
+	return c.discard(inc)
 }
 
 // setSize sets what inc's files hold, keeping the cache's running total
@@ -225,38 +295,57 @@ func (c *Cache) setSize(inc *incarnation, disk, meta int64) {
 	inc.diskBytes, inc.metaBytes = disk, meta
 }
 
-// discard moves a retired incarnation nobody holds into trash/ and kicks the
-// janitor. A rename that fails leaves the directory where it is: no entry
-// names it any more, and the next boot's reading trashes it as an older
-// incarnation or converges it as the newest — so it is logged, never fatal.
-// Once Stop has begun it moves nothing, for the same reason: the directory
-// is the next Open's, which may be another process's already. A move that
-// began before Stop is work Stop waits for (enter).
-//
-// Its bytes leave the cache's total here, whether or not the move is made:
-// nothing names the directory any more, and a directory a failed move left is
-// the next boot's to count and clear.
-func (c *Cache) discard(inc *incarnation) {
-	if !inc.discarded {
-		inc.discarded = true
-		c.heldBytes.Add(-(inc.diskBytes + inc.metaBytes))
-		c.setGauges()
+// discard takes a retired incarnation nobody holds out of the cache — its
+// bytes out of the total, whether or not its directory is ever moved: nothing
+// names the directory any more, and one a failed move left is the next boot's
+// to count and clear — and answers the directory, which its caller moves into
+// trash/ (Cache.trash) once it holds NO LOCK: a rename can wait on the
+// filesystem's journal, and the locks a discard is decided under are every
+// request's to the repository (entry.mu) and, for an eviction or a purge,
+// every request's to any repository on the node (Cache.mu). A repository's
+// next incarnation never waits for the move either: it takes the next free
+// number while the old directory is still there (newIncarnation). The
+// entry's mu is held; "" when inc was already discarded.
+func (c *Cache) discard(inc *incarnation) string {
+	if inc.discarded {
+		return ""
 	}
+	inc.discarded = true
+	c.heldBytes.Add(-(inc.diskBytes + inc.metaBytes))
+	return inc.dir
+}
+
+// trash moves a directory a discard answered into trash/, kicks the janitor
+// and sets the gauges; "" does nothing. A rename that fails leaves the
+// directory where it is: no entry names it any more, and the next boot's
+// reading trashes it as an older incarnation or converges it as the newest —
+// so it is logged, never fatal. Once Stop has begun it moves nothing, for the
+// same reason: the directory is the next Open's, which may be another
+// process's already. A move that began before Stop is work Stop waits for
+// (enter). Called holding no lock.
+func (c *Cache) trash(dir string) {
+	if dir == "" {
+		return
+	}
+	c.setGauges()
 	if !c.enter() {
 		return
 	}
 	defer c.leave()
-	if err := toTrash(c.dir, inc.dir, newV7()+"-"+filepath.Base(inc.dir)); err != nil {
-		c.log.Warn("code_cache_trash_failed", "path", inc.dir, "error", err)
+	if err := toTrash(c.dir, dir, newV7()+"-"+filepath.Base(dir)); err != nil {
+		c.log.Warn("code_cache_trash_failed", "path", dir, "error", err)
 		return
 	}
 	c.kick()
 }
 
 // newIncarnation makes e's next incarnation — one past the highest it has
-// had — and makes it e's current one: there is nothing else to serve, and no
-// reader is handed it before a round has converged it (a reader is answered
-// at once only from an incarnation this process has converged).
+// had. A FIRST incarnation (current: the entry has none) is e's current one
+// from the moment it is made: there is nothing else to serve, and no reader
+// is handed it before a round has converged it (a reader is answered at once
+// only from an incarnation this process has converged). A REBUILD's is not:
+// it is built beside the current one, which serves until the rebuild has
+// converged its replacement (promote).
 //
 // Its skeleton is a bare repository git can run in: HEAD naming main (the
 // round's refs step names the repository's own default branch before any
@@ -266,7 +355,7 @@ func (c *Cache) discard(inc *incarnation) {
 // name: a directory already there under it — a purged repository's
 // incarnation a reader still holds — keeps its name, and the next number is
 // taken. A skeleton that cannot be written is moved into trash/.
-func (c *Cache) newIncarnation(e *entry) (*incarnation, error) {
+func (c *Cache) newIncarnation(e *entry, current bool) (*incarnation, error) {
 	e.mu.Lock()
 	n := 1
 	for _, inc := range append([]*incarnation{e.current}, e.retiring...) {
@@ -294,12 +383,14 @@ func (c *Cache) newIncarnation(e *entry) (*incarnation, error) {
 		return nil, err
 	}
 	inc := &incarnation{n: n, dir: dir, lastUsed: c.now()}
-	e.mu.Lock()
-	if e.current == nil {
-		c.heldRepos.Add(1)
+	if current {
+		e.mu.Lock()
+		if e.current == nil {
+			c.heldRepos.Add(1)
+		}
+		e.current = inc
+		e.mu.Unlock()
 	}
-	e.current = inc
-	e.mu.Unlock()
 	return inc, nil
 }
 

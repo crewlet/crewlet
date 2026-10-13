@@ -33,6 +33,7 @@ type stateDoc struct {
 	Midx          struct {
 		Packs   int           `json:"packs"`
 		Bitmap  bool          `json:"bitmap"`
+		Graph   bool          `json:"graph"`
 		Bytes   int64         `json:"bytes"`
 		LastRun time.Time     `json:"last_run"`
 		Took    time.Duration `json:"took"`

@@ -20,6 +20,7 @@ const (
 	BackupDuration                   = "crewlet.backup.duration"
 	BackupHolds                      = "crewlet.backup.holds"
 	CodeCacheBytes                   = "crewlet.code.cache.bytes"
+	CodeCacheRebuildRefusals         = "crewlet.code.cache.rebuild.refusals"
 	CodeCacheRebuilds                = "crewlet.code.cache.rebuilds"
 	CodeCacheRepos                   = "crewlet.code.cache.repos"
 	CodeCacheSyncDuration            = "crewlet.code.cache.sync.duration"

@@ -285,7 +285,7 @@ func (c *Cache) dropIndexes(inc *incarnation) error {
 // measure sets inc's counts from its directory: the packs installed (an .idx
 // with its .pack), the bytes of their files and packed-refs, and the
 // maintainer's files. A multi-pack-index no longer on disk is no longer
-// covering anything.
+// covering anything, and a commit-graph no longer on disk is due again.
 func (c *Cache) measure(e *entry, inc *incarnation) error {
 	packDir := filepath.Join(inc.dir, "objects", "pack")
 	list, err := os.ReadDir(packDir)
@@ -320,17 +320,23 @@ func (c *Cache) measure(e *entry, inc *incarnation) error {
 			disk += size
 		}
 	}
+	graph := false
 	for _, f := range []struct {
-		path string
-		into *int64
+		path  string
+		into  *int64
+		there *bool
 	}{
-		{filepath.Join(inc.dir, "packed-refs"), &disk},
-		{filepath.Join(inc.dir, "objects", "info", "commit-graph"), &meta},
+		{filepath.Join(inc.dir, "packed-refs"), &disk, nil},
+		{filepath.Join(inc.dir, "objects", "info", "commit-graph"), &meta, &graph},
 	} {
 		info, err := os.Lstat(f.path)
-		if err == nil {
+		switch {
+		case err == nil:
 			*f.into += info.Size()
-		} else if !errors.Is(err, fs.ErrNotExist) {
+			if f.there != nil {
+				*f.there = true
+			}
+		case !errors.Is(err, fs.ErrNotExist):
 			return err
 		}
 	}
@@ -339,6 +345,9 @@ func (c *Cache) measure(e *entry, inc *incarnation) error {
 	c.setSize(inc, disk, meta)
 	if !midx {
 		inc.midx.Packs, inc.midx.Bitmap = 0, false
+	}
+	if !graph {
+		inc.midx.Graph = false
 	}
 	e.mu.Unlock()
 	return nil

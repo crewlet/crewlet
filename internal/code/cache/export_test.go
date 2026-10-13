@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -74,6 +75,98 @@ func BeforePeel(o *Options, f func(dir string)) {
 	}
 	o.knobs.peeling = f
 }
+
+// MaintainerPass runs one maintainer pass as work of the cache's own (a
+// stopped cache runs none), waits for every run it started to end, and
+// answers the repositories whose runs ran every step to its end.
+func MaintainerPass(c *Cache) []string {
+	_, wait := StartMaintainerPass(c)
+	return wait()
+}
+
+// StartMaintainerPass runs one maintainer pass as work of the cache's own,
+// and answers the repositories it started runs on, sorted, as soon as it has
+// started them — the runs go on — with a wait that answers, once every one
+// has ended, those that ran every step to its end.
+func StartMaintainerPass(c *Cache) (started []string, wait func() []string) {
+	if !c.enter() {
+		return nil, func() []string { return nil }
+	}
+	runs := c.maintainerPass(context.Background())
+	c.leave()
+	for _, m := range runs {
+		started = append(started, m.e.id)
+	}
+	slices.Sort(started)
+	return started, func() []string {
+		var ran []string
+		for _, m := range runs {
+			<-m.done
+			if m.maintained {
+				ran = append(ran, m.e.id)
+			}
+		}
+		slices.Sort(ran)
+		return ran
+	}
+}
+
+// SetMaintenanceMemory sets what the maintenance runs beside the largest may
+// be estimated at together. Before any pass.
+func SetMaintenanceMemory(c *Cache, n int64) { c.maintMemory = n }
+
+// MaintenanceMemory is what the maintenance runs beside the largest may be
+// estimated at together.
+func MaintenanceMemory(c *Cache) int64 { return c.maintMemory }
+
+// MaintenanceEstimate is the memory a maintenance run of repoID's current
+// incarnation is estimated at.
+func MaintenanceEstimate(c *Cache, repoID string) int64 {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.current.objects * MaintenanceBytesPerObject
+}
+
+// BeforeMaintaining makes every maintenance run call f with its own context
+// before each of its steps ("multi-pack-index", then "commit-graph").
+func BeforeMaintaining(o *Options, f func(ctx context.Context, step string)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.maintaining = f
+}
+
+// MaintainerTicksFrom makes the maintainer take its ticks from ticks, in
+// place of a ticker of MidxDebounce.
+func MaintainerTicksFrom(o *Options, ticks <-chan time.Time) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.maintTicks = ticks
+}
+
+// Maintaining reports whether a maintenance run is in flight on repoID.
+func Maintaining(c *Cache, repoID string) bool {
+	e := lookup(c, repoID)
+	if e == nil {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.maint != nil
+}
+
+// RebuildWindow is how long after the last rebuild attempt the next is
+// refused, for an incarnation n attempts in a row stand behind.
+func RebuildWindow(n int) time.Duration { return rebuildWindow(n) }
+
+// Total is what the janitor holds the cache to its budget by: every
+// incarnation's files, the downloads in flight and scratch/ as last measured.
+func Total(c *Cache) int64 { return c.total() }
+
+// SetMaxBytes sets the cache's budget. Between syncs, with nothing running.
+func SetMaxBytes(c *Cache, n int64) { c.maxBytes = n }
 
 // BuffersOut is the copy buffers the node's download slots hold now, and the
 // most they have held at once.
@@ -164,11 +257,13 @@ func Retire(c *Cache, repoID string) bool {
 		return false
 	}
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if e.current == nil {
+		e.mu.Unlock()
 		return false
 	}
-	c.retire(e, e.current)
+	gone := c.retire(e, e.current)
+	e.mu.Unlock()
+	c.trash(gone)
 	return true
 }
 

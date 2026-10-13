@@ -103,6 +103,62 @@
 // not a caller's: a client that hangs up never cancels the round the others
 // are waiting on.
 //
+// # Kept while there is room
+//
+// A cache is evicted to its budget (git.cache_max_bytes) and for no other
+// reason: over it, the repositories used least recently go first, each a
+// directory renamed into trash/ for the janitor; under it, nothing goes,
+// however long a repository has been idle. An idle repository costs disk the
+// budget already bounds, while evicting it costs a GET a push the next time
+// anybody fetches it — nothing compacts its packs — and a cache older than the
+// rows' tombstone horizon is brought forward by a whole read that reuses every
+// pack it holds. A repository a request holds is never evicted, even over the
+// budget: it is served, and goes as soon as its last reader — or its
+// maintenance run — lets go. The budget counts everything the cache holds on
+// disk once — every incarnation, the downloads in flight, the pushes' scratch
+// repositories, but not a file in scratch/ that is an incarnation's own under
+// a second name — and a round that takes the cache past it kicks the janitor
+// at once, so a burst of cold syncs never overshoots it for a tick. An
+// eviction is decided under the cache's lock and its directory moved into
+// trash/ after it, so no sync on the node waits on a rename.
+//
+// # Damage is repaired by a rebuild, once
+//
+// A git process the host ran in a cache that git found damaged — a pack or an
+// index it could not read, an object a row names that no pack holds — makes
+// the host [Cache.Rebuild] it: the repository read whole at the log's head
+// into the NEXT incarnation, beside the one its readers hold, which replaces
+// it once converged. Ten requests failing on one damaged cache cost one
+// rebuild, a request that failed on an incarnation already replaced costs
+// none, and a sync queued behind a rebuild that fails is answered by an
+// ordinary round on the incarnation still serving, never with the rebuild's
+// failure. A rebuild is not repeated where it cannot help: damage a rebuild
+// did not end is the object store's or the rows', so an incarnation holding
+// exactly what such a rebuild read is not rebuilt again for a day
+// ([RebuildBackoffCap]) unless something writes into it, and a line of
+// attempts that keep failing waits [RebuildCooldown] after the first and
+// twice as long after each one after it, up to that day — every refusal
+// counted, and logged once a cooldown. A line ends when the asking stops: a
+// repository with no rebuild asked of it for [RebuildQuiet] meets its next
+// failure as new damage.
+//
+// # Background work never takes a person's slot
+//
+// The maintainer writes a multi-pack-index with its bitmap and a commit-graph
+// once a repository's packs have gathered and stood still for
+// [MidxDebounce] — or the oldest has waited [MidxMaxWait], so a repository
+// that is never still is indexed too — in the pool's maintenance lane: half
+// the node's cores, a free slot or none, never waiting, a repository a slot,
+// in every slot but one — kept for a person's verify — and as many at once
+// as [MaintenanceMemoryPerCore] holds beside the largest, so one repository's
+// hours-long bitmap holds back nobody else's and a node's largest
+// repositories falling due together do not take its memory at once; and at
+// most a tenth of a core's time a repository ([MidxDutyCycle]). It holds a pin, never the repository's round,
+// so no push or fetch waits for it; a full round that would sweep the
+// directory under it stops it first, because a multi-pack-index naming a pack
+// the sweep removes fails every read of the repository. A cache without the
+// bitmap is slower, never wrong.
+//
 // # The directory
 //
 //	<git.cache_dir>/
@@ -161,11 +217,11 @@
 // A reader is handed a repository's directory PINNED ([Synced]), and there is
 // no other way to it: no path accessor skips the pin. Each repository's
 // directory is an INCARNATION (repos/<id>.<n>.git). One taken out of service
-// — replaced by a rebuild, or its repository purged — is RETIRED: it stays
-// where it is while a reader holds it, and moves into trash/ with its last
-// release. Nothing renames a directory a reader holds — a path is a name, and
-// a git process whose GIT_DIR is that name would otherwise open another
-// directory's files half way through its run.
+// — replaced by a rebuild, its repository purged or evicted — is RETIRED: it
+// stays where it is while a reader holds it, and moves into trash/ with its
+// last release. Nothing renames a directory a reader holds — a path is a
+// name, and a git process whose GIT_DIR is that name would otherwise open
+// another directory's files half way through its run.
 //
 // # A boot starts from the disk, once
 //

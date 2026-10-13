@@ -75,6 +75,13 @@ type midxState struct {
 	// Bitmap reports that the index on disk has its bitmap — the
 	// maintainer's — rather than being one a full round wrote without one.
 	Bitmap bool `json:"bitmap"`
+	// Graph reports that the maintainer's commit-graph is on disk. Recorded
+	// apart from the index, because the two are written by two processes and
+	// the second can be refused a slot the first had: a repository whose
+	// index is current and whose graph is missing is due for the graph
+	// alone, where read only from the index it would never be due again
+	// until MidxPacks more packs had landed.
+	Graph bool `json:"graph"`
 	// Bytes is the size of the maintainer's files: the multi-pack-index,
 	// its bitmap and reverse index, and the commit-graph. Kept apart from
 	// DiskBytes so a boot restores both halves of what the incarnation

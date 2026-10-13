@@ -608,30 +608,65 @@ func Catalogue() []Instrument {
 		{
 			Name: CodeCacheBytes, Kind: KindGauge, Unit: UnitBytes,
 			Shows: "What this node's git cache holds on disk — every " +
-				"repository's packs, indexes and refs, plus the downloads in " +
-				"flight — against its budget (git.cache_max_bytes). A cold " +
-				"repository's first sync raises it by the whole repository, " +
-				"since a git node caches every repository it serves whole.",
+				"repository's packs, indexes and refs, plus the downloads and " +
+				"pushes in flight — against its budget (git.cache_max_bytes), " +
+				"which it is evicted to, least recently used first, and for " +
+				"no other reason. Sitting at the budget is a cache doing its " +
+				"job; held above it is a repository larger than the budget " +
+				"being served, evicted once nothing reads it; climbing past " +
+				"it while syncs keep starting cold is a budget too small for " +
+				"the repositories this node serves.",
+		},
+		{
+			Name: CodeCacheRebuildRefusals, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason", "rule"},
+			Shows: "Rebuilds this node's git cache refused, by the `reason` " +
+				"the git process gave (`corrupt` or `missing`) and the " +
+				"`rule` that refused it. `unchanged`: the repository's " +
+				"cache holds exactly what a rebuild that did not end the " +
+				"failure read less than a day ago, and nothing has written " +
+				"into it since, so another would make the same directory; " +
+				"`cooldown`: the last attempt began too recently — ten " +
+				"minutes after the first of a line of attempts that keep " +
+				"failing, twice as long after each one after it, at most a " +
+				"day, a line starting again once a day passes with no " +
+				"rebuild asked for. Each refusal is a request answered 503 " +
+				"at once rather than a whole repository downloaded again. " +
+				"Rising at all is " +
+				"damage no rebuild repairs — a pack the object store lost or " +
+				"holds damaged, rows naming an object no pack holds — which " +
+				"`crewlet code verify` names; flat while " +
+				"`crewlet.code.cache.rebuilds` rises is damage each rebuild " +
+				"ended.",
 		},
 		{
 			Name: CodeCacheRebuilds, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"reason"},
 			Shows: "Repositories this node's git cache read whole from the " +
-				"rows again, by `reason`: `stream` is the code log " +
+				"rows again, by `reason`. `corrupt` and `missing` are a " +
+				"rebuild a git process asked for — it found a pack or an " +
+				"index it could not read, or an object a row names that no " +
+				"pack held — into a new directory beside the damaged one; " +
+				"either rising is disk or object-store damage, which " +
+				"`crewlet code verify` names. `stream` is the code log " +
 				"RECREATED under the cache (provisioned anew, its stamp not " +
 				"the one the cache read under); `rewound` is the log gone " +
 				"BACK under it on the same stream — a broker restored from " +
 				"an older copy — seen in a read at the log's head below a " +
-				"position the cache had read. Either counts every repository " +
-				"on the node once, as its next sync converges to the rows " +
-				"the log holds rather than taking a delta from a position " +
-				"that log never had or has since given to other records.",
+				"position the cache had read. Either of those counts every " +
+				"repository on the node once, as its next sync converges to " +
+				"the rows the log holds rather than taking a delta from a " +
+				"position that log never had or has since given to other " +
+				"records.",
 		},
 		{
 			Name: CodeCacheRepos, Kind: KindGauge, Unit: UnitCount,
 			Shows: "Repositories with a cache on this node. One leaves when " +
-				"its rows are purged; every one that arrives cost a cold sync " +
-				"of the whole repository.",
+				"its rows are purged or the budget evicts it; every one that " +
+				"arrives cost a cold sync of the whole repository. Falling " +
+				"while the cache's bytes stay at the budget is eviction " +
+				"churn: every repository it drops is a cold sync the next " +
+				"time it is fetched.",
 		},
 		{
 			Name: CodeCacheSyncDuration, Kind: KindHistogram, Unit: UnitMilliseconds,

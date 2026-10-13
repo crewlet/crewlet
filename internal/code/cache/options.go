@@ -96,6 +96,12 @@ type knobs struct {
 	// peeling runs as a round's peel is about to read the incarnation at
 	// dir.
 	peeling func(dir string)
+	// maintaining runs before each step of a maintenance run, with the run's
+	// own context: a case holds a run in flight by blocking here.
+	maintaining func(ctx context.Context, step string)
+	// maintTicks, when set, is where the maintainer takes its ticks from, in
+	// place of a ticker of MidxDebounce.
+	maintTicks <-chan time.Time
 }
 
 // validate refuses an Options value naming the field and what to set,
