@@ -1968,7 +1968,7 @@ mcp_servers:
   # shared stdio server (one instance for all agents)
   - name: tavily
     command: npm
-    args: ["exec", "--yes", "--", "tavily-mcp@latest"]
+    args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"
 
