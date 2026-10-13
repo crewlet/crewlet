@@ -300,8 +300,10 @@ a node whose rows are ahead of a log that restarted from nothing stops serving
 for good. So the engine refuses to boot that pairing, and `crewlet validate`
 refuses it when given both documents, naming `stream.store_dir`. Either
 backend is enough: a company on Jira whose knowledge base is the engine's own,
-which is the default without Confluence, is refused the same way. Only a
-company on vendors for both can run an in-memory member.
+which is the default without Confluence, is refused the same way — and so is
+one that hosts its repositories in the engine (`code.native`), whose pushes
+live in a log of their own there. Only a company on vendors for both that
+hosts no code can run an in-memory member.
 
 **Divide `store_max_bytes` when several engines share a filesystem.** Every
 stream ceiling on the embedded broker is a *reservation*: the broker refuses to

@@ -661,6 +661,15 @@ func aRunningNode(t *testing.T) (*Engine, natsjs.JetStream) {
 // aRunningNodeOf is [aRunningNode] running the given company.
 func aRunningNodeOf(t *testing.T, company string) (*Engine, natsjs.JetStream) {
 	t.Helper()
+	return aRunningNodeWith(t, company, Options{})
+}
+
+// aRunningNodeWith is [aRunningNodeOf] built with opts, whose bootstrap,
+// company and backends it supplies itself — for a node that needs one more
+// option, such as the recorder its own trim reads its alarms from
+// ([Options.Metrics]).
+func aRunningNodeWith(t *testing.T, company string, opts Options) (*Engine, natsjs.JetStream) {
+	t.Helper()
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
@@ -674,7 +683,8 @@ func aRunningNodeOf(t *testing.T, company string) (*Engine, natsjs.JetStream) {
 		t.Fatalf("OpenBackends: %v", err)
 	}
 	t.Cleanup(func() { back.Close(context.Background()) })
-	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
+	opts.Bootstrap, opts.Company, opts.Backends = &b, cfg, back
+	e, err := New(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

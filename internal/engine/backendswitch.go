@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/crewlet/crewlet/internal/config"
 )
@@ -11,14 +12,15 @@ import (
 // # Why a switch is not live
 //
 // A node's native runtime — the state log, the tracker's and the knowledge
-// base's read and write sides, the index, the feeds — is built ONCE per
-// process ([Engine.startNative], or [Engine.startRemote] on a node without
-// `data`), from whichever company started it, and it follows the fleet's logs
-// rather than a revision. Tearing a half down or bringing one up beside a
-// running register at an apply would restart every applier and re-run every
-// boot reconcile on a configuration edit; so a revision that turns a native
-// half on or off activates normally, reports `ok`, and changes nothing here
-// until the process restarts.
+// base's read and write sides, the code host's committer, the index, the
+// feeds — is built ONCE per process ([Engine.startNative], or
+// [Engine.startRemote] on a node without `data`), from whichever company
+// started it, and it follows the fleet's logs rather than a revision.
+// Tearing a half down or bringing one up beside a running register at an
+// apply would restart every applier and re-run every boot reconcile on a
+// configuration edit; so a revision that turns a native half on or off
+// activates normally, reports `ok`, and changes nothing here until the
+// process restarts.
 //
 // # Why it is said, once per activation
 //
@@ -48,27 +50,34 @@ import (
 type builtWith struct {
 	tracker   config.TrackerBackend
 	knowledge config.KnowledgeBackend
+	// code is `code.native`, which is already whether the half is the
+	// engine's own: the code host has no vendor to name.
+	code bool
 }
 
 // builtFrom is what a runtime started for c is built with — the one reading
 // both kinds of runtime take, so the halves a runtime holds and the choices it
 // reports cannot disagree.
 func builtFrom(c *config.Company) builtWith {
-	return builtWith{tracker: c.TrackerBackendFor(), knowledge: c.KnowledgeBackendFor()}
+	return builtWith{
+		tracker: c.TrackerBackendFor(), knowledge: c.KnowledgeBackendFor(), code: c.Code.Native,
+	}
 }
 
-// runsTracker and runsWiki are the halves a runtime built this way holds.
+// runsTracker, runsWiki and runsCode are the halves a runtime built this way
+// holds.
 func (b builtWith) runsTracker() bool { return b.tracker == config.TrackerNative }
 func (b builtWith) runsWiki() bool    { return b.knowledge == config.KnowledgeNative }
+func (b builtWith) runsCode() bool    { return b.code }
 
 // backendSwitch is one native-backend choice an activated revision makes that
 // the running runtime was not built with.
 type backendSwitch struct {
-	// Field is the configuration path the revision moved: tracker.backend or
-	// knowledge.backend.
+	// Field is the configuration path the revision moved: tracker.backend,
+	// knowledge.backend or code.native.
 	Field string
 	// Half is what the runtime builds natively for that field, as a person
-	// reads it: "tracker", "knowledge base".
+	// reads it: "tracker", "knowledge base", "code host".
 	Half string
 	// Running is the field's value the runtime was built with — what this
 	// node serves until a restart.
@@ -99,7 +108,8 @@ func (s backendSwitch) detail() string {
 // serve: a choice of WHETHER a half is native, since that is what the runtime
 // was built around. Moving between two vendors (jira to none) is not one — a
 // vendor's parser is rebuilt live by its reconciler — and neither is any other
-// field. In a fixed order: tracker, then knowledge.
+// field. In a fixed order: tracker, then knowledge, then the code host — whose
+// one field is already whether the half is native, so any change of it is one.
 //
 // PURE, so the rule is tested without an engine; [Engine.sayBackendSwitches]
 // says each one.
@@ -115,6 +125,13 @@ func backendSwitches(b builtWith, c *config.Company) []backendSwitch {
 		out = append(out, backendSwitch{
 			Field: "knowledge.backend", Half: "knowledge base",
 			Running: string(b.knowledge), Activated: string(knowledge), Holds: b.runsWiki(),
+		})
+	}
+	if b.runsCode() != c.Code.Native {
+		out = append(out, backendSwitch{
+			Field: "code.native", Half: "code host",
+			Running: strconv.FormatBool(b.code), Activated: strconv.FormatBool(c.Code.Native),
+			Holds: b.runsCode(),
 		})
 	}
 	return out

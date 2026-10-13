@@ -1632,9 +1632,23 @@ it comes from an assumed 125 linearizable reads a day per agent seat, which is
 [`census_drift`](../reference/alarms.md) alarm holds every log to that
 assumption: each log is expected to take 125 reads a day per agent seat (a
 company with none is counted as one), plus what the engine reads on its own —
-the object store's collector, one in the fleet, pins the tracker's log 25 times
-a day (24 collections and one audit) — and the alarm fires on the log furthest
-past twice its census.
+the object store's collector, one in the fleet, pins the log of every domain
+whose rows name files, the tracker's and the code host's, 25 times a day each
+(24 collections and one audit) — and the alarm fires on the log furthest past
+twice its census. The code log's census also counts its git clients — people
+and their CI, who read no seat's tools — as the barriers that fill a tenth of
+the ceiling its stream holds over the whole of `min_age`, at 136 bytes a
+barrier (about 113 000 a day at the 1 GiB floor and the default seven days).
+That term belongs to the log rather than to the company's current
+configuration, so it is counted whether or not `code.native` is set: the log
+keeps its ceiling either way, and the rate it is held against is every node's
+over the last day — which still holds a day of git reads after the host is
+turned off, and the peers' reads while a rolling restart turns it on. A busier
+git host resizes the log — `crewlet retention set-capacity CREWLET_CODE_LOG`, as in
+[Changing a log's ceiling](#changing-a-logs-ceiling) — and the census moves
+with the ceiling the stream then holds; `stream.code_log_max_bytes` sizes only
+a code log not yet created, so raising it under one that exists changes neither
+the log nor its census.
 The rate is the log's, counted where every node applies it, and each barrier is
 counted in the hour it was **committed**: a node back from days away, or
 adopting a snapshot a day old, replays days of barriers in minutes, and they

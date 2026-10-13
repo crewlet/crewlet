@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/seat"
@@ -299,24 +300,41 @@ func (e *Engine) seatsAdmitted(ctx context.Context) bool {
 	return e.mode.Publishes() && e.NativeHydrated(ctx)
 }
 
-// writeSide is this node's own tracker writer and knowledge-base store — nil
-// where the runtime runs neither, and nil in a mode that does not publish.
+// writeSet is this node's own write side, as [Engine.writeSide] hands it out:
+// each half nil where the runtime runs no such half, and every one nil in a
+// mode that does not publish.
+type writeSet struct {
+	// tracker is the tracker's write authority and pages the knowledge
+	// base's.
+	tracker *tracker.Writer
+	pages   *pages.Store
+	// committer decides the pushes this node is asked to commit, and code is
+	// the lifecycle store the repositories' reconcile and retention write
+	// through — both the code host's, where the company hosts code.
+	committer *code.Committer
+	code      *code.Store
+}
+
+// writeSide is this node's own write side — see [writeSet].
 //
 // ONE GATE FOR EVERY WRITE THIS NODE'S OWN COPY MAKES — the chart's and the
-// containers' applies, and the estate server writing for a peer — and, through
+// containers' applies, the code host's committer deciding a push for whichever
+// node received it, and the estate server writing for a peer — and, through
 // [Engine.writers], for whether a seat's tools, the operator's MCP and the
 // write routes are handed the router's writer at all. Each is handed its writer
 // from here, so a maintenance-mode node hands out none — for [New]'s reason
 // for gating its publishers in one place: a check per surface is a list
 // somebody maintains, and the surface it forgets is a publish during the
 // window the mode exists to rule out, into a log whose usage a resize is being
-// decided against.
-func (e *Engine) writeSide() (*tracker.Writer, *pages.Store) {
+// decided against. A committer handed to the estate server here and not there
+// would be exactly that surface: a peer's push decided and appended on a node
+// whose operator restarted it to append nothing.
+func (e *Engine) writeSide() writeSet {
 	n := e.native.Load()
 	if n == nil || !e.mode.Publishes() {
-		return nil, nil
+		return writeSet{}
 	}
-	return n.writer, n.pages
+	return writeSet{tracker: n.writer, pages: n.pages, committer: n.committer, code: n.codeStore}
 }
 
 // Mode is what this node started for.

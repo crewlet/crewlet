@@ -843,10 +843,10 @@ func CheckTiers(boot *Bootstrap, company *Company) error {
 	// A NATIVE BACKEND ON AN IN-MEMORY STREAM IS UNRECOVERABLE, and that is
 	// why it is an error rather than the warning Tier A raises alone.
 	//
-	// The engine's own tracker and its own knowledge base keep their
-	// write-ahead logs on the stream, and either one starts the node's state
-	// log ([Company.RunsStateLog]). An embedded server with no store
-	// directory keeps its streams in MEMORY, so a restart recreates them
+	// The engine's own tracker, its own knowledge base and its own code host
+	// keep their write-ahead logs on the stream, and any one starts the
+	// node's state log ([Company.RunsStateLog]). An embedded server with no
+	// store directory keeps its streams in MEMORY, so a restart recreates them
 	// empty, and a node whose durable tables are ahead of a stream that has
 	// restarted from nothing cannot tell "the log was trimmed" from "the log
 	// is a different log", refuses to serve, and stays refused: every
@@ -855,12 +855,14 @@ func CheckTiers(boot *Bootstrap, company *Company) error {
 	// THE KNOWLEDGE BASE AS MUCH AS THE TRACKER. This rule once asked only
 	// about the tracker, and the knowledge base is native by default: a
 	// company on Jira with no Confluence ran its pages on an in-memory log,
-	// passed, and lost the ability to serve on its first restart.
+	// passed, and lost the ability to serve on its first restart. And the
+	// code host: a company on Jira and Confluence that hosts its
+	// repositories runs the log on `code.native` alone.
 	//
 	// It is an error rather than a warning because there is no correct
 	// deployment it describes. A company whose tracker and knowledge base are
-	// both a vendor's starts no log at all and is unaffected, which is why
-	// the rule needs both documents.
+	// both a vendor's, and that hosts no code, starts no log at all and is
+	// unaffected, which is why the rule needs both documents.
 	//
 	// A MEMBER ONLY: a leaf keeps no stream of its own — every log it
 	// reaches lives on the members it joined, which hold the store
@@ -871,11 +873,11 @@ func CheckTiers(boot *Bootstrap, company *Company) error {
 		strings.TrimSpace(boot.Stream.StoreDir) == "" {
 		p.add(field("stream.store_dir"), ErrMissing,
 			"this company runs the engine's own backends (tracker.backend: %s, "+
-				"knowledge.backend: %s), whose logs live on the stream, and an "+
-				"embedded stream with no store directory keeps its streams in "+
-				"memory: a restart recreates them empty and this node refuses to "+
-				"serve them permanently. Name a directory",
-			company.TrackerBackendFor(), company.KnowledgeBackendFor())
+				"knowledge.backend: %s, code.native: %t), whose logs live on the "+
+				"stream, and an embedded stream with no store directory keeps its "+
+				"streams in memory: a restart recreates them empty and this node "+
+				"refuses to serve them permanently. Name a directory",
+			company.TrackerBackendFor(), company.KnowledgeBackendFor(), company.Code.Native)
 	}
 	return p.err()
 }

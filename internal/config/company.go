@@ -66,6 +66,11 @@ type Company struct {
 	// search.
 	Knowledge Knowledge `yaml:"knowledge,omitempty" json:"knowledge"`
 
+	// Code is the engine's own git host: whether this company hosts its
+	// repositories in the engine, and the limits a push is held to. See
+	// [Code].
+	Code Code `yaml:"code,omitempty" json:"code,omitzero"`
+
 	// SkillVariables is an operator-defined name -> value map substituted
 	// into tool-skill text wherever a skill writes ${name}.
 	//
@@ -506,6 +511,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	p.wrap(c.Scheduling.validate(field("scheduling")))
 	p.wrap(c.Integrations.validate(field("integrations")))
 	p.wrap(c.validateKnowledgeBackend())
+	p.wrap(c.Code.validate(field("code")))
 	p.wrap(c.validateContainerKeys())
 	p.wrap(c.validateProviderKeys())
 	p.wrap(c.validateWorkers())
@@ -946,14 +952,19 @@ func (c *Company) TrackerBackendFor() TrackerBackend {
 }
 
 // RunsStateLog reports whether this company keeps any of its own records on
-// the stream: the engine's own tracker or its own knowledge base.
+// the stream: the engine's own tracker, its own knowledge base, or its own git
+// host.
 //
-// EITHER ONE, because either starts a node's state log and the log runs every
+// ANY ONE, because each starts a node's state log and the log runs every
 // registered domain or none. So the question is not which native backend a
 // company chose but whether it chose one at all, and the node that starts the
 // log and the rule that refuses an in-memory stream for it both ask it here.
+// The code host is one of them: a company on Jira and Confluence that hosts
+// its repositories runs the log on `code.native` alone, or no node would have
+// a committer to decide a push with.
 func (c *Company) RunsStateLog() bool {
-	return c.TrackerBackendFor() == TrackerNative || c.KnowledgeBackendFor() == KnowledgeNative
+	return c.TrackerBackendFor() == TrackerNative || c.KnowledgeBackendFor() == KnowledgeNative ||
+		c.Code.Native
 }
 
 // VectorsEnabled reports whether the corpus is embedded and searched by

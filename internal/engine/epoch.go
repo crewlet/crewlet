@@ -106,6 +106,9 @@ func (e *Engine) installEpoch(c *Company, activatedAt time.Time) {
 			activatedAt = activatedAt.UTC()
 		}
 		c.ActivatedAt = activatedAt
+		// And the code host's limits in force, carried over the epoch
+		// this one replaces where it hosts no code of its own.
+		c.codeLimits = carriedCodeLimits(c, e.epoch.current.Load())
 	}
 	if c != nil && !e.indexes(c) {
 		e.refreshParties(c)

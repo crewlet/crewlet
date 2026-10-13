@@ -198,6 +198,10 @@ type retention struct {
 	// leave. Nil puts none.
 	background func(domain string) int
 
+	// The third term of the census, the readers a log's own sizing declares
+	// ([clientBarriers]), is not a field: it is the log's, never this node's
+	// or the moment's, so there is nothing to read at an evaluation.
+
 	// mu guards the coverage cache below. The tick and every API request
 	// assemble a report, on different goroutines.
 	mu sync.Mutex

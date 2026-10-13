@@ -75,6 +75,8 @@ workers: {...}                          # optional — reusable delegate templat
 roles: [...]                            # optional — root-level org-wide agents (see below)
 units: [...]                            # optional — org structure tree (see below)
 
+code: {...}                             # optional — the engine's own git host (see "Code" below)
+
 turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn
   max_tool_rounds: 24                   # max tool-call rounds within one executor run
@@ -732,10 +734,11 @@ stream:
                                     #   and nothing published survives a
                                     #   restart. A company on the engine's own
                                     #   tracker or knowledge base (the
-                                    #   defaults) keeps every item and every
-                                    #   page there, so the engine refuses to
-                                    #   boot it on an in-memory stream rather
-                                    #   than lose them at the first restart.
+                                    #   defaults), or its code host, keeps
+                                    #   every item, page and push there, so
+                                    #   the engine refuses to boot it on an
+                                    #   in-memory stream rather than lose
+                                    #   them at the first restart.
                                     #   And a MEMBER OF A FLEET's broker —
                                     #   embedded, no leaf urls, and naming a
                                     #   cluster, peers or a leaf listener —
@@ -1692,7 +1695,30 @@ tracker:
 
 Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#tier-a-crewletyaml), a fact about the whole **company** — the clock its dates mean is the top-level [`timezone`](#the-companys-clock) — or a decision the engine makes once for everybody.
 
-**A native tracker or knowledge base needs a stream that survives a restart.** Their write-ahead logs live on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. Either backend starts the log: a company on Jira whose knowledge base is the engine's own, the default without Confluence, is refused the same way. Only a company whose tracker and knowledge base are both a vendor's (or `none`) starts no log at all and is unaffected, which is why the rule needs both files to see.
+**A native tracker or knowledge base needs a stream that survives a restart.** Their write-ahead logs live on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. Either backend starts the log, and so does [`code.native`](#code): a company on Jira whose knowledge base is the engine's own, the default without Confluence, is refused the same way, and so is one on vendors for both that hosts its repositories in the engine. Only a company whose tracker and knowledge base are both a vendor's (or `none`) and that hosts no code starts no log at all and is unaffected, which is why the rule needs both files to see.
+
+---
+
+## Code
+
+```yaml
+code:
+  native: true                          # host the company's repositories in the engine
+  limits:                               # every field optional
+    max_push_bytes: 1073741824          # 1 MiB..1 GiB; the largest pack one push sends (default 1 GiB)
+    max_blob_bytes: 52428800            # 1 KiB..1 GiB, at most max_push_bytes (default 50 MiB)
+    repo_max_bytes: 21474836480         # 1 MiB..1 TiB, at least max_push_bytes (default 20 GiB)
+```
+
+`code.native` turns on the engine's own **git host**. A repository's refs and packs are records on a log of their own — the code log, beside the tracker's and the knowledge base's — and every data node runs a **committer** that decides the pushes it is asked to commit, publishing each batch as one record. A push is asked of its repository's committer: the first data node in a rendezvous order of the repository's id, which every node computes alike, so a repository's pushes meet at one node whichever node received them, and a committer that stops, or answers nothing, hands each of its repositories to that repository's runner-up with the same push id. A node in a [maintenance mode](../guides/retention.md#the-three-modes) decides none: it refuses a push as a node that ran nothing, and the repository's next committer decides it — so while the whole fleet is in a maintenance mode, no push is committed at all. Like `tracker.backend`, it is part of a node's **native runtime**, built once per process: on a node that runs no native backend yet — a company whose tracker and knowledge base are both a vendor's — the activation that sets it starts the code host with no restart, and on a node whose native runtime is already running, a revision that turns it on or off activates normally and takes effect at each node's restart, which the node says with a `native_backend_needs_restart` warning naming `code.native` (see [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)). Setting it starts the state log even on a company whose tracker and knowledge base are both a vendor's, so it needs a stream that survives a restart, as above.
+
+`code.limits` is what one push and one repository may hold, and it is read off the **current** revision at every decision, so a change takes effect at its activation, with no restart. The three nest: a file inside a push, a push inside a repository. A revision that turns `code.native` off must drop `code.limits` with it (below), and a node that keeps serving the code host until its restart goes on holding pushes to the limits of the last revision that hosted code, not to the defaults.
+
+- **`max_push_bytes`** — the largest pack one push may send. Unset is 1 GiB, which is also the most it may be: a person's first push of an existing project is its whole history, and a larger one is imported in parts.
+- **`max_blob_bytes`** — the largest single file a push may carry. Unset is 50 MiB, and it is what sizes git's own memory on a node serving the repository, so a larger binary belongs in [tracker files](../concepts/object-store.md) rather than in a repository.
+- **`repo_max_bytes`** — the most packed bytes one repository may hold. Unset is 20 GiB. It is per **node** as much as per repository: every node that serves a repository keeps a whole copy of it.
+
+The order is checked on what a push is actually held to, the defaults included: `max_push_bytes: 10485760` set alone is refused, because the default `max_blob_bytes` (50 MiB) is larger, and the refusal names the default it met — set both. `code.limits` on a company that does not set `code.native` is refused: it would read as live and limit nothing.
 
 ---
 

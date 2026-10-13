@@ -111,11 +111,17 @@ func TestANodeInACapacityWindowAppendsNothingToItsLogs(t *testing.T) {
 // company whose logs it runs.
 func aNodeInMode(t *testing.T, mode statelog.MaintenanceMode) (*Engine, natsjs.JetStream) {
 	t.Helper()
+	return aNodeInModeOf(t, mode, nativeCleanupCompany)
+}
+
+// aNodeInModeOf is [aNodeInMode] over the company doc.
+func aNodeInModeOf(t *testing.T, mode statelog.MaintenanceMode, doc string) (*Engine, natsjs.JetStream) {
+	t.Helper()
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
-	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}

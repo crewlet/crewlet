@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -352,7 +353,9 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 //
 // EITHER BACKEND. The rule once asked only about the tracker, and the
 // knowledge base is native by default, so a company on Jira with no Confluence
-// ran its pages on an in-memory log and was accepted.
+// ran its pages on an in-memory log and was accepted. AND THE CODE HOST: a
+// company on vendors for both that hosts its repositories runs the log on
+// `code.native` alone.
 //
 // Each tier validates alone and neither can see the other, which is why this
 // is a rule of its own rather than a field's.
@@ -363,19 +366,21 @@ func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 		streamType config.StreamType
 		tracker    config.TrackerBackend
 		knowledge  config.KnowledgeBackend
+		code       bool
 		accept     bool
 		leaf       bool
 	}{
 		// A LEAF KEEPS NO STREAM: every log it reaches is a member's, and
 		// the member holds the store directory.
-		"native on a leaf with no store directory": {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true, true},
-		"both native on an in-memory stream":       {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, false, false},
-		"a native tracker on an in-memory stream":  {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNone, false, false},
-		"native pages on an in-memory stream":      {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false, false},
-		"a blank store directory is none":          {"  ", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false, false},
-		"native with a store directory":            {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true, false},
-		"native on an external cluster":            {"", config.StreamNATS, config.TrackerNative, config.KnowledgeNative, true, false},
-		"vendors for both on the same stream":      {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, true, false},
+		"native on a leaf with no store directory":   {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, false, true, true},
+		"both native on an in-memory stream":         {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, false, false, false},
+		"a native tracker on an in-memory stream":    {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNone, false, false, false},
+		"native pages on an in-memory stream":        {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false, false, false},
+		"the code host alone on an in-memory stream": {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, true, false, false},
+		"a blank store directory is none":            {"  ", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false, false, false},
+		"native with a store directory":              {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true, true, false},
+		"native on an external cluster":              {"", config.StreamNATS, config.TrackerNative, config.KnowledgeNative, true, true, false},
+		"vendors for both on the same stream":        {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, false, true, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()
@@ -391,6 +396,7 @@ func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 			c.Name = "Acme"
 			c.Tracker.Backend = tc.tracker
 			c.Knowledge.Backend = tc.knowledge
+			c.Code.Native = tc.code
 
 			err := config.CheckTiers(&b, &c)
 			if tc.accept {
@@ -406,6 +412,7 @@ func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 				"stream.store_dir", "refuses to serve",
 				"tracker.backend: " + string(tc.tracker),
 				"knowledge.backend: " + string(tc.knowledge),
+				"code.native: " + strconv.FormatBool(tc.code),
 			} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("refusal = %q, want it to say %q", err, want)

@@ -146,10 +146,13 @@ roles:
 // building them, so no warning was written and no status line showed it.
 //
 // EACH ARM NAMES THE BRANCH IT COVERS and holds its premise: the native
-// tracker's arm the estate read through the tools' own reader, the other the
-// estate built for the object store alone, where no tool reader exists. The
-// second arm covers that branch only while the company it boots is served no
-// tracker tools — so that is asserted, not assumed.
+// tracker's arm the estate read through the tools' own reader, the others the
+// estate built for the object store alone, where no tool reader exists. Those
+// cover that branch only while the company each boots is served no tracker
+// tools — so that is asserted, not assumed. And the code host's estate is
+// offered on every arm, whatever `code.native` says, because its log runs in
+// every register: the arm whose state log runs on the code host alone, and the
+// others, which host no code, alike.
 func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
 	t.Parallel()
 	declared := map[string]bool{}
@@ -164,6 +167,11 @@ func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
 	}{
 		"native tracker":                    {doc: companyWithoutSandboxDoc, toolReader: true},
 		"no tracker, native knowledge base": {doc: noTrackerDoc, toolReader: false},
+		// THE STATE LOG ON THE CODE HOST ALONE: no tracker and no
+		// knowledge base of the engine's own, so nothing but code.native
+		// starts the register — and every declaring domain's estate is
+		// still offered, the tracker's built for the object store alone.
+		"the code host alone": {doc: codeHostAlone, toolReader: false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

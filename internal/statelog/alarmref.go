@@ -89,8 +89,10 @@ var alarmMeaning = map[Kind]string{
 		"their query starts.",
 	KindCensusDrift: "A log is taking more than twice the linearizable reads " +
 		"its census allows — 125 a day per agent seat (at least one seat), " +
-		"plus what the object store's collector reads on its own schedule — " +
-		"so every sizing decision under it is stale.",
+		"plus what the object store's collector reads on its own schedule, " +
+		"plus — on the code log, whether or not the company hosts code now — " +
+		"the git reads its ceiling was sized for (a tenth of it in barriers " +
+		"over the trim's min_age) — so every sizing decision under it is stale.",
 	KindObjectsMissing: "Some of the company's files cannot be read: the " +
 		"collector's last audit asked the object store for every file's bytes, " +
 		"and some were not there, or were there at the wrong size, under the " +

@@ -136,8 +136,10 @@ const (
 	//
 	// It is the SEATS' term of a log's census and not the whole of it: the
 	// engine's own periodic reads append barriers too, whatever the seats
-	// do, and [Census.Background] is where they are counted. [Census]
-	// turns both into one log's figure.
+	// do, and [Census.Background] is where they are counted; and a log whose
+	// readers are not seats at all — the code log's git clients — declares
+	// them in its own sizing, which [Census.Clients] carries. [Census] turns
+	// all three into one log's figure.
 	LinearizableReadsPerSeatDay = 125
 )
 
@@ -160,6 +162,23 @@ type Census struct {
 	// log expected to take 125, and census_drift fired on companies whose
 	// sizing was right — LOUDER the smaller the company.
 	Background int
+
+	// Clients is the linearizable reads a day a log's OWN SIZING declares
+	// for readers that are NEITHER seats NOR the engine's own passes — the
+	// code log's git clients (code.GitReadsPerDay): a company's people and
+	// their CI, whose number no seat count predicts. Zero on every other
+	// log. Its caller sizes it by the ceiling the log's stream HOLDS, which
+	// every node reads alike and only a resize moves — and counts it on
+	// that log whatever the company hosts at the moment, because the log
+	// keeps its ceiling either way and the rate it is held against is
+	// every node's over the alarm's day, which outlives a switch and spans
+	// a rolling restart.
+	//
+	// It exists for Background's reason, worse: every linearizable read of
+	// the code log is a person's or a pipeline's, so held to the seats'
+	// term a five-seat company's code log alarmed past 1 300 git reads a
+	// day, which one CI polling ten repositories a minute exceeds tenfold.
+	Clients int
 }
 
 // Expected is the log's census: the linearizable reads a day it was sized to
@@ -183,11 +202,12 @@ type Census struct {
 // reads are mostly the tracker's, would fire the alarm doing exactly the work
 // it was sized for.
 //
-// # Plus what the engine reads on its own
+// # Plus what the engine reads on its own, and what the log was sized for
 //
-// [Census.Background] is added to it, for the reason it gives.
+// [Census.Background] is added to it, and [Census.Clients], each for the
+// reason it gives.
 func (c Census) Expected() int {
-	return LinearizableReadsPerSeatDay*max(c.Seats, 1) + max(c.Background, 0)
+	return LinearizableReadsPerSeatDay*max(c.Seats, 1) + max(c.Background, 0) + max(c.Clients, 0)
 }
 
 // Kind names one alarm.
@@ -767,7 +787,11 @@ var table = []rule{
 		},
 		remedy: "Re-derive the log's ceiling and the trim's cadence from the real " +
 			"rate. See `stream.tracker_retention` in " +
-			"docs/getting-started/configuration.md.",
+			"docs/getting-started/configuration.md. A code log's git census is a " +
+			"share of the ceiling its stream holds, so it moves only when the log " +
+			"is resized: `crewlet retention set-capacity CREWLET_CODE_LOG` " +
+			"(docs/guides/retention.md); `stream.code_log_max_bytes` sizes only a " +
+			"log not yet created.",
 	},
 	{
 		kind: KindObjectsMissing,
