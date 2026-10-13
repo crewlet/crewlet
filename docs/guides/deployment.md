@@ -1571,7 +1571,7 @@ field keeps all three while a shell redirect throws them away:
 | What | Why it bypasses the handler |
 |---|---|
 | Everything before the Tier A document is read | The log file is named *by* that document, so it cannot be open yet |
-| The [seat watchdog's](../concepts/seat-ownership.md) exit notice | It writes to stderr directly and calls `os.Exit(75)`; a wedged process has not earned a configured handler. A broker that declared itself dead leaves by the same exit, after an `embedded_broker_died` line that does go through the handler |
+| The [seat watchdog's](../concepts/seat-ownership.md) exit notice | It writes to stderr directly and calls `os.Exit(75)`; a wedged process has not earned a configured handler. A broker that declared itself dead leaves by the same exit with code `69`, after an `embedded_broker_died` line that does go through the handler |
 | "log file *X*: no space left on device" | A sink cannot report its own failure through itself |
 
 **A terminal that is about to go quiet says so.** Before the switch takes
@@ -1723,12 +1723,14 @@ decides what it means, and it means the same thing a standalone server would:
 - **After the boot, the node ends.** It logs `embedded_broker_died` at
   `error`, with the broker's reason, through the ordinary log, then leaves the
   same way the [seat watchdog](../concepts/seat-ownership.md#a-broker-that-declares-itself-dead)
-  does: a notice on stderr and exit code **75**. It does not drain, because
-  every step of a drain — acknowledging a turn, publishing what it did, giving
-  a seat's lease back — rides the broker that has just declared itself dead. A
-  node left running on it would answer `/health` while nothing it did could
-  land; ended, it is restarted, and the restart recovers the broker from its
-  store. The same reason on every restart is a setting or a disk to fix.
+  does: a notice on stderr, and exit code **69** rather than the wedge's 75,
+  so an orchestrator's restart log tells the two apart. It does not drain,
+  because every step of a drain — acknowledging a turn, publishing what it
+  did, giving a seat's lease back — rides the broker that has just declared
+  itself dead. A node left running on it would answer `/health` while nothing
+  it did could land; ended, it is restarted, and the restart recovers the
+  broker from its store. The same reason on every restart is a setting or a
+  disk to fix.
 
 ### Per-Agent Token Tracking
 

@@ -623,11 +623,12 @@ func TestADeclaredDeathEndsTheProcessWhateverTheWatchdogIsDoing(t *testing.T) {
 	}
 }
 
-// THE NOTICE SAYS WHICH OF THE TWO IT WAS. Both exits share one code, so the
-// line on stderr is the only thing an operator reading a restart has that
-// tells a wedge from a broker that declared itself dead — and for the
-// declaration it has to carry the broker's own reason, the one fact nothing
-// else in the process outlives.
+// THE EXIT SAYS WHICH OF THE TWO IT WAS, in its code and in its notice. The
+// code is what an orchestrator's restart log keeps, often alone — a deployment
+// that discards stderr keeps nothing else — so a wedge and a broker that
+// declared itself dead must not share one. The notice has to carry the
+// broker's own reason, the one fact nothing else in the process outlives,
+// and name the code it ends with.
 func TestTheExitNoticeTellsAStallFromADeclaredDeath(t *testing.T) {
 	t.Parallel()
 	stall := exitNotice(Stall{Duty: "seat-host", Lag: 50 * time.Second, Threshold: time.Minute})
@@ -642,10 +643,24 @@ func TestTheExitNoticeTellsAStallFromADeclaredDeath(t *testing.T) {
 	if strings.Contains(death, "stalled") {
 		t.Errorf("a declared death is reported as a stall: %q", death)
 	}
-	for _, line := range []string{stall, death} {
-		if !strings.Contains(line, strconv.Itoa(WatchdogExitCode)) {
+	if WatchdogExitCode == FailExitCode {
+		t.Fatalf("a wedge and a declared death both exit %d, so a restart log "+
+			"cannot tell them apart", WatchdogExitCode)
+	}
+	for _, c := range []struct {
+		line string
+		s    Stall
+		want int
+	}{
+		{stall, Stall{Duty: "seat-host", Lag: time.Minute}, WatchdogExitCode},
+		{death, Stall{Duty: "embedded broker", Cause: errors.New(reason)}, FailExitCode},
+	} {
+		if got := c.s.exitCode(); got != c.want {
+			t.Errorf("%q exits %d, want %d", c.line, got, c.want)
+		}
+		if !strings.Contains(c.line, "(code "+strconv.Itoa(c.want)+")") {
 			t.Errorf("the notice does not name the exit code an orchestrator "+
-				"records: %q", line)
+				"records, %d: %q", c.want, c.line)
 		}
 	}
 }
