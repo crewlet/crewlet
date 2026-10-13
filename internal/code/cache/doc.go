@@ -14,7 +14,13 @@
 // code_refs at the position its state names, its packs exactly the
 // code_packs there, and [Cache.Sync] writes it by CONVERGENCE — derive the
 // target from the rows, make the directory equal to it — never by replaying
-// what happened.
+// what happened. TestNothingButSyncWritesACache holds that from both sides:
+// the files under internal/code that write the filesystem or run a git
+// process that may write are a reviewed list, each with its reason, and
+// seeded interleavings of what a node's cache meets — pushes, refused
+// pushes, adoptions, syncs killed mid-step, crashes, evictions, rebuilds,
+// maintenance, a log recreated backwards — end every time in caches equal to
+// ones rebuilt from nothing at the same position.
 //
 // # Convergence, priced for a push on every node
 //
