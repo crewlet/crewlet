@@ -47,7 +47,7 @@ const brokerDuty = "embedded broker"
 //
 // ctx is the boot's, and only its values are kept: the watch outlives the
 // call that arms it.
-func (e *Engine) watchBroker(ctx context.Context, death brokerDeath, die func(error)) {
+func (e *Engine) watchBroker(ctx context.Context, death brokerDeath) {
 	if death == nil {
 		return
 	}
@@ -77,10 +77,6 @@ func (e *Engine) watchBroker(ctx context.Context, death brokerDeath, die func(er
 			"hint", "the cause is the broker's own; a restart recovers the "+
 				"broker from its store, and the same cause on every restart is "+
 				"a setting or a disk to fix")
-		die(cause)
+		e.watchdog.Fail(brokerDuty, cause)
 	}()
 }
-
-// brokerDeathExit is the production answer to a broker's death: the seat
-// watchdog's exit, which ends the process.
-func (e *Engine) brokerDeathExit(cause error) { e.watchdog.Fail(brokerDuty, cause) }
