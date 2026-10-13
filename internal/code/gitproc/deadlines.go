@@ -36,16 +36,18 @@ import (
 // ended by [TransferStall] long before either transfer deadline.
 
 // ReadDeadline bounds one local read: one read attempt, the bound the router
-// gives a read anywhere in the engine (estate.ReadAttempt, which this package
-// cannot import; [SlotWait] is the same figure for the same reason).
+// gives a read anywhere in the engine (estate.Production().ReadAttempt). This
+// package imports no engine package, so estate's
+// TestGitprocsReadBoundsAreOneReadAttempt holds the equality, and [SlotWait]'s
+// beside it.
 const ReadDeadline = 10 * time.Second
 
 // SlotWait is the longest a run waits for a slot before it is refused
-// [ErrBusy]: one read attempt (estate.ReadAttempt). A node whose slots have
+// [ErrBusy]: one read attempt (estate.Production().ReadAttempt, held equal by
+// estate's TestGitprocsReadBoundsAreOneReadAttempt). A node whose slots have
 // been busy for a whole read attempt is a node a balancer should send the
 // retry elsewhere from, which is what the host's 503 and its Retry-After are
-// for. The engine's own test holds the equality, since this package imports
-// no engine package.
+// for.
 const SlotWait = 10 * time.Second
 
 // KillGrace is how long a process is given between SIGTERM and SIGKILL. git

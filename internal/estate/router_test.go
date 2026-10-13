@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -454,24 +455,31 @@ func (f *fleet) start(t *testing.T) *memory.Queue {
 	return q
 }
 
-// fleetAttempt is how long a fleet's router gives one node, for a read and a
-// write alike: production's read attempt ([ReadAttempt]), five times a
-// holder's own floor wait ([statelog.ReadBudget]), so a node behind the
-// caller's floor says so before its asker stops listening rather than reading
-// as silent — and an answering node, a behind one included, is never judged
-// silent because the machine running the suite was busy: a second past the
-// floor wait was measured too little for that on a loaded machine. A node
-// that is gone costs none of it: the twin's ask ends as soon as every
-// answerer has answered or failed, so only a node that HANGS waits an attempt
-// out, and the case that hangs one gives its router a budget of its own.
-const fleetAttempt = ReadAttempt
-
 // router is a router on node self over the fleet, answering in-process from
-// local where it is given one.
+// local where it is given one, waiting PRODUCTION'S TIMING.
+//
+// Its read attempt is production's, which holds every wait a holder makes at
+// its whole budget ([ReadAttempt]), rather than anything nearer the shortest a
+// router takes ([minReadAttempt]): a holder ends its waits inside whatever
+// attempt it is given, but a node that answered must still never be judged
+// silent because the machine running the suite was busy delivering its reply,
+// and a cut-short wait would turn a case's slow-but-healthy holder into a
+// `behind` it did not mean to test. Its write attempt cannot be shorter than
+// [minWriteAttempt] at all.
+// And a node that is gone costs none of either: the twin's ask ends as soon as
+// every answerer has answered or failed, so only a node that HANGS waits an
+// attempt out, and the case that hangs one gives its router a timing of its
+// own ([fleet.routerTimed]).
 func (f *fleet) router(t *testing.T, self string, local *fakeNode) *Router {
 	t.Helper()
+	return f.routerTimed(t, self, local, Production())
+}
+
+// routerTimed is [fleet.router] waiting timing rather than the fleet's.
+func (f *fleet) routerTimed(t *testing.T, self string, local *fakeNode, timing Timing) *Router {
+	t.Helper()
 	opts := RouterOptions{Queue: f.start(t), Self: self, Placement: f.placement,
-		Session: NewSession()}
+		Session: NewSession(), Timing: timing}
 	if local != nil {
 		opts.Local, opts.Seams = local, local.seams()
 	}
@@ -479,7 +487,6 @@ func (f *fleet) router(t *testing.T, self string, local *fakeNode) *Router {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.readBudget, r.writeBudget = fleetAttempt, fleetAttempt
 	return r
 }
 
@@ -597,6 +604,204 @@ func TestAnUnansweredReadMovesOnAndTheSilentNodeIsAskedLast(t *testing.T) {
 	if !slices.Contains(told, firstName) {
 		t.Errorf("the placement was told %v went unanswered, want %s among them",
 			told, firstName)
+	}
+}
+
+// A ROUTER REFUSES A TIMING WITH ANY FIELD UNSET, BY THE FIELD IT LACKS, and
+// takes Production whole.
+//
+// Read as a setting, a zero attempt is no bound of the router's own — a
+// request from a caller with no deadline waits on a wedged node for ever —
+// and a zero admission budget, like any negative field, is a deadline already
+// past, which withholds every seat's claim: neither is a setting anybody
+// chose. Each field is taken away from production's timing in turn, as zero
+// and as negative.
+func TestARouterRefusesAZeroTiming(t *testing.T) {
+	t.Parallel()
+	build := func(timing Timing) error {
+		_, err := NewRouter(RouterOptions{Self: "agent-1", Queue: &recordingAsker{},
+			Placement: &fakePlacement{}, Session: NewSession(), Timing: timing})
+		return err
+	}
+	if err := build(Production()); err != nil {
+		t.Fatalf("a router refused the timing every node runs: %v", err)
+	}
+	unset := map[string]func(*Timing, time.Duration){
+		"ReadAttempt":  func(tm *Timing, d time.Duration) { tm.ReadAttempt = d },
+		"WriteAttempt": func(tm *Timing, d time.Duration) { tm.WriteAttempt = d },
+		"AdmissionAsk": func(tm *Timing, d time.Duration) { tm.AdmissionAsk = d },
+	}
+	// EVERY FIELD, so a field added to Timing and to nothing here fails
+	// rather than going unchecked.
+	if fields := reflect.TypeFor[Timing]().NumField(); len(unset) != fields {
+		t.Fatalf("Timing has %d fields and this case unsets %d", fields, len(unset))
+	}
+	for field, set := range unset {
+		for _, d := range []time.Duration{0, -time.Second} {
+			timing := Production()
+			set(&timing, d)
+			if err := build(timing); err == nil || !strings.Contains(err.Error(), "Timing."+field) {
+				t.Errorf("a router built with Timing.%s = %v answered %v, want a refusal "+
+					"naming Timing.%s", field, d, err, field)
+			}
+		}
+	}
+	if err := build(Timing{}); err == nil || !strings.Contains(err.Error(), "Timing.") {
+		t.Errorf("a router built with no timing answered %v, want a refusal naming a field", err)
+	}
+}
+
+// A READ ATTEMPT IS LONGER THAN THE REPLY'S MARGIN, or no router is built with
+// it — and at the shortest one taken, a node behind its asker's floor is HEARD
+// saying so. A serving node ends every wait a reply's margin short of its
+// asker's deadline (statelog.WithReplyMargin), so an attempt no longer than the
+// margin leaves it no time for anything, and any attempt past it is one a
+// lagging node answers inside: here the node has no time left to wait for the
+// floor at all and says it is behind at once. Waiting out its floor budget
+// instead, it answered after its asker had stopped listening, which asked an
+// HONEST node last for suspectFor and told the placement it was gone. The
+// bound is spelled from code.ReplyMargin itself, never from the router's own
+// constant, so a floor that drifted from the margin fails.
+func TestAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	timing := Production()
+	timing.ReadAttempt = code.ReplyMargin
+	if _, err := NewRouter(RouterOptions{Self: "agent-2", Queue: f.start(t),
+		Placement: f.placement, Session: NewSession(), Timing: timing}); err == nil ||
+		!strings.Contains(err.Error(), "Timing.ReadAttempt") {
+		t.Fatalf("a router whose read attempt is the reply's margin (%v) answered %v, want a "+
+			"refusal naming Timing.ReadAttempt", timing.ReadAttempt, err)
+	}
+	timing.ReadAttempt = code.ReplyMargin + time.Nanosecond
+	r := f.routerTimed(t, "agent-2", nil, timing)
+
+	r.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 5})
+	f.nodes["data-a"].set(func(n *fakeNode) { n.behind = true })
+	_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	var unserved *ErrUnserved
+	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "data-a: data-a has not applied") {
+		t.Fatalf("a read of a node behind its floor, at the shortest read attempt a router "+
+			"takes (%v), answered %v — want the node heard saying it is behind", timing.ReadAttempt, err)
+	}
+	f.placement.mu.Lock()
+	told := slices.Clone(f.placement.unanswered)
+	f.placement.mu.Unlock()
+	if slices.Contains(told, "data-a") {
+		t.Errorf("a node that answered it was behind was reported unanswered (%v): its asker "+
+			"had stopped listening when it said so", told)
+	}
+}
+
+// A NODE THAT HAS ITS ASKER'S FLOOR AND LAGS ITS READ'S BARRIER IS HEARD SAYING
+// SO, at an attempt a fraction of what a linearizable read's waits take at
+// their whole budgets. The node reaches the floor at once; its read, through a
+// real statelog reader, appends a barrier that commits at once and never
+// reaches the barrier's position — a node that lags the log's end. The
+// reader's wait ends a reply's margin short of the attempt
+// (statelog.WithReplyMargin), so the read is refused `behind` while the router
+// still listens, and the node is not reported unanswered. Waited out at its own
+// budget (statelog.ReadBudget) — on a seat's read, every tool's — that refusal
+// reached nobody, and an honest node was suspected.
+func TestANodeThatLagsItsReadsBarrierIsHeardSayingSo(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	timing := Production()
+	timing.ReadAttempt = minReadAttempt + time.Second
+	if timing.ReadAttempt >= statelog.ReadBudget+code.ReplyMargin {
+		t.Fatalf("the premise: a %v attempt must end before the read's own wait would",
+			timing.ReadAttempt)
+	}
+	r := f.routerTimed(t, "agent-2", nil, timing)
+	r.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 5})
+	f.nodes["data-a"].set(func(n *fakeNode) { n.levelRead = laggingLinearizableRead(t) })
+
+	begun := time.Now()
+	_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	waited := time.Since(begun)
+	var refusal *statelog.Refused
+	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBehind {
+		t.Fatalf("a read of a node lagging its barrier, at a %v attempt, answered %v — want "+
+			"the node heard refusing it %q", timing.ReadAttempt, err, statelog.RefuseBehind)
+	}
+	if waited >= timing.ReadAttempt {
+		t.Errorf("the refusal took %v, the router's whole %v attempt", waited, timing.ReadAttempt)
+	}
+	f.placement.mu.Lock()
+	told := slices.Clone(f.placement.unanswered)
+	f.placement.mu.Unlock()
+	if slices.Contains(told, "data-a") {
+		t.Errorf("a node that answered it was behind its barrier was reported unanswered (%v)", told)
+	}
+}
+
+// PRODUCTION'S READ ATTEMPT HOLDS A LINEARIZABLE READ'S WAITS at their whole
+// budgets — the asker's floor, the barrier, the barrier's position — and the
+// reply's margin, so production cuts a healthy node's waits short only where a
+// barrier first waits out one already in flight. Raising any of those budgets
+// without the attempt fails here rather than in a fleet.
+func TestProductionsReadAttemptHoldsALinearizableReadsWaits(t *testing.T) {
+	t.Parallel()
+	waits := 2*statelog.ReadBudget + statelog.DefaultBarrierBudget + code.ReplyMargin
+	if read := Production().ReadAttempt; read < waits {
+		t.Errorf("production's read attempt is %v, under the %v a linearizable read's waits "+
+			"take at their whole budgets with the reply's margin", read, waits)
+	}
+}
+
+// A WEDGED NODE COSTS A READ THE ROUTER'S OWN READ ATTEMPT, never
+// production's: the timing a router is built with is the one it waits, which
+// is what lets a suite in another package — where no unexported budget can be
+// reached — drive the production router over a fleet whose node hangs without
+// waiting out a whole production attempt per case. The first node this router
+// asks takes the read and never answers; the next answers it, a whole attempt
+// of this router's later and well inside production's.
+func TestAWedgedNodeCostsAReadTheRoutersOwnReadAttempt(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	timing := Production()
+	timing.ReadAttempt = minReadAttempt + time.Second
+	r := f.routerTimed(t, "agent-2", nil, timing)
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	firstName, first := f.first(t, r)
+	first.set(func(n *fakeNode) { n.hang = hang })
+
+	begun := time.Now()
+	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+		t.Fatalf("a read with a live second node failed: %v", err)
+	}
+	waited := time.Since(begun)
+	if !first.askedFor("hung") || waited < timing.ReadAttempt {
+		t.Fatalf("the premise: %s, the node asked first, was asked (%v) and held the read "+
+			"for %s, want it to have held its router's whole %s attempt", firstName,
+			first.askedFor("hung"), waited, timing.ReadAttempt)
+	}
+	// HALFWAY TO PRODUCTION'S, so a loaded machine's slack is on both sides.
+	if bound := (timing.ReadAttempt + Production().ReadAttempt) / 2; waited >= bound {
+		t.Fatalf("a read waited %s on wedged %s, want about its router's %s read attempt "+
+			"and under %s — the router waited a timing it was not built with",
+			waited, firstName, timing.ReadAttempt, bound)
+	}
+}
+
+// GITPROC'S READ BOUNDS ARE ONE READ ATTEMPT — production's, the one every
+// node's router gives a read on one data node: a local git read
+// (gitproc.ReadDeadline) is bounded like any read in the engine, and a run
+// that has waited a whole read attempt for a slot (gitproc.SlotWait) is on a
+// node a balancer should send the retry elsewhere from. gitproc imports no
+// engine package, so the equality its deadlines claim is held here, where both
+// sides are importable.
+func TestGitprocsReadBoundsAreOneReadAttempt(t *testing.T) {
+	t.Parallel()
+	read := Production().ReadAttempt
+	if gitproc.ReadDeadline != read {
+		t.Errorf("gitproc.ReadDeadline is %v, and a node's router gives a read %v — a local git "+
+			"read is one read attempt", gitproc.ReadDeadline, read)
+	}
+	if gitproc.SlotWait != read {
+		t.Errorf("gitproc.SlotWait is %v, and a node's router gives a read %v — a run waits "+
+			"one read attempt for a slot", gitproc.SlotWait, read)
 	}
 }
 
@@ -758,9 +963,9 @@ func TestAFloorOnAnotherDomainsLogNeverHoldsAnOperation(t *testing.T) {
 			rep, err)
 	}
 
-	// The fleet's attempt is longer than the holder's floor wait
-	// ([fleetAttempt]), so it says it is behind before the asker stops
-	// listening.
+	// The holder's floor wait ends a reply's margin inside its asker's
+	// attempt (statelog.WithReplyMargin), so it says it is behind while the
+	// asker is still listening.
 	_, _, err = f.client.Pages().Comment(t.Context(), pages.Actor{}, "p", pages.NewComment{})
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) || !strings.Contains(err.Error(), "has not applied") ||
@@ -1987,8 +2192,9 @@ func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 	for _, n := range f.nodes {
 		n.set(func(n *fakeNode) { n.hang = hang })
 	}
-	r := f.router(t, "agent-2", nil)
-	r.readBudget, r.admissionBudget = 10*time.Second, 200*time.Millisecond
+	timing := Production()
+	timing.AdmissionAsk = 200 * time.Millisecond
+	r := f.routerTimed(t, "agent-2", nil, timing)
 	type answer struct {
 		served bool
 		err    error
@@ -2006,7 +2212,7 @@ func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 		}
 		if waited := time.Since(begun); waited > 2*time.Second {
 			t.Fatalf("admission waited %s on wedged data nodes, past its %s bound",
-				waited, r.admissionBudget)
+				waited, timing.AdmissionAsk)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("admission waited on every wedged data node in turn, past its bound")

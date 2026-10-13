@@ -29,7 +29,7 @@ import (
 // gave up and marked the node suspect for every domain.
 //
 // JUDGED BY WHAT WAS STILL HELD, never by a clock: the reader has the
-// fleet's attempt, production's read attempt ([fleetAttempt]), so a node slow
+// fleet's attempt, production's read attempt ([fleet.router]), so a node slow
 // under load still answers it, and what proves the read never waited for a
 // proposal's slot is that no push had let go of one when it was answered. Served on one registration, every slot stays held until the
 // release below, so the read waits out its whole attempt and is refused.
@@ -81,7 +81,7 @@ func TestAQueuedPushHoldsNoSlotAReadIsAnsweredThrough(t *testing.T) {
 			}
 			time.Sleep(time.Millisecond)
 		}
-		reads, cancelReads := context.WithTimeout(t.Context(), 2*fleetAttempt)
+		reads, cancelReads := context.WithTimeout(t.Context(), 2*Production().ReadAttempt)
 		if _, err := f.client.Work().Tasks(reads, tracker.Query{}, time.Now()); err != nil {
 			cancelReads()
 			t.Fatalf("with %d pushes held on the node, a tracker read of it = %v, want it "+

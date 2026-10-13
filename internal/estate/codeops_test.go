@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -468,14 +469,27 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 // with none would be judged by its wait in the queue alone, and answered up to
 // the serving node's floor wait and the request's trip after its asker had
 // handed the push id to the runner-up.
+//
+// THE ROUTER'S OWN WRITE ATTEMPT, read from the timing it was built with:
+// halfway between the shortest a router takes and production's, so it is
+// neither production's constant nor the router's read attempt, and a router
+// that waited either for a write is caught.
 func TestAProposalCarriesItsAttemptToTheCommitter(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	d := &codeDesk{}
 	serveDesk(t, f, d)
+	timing := Production()
+	timing.WriteAttempt = (minWriteAttempt + Production().WriteAttempt) / 2
+	if timing.WriteAttempt == timing.ReadAttempt || timing.WriteAttempt == Production().WriteAttempt {
+		t.Fatalf("the premise: a write attempt of %v tells nothing apart from a read attempt of "+
+			"%v and production's write attempt of %v", timing.WriteAttempt, timing.ReadAttempt,
+			Production().WriteAttempt)
+	}
+	r := f.routerTimed(t, "agent-2", nil, timing)
 
 	asked := time.Now()
-	if _, err := f.client.Code().Propose(t.Context(),
+	if _, err := r.Code().Propose(t.Context(),
 		proposalTo("repo-deadline", "019a0c2e-0000-7000-8000-0000000000d1")); err != nil {
 		t.Fatalf("propose: %v", err)
 	}
@@ -483,7 +497,7 @@ func TestAProposalCarriesItsAttemptToTheCommitter(t *testing.T) {
 	callerDeadline := answered.Add(5 * time.Minute)
 	ctx, cancel := context.WithDeadline(t.Context(), callerDeadline)
 	defer cancel()
-	if _, err := f.client.Code().Propose(ctx,
+	if _, err := r.Code().Propose(ctx,
 		proposalTo("repo-deadline", "019a0c2e-0000-7000-8000-0000000000d2")); err != nil {
 		t.Fatalf("propose with a deadline: %v", err)
 	}
@@ -494,10 +508,7 @@ func TestAProposalCarriesItsAttemptToTheCommitter(t *testing.T) {
 	if len(deadlines) != 2 {
 		t.Fatalf("the committer was proposed %d pushes, want 2", len(deadlines))
 	}
-	// The fleet's routers hold a shortened write attempt ([fleetAttempt]);
-	// production's is writeAttempt, which
-	// TestARoutedPushCanBeDecidedInsideItsAttempt holds.
-	attempt := f.client.writeBudget
+	attempt := timing.WriteAttempt
 	if got := deadlines[0]; got.Before(asked.Add(attempt)) || got.After(answered.Add(attempt)) {
 		t.Errorf("a push from a caller with no deadline was served under %v, want the router's write "+
 			"attempt (%s) from the moment it was asked, between %v and %v", got, attempt,
@@ -509,23 +520,41 @@ func TestAProposalCarriesItsAttemptToTheCommitter(t *testing.T) {
 	}
 }
 
-// A ROUTED PUSH CAN BE DECIDED INSIDE ITS ATTEMPT: the serving node may spend
-// statelog.ReadBudget of the router's write attempt waiting for the asker's
-// floor before the committer sees the push, and the committer starts a batch
-// only while a CommitBudget and the ReplyMargin are left before the attempt
-// ends — so the attempt, less that wait, must hold MORE than a batch and its
-// answer, or every push asked of another node's committer by a caller with no
-// deadline of its own is answered busy before anything decides it. What is
-// left over is how long such a push may queue behind its repository's earlier
-// pushes. The committer's bounds and the router's are two packages' constants;
-// this is the one place both are importable (estate imports code, never the
-// reverse).
+// A ROUTED PUSH CAN BE DECIDED INSIDE ITS ATTEMPT, or no router is built with
+// it: the serving node may spend statelog.ReadBudget of the router's write
+// attempt waiting for the asker's floor before the committer sees the push,
+// and the committer starts a batch only while a CommitBudget and the
+// ReplyMargin are left before the attempt ends — so the attempt, less that
+// wait, must hold MORE than a batch and its answer, or every push asked of
+// another node's committer by a caller with no deadline of its own is answered
+// busy before anything decides it. A write attempt at that sum is refused,
+// naming the field; the next is taken, and so is production's, whose excess is
+// how long a push may queue behind its repository's earlier pushes.
+//
+// The sum is spelled here from the committer's bounds and the floor wait, never
+// from the router's own constant, so a bound that lost a term fails; the two
+// packages' constants meet here because estate imports code, never the
+// reverse.
 func TestARoutedPushCanBeDecidedInsideItsAttempt(t *testing.T) {
 	t.Parallel()
-	if left := writeAttempt - statelog.ReadBudget; left <= code.CommitBudget+code.ReplyMargin {
-		t.Fatalf("the router gives one data node %s, the serving node may wait %s of it for the "+
-			"asker's floor, and the committer starts a batch only while %s and its answer's %s are "+
-			"left: a push asked of another node's committer could never be decided, only answered "+
-			"busy", writeAttempt, statelog.ReadBudget, code.CommitBudget, code.ReplyMargin)
+	build := func(write time.Duration) error {
+		timing := Production()
+		timing.WriteAttempt = write
+		_, err := NewRouter(RouterOptions{Self: "agent-1", Queue: &recordingAsker{},
+			Placement: &fakePlacement{}, Session: NewSession(), Timing: timing})
+		return err
+	}
+	bound := statelog.ReadBudget + code.CommitBudget + code.ReplyMargin
+	if err := build(bound); err == nil || !strings.Contains(err.Error(), "Timing.WriteAttempt") {
+		t.Errorf("a router whose write attempt is the serving node's floor wait (%v), a batch "+
+			"(%v) and its answer (%v) answered %v, want a refusal naming Timing.WriteAttempt: no "+
+			"push asked of another node's committer could be decided, only answered busy",
+			statelog.ReadBudget, code.CommitBudget, code.ReplyMargin, err)
+	}
+	for _, write := range []time.Duration{bound + time.Nanosecond, Production().WriteAttempt} {
+		if err := build(write); err != nil {
+			t.Errorf("a router whose write attempt is %v, over the %v a routed push needs, "+
+				"answered %v", write, bound, err)
+		}
 	}
 }

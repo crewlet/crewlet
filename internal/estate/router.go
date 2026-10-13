@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -81,6 +82,138 @@ type RouterOptions struct {
 	// Now is the clock the suspect cooldown and the admission cache read,
 	// injected for tests. Nil is the wall clock.
 	Now func() time.Time
+
+	// Timing is how long the router waits on a data node: [Production] on
+	// every node. Every field is required, and no attempt may end before the
+	// serving node can answer ([Timing]).
+	Timing Timing
+}
+
+// Timing is every duration the router waits on that a test must be able to
+// scale: one attempt's budget on one data node for a read and for a write, and
+// the admission question's whole budget.
+//
+// [Production] is the value every node runs, and nothing in the engine builds
+// another. A suite that drives the router from outside this package builds its
+// own: one value rather than three fields set from inside the package, because
+// a test in another package can reach no unexported field, and the jsprovision
+// idiom (jsprovision.Timing) is the tree's one shape for a set of durations a
+// test scales.
+//
+// WHAT A SHORTER TIMING BUYS is the cost of a WEDGED node — one that takes a
+// request and never answers it, which its asker waits out to the end of the
+// attempt — and of an admission question no data node answers. A node that is
+// GONE costs no attempt at any timing: nothing serves its subject any more,
+// and the broker's ask ends at once.
+//
+// THE SERVING NODE FITS ITS WAITS INTO THE ATTEMPT, rather than the attempt
+// having to outlast them: every wait a node makes before it answers another —
+// for the asker's floor, for a linearizable read's barrier and the position it
+// established, for a write's own record — ends code.ReplyMargin short of the
+// attempt's end ([statelog.WithReplyMargin]), so a node that runs out of time
+// says so (`behind`, `no_quorum`, `pending`) while its asker is still
+// listening. A shorter attempt therefore costs only that a node behind by more
+// than it leaves says so sooner; it never reads an HONEST node as a wedged one,
+// which is what an attempt sized below the waits used to do — the asker had
+// stopped listening when a lagging but healthy node answered, asked it last for
+// suspectFor and told the placement it went unanswered. Nor could an attempt be
+// sized to outlast the waits instead: at their whole budgets they are two
+// [statelog.ReadBudget]s and two [statelog.DefaultBarrierBudget]s (a barrier
+// may first wait out one already in flight), fourteen seconds, past production's
+// own read attempt and a figure no test could scale.
+//
+// What [NewRouter] refuses, naming the field and the arithmetic, is an attempt
+// that cannot do its job at all:
+//
+//   - A read attempt no longer than [minReadAttempt], the reply's margin: the
+//     serving node would have no time left in it to wait for anything or to
+//     run a query, so every read it is asked comes back refused or late.
+//   - A write attempt no longer than [minWriteAttempt]: the serving node's
+//     floor wait at its whole budget, then a whole code.CommitBudget and
+//     code.ReplyMargin. The attempt's end travels to a repository's committer
+//     as the push's deadline, and a committer starts a batch only while a
+//     budget and the margin are left before it — so under the bound a push
+//     whose committer first waited out its floor is answered busy, undecided,
+//     and under the committer's two terms alone EVERY push asked of another
+//     node's committer is. A suite that needs a wedged committer to cost less
+//     has to shorten the committer's budget with it, which is the committer's
+//     to expose rather than the router's to assume.
+//
+// The admission budget bounds a floorless question ([opPing]), so it has only
+// to be a positive duration.
+//
+// A FIELD LEFT ZERO IS REFUSED BY NAME as well, never read as "the default",
+// because each would be read as something nobody chose: a zero attempt is no
+// bound of the router's own ([attemptContext] takes it as the caller's
+// deadline, unchanged), so a request from a caller with none would wait on a
+// wedged data node for ever rather than move on to the next; and a zero
+// admission budget is a deadline already past, so every placement sweep would
+// withhold every seat's claim — a wiring mistake that reads as a fleet with no
+// data node in it. A negative field is a deadline already past for any of the
+// three.
+type Timing struct {
+	// ReadAttempt bounds one read's wait on one data node — see
+	// [ReadAttempt]. Longer than [minReadAttempt].
+	ReadAttempt time.Duration
+	// WriteAttempt bounds one write's wait on one data node, for a caller
+	// with no deadline of its own — see writeAttempt. Longer than
+	// [minWriteAttempt].
+	WriteAttempt time.Duration
+	// AdmissionAsk bounds the remote half of the admission question as a
+	// whole — see admissionAsk. Positive.
+	AdmissionAsk time.Duration
+}
+
+// Production is the timing every node runs: [ReadAttempt], writeAttempt and
+// admissionAsk, whose reasons are written at their definitions.
+func Production() Timing {
+	return Timing{ReadAttempt: ReadAttempt, WriteAttempt: writeAttempt, AdmissionAsk: admissionAsk}
+}
+
+// minReadAttempt is what every read attempt must be longer than: the reply's
+// margin, code.ReplyMargin — the answer's trip back, which a serving node
+// leaves between the end of every wait it makes and its asker's deadline
+// ([statelog.WithReplyMargin]). An attempt no longer than that leaves the node
+// nothing to wait or run a query in; what an attempt holds beyond it is what
+// the serving node's waits and its query share. See [Timing].
+const minReadAttempt = code.ReplyMargin
+
+// minWriteAttempt is what every write attempt must be longer than: the serving
+// node's floor wait at its whole budget ([statelog.ReadBudget]), then a whole
+// code.CommitBudget and code.ReplyMargin, which a repository's committer must
+// still find before a push's deadline to start the push's batch at all.
+//
+// It is what a PUSH needs, and no bound on how long any write's serving node
+// takes: a walking gesture — a merge, a move — appends once per object it
+// walks and waits between them, which is what production's write attempt is
+// sized for (writeAttempt), and every one of those waits ends inside whatever
+// attempt the write is given, a reply's margin short of it. See [Timing].
+const minWriteAttempt = statelog.ReadBudget + code.CommitBudget + code.ReplyMargin
+
+// refusal is why a router may not be built with t, naming the first field it
+// refuses, or nil.
+func (t Timing) refusal() error {
+	const production = "Production() is the value a node runs"
+	switch {
+	case t.ReadAttempt <= minReadAttempt:
+		return fmt.Errorf("estate: a router's Timing.ReadAttempt is %v, and it must be longer "+
+			"than %v — the answer's trip back (code.ReplyMargin), which a serving node leaves "+
+			"between the end of its waits and its asker's deadline, so an attempt no longer "+
+			"leaves it no time to wait for anything or to run the read; %s", t.ReadAttempt,
+			minReadAttempt, production)
+	case t.WriteAttempt <= minWriteAttempt:
+		return fmt.Errorf("estate: a router's Timing.WriteAttempt is %v, and it must be longer "+
+			"than %v — the serving node's wait for the asker's floor (statelog.ReadBudget, %v), "+
+			"then a batch (code.CommitBudget, %v) and its answer (code.ReplyMargin, %v), which a "+
+			"repository's committer must still have before a push's deadline or it answers the "+
+			"push busy, undecided; %s", t.WriteAttempt, minWriteAttempt, statelog.ReadBudget,
+			code.CommitBudget, code.ReplyMargin, production)
+	case t.AdmissionAsk <= 0:
+		return fmt.Errorf("estate: a router's Timing.AdmissionAsk is %v, and it must be a "+
+			"positive duration — a zero or negative budget is a deadline already past, which "+
+			"withholds every seat's claim; %s", t.AdmissionAsk, production)
+	}
+	return nil
 }
 
 // Router routes every estate operation to a data node: this node, in-process,
@@ -131,10 +264,8 @@ type Router struct {
 	seams     ServerSeams
 	now       func() time.Time
 
-	// readBudget and writeBudget are [ReadAttempt] and [writeAttempt], and
-	// admissionBudget [admissionAsk], held so a test can shorten them
-	// rather than wait out a dead node.
-	readBudget, writeBudget, admissionBudget time.Duration
+	// timing is how long each attempt waits ([RouterOptions.Timing]).
+	timing Timing
 
 	mu sync.Mutex
 	// sticky is, per set of copies an operation reads ([opSpec.copies]) —
@@ -182,6 +313,9 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 		return nil, errors.New("estate: a router needs this node's id — it is " +
 			"what a serving node's log names, and what the router never asks")
 	}
+	if err := opts.Timing.refusal(); err != nil {
+		return nil, err
+	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
@@ -189,23 +323,36 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 	return &Router{
 		self: opts.Self, queue: opts.Queue, placement: opts.Placement,
 		local: opts.Local, session: opts.Session, seams: opts.Seams, now: now,
-		readBudget: ReadAttempt, writeBudget: writeAttempt, admissionBudget: admissionAsk,
+		timing: opts.Timing,
 		sticky: map[string]string{}, suspect: map[string]time.Time{},
 		passedOver: map[nodeCopy]time.Time{}, declined: map[nodeOp]time.Time{},
 	}, nil
 }
 
-// ReadAttempt bounds one read's wait on one node.
+// ReadAttempt bounds one read's wait on one node: [Production]'s
+// [Timing.ReadAttempt].
 //
-// TEN SECONDS: a serving node may wait [statelog.ReadBudget] for the floor and
-// again for the level a read asked for, and then runs the query — so a node
-// that has not answered in several times that is one that is gone rather than
-// slow, and the next one answers sooner than it would. It is a ceiling under
-// the caller's own deadline, never over it.
+// TEN SECONDS: every wait a serving node makes for a linearizable read at its
+// whole budget — the asker's floor ([statelog.ReadBudget]), the read's barrier
+// ([statelog.DefaultBarrierBudget]) and the barrier's position (ReadBudget
+// again) — and the reply's margin on top (code.ReplyMargin): 2 + 5 + 2 + 1.
+// So production cuts a healthy node's waits short only where its barrier
+// first waits out one already in flight, and the node then says so in time
+// ([statelog.WithReplyMargin]); a node that has said nothing at all in that
+// long is one that is gone rather than slow, and the next one answers sooner
+// than it would. TestProductionsReadAttemptHoldsALinearizableReadsWaits holds
+// the sum. It is a ceiling under the caller's own deadline, never over it, and
+// above [minReadAttempt], which [NewRouter] holds every timing to.
+//
+// THE CODE HOST'S LOCAL READS ARE BOUNDED BY THE SAME FIGURE — gitproc's
+// ReadDeadline and SlotWait, one read attempt each — and since gitproc imports
+// no engine package, TestGitprocsReadBoundsAreOneReadAttempt holds the
+// equality from here.
 const ReadAttempt = 10 * time.Second
 
 // writeAttempt bounds one write's wait on one node, for a caller with no
-// deadline of its own.
+// deadline of its own: [Production]'s [Timing.WriteAttempt], and read by
+// nothing else, so a router waits only the timing it was built with.
 //
 // SIXTY SECONDS: a single append resolves within [statelog.DefaultResolveBudget]
 // (five), and the longest gesture a seat's tools make — a merge or a move —
@@ -216,8 +363,9 @@ const ReadAttempt = 10 * time.Second
 // repository's committer answers a push inside it: it starts a batch only
 // while a code.CommitBudget and code.ReplyMargin are left before it, so the
 // attempt, less the serving node's floor wait, has to hold more than both —
-// TestARoutedPushCanBeDecidedInsideItsAttempt — and what is left over is how
-// long a push may queue behind its repository's earlier ones.
+// [minWriteAttempt], which [NewRouter] holds every timing to — and what is left
+// over, twenty-seven seconds, is how long a push may queue behind its
+// repository's earlier ones.
 const writeAttempt = 60 * time.Second
 
 // suspectFor is how long a node that went unanswered is asked last.
@@ -255,7 +403,8 @@ const suspectFor = 30 * time.Second
 const admissionTrust = 5 * time.Second
 
 // admissionAsk bounds the REMOTE half of the admission question as a whole —
-// every data node it asks, together — where [ReadAttempt] bounds only each one.
+// every data node it asks, together — where [ReadAttempt] bounds only each one:
+// [Production]'s [Timing.AdmissionAsk], and read by nothing else.
 //
 // FIVE SECONDS, what a node holding no data waited before the router, and for
 // its reason: admission is asked on every placement sweep, synchronously — the
@@ -675,18 +824,18 @@ func (x exchange) record(rep reply) {
 	}
 }
 
-// budgetFor is one attempt's budget on one data node: [ReadAttempt] for a read,
-// and for a write [writeAttempt] — or, where the caller has a deadline, that
-// deadline, since a gesture the caller gave five minutes must not be
-// abandoned after one.
+// budgetFor is one attempt's budget on one data node: the router's
+// [Timing.ReadAttempt] for a read, and for a write its [Timing.WriteAttempt] —
+// or, where the caller has a deadline, that deadline, since a gesture the
+// caller gave five minutes must not be abandoned after one.
 func (r *Router) budgetFor(ctx context.Context, spec *opSpec) time.Duration {
 	if spec.class == opRead {
-		return r.readBudget
+		return r.timing.ReadAttempt
 	}
 	if _, bounded := ctx.Deadline(); bounded {
 		return 0
 	}
-	return r.writeBudget
+	return r.timing.WriteAttempt
 }
 
 // runLocal runs one operation in-process on this node's own copy. why is set,
@@ -1028,7 +1177,7 @@ func (r *Router) Serves(ctx context.Context) (tracker, pages bool, err error) {
 	if cached != nil && r.now().Sub(cached.at) < admissionTrust {
 		return cached.tracker, cached.pages, cached.err
 	}
-	asked, cancel := context.WithTimeout(ctx, r.admissionBudget)
+	asked, cancel := context.WithTimeout(ctx, r.timing.AdmissionAsk)
 	defer cancel()
 	out, err := call(asked, r, opPing, nil, struct{}{})
 	r.mu.Lock()
