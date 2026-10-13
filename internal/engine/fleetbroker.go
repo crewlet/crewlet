@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
@@ -362,7 +363,7 @@ func (e *Engine) serveFleetBroker(ctx context.Context) error {
 		e.backends.Queue == nil || e.backends.broker == nil {
 		return nil
 	}
-	stop, err := e.backends.Queue.Serve(ctx, fleetBrokerSubject(e.id),
+	stop, err := e.backends.Queue.Serve(ctx, fleetBrokerSubject(e.id), queue.ConcurrentAnswers,
 		func(ctx context.Context, raw []byte) ([]byte, error) {
 			return json.Marshal(e.answerBroker(ctx, raw))
 		})

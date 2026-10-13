@@ -280,9 +280,17 @@ const (
 	// process that may die holding it. CommitterInboxBytes bounds the same
 	// queue by what it weighs. NEITHER BOUNDS HOW LONG a push waits — sixteen
 	// healthy batches drain in well under a second, sixteen slow ones in
-	// minutes — so the queue is bounded in TIME too: a push still queued a
-	// whole CommitBudget after it arrived is answered busy rather than
-	// decided (committer.go).
+	// minutes — so the queue is bounded in TIME too: a push is answered busy
+	// rather than decided once too little of its asker's attempt is left for
+	// its own batch, and one asked with no deadline once it has waited a
+	// whole CommitBudget (committer.go).
+	//
+	// A ROUTED burst reaches it too: the estate answers a node's proposals
+	// on a registration of their own whose concurrency is this queue and
+	// the batch ahead of it (internal/estate's proposalAnswers), so the
+	// bound a burst meets is this one, refused busy at once, never the
+	// registration's — past which a push would wait unseen in the broker's
+	// buffer for a slot.
 	CommitterInbox = 1_024
 
 	// CommitterInboxBytes is the most one repository's queue may weigh, by
@@ -298,6 +306,36 @@ const (
 	// bytes.
 	CommitterInboxBytes = 16 * MaxRecordBytes
 
+	// CommitterNodeBytes is the most the proposals one node's committer
+	// HOLDS may weigh together, across every repository, by the same
+	// measure — each from the moment it is queued until its caller has its
+	// answer, its batch included: FOUR REPOSITORIES' CommitterInboxBytes,
+	// sixty-four records. Past it a push is refused busy at once.
+	//
+	// Each repository's queue is bounded on its own, and nothing else bound
+	// them together: a node is the committer of every repository rendezvous
+	// ranks it first for, and the estate answers its proposals on a
+	// registration of their own as wide as one repository's whole queue
+	// (CommitterInbox), so a thousand of the largest pushes at once — each
+	// one a receive-pack some receiving node holds open, from as many
+	// repositories — held over 400 MiB of entries on the committer, and as
+	// much again decoded. The largest entry this domain admits is about
+	// 440 KiB (MaxCommandsPerPush commands at MaxRefNameBytes, then
+	// MaxIntroduced ids: 451 222 bytes measured), so four repositories'
+	// queues is room for four bursts taken whole at once, or about 150 of the
+	// largest pushes — where the estate's one shared registration held at
+	// most sixty-four proposals a node, about 28 MiB of them, before
+	// proposals had a registration of their own. A JUDGEMENT, of a burst's
+	// reach against a node's memory: about 64 MiB of entries, some two and
+	// a third times what the shared registration could hold, on a node that
+	// holds the whole estate, so that four repositories' bursts queue whole
+	// at once. Small pushes
+	// never reach it — a thousand at a kilobyte or two meet CommitterInbox
+	// long before — while large ones, an import's thousand-ref chunks, queue
+	// four repositories' worth at once and are refused busy past it, and the
+	// client runs git push again.
+	CommitterNodeBytes = 4 * CommitterInboxBytes
+
 	// CommitterIdle is how long a repository's committer goroutine waits
 	// with nothing queued before it exits and forgets the repository. A
 	// goroutine and its queue cost a few kilobytes and restarting one costs
@@ -306,22 +344,35 @@ const (
 	// burst, whose pushes arrive seconds apart, keeps the one it started.
 	CommitterIdle = 30 * time.Second
 
-	// CommitBudget bounds ONE batch's publish and the read that answers it,
-	// and how long a push may WAIT in its repository's queue before its own
-	// batch starts: HALF the estate router's write attempt (sixty seconds),
-	// because a decided push's answer is those two halves — a wait of less
-	// than one budget, then a batch of at most another — and the committer
-	// must answer inside the ONE attempt its asker gives it, or the asker
-	// hands the same push id to the runner-up and two committers contend on
-	// the repository's subject. A push still queued a whole budget after it
-	// arrived, behind however many batches, is answered busy undecided; one
-	// whose caller has gone is never decided. internal/estate holds
-	// 2 × CommitBudget within its attempt (estate imports this package,
-	// never the reverse). A healthy batch takes milliseconds; thirty seconds
-	// is a broker election and its compare-and-set rounds with room to
-	// spare, and past it the publisher's own resolution answers unknown,
-	// naming the operation.
+	// CommitBudget bounds ONE batch's publish and the read that answers it:
+	// HALF the estate router's write attempt (sixty seconds). A healthy batch
+	// takes milliseconds; thirty seconds is a broker election and its
+	// compare-and-set rounds with room to spare, and past it the publisher's
+	// own resolution answers unknown, naming the operation.
+	//
+	// A committer must answer inside the ONE attempt its asker gives it, or
+	// the asker hands the same push id to the runner-up and two committers
+	// contend on the repository's subject. So a push whose caller carries a
+	// DEADLINE — the router's attempt, on a routed proposal — starts a batch
+	// only while a whole budget and ReplyMargin are left before it, and is
+	// answered busy undecided the moment they are not, whether it is still
+	// queued or just reaching its batch; one whose caller carries none — the
+	// in-process path, where no runner-up is asked while it runs — may wait
+	// in the queue for less than one budget. One whose caller has gone is
+	// never decided. internal/estate holds the router's attempt, less the
+	// serving node's floor wait, to more than a budget and ReplyMargin, so a
+	// routed push can be decided at all (estate imports this package, never
+	// the reverse).
 	CommitBudget = 30 * time.Second
+
+	// ReplyMargin is what a committer leaves between the end of a push's
+	// batch and its asker's deadline: the answer's trip back — its
+	// encoding and one hop of the broker's request/reply, milliseconds on a
+	// healthy fleet — and the skew between the asker's clock, which stamped
+	// the deadline, and this node's, which reads it, which NTP holds to
+	// milliseconds as well. ONE SECOND is two orders of magnitude over both,
+	// and costs a routed push one second of the twenty-odd it may queue.
+	ReplyMargin = time.Second
 
 	// MaxPackBytes is the largest OBJECT one push stores — its pack bundle
 	// (bundle.go): the pack receive-pack stored, then its index and its

@@ -414,7 +414,7 @@ func Serve(ctx context.Context, q queue.EventQueue, self string, local *store.Ev
 	if q == nil || local == nil || self == "" {
 		return nil, errors.New("eventfan: serve needs a queue, a store and this node's id")
 	}
-	return q.Serve(ctx, Subject, func(ctx context.Context, raw []byte) ([]byte, error) {
+	return q.Serve(ctx, Subject, queue.ConcurrentAnswers, func(ctx context.Context, raw []byte) ([]byte, error) {
 		var req request
 		if err := json.Unmarshal(raw, &req); err != nil {
 			// UNATTRIBUTABLE, so silent: an answer to a request this

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -62,7 +63,7 @@ func TestOnlyTheSeatHolderAnswersASteer(t *testing.T) {
 	}
 	running, idle := newSteerDesk(), newSteerDesk()
 	for q, d := range map[*memory.Queue]*steerDesk{holder: running, other: idle} {
-		stop, err := q.Serve(t.Context(), topics.SeatSteer, d.answer)
+		stop, err := q.Serve(t.Context(), topics.SeatSteer, queue.ConcurrentAnswers, d.answer)
 		if err != nil {
 			t.Fatalf("Serve: %v", err)
 		}

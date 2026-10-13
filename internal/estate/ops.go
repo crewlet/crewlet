@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -20,8 +21,9 @@ import (
 // The serving half: what a data node answers with.
 //
 // Declared here, by the consumer, and kept to exactly what the operations
-// below call — the seat surface's tools, and the operator's own surfaces: the
-// dashboard and REST routes and the operator's MCP. Those reach the estate
+// below and in codeops.go call — the seat surface's tools, the code host, and
+// the operator's own surfaces: the dashboard and REST routes and the
+// operator's MCP. Those reach the estate
 // through this node's router as a seat's tools do, so a node whose copy of the
 // operation's domain is out of service answers its operator from a peer's copy
 // rather than its own, and a node holding no data serves them at all.
@@ -200,6 +202,11 @@ type Backend struct {
 	Backlinks  BacklinkReader
 	Usage      UsageReader
 
+	// Code is this node's code half — its committer and its reader
+	// ([code.Served]) — or nil where the company hosts no code: every code
+	// operation is then answered "no backend here".
+	Code CodeServer
+
 	// Committed waits until this node's applier of the floor's log holds a
 	// position — the floor every request carries, the node's own included.
 	Committed func(ctx context.Context, at statelog.Position) error
@@ -264,6 +271,29 @@ type ServerSeams struct {
 // errNoHalf is an operation on a half this node does not run.
 var errNoHalf = errors.New("estate: this node runs no native backend for this operation")
 
+// declined is a half that RAN NOTHING for a reason of its own — a code
+// committer that refused before it appended anything ([ranNothing]): read as
+// errNoHalf by the router and the server alike, so every class moves on from
+// it with the same arguments, and worded as the half's own refusal, which the
+// walk's account keeps ([ranNothingDetail]).
+type declined struct{ cause error }
+
+func (d declined) Error() string   { return d.cause.Error() }
+func (d declined) Unwrap() []error { return []error{errNoHalf, d.cause} }
+
+// ranNothingDetail is what a node's answer says of a half that ran nothing:
+// that the node runs none, or — for a half that declined — the half's own
+// reason, so an estate nobody served names why each node passed (a committer
+// stopping, a node that publishes nothing) rather than claiming it has no
+// backend.
+func ranNothingDetail(self, op string, err error) string {
+	var why declined
+	if errors.As(err, &why) {
+		return fmt.Sprintf("%s ran nothing for %s: %v", self, op, why.cause)
+	}
+	return fmt.Sprintf("%s runs no native backend for %s", self, op)
+}
+
 // errNotAdmitting is admission's ping on a copy that admits no seat yet
 // ([Backend.Admits]): nothing ran, and the asker moves on.
 var errNotAdmitting = errors.New("estate: this copy admits no seat yet")
@@ -287,11 +317,13 @@ var (
 	trackerDomain = tracker.Domain{}.Name()
 	pagesDomain   = pages.Domain{}.Name()
 	usageDomain   = usage.Domain{}.Name()
+	codeDomain    = code.Domain{}.Name()
 
 	floorStreams = map[string]string{
 		trackerDomain: tracker.Domain{}.Stream().Name,
 		pagesDomain:   pages.Domain{}.Stream().Name,
 		usageDomain:   usage.Domain{}.Stream().Name,
+		codeDomain:    code.Domain{}.Stream().Name,
 	}
 )
 

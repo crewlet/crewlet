@@ -115,6 +115,10 @@ type RouterOptions struct {
 // they failed over to. A node that ran nothing is passed over by every class
 // of operation; what may be repeated after a node MAY have run it is the
 // class's ([opClass]).
+//
+// A KEYED operation — a push — keeps the demotions and nothing else of this
+// order: it is asked in [rendezvous.Order] of its KEY over every data node,
+// this one at its place, with no sticky node ([Router.keyedOrder]).
 type Router struct {
 	self      string
 	queue     Asker
@@ -198,6 +202,13 @@ const ReadAttempt = 10 * time.Second
 // (five), and the longest gesture a seat's tools make — a merge or a move —
 // appends once per object it walks and waits between them. A caller with a
 // deadline is held to that instead.
+//
+// The attempt's end travels with the request ([request.Deadline]), and a
+// repository's committer answers a push inside it: it starts a batch only
+// while a code.CommitBudget and code.ReplyMargin are left before it, so the
+// attempt, less the serving node's floor wait, has to hold more than both —
+// TestARoutedPushCanBeDecidedInsideItsAttempt — and what is left over is how
+// long a push may queue behind its repository's earlier ones.
 const writeAttempt = 60 * time.Second
 
 // suspectFor is how long a node that went unanswered is asked last.
@@ -273,6 +284,11 @@ type exchange struct {
 	// asks the next node after an unvouched one. Nil where the actor holds
 	// none; an in-process run reports into it directly.
 	written tracker.WriteLog
+
+	// key is the arguments' routing key for a KEYED operation
+	// ([op.keyedBy]), and empty for every other: the walk asks the data
+	// nodes in its rendezvous order rather than this node first.
+	key string
 }
 
 // call runs one operation on a data node whose copy serves.
@@ -296,11 +312,19 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 		keyed.class = opIdempotentWrite
 		spec = &keyed
 	}
+	var key string
+	if o.key != nil {
+		if key = o.key(args); key == "" {
+			return zero, fmt.Errorf("estate: %s is asked of the data node its key prefers, and "+
+				"its arguments name no key", spec.name)
+		}
+	}
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		return zero, fmt.Errorf("estate: %s: encode the arguments: %w", spec.name, err)
 	}
 	x := exchange{
+		key: key,
 		local: func(ctx context.Context, b Backend) (any, error) {
 			return o.serve(ctx, b, actor, args)
 		},
@@ -357,10 +381,13 @@ type walk struct {
 	reasons  []string
 	fallback *held
 
-	// lagging is every node that answered [unservedLagging], and
-	// laggingHere whether this node's own copy did.
-	lagging     []string
-	laggingHere bool
+	// lagging is every node whose copy answered [unservedLagging], in the
+	// order the walk asked them — this node among them, by its own id,
+	// where its own copy did — so the last resort asks them in that order
+	// too: this node first for an operation any copy answers equally, and
+	// the key's order for a keyed one, whose committer the last resort
+	// must not jump either.
+	lagging []string
 }
 
 func (w *walk) note(format string, args ...any) {
@@ -385,12 +412,24 @@ func (w *walk) note(format string, args ...any) {
 // data node whose applier a burst put a thousand records behind refused every
 // call its own seats made until it caught up; a fleet the same burst put
 // behind together refused every node's.
+//
+// # A keyed operation asks in its key's order
+//
+// An operation declared [op.keyedBy] asks this node at its PLACE in the
+// key's order ([Router.keyedOrder]) rather than first, and never ahead of the
+// node the key prefers; every other step of the walk — the floors, the
+// verdict of the operation's own domain, the class rule for a node that may
+// have run it, the lagging last resort — is the one above.
 func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchange) (any, error) {
 	w := &walk{}
 	// THIS NODE FIRST, where its copy serves — in-process, with the node's
-	// floors enforced exactly as a remote node enforces them.
-	if value, final, ranErr := r.tryLocal(ctx, spec, x, false, w); final {
-		return value, ranErr
+	// floors enforced exactly as a remote node enforces them — for an
+	// operation any copy answers equally. A keyed one asks it at its place
+	// in the key's order, below.
+	if x.key == "" {
+		if value, final, ranErr := r.tryLocal(ctx, spec, x, false, w); final {
+			return value, ranErr
+		}
 	}
 	budget := r.budgetFor(ctx, spec)
 	nodes, err := r.placement.Holders()
@@ -404,7 +443,13 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 		// put behind refused every call its own seats made for as long as
 		// the presence view could not answer — while it kept those seats,
 		// rightly: a node that answers from its own copy needs no view to
-		// route.
+		// route. A KEYED operation has not asked it yet: with no node
+		// named to order, its own copy is the one node left to ask.
+		if x.key != "" {
+			if value, final, ranErr := r.tryLocal(ctx, spec, x, false, w); final {
+				return value, ranErr
+			}
+		}
 		if value, final, ranErr := r.lastResort(ctx, spec, actor, x, budget, w); final {
 			return value, ranErr
 		}
@@ -417,7 +462,15 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 		}
 		return nil, fmt.Errorf("estate: %s: read who holds the estate: %w", spec.name, err)
 	}
-	for _, node := range r.order(spec.copies, nodes) {
+	for _, node := range r.orderFor(spec, x.key, nodes) {
+		if node == r.self {
+			// THIS NODE'S TURN IN A KEYED ORDER: in-process, held to the
+			// same floors and the same verdict a remote node is.
+			if value, final, ranErr := r.tryLocal(ctx, spec, x, false, w); final {
+				return value, ranErr
+			}
+			continue
+		}
 		rep, answered, err := r.askFor(ctx, spec, actor, x, node, budget, false)
 		if err != nil {
 			return nil, err
@@ -441,22 +494,22 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 	return nil, &ErrUnserved{Detail: strings.Join(w.reasons, "; ")}
 }
 
-// lastResort asks the copies the walk passed over for lagging their logs —
-// this node's own first, where it lagged, then each data node that said so —
+// lastResort asks the copies the walk passed over for lagging their logs, in
+// the order it asked them ([walk.lagging]) — this node's own in-process —
 // telling each to take the request anyway. final is set when one of them gives
 // the answer.
 func (r *Router) lastResort(ctx context.Context, spec *opSpec, actor *Actor, x exchange,
 	budget time.Duration, w *walk) (value any, final bool, err error) {
 
-	if w.laggingHere {
-		w.laggingHere = false
-		if value, final, ranErr := r.tryLocal(ctx, spec, x, true, w); final {
-			return value, true, ranErr
-		}
-	}
 	lagging := w.lagging
 	w.lagging = nil
 	for _, node := range lagging {
+		if node == r.self {
+			if value, final, ranErr := r.tryLocal(ctx, spec, x, true, w); final {
+				return value, true, ranErr
+			}
+			continue
+		}
 		rep, answered, askErr := r.askFor(ctx, spec, actor, x, node, budget, true)
 		if askErr != nil {
 			return nil, true, askErr
@@ -496,7 +549,7 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 	switch {
 	case why != "":
 		if refusal == unservedLagging {
-			w.laggingHere = true
+			w.lagging = append(w.lagging, r.self)
 		}
 		w.note("%s: %s", r.self, why)
 	case unvouched(spec, value, ran):
@@ -515,7 +568,7 @@ func (r *Router) askFor(ctx context.Context, spec *opSpec, actor *Actor, x excha
 	node string, budget time.Duration, acceptLagging bool) (reply, bool, error) {
 
 	floors := r.floorsFor(spec)
-	rep, answered, err := r.ask(ctx, node, request{
+	rep, answered, err := r.ask(ctx, node, spec.lane.subject(node), request{
 		Op: spec.name, Args: x.encoded, Actor: actor,
 		Floors: floors, From: r.self, AcceptLagging: acceptLagging,
 	}, budget)
@@ -622,8 +675,7 @@ func (r *Router) runLocal(ctx context.Context, spec *opSpec, b Backend, x exchan
 	value, err = x.local(ctx, b)
 	switch {
 	case errors.Is(err, errNoHalf):
-		return nil, unservedNoBackend, fmt.Sprintf("%s runs no native backend for %s",
-			r.self, spec.name), nil
+		return nil, unservedNoBackend, ranNothingDetail(r.self, spec.name, err), nil
 	case errors.Is(err, errNotAdmitting):
 		return nil, unservedNotEstablished, fmt.Sprintf("%s's copy admits no seat yet",
 			r.self), nil
@@ -641,11 +693,12 @@ func (r *Router) floorsFor(spec *opSpec) []statelog.Position {
 	return r.session.Floors([]string{spec.floorStream})
 }
 
-// ask sends one request to one node. answered is false for a node that said
+// ask sends one request to one node, on the subject of the lane its operation
+// is answered on ([opSpec.lane]). answered is false for a node that said
 // nothing — suspected, and reported to the placement — and err is set only
 // where the request could not be made at all, which no other node would fare
 // better with.
-func (r *Router) ask(ctx context.Context, node string, req request, budget time.Duration) (
+func (r *Router) ask(ctx context.Context, node, subject string, req request, budget time.Duration) (
 	reply, bool, error) {
 
 	attempt, cancel := attemptContext(ctx, budget)
@@ -655,7 +708,7 @@ func (r *Router) ask(ctx context.Context, node string, req request, budget time.
 	if err != nil {
 		return reply{}, false, fmt.Errorf("encode the request: %w", err)
 	}
-	replies, err := r.queue.Ask(attempt, Subject(node), raw, 1)
+	replies, err := r.queue.Ask(attempt, subject, raw, 1)
 	if err != nil {
 		// THE ASK COULD NOT BE MADE AT ALL — a queue that is not live,
 		// a request over the size limit.
@@ -699,8 +752,65 @@ func (r *Router) order(copies string, nodes []string) []string {
 	// from its answer leaves the rest in rendezvous order.
 	nodes = slices.DeleteFunc(rendezvous.Order(r.self, nodes),
 		func(n string) bool { return n == r.self || n == "" })
+	class := r.classes(copies, true)
+	slices.SortStableFunc(nodes, func(a, b string) int { return class(a) - class(b) })
+	return nodes
+}
+
+// orderFor is the order the data nodes are asked in for one request:
+// [Router.order] for an operation any copy answers equally — this node
+// excluded, since it was asked first — and [Router.keyedOrder] for a keyed
+// one.
+func (r *Router) orderFor(spec *opSpec, key string, nodes []string) []string {
+	if key == "" {
+		return r.order(spec.copies, nodes)
+	}
+	return r.keyedOrder(spec.copies, key, nodes)
+}
+
+// keyedOrder is the order a KEYED operation asks the data nodes in:
+// [rendezvous.Order] on the KEY over every data node — THIS ONE INCLUDED where
+// it holds the estate, since the node the key prefers may be this one, and an
+// empty id never — with every node that answered `out_of_service` for the
+// operation's copies inside [suspectFor] after the rest and every node that
+// went silent inside it last, the key's order kept within each by a STABLE
+// sort.
+//
+// NO STICKY NODE: which node answered last says nothing about where a
+// repository's pushes should meet, and every node computing the same order
+// from the same set is the whole point — a committer holding a repository's
+// whole burst commits it in a few records, where two committers each holding
+// part of it contend on its one subject and each round one loses costs it a
+// re-decide and a re-append of its whole batch.
+func (r *Router) keyedOrder(copies, key string, nodes []string) []string {
+	candidates := slices.DeleteFunc(slices.Clone(nodes), func(n string) bool {
+		return n == "" || n == r.self
+	})
+	if r.local != nil {
+		candidates = append(candidates, r.self)
+	}
+	// rendezvous.Order keeps duplicates, adjacent: a placement listing a
+	// node twice names it once here.
+	ordered := slices.Compact(rendezvous.Order(key, candidates))
+	class := r.classes(copies, false)
+	slices.SortStableFunc(ordered, func(a, b string) int { return class(a) - class(b) })
+	return ordered
+}
+
+// classes is how the router's memory ranks each node for an operation reading
+// copies, lowest asked first: the STICKY node for those copies (where stay is
+// set — never for a keyed order), then every other node, then every node that
+// answered `out_of_service` for them inside [suspectFor], then every SUSPECT
+// node. It sweeps out every window that has lapsed. ONE reading of the memory
+// for both orders, so a node demoted for the unkeyed walk is demoted alike for
+// the keyed one.
+func (r *Router) classes(copies string, stay bool) func(node string) int {
 	r.mu.Lock()
-	sticky := r.sticky[copies]
+	defer r.mu.Unlock()
+	sticky := ""
+	if stay {
+		sticky = r.sticky[copies]
+	}
 	now := r.now()
 	suspect := map[string]bool{}
 	for n, until := range r.suspect {
@@ -719,20 +829,17 @@ func (r *Router) order(copies string, nodes []string) []string {
 			passedOver[c.node] = true
 		}
 	}
-	r.mu.Unlock()
-	class := func(n string) int {
+	return func(n string) int {
 		switch {
 		case suspect[n]:
 			return 3
 		case passedOver[n]:
 			return 2
-		case n == sticky:
+		case sticky != "" && n == sticky:
 			return 0
 		}
 		return 1
 	}
-	slices.SortStableFunc(nodes, func(a, b string) int { return class(a) - class(b) })
-	return nodes
 }
 
 // attemptContext is one attempt's context: the caller's, capped by budget.

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -42,6 +43,22 @@ type Proposal struct {
 	Introduced      []string  `json:"introduced,omitempty"`
 	IntroducedCount int       `json:"introduced_count,omitempty"`
 	ReceivedAt      time.Time `json:"received_at"`
+	// Seen is the code log's position the receiving node checked the push
+	// against — its linearizable sync before receive-pack ran, the state the
+	// client's commands were formed from and the thin pack's bases were read
+	// at — zero for a receiver that read none. The committer DECIDES FROM A
+	// SNAPSHOT AT OR PAST IT ([Committer]): the repository's committer is
+	// usually another node, which may be behind what the receiver saw — a
+	// node that just became the committer, or one a few records short of a
+	// repository an activation has just created — and from below it the
+	// decide would refuse a command whose old value the client was shown
+	// (stale, "fetch first") or the repository itself (repo_deleted), and
+	// refuse it again after the client fetched, until it caught up. It is a
+	// PER-PROPOSAL floor, never this node's: it is somebody else's writes,
+	// and only the decide that answers this push has to see them. Never
+	// recorded — a push row says what the push did, not what was read to
+	// receive it.
+	Seen statelog.Position `json:"seen,omitzero"`
 }
 
 // ProposeResult is what became of one proposal.
@@ -150,6 +167,11 @@ func (p Proposal) validFields() error {
 		return fmt.Errorf("%w: node: a push names the node that received it", ErrInvalidProposal)
 	case p.ReceivedAt.IsZero():
 		return fmt.Errorf("%w: received_at: a push names when it was received", ErrInvalidProposal)
+	case !p.Seen.IsZero() && p.Seen.Stream != topics.CodeLogStream:
+		return fmt.Errorf("%w: seen: %s is a position on another log than the code log (%s)",
+			ErrInvalidProposal, p.Seen, topics.CodeLogStream)
+	case !p.Seen.IsZero() && p.Seen.Valid() != nil:
+		return fmt.Errorf("%w: seen: %w", ErrInvalidProposal, p.Seen.Valid())
 	case len(p.Commands) == 0:
 		return fmt.Errorf("%w: commands: a push updates at least one ref", ErrInvalidProposal)
 	case len(p.Commands) > MaxCommandsPerPush:

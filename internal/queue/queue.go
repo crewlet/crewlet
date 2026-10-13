@@ -102,8 +102,8 @@ var ErrTooLarge = errors.New("queue: event too large for the transport")
 // in-flight event and not a disk number.
 const MaxPayloadBytes = 8 << 20
 
-// MaxConcurrentAnswers is how many requests one [EventQueue.Serve]
-// registration answers at once.
+// ConcurrentAnswers is how many requests an [EventQueue.Serve] registration
+// answers at once when what it answers is work it does NOW.
 //
 // SIXTY-FOUR, which is twice the default `node.max_concurrent`: every turn a
 // node runs can be inside one tool call that asks a peer, so a registration
@@ -123,7 +123,14 @@ const MaxPayloadBytes = 8 << 20
 // sixty-four of them in flight on one registration is sixty-four such readers
 // at the same instant. Past the cap a request waits for a slot like any
 // other, which is back-pressure on the asker rather than a failure.
-const MaxConcurrentAnswers = 64
+//
+// A REGISTRATION WHOSE ANSWERS WAIT — in a queue of their own, for as long as
+// their askers' attempts, as a push proposal waits behind its repository's
+// earlier pushes — passes the bound of that queue instead, and is a
+// registration of its own: a slot held through such a wait is one every other
+// request of its registration waits behind, so sixty-four of them on a
+// registration shared with work done now would hold every slot it has.
+const ConcurrentAnswers = 64
 
 // MaxLingerSeconds is the hard ceiling on a batch linger window.
 //
@@ -510,18 +517,29 @@ type EventQueue interface {
 	// server that did not answer, which is the same fact as a server that
 	// was not running — see AnswerFunc.
 	//
-	// ANSWERS RUN CONCURRENTLY, up to [MaxConcurrentAnswers] per
-	// registration, and a request beyond that waits for a slot rather
-	// than being dropped. One slow answer must never hold the next
-	// request behind it: an answerer serves every asker in the fleet, and
-	// a registration that answered one at a time made each of them wait
-	// for the sum of everybody else's latency.
+	// ANSWERS RUN CONCURRENTLY, up to answers of them at once, and a
+	// request beyond that waits for a slot rather than being dropped. One
+	// slow answer must never hold the next request behind it: an answerer
+	// serves every asker in the fleet, and a registration that answered
+	// one at a time made each of them wait for the sum of everybody
+	// else's latency.
+	//
+	// THE BOUND IS THE REGISTRATION'S OWN, and so are its slots: a
+	// request waiting for one waits only behind its own registration's
+	// answers, never another's. Only the answerer knows what an answer
+	// waits on — [ConcurrentAnswers] for one that does its work now, the
+	// bound of its own queue for one that waits in it — and a slot held
+	// through a wait is one every other request of the registration
+	// waits behind, so work that waits and work that does not are served
+	// on registrations of their own. A bound below one is refused
+	// ([ErrAnswerBound]): a registration that may answer nothing would
+	// hold every request it is sent until its askers gave up.
 	//
 	// The returned Unsubscribe cancels the answerer's context and then
 	// WAITS for the answers in flight, bounded by the context it is given
 	// — so a caller that withdraws and then closes what the answerer
 	// reads never closes it under an answer still reading.
-	Serve(ctx context.Context, subject string, h AnswerFunc) (Unsubscribe, error)
+	Serve(ctx context.Context, subject string, answers int, h AnswerFunc) (Unsubscribe, error)
 
 	// Start connects the backend and begins consuming.
 	//

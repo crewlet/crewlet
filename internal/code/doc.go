@@ -64,13 +64,29 @@
 // repository's history already holds is answered from its row, which is what
 // makes a push forwarded twice, or decided again on another node after a
 // failover, one push. A queue holds at most [CommitterInbox] pushes and
-// [CommitterInboxBytes] of entries, and past either a push is refused busy at
-// once. A batch is bounded by [CommitBudget], half the write attempt the estate
-// router gives the node it asked, and so is a push's wait in the queue: one
-// still queued a whole budget after it arrived is refused busy rather than
-// decided, and one whose caller has gone is never decided, so every push a
-// committer decides is answered inside its asker's attempt — never after the
-// asker has handed the same push id to another node.
+// [CommitterInboxBytes] of entries, and the node at most [CommitterNodeBytes]
+// across its repositories — from a push's queueing to its caller's answer —
+// and past any of them a push is refused busy at once; the estate answers a
+// node's proposals on a lane of their own as wide as one repository's whole
+// queue, so these bounds, never that lane's, are what a burst meets. A batch
+// is bounded by [CommitBudget], half the write attempt the estate
+// router gives the node it asked, and a push starts one only while a budget and
+// [ReplyMargin] are left before its caller's deadline — the asker's attempt,
+// which a routed proposal carries — and is refused busy rather than decided the
+// moment they are not, while it waits as well as when its batch forms; one
+// asked with no deadline may wait less than a budget, and one whose caller has
+// gone is never decided, so every push a committer decides is answered inside
+// its asker's attempt — never after the asker has handed the same push id to
+// another node.
+//
+// WHICH NODE DECIDES is the estate router's: a push is asked of its
+// repository's committer, the first live data node in the rendezvous order of
+// the repository's id, so every node routes one repository's pushes to the
+// same committer and its group commit holds them (internal/estate's "A push is
+// asked of its repository's committer"). A data node serves this package to
+// the router through ONE adapter, [Served] — its committer and its reader —
+// and a committer that decided nothing answers [ErrNotServing], which the
+// router reads as a node that ran nothing and asks the runner-up.
 //
 // # The activation fence
 //

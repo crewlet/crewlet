@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -203,7 +204,7 @@ func TestANodeThatAnswersOnlyTheSecondQuestionCountsNothing(t *testing.T) {
 	}
 	// node-x refuses every count and keeps every row it is asked about.
 	q := client(t, broker)
-	stop, err := q.Serve(t.Context(), eventfan.Subject, func(_ context.Context, raw []byte) ([]byte, error) {
+	stop, err := q.Serve(t.Context(), eventfan.Subject, queue.ConcurrentAnswers, func(_ context.Context, raw []byte) ([]byte, error) {
 		var req struct {
 			Version  int             `json:"version"`
 			Question string          `json:"question"`
