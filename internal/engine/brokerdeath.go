@@ -45,9 +45,24 @@ const brokerDuty = "embedded broker"
 // holding connections it can no longer stand behind — so the same drain over
 // them would wait on a dead broker for as long as a turn takes.
 //
-// FROM NEW RATHER THAN FROM START, because a broker can declare itself dead
-// in the window between its own boot and the engine's, and a boot that went on
-// provisioning against it would fail later on a timeout naming something else.
+// FROM NEW, because that is where the watchdog it exits through is built: the
+// first point there is anything to end the process with. Arming it there
+// loses no declaration, because a death is a latch: one declared before the
+// arm — between the broker's own boot and this line — is acted on the moment
+// the watch is armed. What the arm cannot reach is a boot step that WAITS on
+// the broker in that window: the streams, buckets and object store
+// OpenBackends provisions, and what New provisions before this. Such a step
+// ends by its own budget ([jsprovision]) with an error naming what it was
+// creating, and the boot fails rather than serving. That window is left to
+// those budgets on purpose. No Fatalf of nats-server v2.15.1 is reachable
+// once its Start has returned with this engine's options (see
+// [jetstream.Death]), so ending those waits on the death would be a context
+// threaded through every function from New down to openStream for a path that
+// does not run, and one no test outside internal/queue/jetstream could drive,
+// since nothing else can make a real nats-server declare itself dead. The
+// broker's own sentence is in the log at error either way: its logger writes
+// the line before it declares.
+//
 // UNTIL THE TEARDOWN, which shuts this broker down itself (a nats-server
 // shutting down reports what fails as an Error, never a Fatalf) or hands a
 // lent one back to the caller that owns it.
