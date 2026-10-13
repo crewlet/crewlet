@@ -493,6 +493,57 @@ func TestAnUnresolvedReferenceIsSkippedAndCounted(t *testing.T) {
 	}
 }
 
+// AN ID TWO SEATS RESOLVE TO IS NEITHER'S. Validation compares contacts as
+// the chart writes them, so two ${VAR} references resolving to one member id
+// pass it; the reconcile then kept whichever seat it reached last, silently,
+// and the other person's mail and attribution went to them. One account is not
+// two people, and which of the two it is would be a guess: it is registered
+// for neither, the previous holder's registration is withdrawn, and the pass
+// names both seats.
+func TestAnIDTwoHumanSeatsResolveToIsRegisteredForNeither(t *testing.T) {
+	o := company()
+	o.Roles[2].Contact.SlackUserID = "${FOUNDER_SLACK_ID}"
+	o.Roles = append(o.Roles, &org.Role{
+		Name: "Sam Ops", Kind: org.KindHuman,
+		Contact: &org.HumanContact{SlackUserID: "${OPS_SLACK_ID}"},
+	})
+	o.Normalize()
+	if err := o.Validate(); err != nil {
+		t.Fatalf("two references are a collision validation can see: %v", err)
+	}
+	r := notify.NewRegistry(o)
+	r.ReconcileHumanContacts(o, env(map[string]string{
+		"FOUNDER_SLACK_ID": "U0FOUNDER", "OPS_SLACK_ID": "U0OPS",
+	}))
+	if p, _ := r.ByExternalID("slack", "U0FOUNDER"); p.Handle != "dana-founder" {
+		t.Fatalf("the founder's id started at %q", p.Handle)
+	}
+
+	rec := r.ReconcileHumanContacts(o, env(map[string]string{
+		"FOUNDER_SLACK_ID": "U0FOUNDER", "OPS_SLACK_ID": "U0FOUNDER",
+	}))
+	if p, ok := r.ByExternalID("slack", "U0FOUNDER"); ok {
+		t.Fatalf("an id two seats resolve to is attributed to %q", p.Handle)
+	}
+	want := []notify.SharedIdentity{{
+		Namespace: "slack", ExternalID: "U0FOUNDER",
+		Handles: []string{"dana-founder", "sam-ops"},
+	}}
+	if !slices.EqualFunc(rec.Shared, want, func(a, b notify.SharedIdentity) bool {
+		return a.Namespace == b.Namespace && a.ExternalID == b.ExternalID &&
+			slices.Equal(a.Handles, b.Handles)
+	}) {
+		t.Fatalf("shared = %+v, want %+v", rec.Shared, want)
+	}
+	if len(rec.Conflicts) != 0 {
+		t.Fatalf("a shared declaration was reported as a conflict: %+v", rec.Conflicts)
+	}
+	// The founder's GitHub login is theirs alone and stays registered.
+	if p, _ := r.ByExternalID("github", "danaf"); p.Handle != "dana-founder" {
+		t.Fatalf("the founder's other id resolved to %q", p.Handle)
+	}
+}
+
 // A human seat flipped to an agent, or removed outright, must stop being
 // reachable at the ids it declared.
 func TestASeatThatStopsBeingHumanLosesItsContactIDs(t *testing.T) {
