@@ -272,9 +272,14 @@ Instead the boot says what it is doing every ten seconds:
 INFO queue.jetstream  embedded_broker_starting server=node-1 store_dir=/var/lib/crewlet/stream elapsed_seconds=20 detail="the embedded broker is still starting — recovering its file store, …"
 ```
 
-If you supervise the process with a startup probe, give it room for the
-largest store the node may have to recover. A broker that cannot start at
-all — a store directory it cannot use, a port somebody holds — does not wait:
+**Nothing answers `/health` until the recovery is over**, because the node
+opens its HTTP listener only once its boot has finished. So a node under an
+orchestrator needs a startup probe sized for the largest store it may have to
+recover: [Sizing the startup probe](#sizing-the-startup-probe) has the
+arithmetic. A liveness probe on its own counts every second of the recovery
+as a failure, restarts the node partway through it, and the next boot
+recovers the same store again. A broker that cannot start at all, such as one
+with a store directory it cannot use or a port somebody holds, does not wait:
 it [declares itself dead](#a-broker-that-declares-itself-dead) and the boot
 fails at once with its reason.
 
@@ -843,7 +848,7 @@ Both take the **Tier A** bootstrap file (`crewlet.yaml`) — the founder-owned c
 
 They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory, and signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key, logs `sandbox_otel_signing_key_ephemeral`, and every token one process mints is forged as far as the other is concerned. `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/subscription-llm-backends.md), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
 
-Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field). Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
+Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field), and give the boot a startup probe on `/health`, because neither answers until the boot is over. Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic and how long the startup probe has to wait. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
 
 Both communicate through the stream, and through the coordination KV riding
 the same connection — never with each other. Both accept `-debug` for verbose
@@ -858,7 +863,7 @@ traffic:
 
 | | `/health` (liveness) | `/ready` |
 |---|---|---|
-| A node with `ingress` | `200` while the process is alive, through a drain | Should traffic come here: `503` while draining, unconfigured, or on a `shed` or `stuck` posture |
+| A node with `ingress` | `200` while the process is alive, from the end of its boot and through a drain | Should traffic come here: `503` while draining, unconfigured, or on a `shed` or `stuck` posture |
 | A node without it | The same, with the node's half of the health envelope | Is it doing its work: also `503` while its broker link is down, it does not hold its presence lease, or — running seats — it has not been admitted to claim them |
 
 A node without `ingress` serves **nothing else** on that port — no API, no
@@ -874,6 +879,12 @@ image's `EXPOSE` documents:
 # the engine container of any node — ingress, seats, satellite
 ports:
   - {name: http, containerPort: 8080}
+startupProbe:
+  httpGet: {path: /health, port: http}
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 60     # ten minutes for the boot, store recovery
+                           #   included; see "Sizing the startup probe"
 livenessProbe:
   httpGet: {path: /health, port: http}
   periodSeconds: 10
@@ -894,6 +905,56 @@ node without `ingress` is what a rolling update waits on before it replaces
 the next pod, so a satellite that cannot reach its fleet holds the rollout
 rather than letting it take the next one down too. Give every pod a
 `terminationGracePeriodSeconds` longer than its longest turn, for the drain.
+
+#### Sizing the startup probe
+
+**Neither probe answers until the boot is over.** The node opens its HTTP
+listener only after the boot has finished: the broker's store recovery, its
+listeners, JetStream catching up with its peers, and provisioning. Until then
+the port refuses connections. Kubernetes runs no liveness or readiness probe
+until a startup probe has succeeded once, so the startup probe is what bounds
+the boot, and it fails the container after `failureThreshold × periodSeconds`.
+Without one, the liveness probe above counts the boot as a wedged process:
+six refusals, one minute, and the kubelet restarts the node partway through
+its recovery. The next boot then recovers the same store again, so a store
+whose recovery takes longer than a minute never boots.
+
+The listener is not opened early with a placeholder answer, on purpose. A
+`200` during the recovery could say only that the process exists, and then a
+boot that never finished, on a disk that stopped answering, would have nothing
+to restart it. Bounding the boot belongs to the startup probe, because only
+the deployment knows how large its store is.
+
+**The arithmetic:** `failureThreshold × periodSeconds` has to cover the
+recovery of the largest store the node may hold, plus the rest of the boot.
+
+- **The recovery** was measured at about a second and a half per GiB after a
+  crash on a fast local disk (see the boot's three waits under
+  [Every node embeds a member of one cluster](#every-node-embeds-a-member-of-one-cluster)).
+  A slower disk is slower in proportion.
+- **The rest of the boot** takes seconds on a healthy fleet. Allow two
+  minutes for it, which covers the whole of the two waits that can run
+  longer: 30 seconds for the listeners and 60 for JetStream to catch up.
+
+The block above allows ten minutes (60 × 10 s). Less the two minutes, that
+leaves eight minutes, or 480 seconds, of recovery: about 320 GiB at 1.5 s per
+GiB, or about 80 GiB on a disk four times slower. For a larger store, raise
+`failureThreshold` and leave `periodSeconds` alone, because the period is
+also how long a finished boot can wait before the kubelet sees it.
+
+**Measure your own.** A recovery longer than ten seconds logs
+`embedded_broker_starting` every ten seconds with its `elapsed_seconds`. The
+time from the process's first log line to `api_listening`
+(`api_probes_listening` on a node without `ingress`) is the whole boot. The
+store holds the company's files as well as its streams on the default `nats`
+object store, which has no byte ceiling, so revisit the number as the store
+grows.
+
+**Err long.** A probe that is too short is a restart loop that never ends. A
+probe that is too long delays only the restart of a boot that is genuinely
+stuck. A boot that fails outright, such as one with an unusable store
+directory, a taken port or a bad config, exits at once with its reason
+whatever the probe says.
 
 A StatefulSet of [clustered broker members](fleet.md#the-broker-members-and-leaves)
 needs `podManagementPolicy: Parallel`. The default, `OrderedReady`, starts a
