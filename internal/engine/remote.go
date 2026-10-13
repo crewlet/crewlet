@@ -233,6 +233,12 @@ func (e *Engine) stopKeeper() {
 // slices go first: a node that has decided to go away stops being asked
 // before it stops being able to answer, and the next request goes to a peer
 // rather than waiting out its budget here.
+//
+// AND BEFORE THE ADMISSION IS WITHDRAWN ([Engine.withdraw]), with every other
+// state-log publisher: every write a peer routes here, and every
+// linearizable read's barrier, is appended through this node's publishers,
+// and one appended once the admission is gone is a write a capacity
+// coordinator was told nobody was making.
 func (e *Engine) stopServingEstate(ctx context.Context) {
 	if e.stopEstate == nil {
 		return

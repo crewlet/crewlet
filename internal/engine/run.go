@@ -1963,15 +1963,31 @@ func (e *Engine) teardown(ctx context.Context) {
 	// release. AND BEFORE the native runtime below, whose tracker reader it
 	// reads the references through.
 	e.stopObjectCollector()
+	// AND WHAT THIS NODE PUBLISHES FOR ITS PEERS: the committer, which
+	// appends a record for every batch of pushes a receiving node proposes
+	// to it, and the estate subject, whose every write and linearizable read
+	// a peer routes here runs through this node's publishers.
+	//
+	// THE COMMITTER BEFORE THE ESTATE SUBJECT IT IS ASKED ON. The
+	// withdrawal of the subject cancels the answers in flight before it
+	// waits for them, so a proposal still queued would be answered with its
+	// own cancellation — a final failure its asker reports for a push its
+	// batch may yet land. Stopped first, the committer answers every queued
+	// proposal "not serving", which its asker takes to the repository's
+	// runner-up, and finishes the batch in flight with its real outcome
+	// ([Engine.stopCommitter]).
+	e.stopCommitter(ctx)
+	e.stopServingEstate(ctx)
 	// AFTER THE DRAIN AND AFTER EVERY STATE-LOG PUBLISHER, which is what the
 	// admission says: the key means "this process may be publishing", and
 	// it is the one thing that keeps a capacity coordinator from taking its
 	// exclusion while this node runs (statelog.AdmissionBlocks). So every
 	// loop above that appends to a log — the trim, the embedding duty, the
 	// usage publisher, the code-retention duty, the reconcile of code.repos,
-	// the collector's barriers — is stopped before it is withdrawn, and
-	// withdrawing it while a seat was still finishing a turn, or a duty was
-	// still publishing, would tell a coordinator the opposite of the truth.
+	// the collector's barriers, the committer and the writes peers route
+	// here — is stopped before it is withdrawn, and withdrawing it while a
+	// seat was still finishing a turn, or a duty was still publishing, would
+	// tell a coordinator the opposite of the truth.
 	if err := e.withdraw(ctx); err != nil {
 		log.WarnContext(ctx, "admission_not_withdrawn", "err", err,
 			"detail", "a capacity operation will see this node as a possible "+
@@ -2005,16 +2021,6 @@ func (e *Engine) teardown(ctx context.Context) {
 	// BEFORE the native backends, whose page projection its walk reads, and
 	// before backends.Close, which closes the broker its nudge listens on.
 	e.stopSkillSync(ctx)
-	// THE COMMITTER BEFORE THE ESTATE SUBJECT IT IS ASKED ON. The
-	// withdrawal below cancels the answers in flight before it waits for
-	// them, so a proposal still queued would be answered with its own
-	// cancellation — a final failure its asker reports for a push its batch
-	// may yet land. Stopped first, the committer answers every queued
-	// proposal "not serving", which its asker takes to the repository's
-	// runner-up, and finishes the batch in flight with its real outcome
-	// ([Engine.stopCommitter]).
-	e.stopCommitter(ctx)
-	e.stopServingEstate(ctx)
 	e.stopServingFleetBroker(ctx)
 	// BEFORE backends.Close, for the same reason and with more at stake:
 	// the projectors and the indexer both write, and an apply landing
