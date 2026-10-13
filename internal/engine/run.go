@@ -1307,6 +1307,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// e.leaseTTL, because the host is what resolved it.
 	e.watchdog = seat.NewWatchdog(n.Host().TTL())
 	e.watchdog.Watch("seat-host", n.Host())
+	// AND THE BROKER, whose death ends the process through the same exit —
+	// as soon as there is a watchdog to end it, which is here. See
+	// [Engine.watchBroker].
+	e.watchBroker(ctx, backends.death)
 	e.node = n
 	e.dispatch = e.buildDispatcher(opts, backends)
 	// THIS NODE ANSWERS FOR THE MEMORY OF THE SEATS IT HOLDS, in every mode

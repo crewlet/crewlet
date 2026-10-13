@@ -242,6 +242,11 @@ type Config struct {
 	// trust for the server's certificate, and which certificate to
 	// present when the server requires one. See [TLS].
 	TLS TLS
+
+	// start is how long an embedded server's start may spend on its
+	// listeners and how often it reports a long one; zero is production.
+	// Set by this package's own tests and nothing else — see [startTiming].
+	start startTiming
 }
 
 // TLS is the transport material for an external NATS server.

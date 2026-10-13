@@ -57,13 +57,32 @@ import (
 // ENGINE is verbose, `stream.debug` decides whether the BROKER is. Warnings
 // and errors are unaffected by both and always reach the sink.
 //
-// `Fatalf` maps to Error and DOES NOT EXIT, for the same reason
+// # Fatalf is a declaration, not a line
+//
+// `Fatalf` is logged at Error and DOES NOT EXIT, for the same reason
 // `Options.NoSigs` is set beside it: the engine owns this process, and a
-// library killing it mid-drain loses the running turn and the lease release
-// with it. nats-server does not depend on the exit — every `s.Fatalf` call
-// site returns immediately after it (see e.g. its route.go listener setup),
-// which is what makes a non-exiting Fatalf safe rather than merely polite.
-type natsLogger struct{ log *slog.Logger }
+// library killing it from inside loses whatever the process was in the middle
+// of. But it is not merely an Error line either. Stock nats-server's logger
+// exits on it, so nats-server never had to make a Fatalf mean anything else:
+// it calls one where it cannot go on and RETURNS from the step it was on —
+// JetStream that could not take its store, a listener that could not bind —
+// leaving a server that is half started and will stay that way. One call site
+// does not even return (server.go's "Not allowed to enable JetStream on the
+// system account", v2.15.1), so the server carries on past a failure it
+// called fatal. Read as an Error line alone, a refused store made the boot
+// wait out its whole readiness budget for a server that could never be ready.
+//
+// So every Fatalf also DECLARES the broker's death ([Death]), and the process
+// owner decides what that means: during the boot [startEmbedded] refuses at
+// once with nats-server's own reason, and after it the engine ends the node,
+// as stock nats-server would have — see [Server.Death] for why a drain is not
+// the answer.
+type natsLogger struct {
+	log *slog.Logger
+	// death is where a Fatalf is declared: the server's own, built beside
+	// it so the declaration reaches whoever started this server.
+	death *Death
+}
 
 // newNATSLogger builds the bridge, BOUND TO THE MEMBER IT SPEAKS FOR.
 //
@@ -86,8 +105,8 @@ type natsLogger struct{ log *slog.Logger }
 // Empty is a legitimate value and rendered as such rather than omitted: a
 // solo embedded broker has no name to carry, and a blank attribute says "one
 // member" where a missing one would say "this build does not report it".
-func newNATSLogger(serverName string) natsLogger {
-	return natsLogger{log: logging.Get("queue.nats.server").With("server", serverName)}
+func newNATSLogger(serverName string, death *Death) natsLogger {
+	return natsLogger{log: logging.Get("queue.nats.server").With("server", serverName), death: death}
 }
 
 // The event name is the same for every line and the severity rides on the
@@ -112,7 +131,11 @@ func (l natsLogger) Errorf(format string, v ...any)  { l.emit(slog.LevelError, f
 func (l natsLogger) Debugf(format string, v ...any)  { l.emit(slog.LevelDebug, format, v...) }
 func (l natsLogger) Tracef(format string, v ...any)  { l.emit(slog.LevelDebug, format, v...) }
 
-// Fatalf is an Error line and RETURNS. See the type doc: exiting here would
-// take the engine down from inside a library, which is the exact failure
-// `NoSigs` exists to prevent.
-func (l natsLogger) Fatalf(format string, v ...any) { l.emit(slog.LevelError, format, v...) }
+// Fatalf is an Error line and a declaration of the broker's death, and it
+// RETURNS. See the type doc: exiting here would take the engine down from
+// inside a library, which is the exact failure `NoSigs` exists to prevent, and
+// logging alone left a boot waiting on a server that had already given up.
+func (l natsLogger) Fatalf(format string, v ...any) {
+	l.emit(slog.LevelError, format, v...)
+	l.death.declare(format, v...)
+}

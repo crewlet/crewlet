@@ -215,8 +215,9 @@ func (c *Cluster) LeafURLs() []string {
 //
 // A wider reservation window would not help, because the window is not the
 // problem: the collision is with a process this one does not coordinate with.
-// What DOES fix it is noticing — see [js.Server.ClusterPort] — and trying
-// again with different numbers.
+// What DOES fix it is noticing — the probe before each member starts, and the
+// server's own refusal of a bind that fails ([js.ErrRoutePortTaken]) — and
+// trying again with different numbers.
 const ClusterStartAttempts = 4
 
 // ClusterStartBudget bounds the WHOLE retry loop in wall clock, not just the
@@ -247,11 +248,12 @@ const ClusterStartAttempts = 4
 //
 // It bounds the LOOP, and it does so by bounding each attempt within it: every
 // attempt is handed a context carrying what is LEFT of the budget, so a member
-// start that would otherwise wait out its own clustered accept budget is
-// interrupted instead. Consulted only between attempts — which is how this was
-// first written — it bounded how MANY were made and nothing about how long one
-// took, and a single sequential three-member attempt could outlast the whole
-// ceiling before the loop ever looked at it.
+// start that would otherwise wait out its store recovery — which the start
+// does not bound — and then its listener budget is interrupted instead.
+// Consulted only between attempts — which is how this was first written — it
+// bounded how MANY were made and nothing about how long one took, and a single
+// sequential three-member attempt could outlast the whole ceiling before the
+// loop ever looked at it.
 //
 // What an attempt should cost when nothing is wrong is still the engine's
 // question and [jsprovision] answers it; this is the harness's ceiling on
@@ -370,11 +372,11 @@ func withFreshPorts(ctx context.Context, t testing.TB, what string,
 	// THE DEADLINE IS HANDED TO THE ATTEMPT, not merely consulted after
 	// it. Checked only between attempts it bounded how many were made and
 	// nothing about how long one took: a member start reaching
-	// [js.StartServer] on an unbounded context waits its own clustered
-	// accept budget, and the members are started in sequence, so a single
-	// attempt could outlast this whole ceiling before the loop below ever
-	// looked at it. A budget the thing it bounds cannot observe is a
-	// comment, not a bound.
+	// [js.StartServer] on an unbounded context waits out its whole store
+	// recovery and then its listener budget, and the members are started
+	// in sequence, so a single attempt could outlast this whole ceiling
+	// before the loop below ever looked at it. A budget the thing it
+	// bounds cannot observe is a comment, not a bound.
 	deadline := time.Now().Add(ClusterStartBudget)
 	for attempt := 1; attempt <= ClusterStartAttempts; attempt++ {
 		// THE SOONER OF THE CEILING AND THIS ATTEMPT'S OWN TERM. Handed the
@@ -569,12 +571,12 @@ func memberConfig(base js.Config, cluster string, i, n, clusterPort int, routes 
 
 // start brings up member i and registers its shutdown.
 //
-// IT CHECKS THAT THE ROUTE LISTENER ACTUALLY BOUND, which nothing else does. A
-// member whose route port is already taken starts, serves clients and passes
-// every readiness check — it just never forms a route, which from the outside
-// is indistinguishable from a cluster that is slow to converge. That is how it
-// was found: a harness waiting out its whole budget for peers that could never
-// arrive, reporting only "routed to [], want 2".
+// A ROUTE PORT LOST TO SOMETHING ELSE IS THE SERVER'S TO REPORT, and it does:
+// a route listener that cannot bind is a Fatalf in nats-server, which
+// [js.StartServer] refuses at once as [js.ErrRoutePortTaken]. It used to be
+// this function's to find — the listener error went only to the log and the
+// member started, served clients and never routed — by comparing the port the
+// server bound with the one it was given.
 // ctx BOUNDS THIS MEMBER'S START, and is the attempt's rather than the test's:
 // see [withFreshPorts] for why a ceiling the start cannot observe bounds
 // nothing.
@@ -586,8 +588,8 @@ func (c *Cluster) start(ctx context.Context, t testing.TB, cfg js.Config, i int)
 	// reserves twelve at once and then starts n(n-1) relays before the
 	// first member asks for one. The probe cannot close the race — nothing
 	// can, short of never letting the port go — but it shortens the window
-	// from seconds to microseconds, and it turns the loss from a
-	// two-minute readiness timeout into an immediate retry.
+	// from seconds to microseconds, and it finds the loss before the
+	// member has spent anything on a start that cannot route.
 	switch free, err := PortFree(ctx, cfg.ClusterHost, cfg.ClusterPort); {
 	case err != nil:
 		// NOT A RACE, so the retry above must not treat it as one: an
@@ -603,18 +605,34 @@ func (c *Cluster) start(ctx context.Context, t testing.TB, cfg js.Config, i int)
 	}
 	srv, err := js.StartServer(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("cluster member %d: %w", i, err)
+		return fmt.Errorf("cluster member %d: %w", i, startErr(err))
 	}
 	t.Cleanup(srv.Shutdown)
 	c.Servers = append(c.Servers, srv)
 	c.Configs = append(c.Configs, cfg)
-	if got := srv.ClusterPort(); got != cfg.ClusterPort {
-		return fmt.Errorf("cluster member %d was given route port %d and bound "+
-			"%d — its listener lost the port between this harness reserving it "+
-			"and the server binding it, so it can never form a route",
-			i, cfg.ClusterPort, got)
-	}
 	return nil
+}
+
+// startErr classifies a member's start failure for [withFreshPorts].
+//
+// A BROKER THAT DECLARED ITSELF DEAD ([js.ErrBrokerDied]) is the one start
+// failure known to repeat, with one exception. What nats-server calls fatal is
+// a fact about the configuration or the host — a store directory JetStream
+// cannot use, an advertise address it cannot read — and the next attempt
+// brings the same ones, so retrying spends the whole start budget re-asking a
+// question already answered and then reports a cluster that never came up.
+// The exception is a listener whose port somebody else took between this
+// harness reserving it and the member binding it, which is the race the
+// attempts exist for; the server reports it as [js.ErrRoutePortTaken] or
+// [js.ErrLeafPortTaken] beside the death, and it is retried.
+//
+// Everything else keeps the default, which is to retry: see [withFreshPorts].
+func startErr(err error) error {
+	if errors.Is(err, js.ErrBrokerDied) && !errors.Is(err, js.ErrRoutePortTaken) &&
+		!errors.Is(err, js.ErrLeafPortTaken) {
+		return fmt.Errorf("%w: %w", errNotRetryable, err)
+	}
+	return err
 }
 
 // routeURL is a member's route address as NATS spells it.
@@ -626,9 +644,9 @@ func hostPort(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) }
 // PortFree reports whether a port can still be bound right now.
 //
 // It is a probe rather than a reservation: what it buys is finding a lost race
-// in microseconds instead of two minutes. A clustered member whose route
-// listener cannot bind does not fail fast — it starts, serves clients, never
-// forms a route, and is only reported when its readiness budget expires.
+// in microseconds, before the member starts. The member's own refusal of a
+// bind that fails ([js.ErrRoutePortTaken]) arrives only after it has
+// recovered its store, which is when the server opens its route listener.
 //
 // EXPORTED because the members are not always this package's to start. A fleet
 // of ENGINES embeds its own servers and builds them from Tier A (see [Relays]),

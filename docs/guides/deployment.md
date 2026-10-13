@@ -175,18 +175,19 @@ listener and forms no cluster — while every other reading of the same file
 names the missing field instead.
 
 **A route port something else already holds is refused at startup, by name.**
-This is the one clustering failure with no other symptom: NATS does not fail
-when its route listener cannot bind — it logs the error and carries on serving
-clients, so the node comes up, answers `/health`, and simply never forms a
-route to a peer. Left to report itself, that surfaced two minutes later as a
-readiness timeout blaming peer reachability, which is a network path that is
-fine. The engine now probes the port before it starts the server and refuses:
+The broker binds its route listener last, after it has recovered its whole
+store, so the engine probes the port before it starts the broker and refuses
+in microseconds rather than after a recovery that may take minutes:
 
 ```
 stream.cluster.port 6222 is already in use on 10.0.0.11, so this member's
 route listener cannot bind and it could never form a route to a peer — free
 that port or give this node a different one
 ```
+
+A port taken in the instant between that probe and the bind is refused too,
+as soon as the bind fails, with the operating system's own error on the end of
+the same sentence. `stream.leaf.port` is probed and refused the same way.
 
 **`cluster.advertise` is for when what a member binds is not what its peers can
 dial.** Members learn about each other from the members they already have: when
@@ -241,12 +242,13 @@ the metadata group takes seconds to elect a leader — measured at around eight
 on a quiet three-member cluster — and until it has one, creating a replicated
 stream *blocks* instead of failing.
 
-There are therefore two waits at boot, in order, and they fail for different
-reasons:
+There are therefore three waits at boot, in order, and they fail for
+different reasons:
 
 | Wait | Budget | What is happening |
 |---|---|---|
-| **Accepting connections** | 30s solo, **2 min clustered** | The member recovers its file store and, in a cluster, stands up its route listener while its peers are booting too |
+| **Starting** | none — reported every 10s | The broker recovers its file store: as long as the store is large, and on a fresh one milliseconds |
+| **Listeners** | 30s | The broker opens its listeners — its route listener, in a cluster — once it has started |
 | **JetStream current** | 60s | The metadata group elects a leader and this member catches up with it |
 
 Then placement retries for as long as the cluster answers "no suitable
@@ -256,17 +258,41 @@ the same call underneath. See
 [A clustered node is given longer to create them](#a-clustered-node-is-given-longer-to-create-them)
 below.
 
-The clustered accept budget is four times the solo one because a member
-starting alongside its peers is competing with them for the same disk and the
-same scheduler, and the asymmetry is stark: failing this wait fails the
-**whole boot**, so a budget that is too short turns a busy host into a node
-that refuses to start and then works on the retry — which during a rolling
-restart is how one slow member takes out the restart. Too long only means a
-genuinely broken server is reported later, and the wait is cancellable:
-Ctrl-C ends it at once, unless the member is still recovering its file store.
-The broker cannot stop a recovery in progress, so the boot waits for it to
-finish and logs `embedded_start_cancel_waits` while it does; a second Ctrl-C
-exits immediately (see
+**The store recovery is waited out, not bounded.** It takes as long as the
+store is large — measured at roughly a second per GiB after a clean stop and
+a second and a half after a crash, on a fast local disk, and longer on a
+slower one — and the store holds the company's files as well as its streams.
+A budget there could only fail a boot that was working: the broker cannot
+stop a recovery in progress, so a boot that gave up waited for the recovery
+anyway, shut the recovered broker down, and the next boot recovered the same
+store again, so a store larger than the budget could never start at all.
+Instead the boot says what it is doing every ten seconds:
+
+```
+INFO queue.jetstream  embedded_broker_starting server=node-1 store_dir=/var/lib/crewlet/stream elapsed_seconds=20 detail="the embedded broker is still starting — recovering its file store, …"
+```
+
+**Nothing answers `/health` until the recovery is over**, because the node
+opens its HTTP listener only once its boot has finished. So a node under an
+orchestrator needs a startup probe sized for the largest store it may have to
+recover: [Sizing the startup probe](#sizing-the-startup-probe) has the
+arithmetic. A liveness probe on its own counts every second of the recovery
+as a failure, restarts the node partway through it, and the next boot
+recovers the same store again. A broker that cannot start at all, such as one
+with a store directory it cannot use or a port somebody holds, does not wait:
+it [declares itself dead](#a-broker-that-declares-itself-dead) and the boot
+fails at once with its reason.
+
+**The listeners keep a budget, and only they do.** Once the broker has
+started, opening its listeners is a bind each — measured at under 40 ms with
+sixteen members starting at once — so thirty seconds fails a boot only when
+the broker stops reporting itself ready for a reason nobody predicted, and
+names that rather than hanging.
+
+Every wait is cancellable: Ctrl-C ends it at once, unless the member is still
+recovering its file store. The broker cannot stop a recovery in progress, so
+the boot waits for it to finish and logs `embedded_start_cancel_waits` while
+it does; a second Ctrl-C exits immediately (see
 [Force stop](../concepts/agent-runtime.md#graceful-shutdown)). Every other error is returned at once: a bad subject or
 a conflicting retention does not clear by waiting, and retrying would turn a
 config mistake into a half-minute hang with the same message at the end.
@@ -822,7 +848,7 @@ Both take the **Tier A** bootstrap file (`crewlet.yaml`) — the founder-owned c
 
 They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory, and signing uses the Tier A keyring, so a split deployment needs one configured (`crewlet secrets keygen`); without it each process signs with an ephemeral key, logs `sandbox_otel_signing_key_ephemeral`, and every token one process mints is forged as far as the other is concerned. `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/subscription-llm-backends.md), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
 
-Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field). Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
+Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field), and give the boot a startup probe on `/health`, because neither answers until the boot is over. Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic and how long the startup probe has to wait. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
 
 Both communicate through the stream, and through the coordination KV riding
 the same connection — never with each other. Both accept `-debug` for verbose
@@ -837,7 +863,7 @@ traffic:
 
 | | `/health` (liveness) | `/ready` |
 |---|---|---|
-| A node with `ingress` | `200` while the process is alive, through a drain | Should traffic come here: `503` while draining, unconfigured, or on a `shed` or `stuck` posture |
+| A node with `ingress` | `200` while the process is alive, from the end of its boot and through a drain | Should traffic come here: `503` while draining, unconfigured, or on a `shed` or `stuck` posture |
 | A node without it | The same, with the node's half of the health envelope | Is it doing its work: also `503` while its broker link is down, it does not hold its presence lease, or — running seats — it has not been admitted to claim them |
 
 A node without `ingress` serves **nothing else** on that port — no API, no
@@ -853,6 +879,12 @@ image's `EXPOSE` documents:
 # the engine container of any node — ingress, seats, satellite
 ports:
   - {name: http, containerPort: 8080}
+startupProbe:
+  httpGet: {path: /health, port: http}
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 60     # ten minutes for the boot, store recovery
+                           #   included; see "Sizing the startup probe"
 livenessProbe:
   httpGet: {path: /health, port: http}
   periodSeconds: 10
@@ -873,6 +905,56 @@ node without `ingress` is what a rolling update waits on before it replaces
 the next pod, so a satellite that cannot reach its fleet holds the rollout
 rather than letting it take the next one down too. Give every pod a
 `terminationGracePeriodSeconds` longer than its longest turn, for the drain.
+
+#### Sizing the startup probe
+
+**Neither probe answers until the boot is over.** The node opens its HTTP
+listener only after the boot has finished: the broker's store recovery, its
+listeners, JetStream catching up with its peers, and provisioning. Until then
+the port refuses connections. Kubernetes runs no liveness or readiness probe
+until a startup probe has succeeded once, so the startup probe is what bounds
+the boot, and it fails the container after `failureThreshold × periodSeconds`.
+Without one, the liveness probe above counts the boot as a wedged process:
+six refusals, one minute, and the kubelet restarts the node partway through
+its recovery. The next boot then recovers the same store again, so a store
+whose recovery takes longer than a minute never boots.
+
+The listener is not opened early with a placeholder answer, on purpose. A
+`200` during the recovery could say only that the process exists, and then a
+boot that never finished, on a disk that stopped answering, would have nothing
+to restart it. Bounding the boot belongs to the startup probe, because only
+the deployment knows how large its store is.
+
+**The arithmetic:** `failureThreshold × periodSeconds` has to cover the
+recovery of the largest store the node may hold, plus the rest of the boot.
+
+- **The recovery** was measured at about a second and a half per GiB after a
+  crash on a fast local disk (see the boot's three waits under
+  [Every node embeds a member of one cluster](#every-node-embeds-a-member-of-one-cluster)).
+  A slower disk is slower in proportion.
+- **The rest of the boot** takes seconds on a healthy fleet. Allow two
+  minutes for it, which covers the whole of the two waits that can run
+  longer: 30 seconds for the listeners and 60 for JetStream to catch up.
+
+The block above allows ten minutes (60 × 10 s). Less the two minutes, that
+leaves eight minutes, or 480 seconds, of recovery: about 320 GiB at 1.5 s per
+GiB, or about 80 GiB on a disk four times slower. For a larger store, raise
+`failureThreshold` and leave `periodSeconds` alone, because the period is
+also how long a finished boot can wait before the kubelet sees it.
+
+**Measure your own.** A recovery longer than ten seconds logs
+`embedded_broker_starting` every ten seconds with its `elapsed_seconds`. The
+time from the process's first log line to `api_listening`
+(`api_probes_listening` on a node without `ingress`) is the whole boot. The
+store holds the company's files as well as its streams on the default `nats`
+object store, which has no byte ceiling, so revisit the number as the store
+grows.
+
+**Err long.** A probe that is too short is a restart loop that never ends. A
+probe that is too long delays only the restart of a boot that is genuinely
+stuck. A boot that fails outright, such as one with an unusable store
+directory, a taken port or a bad config, exits at once with its reason
+whatever the probe says.
 
 A StatefulSet of [clustered broker members](fleet.md#the-broker-members-and-leaves)
 needs `podManagementPolicy: Parallel`. The default, `OrderedReady`, starts a
@@ -1489,7 +1571,7 @@ field keeps all three while a shell redirect throws them away:
 | What | Why it bypasses the handler |
 |---|---|
 | Everything before the Tier A document is read | The log file is named *by* that document, so it cannot be open yet |
-| The [seat watchdog's](../concepts/seat-ownership.md) exit notice | It writes to stderr directly and calls `os.Exit(75)`; a wedged process has not earned a configured handler |
+| The [seat watchdog's](../concepts/seat-ownership.md) exit notice | It writes to stderr directly and calls `os.Exit(75)`; a wedged process has not earned a configured handler. A broker that declared itself dead leaves by the same exit with code `69`, after an `embedded_broker_died` line that does go through the handler |
 | "log file *X*: no space left on device" | A sink cannot report its own failure through itself |
 
 **A terminal that is about to go quiet says so.** Before the switch takes
@@ -1617,6 +1699,38 @@ whether anything records them. `crewlet validate` warns when the first is set
 and the second is not. `stream.debug` is **refused** for `stream.type: nats` —
 an external cluster logs wherever its own operator configured it to, so a flag
 here would reach nothing.
+
+#### A broker that declares itself dead
+
+nats-server has one more severity, **fatal**, for a failure it cannot go on
+from: JetStream refusing its store directory, a listener that cannot bind, an
+advertise address it cannot read. A standalone nats-server exits the process
+there. The embedded one does not — the engine owns the process — so the engine
+decides what it means, and it means the same thing a standalone server would:
+
+- **During the boot, the boot fails at once with the broker's own reason.**
+  Nothing waits for a server that has already given up, and the reason is
+  nats-server's own sentence rather than a summary of it:
+
+  ```
+  engine: stream: start embedded nats: embedded nats server could not start:
+  nats-server: Can't start JetStream: storage directory is not a directory
+  ```
+
+  A clustered member is not told its route port was taken unless it was: a
+  bind that failed on `stream.cluster.port` or `stream.leaf.port` because
+  something else holds it is the one fatal reported as a taken port.
+- **After the boot, the node ends.** It logs `embedded_broker_died` at
+  `error`, with the broker's reason, through the ordinary log, then leaves the
+  same way the [seat watchdog](../concepts/seat-ownership.md#a-broker-that-declares-itself-dead)
+  does: a notice on stderr, and exit code **69** rather than the wedge's 75,
+  so an orchestrator's restart log tells the two apart. It does not drain,
+  because every step of a drain — acknowledging a turn, publishing what it
+  did, giving a seat's lease back — rides the broker that has just declared
+  itself dead. A node left running on it would answer `/health` while nothing
+  it did could land; ended, it is restarted, and the restart recovers the
+  broker from its store. The same reason on every restart is a setting or a
+  disk to fix.
 
 ### Per-Agent Token Tracking
 
