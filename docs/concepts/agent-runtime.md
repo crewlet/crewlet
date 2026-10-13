@@ -511,7 +511,14 @@ flowchart TD
    a running box being reaped while turns are still finishing), then the
    notification transports, the maintenance duties, the integration reconcile
    loop, memory sync, the learning passes, the cron scheduler and the
-   credential cooldown refresh.
+   credential cooldown refresh. Everything that appends to a state log stops
+   BEFORE the node withdraws its admission to a
+   [ceiling change](../guides/retention.md#changing-a-logs-ceiling) — the
+   trim, the embedding duty, the usage publisher, the code-retention duty, the
+   object store's collector (whose passes append a barrier), the code host's
+   committer and the estate subject peers route their writes and reads to —
+   because the admission is what says the process may still be publishing,
+   and a coordinator may take its exclusion the moment it is gone.
 9. **Close the backends**: the shared MCP servers are reaped; the
    auxiliary-spend ledger publishes its last records — what the seats'
    auxiliary model spent since its last 15-second flush — on a budget of five

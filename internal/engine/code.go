@@ -134,6 +134,11 @@ func OperatorCode(e *Engine) (estate.CodeSeam, bool) {
 // The order saves no wait: once the subject is withdrawn, an ask finds no
 // responder at once and moves on as fast as a refusal. Nil-safe, which is a
 // node with no runtime or a company that hosts no code.
+//
+// AND BEFORE THE ADMISSION IS WITHDRAWN ([Engine.withdraw]), with every other
+// state-log publisher: every batch it commits is a record on the code log,
+// and one appended once the admission is gone is a write a capacity
+// coordinator was told nobody was making.
 func (e *Engine) stopCommitter(ctx context.Context) { e.native.Load().stopCommitter(ctx) }
 
 // stopCommitter is [Engine.stopCommitter] on this runtime, and the stop its
