@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jira"
 )
@@ -30,7 +31,7 @@ func TestTeardownRemovesOnlyThisEnginesHook(t *testing.T) {
 	}
 
 	client, err := jira.NewClient(jira.ClientOptions{
-		URL: inst.URL, Token: "org-token", Deployment: jira.DataCenter,
+		URL: inst.URL, Token: "org-token", Declared: atlassianhost.DataCenter,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +61,7 @@ func TestTeardownWithNoWebhookBaseStillRemovesTheHook(t *testing.T) {
 	inst.hooks = []map[string]any{{"id": "1", "name": "crewlet", "url": "https://x/webhooks/jira"}}
 
 	client, err := jira.NewClient(jira.ClientOptions{
-		URL: inst.URL, Token: "org-token", Deployment: jira.DataCenter,
+		URL: inst.URL, Token: "org-token", Declared: atlassianhost.DataCenter,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +89,7 @@ func TestTeardownLeavesAHookThatIsNotThisEnginesAlone(t *testing.T) {
 	}
 
 	client, err := jira.NewClient(jira.ClientOptions{
-		URL: inst.URL, Token: "org-token", Deployment: jira.DataCenter,
+		URL: inst.URL, Token: "org-token", Declared: atlassianhost.DataCenter,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +114,7 @@ func TestTeardownIsSafeToRepeat(t *testing.T) {
 	inst.hooks = []map[string]any{{"id": "1", "name": "crewlet", "url": base + "/webhooks/jira"}}
 
 	client, err := jira.NewClient(jira.ClientOptions{
-		URL: inst.URL, Token: "org-token", Deployment: jira.DataCenter,
+		URL: inst.URL, Token: "org-token", Declared: atlassianhost.DataCenter,
 	})
 	if err != nil {
 		t.Fatal(err)

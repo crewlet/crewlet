@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/logging"
 )
@@ -49,8 +50,8 @@ const Backend = "confluence"
 type Deployment string
 
 const (
-	// Cloud is Atlassian-hosted Confluence: a *.atlassian.net site or the
-	// api.atlassian.com gateway, accountId identities.
+	// Cloud is Atlassian-hosted Confluence: a Cloud site or a Cloud
+	// gateway, accountId identities.
 	Cloud Deployment = "cloud"
 	// DataCenter is self-hosted Confluence Data Center or Server.
 	DataCenter Deployment = "data-center"
@@ -59,10 +60,13 @@ const (
 // Valid reports whether the deployment is one this build speaks.
 func (d Deployment) Valid() bool { return d == Cloud || d == DataCenter }
 
-// DeploymentOf reads the deployment off an address.
-func DeploymentOf(base string) Deployment {
-	base = strings.TrimSpace(base)
-	if isCloudSite(base) || strings.Contains(base, "api.atlassian.com/ex/confluence") {
+// DeploymentOf reads the deployment of an address, in a company that
+// declared declared ([atlassianhost.Unknown] for one that declared nothing),
+// by the one rule config validation and the Jira client read it by
+// ([atlassianhost.Of]): a company whose url validation admitted as Cloud is
+// never registered a Data Center hook here, nor the reverse.
+func DeploymentOf(base string, declared atlassianhost.Deployment) Deployment {
+	if atlassianhost.Of(base, declared) == atlassianhost.Cloud {
 		return Cloud
 	}
 	return DataCenter
@@ -75,8 +79,9 @@ const APIPath = "/rest/api"
 // not.
 //
 // A Cloud site serves Confluence under /wiki (https://acme.atlassian.net/wiki
-// /rest/api); the api.atlassian.com gateway already addresses the product, so
-// adding it there produces a 404 on every call. Data Center serves it at the
+// /rest/api); a gateway (https://api.atlassian.com/ex/confluence/{cloudid})
+// already addresses the product, so adding it there produces a 404 on every
+// call. Data Center serves it at the
 // root. Getting this wrong is the single most likely way to have a correct
 // credential fail everything.
 const wikiPrefix = "/wiki"
@@ -101,7 +106,7 @@ type Client struct {
 // ClientOptions configure a [Client].
 type ClientOptions struct {
 	// URL is a direct instance address — a Data Center base, or a Cloud
-	// site — or an api.atlassian.com gateway built from a cloud id.
+	// site — or a Cloud gateway built from a cloud id.
 	URL string
 
 	// Email switches authentication to Basic base64(email:token), which
@@ -110,10 +115,17 @@ type ClientOptions struct {
 	Email string
 	Token string
 
-	// Deployment overrides what the address implies. Empty reads it off
-	// the host, which is right for every real address and wrong for a
-	// test server on 127.0.0.1 standing in for a Cloud site.
-	Deployment Deployment
+	// Declared is the deployment the company declared in
+	// integrations.atlassian.deployment, or [atlassianhost.Unknown] for one
+	// that declared nothing. It decides the deployment of an address whose
+	// host is not one of Atlassian's Clouds' own ([DeploymentOf]) — an
+	// Isolated Cloud site's, or a test server's on 127.0.0.1 standing in for
+	// a Cloud site — and of no other.
+	//
+	// EVERY CLIENT BUILT FOR A COMPANY PASSES THE COMPANY'S, for the reason
+	// the Jira client's option gives; a test in internal/atlassianhost
+	// refuses a construction that omits it.
+	Declared atlassianhost.Deployment
 
 	HTTP *http.Client
 }
@@ -132,13 +144,9 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if client == nil {
 		client = httpx.Client(ClientTimeout)
 	}
-	deploy := opts.Deployment
-	if deploy == "" {
-		deploy = DeploymentOf(base)
-	}
 	return &Client{
 		base:   RESTBase(base),
-		deploy: deploy,
+		deploy: DeploymentOf(base, opts.Declared),
 		auth:   authHeader(strings.TrimSpace(opts.Email), token),
 		http:   client,
 	}, nil
@@ -152,14 +160,18 @@ func (c *Client) Deployment() Deployment { return c.deploy }
 //
 // Three shapes, and the difference is not cosmetic:
 //
-//   - an api.atlassian.com gateway already names the product, so /wiki
-//     there is a 404 on every call;
+//   - a Cloud gateway already names the product, so /wiki there is a 404
+//     on every call;
 //   - a Cloud SITE serves Confluence under /wiki, and without it every call
 //     lands on the Jira side of the same host;
 //   - Data Center serves it at the root.
 //
 // A base that already ends in /wiki is left alone, because an operator who
-// wrote the full address is not wrong.
+// wrote the full address is not wrong. Only a site at a host the rule
+// recognises ([atlassianhost.IsSite]) gains the prefix: an Isolated Cloud
+// site, Cloud by its company's declaration, is at a host no rule names, and
+// whether a path there is a site or a gateway is something only its address
+// can say — so it is written out whole, /wiki included.
 func RESTBase(base string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
 	switch {
@@ -167,28 +179,11 @@ func RESTBase(base string) string {
 		return ""
 	case strings.HasSuffix(base, wikiPrefix):
 		return base
-	case strings.Contains(base, "api.atlassian.com/ex/confluence"):
-		return base
-	case isCloudSite(base):
+	case atlassianhost.IsSite(base):
 		return base + wikiPrefix
 	default:
 		return base
 	}
-}
-
-// isCloudSite reports an Atlassian-hosted site address.
-func isCloudSite(base string) bool {
-	parsed, err := url.Parse(base)
-	if err != nil {
-		return false
-	}
-	host := strings.ToLower(parsed.Hostname())
-	for _, suffix := range []string{".atlassian.net", ".jira.com"} {
-		if strings.HasSuffix(host, suffix) {
-			return true
-		}
-	}
-	return false
 }
 
 // authHeader chooses between Cloud's Basic scheme and a bearer token.

@@ -50,7 +50,7 @@ units:
 |-------|----------|-------------|
 | `kind: human` | yes | Marks the seat as human |
 | `contact.slack_user_id` | one identity | Slack member ID (`U…`) — `<@…>` mentions and the channel an agent DMs on escalation |
-| `contact.mattermost_user_id` | one identity | [Mattermost](../integrations/mattermost.md) **username**: the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID. Stored as written, so write it in the case Mattermost shows |
+| `contact.mattermost_user_id` | one identity | [Mattermost](../integrations/mattermost.md) **username**: the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID. Lowercased, because Mattermost stores every username in lowercase and finds one without case |
 | `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID. One ID covers Jira assignments, Confluence `<ri:user>` mentions and webhook sender attribution on both |
 | `contact.github_login` | one identity | GitHub username: review requests, sender attribution. Lowercased |
 | `contact.gitlab_username` | one identity | GitLab username: assignment, review and mention routing, sender attribution. Lowercased |
@@ -71,7 +71,13 @@ while every walk of the chart answers the *first*. One of the two people
 silently stops receiving their own mail, with both entries looking perfectly
 ordinary — and with `crewlet_operator_id` the two directions disagree outright,
 so a token opens one person's dashboard while their wakes go to another seat.
-The comparison ignores case and surrounding whitespace, because the lookups do.
+Surrounding whitespace is never part of an identity, so the comparison ignores
+it on every field. Case is ignored exactly where the platform ignores it: a
+GitHub login, a GitLab username and a Mattermost username name one account
+however they are capitalised, and an operator id is lowercase by rule, so those
+four are lowercased before anything compares or routes on them. A Slack member
+ID and an Atlassian account ID are opaque ids the platform issues, and are
+compared exactly as written: `U0FOUNDER` and `u0founder` are two values.
 
 `crewlet_operator_id` satisfies that requirement on its own, and the seat is
 still reachable: their queue is the dashboard, not a chat mention. The roster
@@ -176,9 +182,9 @@ whole-value `${VAR}` reference, for example
 `atlassian_account_id: "${ATLASSIAN_FOUNDER_ACCOUNT_ID}"` in a shipped
 example config, where the real ID is instance-specific. Values are
 whitespace-stripped when the organization is normalized. A literal
-`github_login` or `gitlab_username` is lowercased there; a reference is
-stored verbatim (never case-mangled) and its *resolved* value is
-lowercased instead. A reference whose variable is unset counts as a
+`github_login`, `gitlab_username`, `mattermost_user_id` or
+`crewlet_operator_id` is lowercased there; a reference is stored verbatim
+(never case-mangled) and its *resolved* value is lowercased instead. A reference whose variable is unset counts as a
 declared identity for validation, but the identity is omitted wherever it
 is consumed until the variable resolves, so the raw `${VAR}` text is never
 emitted. The count of unresolved identities is logged on every apply

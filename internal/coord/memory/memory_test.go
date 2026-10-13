@@ -200,7 +200,12 @@ func TestUnencodableMetaIsRefusedNotDropped(t *testing.T) {
 // The fleet-shared state is certified by the same suite as the KV, for the
 // same reason: this twin IS the coordination layer for a single-node company,
 // so a divergence between it and the store a fleet runs on would be a
-// behaviour that only appears on the second node.
+// behaviour that only appears on the second node. Every node of a case is
+// handed the one twin, because the twin is the store as well as the handle:
+// it serves the nodes of one process.
 func TestFleetContract(t *testing.T) {
-	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet { return memory.NewFleet() })
+	coordtest.RunFleet(t, func(*testing.T) func() coord.Fleet {
+		f := memory.NewFleet()
+		return func() coord.Fleet { return f }
+	})
 }

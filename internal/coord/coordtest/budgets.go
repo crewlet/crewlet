@@ -915,15 +915,18 @@ var budgetCases = []fleetCase{{
 	fn: func(h *fleetHarness) {
 		// The property a compare-and-swap buys and a read-modify-write
 		// does not. Without it N concurrent rounds count as one, and
-		// the cap is whatever the last writer happened to see. Thirty-two
-		// callers, so a backend's retry budget is exercised rather than
-		// merely present.
+		// the cap is whatever the last writer happened to see.
+		// Thirty-two callers ACROSS FOUR NODES, so the store's own
+		// arbitration between writers is what is certified: a backend
+		// that combines one node's writes must still count each, and
+		// every race between the nodes must settle.
 		const callers = 32
+		nodes := h.nodes(4)
 		var wg sync.WaitGroup
 		errs := make(chan error, callers)
-		for range callers {
+		for i := range callers {
 			wg.Go(func() {
-				if _, err := h.f.Charge(h.ctx, coord.ChargeRequest{
+				if _, err := nodes[i%len(nodes)].Charge(h.ctx, coord.ChargeRequest{
 					Seat: testSeat, Tokens: 10, Windows: h.windows(),
 				}); err != nil {
 					errs <- err
@@ -946,16 +949,19 @@ var budgetCases = []fleetCase{{
 		// The gate's half of the same property: a check and an increment
 		// that were two steps would let every racing caller see room. What
 		// is ADMITTED is what the ceiling holds, exactly; what is COUNTED is
-		// every round, because every one of them was spent.
+		// every round, because every one of them was spent. Across four
+		// nodes, for the case above's reason: a node that judges its own
+		// writes in order proves nothing about a ceiling two nodes race.
 		const callers = 32
+		nodes := h.nodes(4)
 		var (
 			wg       sync.WaitGroup
 			admitted atomic.Int32
 		)
 		errs := make(chan error, callers)
-		for range callers {
+		for i := range callers {
 			wg.Go(func() {
-				got, err := h.f.Charge(h.ctx, coord.ChargeRequest{
+				got, err := nodes[i%len(nodes)].Charge(h.ctx, coord.ChargeRequest{
 					Seat: testSeat, Tokens: 10, Windows: h.windows(), OrgCaps: day(100),
 				})
 				switch {

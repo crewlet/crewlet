@@ -139,7 +139,15 @@ func TestAReadinessFailureBlamesTheRouteListenerOnlyWhenItNeverBound(t *testing.
 // droppingInfoJS drops the account report it is asked for — returning only
 // when the request's own term ends, as a request a metadata group with no
 // leader never replies to does — until it has dropped `drop` of them, and
-// then answers it.
+// then answers at once.
+//
+// THE ANSWER IS ITS OWN, never the real server's. The wait gives every ask
+// the same term, and the cases shorten it to 20 ms so three dropped asks cost
+// little; a real round trip under a loaded race build ran past that term, the
+// wait rightly asked a fifth time, and the case reported the count it exists
+// to pin as a defect (1 run in 900 beside three busy CPUs, and once in 20 runs
+// of this package). How often the wait asks is the assertion, so the latency
+// of an answer must not decide it.
 type droppingInfoJS struct {
 	jetstream.JetStream
 	drop  int32
@@ -151,7 +159,7 @@ func (f *droppingInfoJS) AccountInfo(ctx context.Context) (*jetstream.AccountInf
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	return f.JetStream.AccountInfo(ctx)
+	return &jetstream.AccountInfo{}, nil
 }
 
 // A CLUSTERED MEMBER IS READY ONLY ONCE THE METADATA LEADER ANSWERS IT, not

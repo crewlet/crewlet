@@ -306,13 +306,10 @@ func githubReconcileClient(cfg *config.GitHub, env *config.Resolver) (*github.Cl
 	})
 }
 
-// confluenceBaseURL is the REST base this node reads the wiki on.
+// confluenceBaseURL is the REST base this node reads the wiki on, resolved
+// ([config.Confluence.ResolvedBaseURL]).
 func confluenceBaseURL(cfg *config.Confluence, env *config.Resolver) string {
-	resolved := config.Confluence{
-		URL:     strings.TrimSpace(env.Value(cfg.URL)),
-		CloudID: strings.TrimSpace(env.Value(cfg.CloudID)),
-	}
-	return resolved.BaseURL()
+	return cfg.ResolvedBaseURL(env.Value)
 }
 
 // passConverger runs a [setup.Pass] as the loop's reconciler.

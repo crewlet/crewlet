@@ -35,8 +35,9 @@ func TestContractThroughALeaf(t *testing.T) {
 func TestFleetContractThroughALeaf(t *testing.T) {
 	t.Parallel()
 	client := leafClient(t)
-	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet {
-		return openFleetVia(t, client, fmt.Sprintf("f%d", bucketSeq.Add(1)))
+	coordtest.RunFleet(t, func(t *testing.T) func() coord.Fleet {
+		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
+		return func() coord.Fleet { return openFleetVia(t, client, prefix) }
 	})
 }
 

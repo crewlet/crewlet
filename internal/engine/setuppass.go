@@ -779,6 +779,7 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 	}
 	client, err := jira.NewClient(jira.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
+		Declared: company.Config.Integrations.Atlassian.Declared(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: jira pass: %w", err)
@@ -827,6 +828,7 @@ func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) (provis
 	}
 	client, err := jira.NewClient(jira.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
+		Declared: company.Config.Integrations.Atlassian.Declared(),
 	})
 	if err != nil {
 		return provision.Removed{}, fmt.Errorf("engine: jira teardown: %w", err)
@@ -862,6 +864,7 @@ func (p *confluencePass) Run(ctx context.Context, in setup.PassInput) ([]integra
 	}
 	client, err := confluence.NewClient(confluence.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
+		Declared: company.Config.Integrations.Atlassian.Declared(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: confluence pass: %w", err)
@@ -899,6 +902,7 @@ func (p *confluencePass) Teardown(ctx context.Context, in setup.TeardownInput) (
 	}
 	client, err := confluence.NewClient(confluence.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
+		Declared: company.Config.Integrations.Atlassian.Declared(),
 	})
 	if err != nil {
 		return provision.Removed{}, fmt.Errorf("engine: confluence teardown: %w", err)
