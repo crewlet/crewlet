@@ -9,7 +9,9 @@
 //
 // A path exactly one process may own at a time takes one. The store's
 // database file is that (internal/store, which adds the per-process refcount
-// and the scratch discard on top). One implementation, because the four
+// and the scratch discard on top), and so is a git node's cache directory
+// (internal/code/cache), whose boot empties directories only the process that
+// filled them may be using. One implementation, because the four
 // decisions in it — flock rather than fcntl, non-blocking, unlock before
 // close, never unlink the sidecar — are each a way a hand-rolled copy goes
 // quietly wrong (ADR-0008):

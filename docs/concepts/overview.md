@@ -214,9 +214,10 @@ internal/
 │                         #   wrapper — a built environment, an allowlisted
 │                         #   configuration, slot lanes, process groups and
 │                         #   deadlines — and gitproc/gittest/ the client git
-│                         #   every test drives. codefault/ names the fault
-│                         #   points of the push and sync paths, in the order
-│                         #   a push reaches them
+│                         #   every test drives. cache/ is the node's
+│                         #   disposable bare repositories, derived from rows.
+│                         #   codefault/ names the fault points of the push
+│                         #   and sync paths, in the order a push reaches them
 ├── eventfan/             # The fleet's turn-level history, read from every
 │                         #   node at query time, with coverage on every answer
 ├── search/               # Both halves of knowledge search — the BM25 index
@@ -232,6 +233,7 @@ internal/
 ├── filelock/             # One process's exclusive claim on a path, released
 │                         #   by the kernel however its holder exits — what
 │                         #   keeps a second process off the store's file
+│                         #   and off a git node's cache directory
 ├── estate/               # The replicated estate ROUTED: one router on every
 │                         #   node, answering in-process where this node's
 │                         #   copy of the operation's domain serves and
