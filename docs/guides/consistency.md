@@ -220,7 +220,7 @@ rather than downgraded. Each code names a different thing to do.
 | `behind` | This node has not reached the position the read needs — including a node below the published trim floor whose missing records the log still holds, which it is replaying. | Wait — the answer carries a retry hint derived from this node's measured drain. It clears on its own. |
 | `too_stale` | This node's lag is past what the read said it would accept. | Same, or accept more staleness. |
 | `stalled` | This node's applied prefix has stopped moving — its applier halted, or has been retrying a failure it cannot get past for longer than the retry budget. | Its rows are frozen, so a short answer would be wrong rather than old. Check the applier — `crewlet retention status` names the domain, its position and the error it is retrying. A retried failure clears on its own the moment an attempt succeeds. A `consistent_prefix` read, which makes no statement about age, is still answered by a stalled node at or above the published trim floor — a frozen prefix is still a coherent one — and refused by one below it. |
-| `no_quorum` | The barrier did not commit: the broker answered and a majority did not agree. | Retry after the hint (4 s, the broker's own minimum election timeout). If it persists, a member is down or partitioned. |
+| `no_quorum` | The barrier did not commit in time: the broker answered and a majority did not agree within the barrier's own five seconds — or, on a read another node asked for, within what that node's attempt left, less a second for the answer to reach it. | Retry after the hint (4 s, the broker's own minimum election timeout). If it persists, a member is down or partitioned. |
 | `broker_unreachable` | The broker did not answer at all — the barrier a linearizable read appends, or this node's own reading of its log's ends (not re-read for three seconds) or its eviction row. | Retry. Not the same as `no_quorum`, and the difference is where to look. |
 | `log_full` | The log is at the byte ceiling its ordinary appends are held to — on a log that claims identity (the tracker, pages and code logs) a sixteenth below the broker's, the rest being [kept for gate records](retention.md#the-gate-reserve) — so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` keeps answering**, so a full log costs `linearizable` reads — every seat tool read among them — rather than every read. |
 | `deferred` | This node holds a record it cannot decode covering what this read is about. | Ask another node, or upgrade this one. No amount of waiting changes it. |
@@ -291,7 +291,10 @@ turn's tools then read at:
    own domain's log to whichever node answers it — a tracker read the tracker
    log's, a page read the knowledge base's — this node's own copy included.
 3. That holder waits up to two seconds to have applied it, or answers `behind`
-   and the next holder is asked.
+   and the next holder is asked. A holder asked by another node waits only as
+   long as that node's attempt leaves it, less a second for the answer's trip
+   back, so its `behind` arrives while the asker is still listening — never as
+   the silence of a node that is gone.
 
 The floor travels with the request rather than being waited for before the
 turn opens, because the node running the turn may hold no data at all and have

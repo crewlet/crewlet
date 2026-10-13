@@ -207,6 +207,12 @@ write up to a minute (or the caller's own deadline); none is ever longer than
 the caller's deadline. Every request carries the asking node's own writes as a
 floor, so whichever data node answers has applied them or says it is behind —
 see [Read Consistency](../guides/consistency.md#reading-your-own-write-back).
+And it says so **while the asking node is still listening**: every wait a data
+node makes before it answers another node — for that floor, for the barrier a
+`linearizable` read appends and the position it established, for a write's own
+record — ends a second before the asker stops waiting, so a node that is merely
+behind is heard saying so, and only a node that says nothing at all is asked
+last as a silent one.
 
 The knowledge index is the one place the *work* is divided, and only the work:
 every indexed document carries a

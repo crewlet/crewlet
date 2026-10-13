@@ -170,6 +170,11 @@
 // node answers — this node's own copy included — waits for its applier to
 // reach it, bounded by [statelog.ReadBudget], and says it is behind rather
 // than answer from before a write this node has already been told landed. A
+// node answering ANOTHER node says so while that node is still listening:
+// every wait it makes before it answers — this one, a read's barrier and the
+// position it established, a write's own record — ends code.ReplyMargin short
+// of the asker's deadline ([statelog.WithReplyMargin]), because a `behind`
+// sent after the asker stopped waiting is heard as a node that is gone. A
 // data node's own copy is held to its floors like any other because its seats
 // may have written through another data node while its copy was out of
 // service. Floors on another DOMAIN's log are never waited for, though the
