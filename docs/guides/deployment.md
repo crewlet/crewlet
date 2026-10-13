@@ -242,12 +242,13 @@ the metadata group takes seconds to elect a leader — measured at around eight
 on a quiet three-member cluster — and until it has one, creating a replicated
 stream *blocks* instead of failing.
 
-There are therefore two waits at boot, in order, and they fail for different
-reasons:
+There are therefore three waits at boot, in order, and they fail for
+different reasons:
 
 | Wait | Budget | What is happening |
 |---|---|---|
-| **Accepting connections** | 30s solo, **2 min clustered** | The member recovers its file store and, in a cluster, stands up its route listener while its peers are booting too |
+| **Starting** | none — reported every 10s | The broker recovers its file store: as long as the store is large, and on a fresh one milliseconds |
+| **Listeners** | 30s | The broker opens its listeners — its route listener, in a cluster — once it has started |
 | **JetStream current** | 60s | The metadata group elects a leader and this member catches up with it |
 
 Then placement retries for as long as the cluster answers "no suitable
@@ -257,17 +258,36 @@ the same call underneath. See
 [A clustered node is given longer to create them](#a-clustered-node-is-given-longer-to-create-them)
 below.
 
-The clustered accept budget is four times the solo one because a member
-starting alongside its peers is competing with them for the same disk and the
-same scheduler, and the asymmetry is stark: failing this wait fails the
-**whole boot**, so a budget that is too short turns a busy host into a node
-that refuses to start and then works on the retry — which during a rolling
-restart is how one slow member takes out the restart. Too long only means a
-genuinely broken server is reported later, and the wait is cancellable:
-Ctrl-C ends it at once, unless the member is still recovering its file store.
-The broker cannot stop a recovery in progress, so the boot waits for it to
-finish and logs `embedded_start_cancel_waits` while it does; a second Ctrl-C
-exits immediately (see
+**The store recovery is waited out, not bounded.** It takes as long as the
+store is large — measured at roughly a second per GiB after a clean stop and
+a second and a half after a crash, on a fast local disk, and longer on a
+slower one — and the store holds the company's files as well as its streams.
+A budget there could only fail a boot that was working: the broker cannot
+stop a recovery in progress, so a boot that gave up waited for the recovery
+anyway, shut the recovered broker down, and the next boot recovered the same
+store again, so a store larger than the budget could never start at all.
+Instead the boot says what it is doing every ten seconds:
+
+```
+INFO queue.jetstream  embedded_broker_starting server=node-1 store_dir=/var/lib/crewlet/stream elapsed_seconds=20 detail="the embedded broker is still starting — recovering its file store, …"
+```
+
+If you supervise the process with a startup probe, give it room for the
+largest store the node may have to recover. A broker that cannot start at
+all — a store directory it cannot use, a port somebody holds — does not wait:
+it [declares itself dead](#a-broker-that-declares-itself-dead) and the boot
+fails at once with its reason.
+
+**The listeners keep a budget, and only they do.** Once the broker has
+started, opening its listeners is a bind each — measured at under 40 ms with
+sixteen members starting at once — so thirty seconds fails a boot only when
+the broker stops reporting itself ready for a reason nobody predicted, and
+names that rather than hanging.
+
+Every wait is cancellable: Ctrl-C ends it at once, unless the member is still
+recovering its file store. The broker cannot stop a recovery in progress, so
+the boot waits for it to finish and logs `embedded_start_cancel_waits` while
+it does; a second Ctrl-C exits immediately (see
 [Force stop](../concepts/agent-runtime.md#graceful-shutdown)). Every other error is returned at once: a bad subject or
 a conflicting retention does not clear by waiting, and retrying would turn a
 config mistake into a half-minute hang with the same message at the end.

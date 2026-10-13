@@ -66,11 +66,12 @@ func TestABrokerThatCannotUseItsStoreRefusesItsBootAtOnce(t *testing.T) {
 					"harness retries and an operator goes hunting for: %v", err)
 			}
 			// AT ONCE: the store is refused within milliseconds of Start,
-			// and the old wait was the whole budget. Under the budget is
-			// the line between the two.
-			if budget := acceptBudget(clustered); took >= budget {
+			// and a boot that missed the refusal waits out the whole
+			// listener budget for a server that never opens one. Under the
+			// budget is the line between the two.
+			if took >= listenTimeout {
 				t.Errorf("the refusal took %s, the whole %s budget — the boot "+
-					"waited for a server that had already given up", took, budget)
+					"waited for a server that had already given up", took, listenTimeout)
 			}
 		})
 	}
