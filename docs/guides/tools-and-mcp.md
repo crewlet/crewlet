@@ -548,11 +548,18 @@ and disarms the retry, so nothing is started behind the release.
 
 ```yaml
 mcp_servers:
-  # stdio, shared by all agents
+  # stdio, shared by all agents; it advertises no annotations, so these say
+  # its tools only read (see Tool annotation overrides below)
   - name: tavily
     command: npm
     args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
     env: { TAVILY_API_KEY: "${TAVILY_API_KEY}" }
+    tool_annotations:
+      tavily_search:   { read_only: true, open_world: true }
+      tavily_extract:  { read_only: true, open_world: true }
+      tavily_crawl:    { read_only: true, open_world: true }
+      tavily_map:      { read_only: true, open_world: true }
+      tavily_research: { read_only: true, open_world: true }
   # stdio, per-role (Jira + Confluence share one mcp-atlassian)
   - name: atlassian
     shared: false
@@ -609,6 +616,14 @@ mcp_servers:
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"            # the store, then the host
       NPM_CONFIG_REGISTRY: "${NPM_CONFIG_REGISTRY}"  # a host setting, passed on by name
+    # it advertises no annotations, so these say its tools only read
+    # (see Tool annotation overrides below)
+    tool_annotations:
+      tavily_search:   { read_only: true, open_world: true }
+      tavily_extract:  { read_only: true, open_world: true }
+      tavily_crawl:    { read_only: true, open_world: true }
+      tavily_map:      { read_only: true, open_world: true }
+      tavily_research: { read_only: true, open_world: true }
 ```
 
 A server that worked by reading an undeclared variable out of the engine's environment fails to authenticate or to install until that line is added, and its own last words on stderr — surfaced as `server_stderr_tail` — usually name the variable.

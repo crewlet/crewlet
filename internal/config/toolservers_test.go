@@ -52,7 +52,7 @@ var pinnedToolServers = []struct {
 	// unset TOOLSETS serves, and the browse_url on an issue it returns.
 	{"mcp-atlassian", "0.23.1"},
 	// Its bin's name and TAVILY_API_KEY, the one variable its entries pass,
-	// and its five tools, which the annotation example keys: that they are
+	// and its five tools, which [underAnnotatedReads] names: that they are
 	// the five it lists and that none of them advertises an annotation.
 	{"tavily-mcp", "0.2.22"},
 }
@@ -1138,6 +1138,56 @@ func TestEverySlackToolServerCanPost(t *testing.T) {
 	}
 	if entries == 0 {
 		t.Fatal("no document configures slack-mcp-server — this check was certifying nothing")
+	}
+}
+
+// underAnnotatedReads are the pinned servers that advertise no annotation on
+// a tool at readAt, with every tool each lists — all of which only read.
+// tavily-mcp 0.2.22, run through initialize and tools/list, lists these five
+// with no annotations; build/index.js has each search, extract, crawl, map or
+// research the web and write nothing.
+var underAnnotatedReads = map[string][]string{
+	"tavily-mcp": {"tavily_search", "tavily_extract", "tavily_crawl", "tavily_map", "tavily_research"},
+}
+
+// EVERY ENTRY FOR A SERVER THAT ADVERTISES NO ANNOTATIONS SAYS ITS READS ARE
+// READS.
+//
+// The engine reads a tool's hints off the wire and trusts only an explicit
+// one, so an unannotated tool is not proven read-only, and the delivery check
+// counts every such tool as a possible delivery: a turn that only searched the
+// web can pass it as one that reached somebody. The server will not say, so
+// each documented entry for it must, under the tool's own name or with the
+// entry's tool_prefix — the two spellings an override is matched by.
+func TestEveryUnderAnnotatedServerHasItsReadsMarked(t *testing.T) {
+	t.Parallel()
+	entries := 0
+	for _, block := range documentedBlocks(t) {
+		for _, s := range block.MCPServers {
+			spec, _, ok := launchedPackage(s)
+			if !ok {
+				continue
+			}
+			name, _ := splitRelease(spec)
+			reads, under := underAnnotatedReads[name]
+			if !under {
+				continue
+			}
+			entries++
+			for _, tool := range reads {
+				hints, ok := s.ToolAnnotations[tool]
+				if !ok {
+					hints, ok = s.ToolAnnotations[s.ToolPrefix+tool]
+				}
+				if !ok || !hints.ReadOnly.IsSet() || !hints.ReadOnly.Or(false) {
+					t.Errorf("%s: mcp_servers %q runs %s, which advertises no annotation, and does not mark "+
+						"%s read_only: true, so it counts as a possible delivery", block.where, s.Name, name, tool)
+				}
+			}
+		}
+	}
+	if entries == 0 {
+		t.Fatal("no document configures a server that advertises no annotations — this check was certifying nothing")
 	}
 }
 
