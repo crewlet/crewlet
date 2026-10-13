@@ -1610,20 +1610,34 @@ func (q *Queue) runStreamHandler(ctx context.Context, h queue.StreamHandler, sub
 	h(ctx, subject, ev)
 }
 
-// ErrRoutePortTaken is a clustered member whose route port was held by
-// something else — found before the bind by the probe, or after it by the
-// readiness failure that follows a listener which never came up.
+// ErrRoutePortTaken is a clustered member whose route port
+// (`stream.cluster.port`) was held by something else.
 //
-// A SENTINEL because it is the one provisioning failure that is worth RETRYING
-// WITH A DIFFERENT NUMBER rather than reporting, and telling it apart from
+// TWO PLACES FIND IT, and nothing else may. The probe before the start
+// ([PortAvailable]) finds the ordinary case. A port taken in the window
+// between that probe and nats-server's bind is found by the bind itself: the
+// listener's failure is a Fatalf carrying the bind's own *net.OpError, which
+// names the address and wraps EADDRINUSE, and [deathError] reads that value —
+// so the error is an [ErrBrokerDied] as well as this. A listener that is merely
+// not bound yet is NOT one: inferring a taken port from it is what reported a
+// store nats-server had refused as a port collision ([notReadyError]).
+//
+// A SENTINEL because it is the one boot failure that is worth RETRYING WITH A
+// DIFFERENT NUMBER rather than reporting, and telling it apart from
 // everything else a boot can fail on is not something a caller should do by
-// matching text. The e2e harness retries on exactly this; a deterministic
-// failure — a bad company config, an engine that will not start — must fail
-// the first time rather than three times with a misleading diagnosis.
+// matching text. The e2e and jetstreamtest harnesses retry on exactly this
+// and on [ErrLeafPortTaken], and on no other [ErrBrokerDied]: every other
+// death is a fact about the configuration or the host that a new port does
+// not change, and a deterministic failure — a bad company config, a store
+// directory the broker cannot use — must fail the first time rather than
+// three times with a misleading diagnosis.
 var ErrRoutePortTaken = errors.New("cluster route port taken")
 
 // ErrLeafPortTaken is a member whose LEAF listener's port (`stream.leaf.port`)
-// was held by something else when the member probed it before binding.
+// was held by something else: found by the probe before the start, or by the
+// bind's own EADDRINUSE carried by nats-server's Fatalf when the port was
+// taken after the probe — the same two places as [ErrRoutePortTaken], and an
+// [ErrBrokerDied] beside this in the second.
 //
 // A SENTINEL OF ITS OWN, beside [ErrRoutePortTaken] rather than folded into
 // it: the two name different listeners with different remedies — a member
