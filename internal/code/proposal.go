@@ -240,42 +240,23 @@ func validCommands(cmds []Command) error {
 	return nil
 }
 
-// validPack holds a pack to a bundle its row can describe ([CheckBundle]'s
-// layout): the push's own id, an object the store can name, a size within
-// MaxPackBytes whose two index sections are exactly the size their formats
-// give its object count, and a pack section at least a header and a trailer
-// long — and a push carrying one moves some ref to a commit, since a pack
-// carries the objects a new value needs.
+// validPack holds a pack to a bundle its row can describe — [PackRef.Check],
+// the one rule every holder of the row applies, so a proposal is refused here
+// for exactly what a git node would refuse to install — and to the push it
+// travels with: it carries the push's own id, and the push moves some ref to
+// a commit, since a pack carries the objects a new value needs.
 func (p Proposal) validPack() error {
 	k := p.Pack
-	switch {
-	case k.PackID != p.PushID:
+	if k.PackID != p.PushID {
 		return fmt.Errorf("%w: pack.pack_id: %q, and a push's pack carries the push's id %q",
 			ErrInvalidProposal, k.PackID, p.PushID)
-	case k.Size <= 0 || k.Size > MaxPackBytes:
-		return fmt.Errorf("%w: pack.size: %d, outside 1..%d (MaxPackBytes)", ErrInvalidProposal,
-			k.Size, MaxPackBytes)
-	case !gitref.ValidOID(k.GitChecksum):
-		return fmt.Errorf("%w: pack.git_checksum: %q is not a pack's 40-hex trailer",
-			ErrInvalidProposal, k.GitChecksum)
-	case k.Objects < 1 || k.Objects > k.Size:
-		return fmt.Errorf("%w: pack.objects: %d objects in %d bytes", ErrInvalidProposal,
-			k.Objects, k.Size)
-	case k.IndexBytes != IndexBytesFor(k.Objects):
-		return fmt.Errorf("%w: pack.index_bytes: %d, and a version-2 index of %d objects is %d",
-			ErrInvalidProposal, k.IndexBytes, k.Objects, IndexBytesFor(k.Objects))
-	case k.ReverseBytes != ReverseBytesFor(k.Objects):
-		return fmt.Errorf("%w: pack.reverse_bytes: %d, and a version-1 reverse index of %d "+
-			"objects is %d", ErrInvalidProposal, k.ReverseBytes, k.Objects, ReverseBytesFor(k.Objects))
-	case k.PackBytes() < minPackBytes:
-		return fmt.Errorf("%w: pack.size: its pack section is %d bytes, under the %d of a "+
-			"pack's header and trailer", ErrInvalidProposal, k.PackBytes(), minPackBytes)
-	case !slices.ContainsFunc(p.Commands, func(c Command) bool { return c.New != ZeroOID }):
+	}
+	if err := k.Check(); err != nil {
+		return fmt.Errorf("%w: pack.%w", ErrInvalidProposal, err)
+	}
+	if !slices.ContainsFunc(p.Commands, func(c Command) bool { return c.New != ZeroOID }) {
 		return fmt.Errorf("%w: pack: a push that only deletes refs carries no objects",
 			ErrInvalidProposal)
-	}
-	if err := k.Content().Validate(); err != nil {
-		return fmt.Errorf("%w: pack: %w", ErrInvalidProposal, err)
 	}
 	return nil
 }
