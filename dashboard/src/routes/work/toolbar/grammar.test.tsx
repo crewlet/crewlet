@@ -336,25 +336,28 @@ const ARRANGEMENT: Record<
   },
 };
 
-test("every arrangement key is one an arrangement control writes", async () => {
+test("every arrangement key has a control to press here", () => {
   const homed = Object.entries(URL_HOMES)
     .filter(([, home]) => home === "arrangement")
     .map(([key]) => key);
   expect(Object.keys(ARRANGEMENT).sort()).toEqual(homed.sort());
+});
 
-  for (const key of homed) {
-    const entry = ARRANGEMENT[key] as (typeof ARRANGEMENT)[string];
-    await listAt(entry.at, entry.answers);
-    await entry.press();
-    await waitFor(() =>
-      expect(location.hash, `${key} was not written by its control`).toContain(entry.writes),
-    );
-    // AND NO CHIP SAYS SO, because an arrangement narrows nothing: a chip for
-    // one would offer to remove a drawing.
-    const chips = document.querySelector(".work-chips")?.textContent ?? "";
-    expect(chips, `${key} drew a chip`).not.toContain(key);
-    cleanup();
-  }
+// ONE CASE PER KEY, each mounting the list afresh. Walked in one case, the
+// keys shared a single five-second budget that grew with every arrangement
+// added: about 1.8 s alone, and 5.25 s — over the budget — on a machine
+// running the whole suite.
+test.each(Object.keys(ARRANGEMENT))("%s is written by its arrangement control", async (key) => {
+  const entry = ARRANGEMENT[key] as (typeof ARRANGEMENT)[string];
+  await listAt(entry.at, entry.answers);
+  await entry.press();
+  await waitFor(() =>
+    expect(location.hash, `${key} was not written by its control`).toContain(entry.writes),
+  );
+  // AND NO CHIP SAYS SO, because an arrangement narrows nothing: a chip for
+  // one would offer to remove a drawing.
+  const chips = document.querySelector(".work-chips")?.textContent ?? "";
+  expect(chips, `${key} drew a chip`).not.toContain(key);
 });
 
 // AND THE COLUMN FAMILY IS ONE KEY PER GRID SHAPE, so a third grid shape
