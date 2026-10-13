@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+
+	"github.com/crewlet/crewlet/internal/gitref"
 )
 
 // THE PACK BUNDLE: the ONE object a push stores, and the ONE rule every node
@@ -168,32 +170,65 @@ var (
 	reverseMagic = []byte("RIDX")
 )
 
+// Check holds a [PackRef] to a bundle its row can describe — the ROW-LEVEL
+// half of [CheckBundle], decided from the row alone, before any byte: an
+// object the store can name; at least one object, since a stored pack carries
+// what some ref needs; both indexes exactly the size their formats give that
+// count; a pack section at least a header and a trailer long; the whole
+// within [MaxPackBytes]; and a git checksum that is a pack's trailer.
+//
+// ONE RULE FOR EVERY HOLDER OF A ROW (ADR-0008): the receiver's proposal is
+// held to it before it is published, [CheckBundle] before a seal is compared,
+// and a git node's cache before it downloads anything. A copy the domain
+// admitted a row past and a cache refused would leave a repository no git
+// node can sync, fleet-wide, for good — the rows say it, and asking again
+// reads the same rows.
+//
+// The answer names the row's field first ("size: …"), as its JSON spells it,
+// for each holder to wrap with its own sentinel.
+func (p PackRef) Check() error {
+	if err := p.Content().Validate(); err != nil {
+		return fmt.Errorf("object: %w", err)
+	}
+	switch {
+	case p.Objects < 1:
+		return fmt.Errorf("objects: the row counts %d objects, and a stored pack holds at least one", p.Objects)
+	case p.IndexBytes != IndexBytesFor(p.Objects):
+		return fmt.Errorf("index_bytes: the index is %d bytes and a version-2 index of %d objects is %d",
+			p.IndexBytes, p.Objects, IndexBytesFor(p.Objects))
+	case p.ReverseBytes != ReverseBytesFor(p.Objects):
+		return fmt.Errorf("reverse_bytes: the reverse index is %d bytes and a version-1 one of %d objects is %d",
+			p.ReverseBytes, p.Objects, ReverseBytesFor(p.Objects))
+	case p.PackBytes() < minPackBytes:
+		return fmt.Errorf("size: the pack section is %d bytes, under a pack's own %d-byte header and trailer",
+			p.PackBytes(), minPackBytes)
+	case p.Size > MaxPackBytes:
+		return fmt.Errorf("size: the bundle is %d bytes, past the %d one push may store", p.Size, MaxPackBytes)
+	case !gitref.ValidOID(p.GitChecksum):
+		return fmt.Errorf("git_checksum: %q is not 40 hex digits", p.GitChecksum)
+	case p.GitChecksum == ZeroOID:
+		// git's null id: what it writes for "no object", and no pack's
+		// trailer — and the name of the files a cache would install.
+		return fmt.Errorf("git_checksum: the zero id is no pack's trailer")
+	}
+	return nil
+}
+
 // CheckBundle holds a bundle's seal to the [PackRef] that names it — the ONE
 // rule (ADR-0008) the receiver applies before it proposes a push and every git
 // node applies before it installs one. Every disagreement is [ErrBadBundle],
-// naming the first one found and both of its values.
+// naming the first one found and both of its values: the row's own fields
+// first ([PackRef.Check]), then the seal against them.
 func CheckBundle(ref PackRef, s BundleSeal) error {
 	bad := func(format string, args ...any) error {
 		return fmt.Errorf("%w: "+format, append([]any{ErrBadBundle}, args...)...)
 	}
-	switch {
-	case ref.Objects < 1:
-		return bad("the row counts %d objects, and a stored pack holds at least one", ref.Objects)
-	case ref.IndexBytes != IndexBytesFor(ref.Objects):
-		return bad("the index is %d bytes and a version-2 index of %d objects is %d",
-			ref.IndexBytes, ref.Objects, IndexBytesFor(ref.Objects))
-	case ref.ReverseBytes != ReverseBytesFor(ref.Objects):
-		return bad("the reverse index is %d bytes and a version-1 one of %d objects is %d",
-			ref.ReverseBytes, ref.Objects, ReverseBytesFor(ref.Objects))
-	case ref.PackBytes() < minPackBytes:
-		return bad("the pack section is %d bytes, under a pack's own %d-byte header and trailer",
-			ref.PackBytes(), minPackBytes)
-	case ref.Size > MaxPackBytes:
-		return bad("the bundle is %d bytes, past the %d one push may store", ref.Size, MaxPackBytes)
+	if err := ref.Check(); err != nil {
+		return fmt.Errorf("%w: %w", ErrBadBundle, err)
 	}
 	checksum, err := hex.DecodeString(ref.GitChecksum)
-	if err != nil || len(checksum) != hashBytes {
-		return bad("the row's git checksum %q is not 40 hex digits", ref.GitChecksum)
+	if err != nil {
+		return bad("the row's git checksum %q: %v", ref.GitChecksum, err)
 	}
 
 	head := s.PackHead[:]

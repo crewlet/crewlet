@@ -138,6 +138,14 @@ func TestABundleIsTheOneItsRowDescribes(t *testing.T) {
 			ref: func(r code.PackRef) code.PackRef { r.GitChecksum = "zz"; return r },
 			by:  "is not 40 hex digits",
 		},
+		"a row naming the zero id": {
+			ref:     func(r code.PackRef) code.PackRef { r.GitChecksum = code.ZeroOID; return r },
+			rowOnly: true, by: "the zero id is no pack's trailer",
+		},
+		"a row naming no object": {
+			ref:     func(r code.PackRef) code.PackRef { r.Object = objstore.Key{}; return r },
+			rowOnly: true, by: "object:",
+		},
 		"a row counting another number": {bytes: grown, ref: func(r code.PackRef) code.PackRef {
 			r.Objects++
 			r.IndexBytes, r.ReverseBytes = code.IndexBytesFor(r.Objects), code.ReverseBytesFor(r.Objects)
