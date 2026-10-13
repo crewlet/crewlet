@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1146,6 +1147,82 @@ func TestEverySlackToolServerCanPost(t *testing.T) {
 // credential, whatever the server entry is called.
 var slackTokenVars = []string{"SLACK_MCP_XOXB_TOKEN", "SLACK_MCP_XOXP_TOKEN", "SLACK_MCP_XOXC_TOKEN", "SLACK_MCP_XOXD_TOKEN"}
 
+// seatServer is one tool server one agent seat starts, with the environment
+// it starts with: the entry's, under the seat's unit's mcp_env for it, under
+// the seat's own.
+type seatServer struct {
+	seat   docSeat
+	server string
+	// entry is the server's mcp_servers entry in the same block, nil when the
+	// block is a fragment that declares the seats alone.
+	entry *MCPServer
+	env   map[string]string
+}
+
+// seatServers is every tool server every agent seat of a documented block
+// starts, the environment layered as the engine layers it: the entry's
+// under its unit's under its own. Only a unit's direct seats inherit the
+// unit's block, and a human seat starts nothing. A unit with an mcp_env of
+// its own also stands for the direct seat that sets nothing — the one the
+// block exists for, whether or not the page goes on to declare it.
+func seatServers(block docBlock) []seatServer {
+	entries := map[string]*MCPServer{}
+	for i := range block.MCPServers {
+		entries[block.MCPServers[i].Name] = &block.MCPServers[i]
+	}
+	units := map[string]docUnit{}
+	type placed struct {
+		seat docSeat
+		unit docUnit
+	}
+	var all []placed
+	var walk func([]docUnit)
+	walk = func(list []docUnit) {
+		for _, u := range list {
+			if _, seen := units[u.Name]; !seen {
+				units[u.Name] = u
+			}
+			for _, r := range u.Roles {
+				all = append(all, placed{r, u})
+			}
+			if len(u.MCPEnv) > 0 {
+				all = append(all, placed{docSeat{Name: "any direct seat of " + u.Name + " that sets none"}, u})
+			}
+			walk(u.Children)
+		}
+	}
+	walk(block.Units)
+	for _, r := range block.Roles {
+		all = append(all, placed{r, units[r.Unit]})
+	}
+
+	var out []seatServer
+	for _, p := range all {
+		if p.seat.Kind == "human" {
+			continue
+		}
+		servers := map[string]bool{}
+		for name := range p.seat.MCPEnv {
+			servers[name] = true
+		}
+		for name := range p.unit.MCPEnv {
+			servers[name] = true
+		}
+		for _, server := range slices.Sorted(maps.Keys(servers)) {
+			env := map[string]string{}
+			var entryEnv map[string]string
+			if e := entries[server]; e != nil {
+				entryEnv = e.Env
+			}
+			for _, layer := range []map[string]string{entryEnv, p.unit.MCPEnv[server], p.seat.MCPEnv[server]} {
+				maps.Copy(env, layer)
+			}
+			out = append(out, seatServer{seat: p.seat, server: server, entry: entries[server], env: env})
+		}
+	}
+	return out
+}
+
 // EVERY SLACK SEAT A DOCUMENT CONFIGURES KEEPS A CHANNEL CACHE OF ITS OWN.
 //
 // slack-mcp-server keeps the channels its token can see in a file named after
@@ -1159,79 +1236,94 @@ func TestEverySlackSeatKeepsItsOwnChannelCache(t *testing.T) {
 	t.Parallel()
 	seats := 0
 	for _, block := range documentedBlocks(t) {
-		entryEnv := map[string]map[string]string{}
-		for _, s := range block.MCPServers {
-			entryEnv[s.Name] = s.Env
-		}
-		units := map[string]docUnit{}
-		var walk func([]docUnit, func(docSeat, docUnit))
-		walk = func(list []docUnit, visit func(docSeat, docUnit)) {
-			for _, u := range list {
-				if _, seen := units[u.Name]; !seen {
-					units[u.Name] = u
-				}
-				for _, r := range u.Roles {
-					visit(r, u)
-				}
-				walk(u.Children, visit)
-			}
-		}
-		type placed struct {
-			seat docSeat
-			unit docUnit
-		}
-		var all []placed
-		walk(block.Units, func(r docSeat, u docUnit) { all = append(all, placed{r, u}) })
-		for _, r := range block.Roles {
-			all = append(all, placed{r, units[r.Unit]})
-		}
-
 		readers := map[string]string{} // cache path -> the identity reading it
-		for _, p := range all {
-			if p.seat.Kind == "human" {
+		for _, s := range seatServers(block) {
+			var identity []string
+			for _, v := range slackTokenVars {
+				if s.env[v] != "" {
+					identity = append(identity, v+"="+s.env[v])
+				}
+			}
+			if len(identity) == 0 {
 				continue
 			}
-			servers := map[string]bool{}
-			for name := range p.seat.MCPEnv {
-				servers[name] = true
+			seats++
+			cache := s.env["SLACK_MCP_CHANNELS_CACHE"]
+			if cache == "" {
+				t.Errorf("%s: seat %q starts slack-mcp-server (mcp_env.%s) with no SLACK_MCP_CHANNELS_CACHE, "+
+					"so it shares the workspace's one channel cache with every other Slack seat on its node",
+					block.where, s.seat.Name, s.server)
+				continue
 			}
-			for name := range p.unit.MCPEnv {
-				servers[name] = true
+			who := strings.Join(identity, " ")
+			if other, ok := readers[cache]; ok && other != who {
+				t.Errorf("%s: seat %q reads the channel cache %s that another Slack identity (%s) writes",
+					block.where, s.seat.Name, cache, other)
 			}
-			for server := range servers {
-				env := map[string]string{}
-				for _, layer := range []map[string]string{entryEnv[server], p.unit.MCPEnv[server], p.seat.MCPEnv[server]} {
-					for k, v := range layer {
-						env[k] = v
-					}
-				}
-				var identity []string
-				for _, v := range slackTokenVars {
-					if env[v] != "" {
-						identity = append(identity, v+"="+env[v])
-					}
-				}
-				if len(identity) == 0 {
-					continue
-				}
-				seats++
-				cache := env["SLACK_MCP_CHANNELS_CACHE"]
-				if cache == "" {
-					t.Errorf("%s: seat %q starts slack-mcp-server (mcp_env.%s) with no SLACK_MCP_CHANNELS_CACHE, "+
-						"so it shares the workspace's one channel cache with every other Slack seat on its node",
-						block.where, p.seat.Name, server)
-					continue
-				}
-				who := strings.Join(identity, " ")
-				if other, ok := readers[cache]; ok && other != who {
-					t.Errorf("%s: seat %q reads the channel cache %s that another Slack identity (%s) writes",
-						block.where, p.seat.Name, cache, other)
-				}
-				readers[cache] = who
-			}
+			readers[cache] = who
 		}
 	}
 	if seats == 0 {
 		t.Fatal("no document configures a Slack seat — this check was certifying nothing")
+	}
+}
+
+// atlassianProducts are the two products mcp-atlassian serves and the pair it
+// authenticates each with by an API token at readAt: JiraConfig.from_env and
+// ConfluenceConfig.from_env read the token only beside the account's username.
+var atlassianProducts = []struct{ name, username, token string }{
+	{"Jira", "JIRA_USERNAME", "JIRA_API_TOKEN"},
+	{"Confluence", "CONFLUENCE_USERNAME", "CONFLUENCE_API_TOKEN"},
+}
+
+// atlassianServerNames are the mcp_env keys the documents give mcp-atlassian
+// where a block declares no entry for them: the shared `atlassian` entry every
+// page runs, or one product's alone.
+var atlassianServerNames = []string{"atlassian", "jira", "confluence"}
+
+// EVERY ATLASSIAN SEAT A DOCUMENT CONFIGURES NAMES ITS TOKEN'S ACCOUNT.
+//
+// mcp-atlassian takes an API token only beside the account it belongs to: a
+// token alone raises on Cloud and on a Data Center with no personal access
+// token, the server logs that to the stderr only the engine's log sees, and
+// starts with none of that product's tools — reported by the engine as a
+// server that started. Run against a Cloud address at readAt it lists no tool
+// at all without JIRA_USERNAME and 63 Jira tools with it. So a seat copied
+// from a page that forgot the username can neither read nor write an issue,
+// and on Cloud the engine cannot resolve its account either. Held over the
+// env each seat's server starts with — the entry's, under its unit's, under
+// its own — so a unit's address and a seat's token count together.
+func TestEveryAtlassianSeatNamesItsTokensAccount(t *testing.T) {
+	t.Parallel()
+	seats := 0
+	for _, block := range documentedBlocks(t) {
+		for _, s := range seatServers(block) {
+			if s.entry != nil {
+				spec, _, ok := launchedPackage(*s.entry)
+				if name, _ := splitRelease(spec); !ok || name != "mcp-atlassian" {
+					continue
+				}
+			} else if !slices.Contains(atlassianServerNames, s.server) {
+				continue
+			}
+			for _, p := range atlassianProducts {
+				user, token := s.env[p.username] != "", s.env[p.token] != ""
+				if !user && !token {
+					continue
+				}
+				seats++
+				switch {
+				case token && !user:
+					t.Errorf("%s: seat %q gives mcp-atlassian (mcp_env.%s) %s and no %s, so it starts with no %s tool",
+						block.where, s.seat.Name, s.server, p.token, p.username, p.name)
+				case user && !token:
+					t.Errorf("%s: seat %q gives mcp-atlassian (mcp_env.%s) %s and no %s, so it starts with no %s tool",
+						block.where, s.seat.Name, s.server, p.username, p.token, p.name)
+				}
+			}
+		}
+	}
+	if seats == 0 {
+		t.Fatal("no document gives an Atlassian seat a credential — this check was certifying nothing")
 	}
 }
