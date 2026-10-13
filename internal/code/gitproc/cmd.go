@@ -212,13 +212,17 @@ var baseKeys = []KV{
 // two siblings) — a denylist leaks whichever nobody named. A key a call site
 // needs is added here in the commit that adds the call site.
 var allowedConfig = map[string]string{
-	"core.multipackindex":          "the cache's serve configuration and its maintainer",
-	"pack.allowpackreuse":          "the cache's serve configuration, valued Pool.PackReuse",
-	"pack.windowmemory":            "the cache's serve configuration",
-	"pack.usebitmaps":              "the cache's serve configuration",
-	"uploadpack.allowfilter":       "the cache's serve configuration",
-	"uploadpack.allowrefinwant":    "the cache's serve configuration",
-	"uploadpack.keepalive":         "the cache's serve configuration: the stall watchdog relies on it",
+	"core.multipackindex":       "the cache's serve configuration and its maintainer",
+	"pack.allowpackreuse":       "the cache's serve configuration, valued Pool.PackReuse",
+	"pack.windowmemory":         "the cache's serve configuration",
+	"pack.usebitmaps":           "the cache's serve configuration",
+	"uploadpack.allowfilter":    "the cache's serve configuration",
+	"uploadpack.allowrefinwant": "the cache's serve configuration",
+	"uploadpack.keepalive":      "the cache's serve configuration: the stall watchdog relies on it",
+	// A prefix filter on the refs git lists of an alternate, passed to the
+	// for-each-ref it runs as patterns: it names refs and runs nothing. Its
+	// sibling core.alternateRefsCommand runs a command, and is not here.
+	"core.alternaterefsprefixes":   "the cache's advertisement view (Cache.AdvertiseConfig)",
 	"receive.procreceiverefs":      "the receive configuration",
 	"receive.unpacklimit":          "the receive configuration",
 	"receive.fsckobjects":          "the receive configuration",

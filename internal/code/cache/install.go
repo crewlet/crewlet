@@ -179,6 +179,13 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 			waited = context.Cause(gctx)
 			break
 		}
+		// A pack this node's own push wrote, handed to the round by its
+		// adoption (adopt.go), is installed from those files — three links
+		// rather than a GET — once the round reaches it.
+		if st := c.claimHanded(e, p); st != nil && c.installHanded(e, inc, packDir, p, st) {
+			added.Add(1)
+			continue
+		}
 		if err := share.Acquire(gctx, 1); err != nil {
 			waited = context.Cause(gctx)
 			break
@@ -271,6 +278,31 @@ func (c *Cache) installOne(ctx context.Context, e *entry, inc *incarnation, pack
 	c.setSize(inc, inc.diskBytes+p.Size, inc.metaBytes)
 	e.mu.Unlock()
 	return nil
+}
+
+// installHanded installs p from the staging an adoption handed the round —
+// the receiving node's own files, the bundle the host sealed and held to the
+// row before it was handed — by linking them into place in the install's
+// order, and reports whether it did. One it could not link is logged and
+// left to the download, which needs nothing from it: the staging is dropped
+// either way, and the directory is synced with the round's other installs.
+func (c *Cache) installHanded(e *entry, inc *incarnation, packDir string, p code.PackRow, st *staging) bool {
+	defer c.dropStaging(st)
+	linked, err := linkBundle(st.stem, packDir, p.GitChecksum, func(ext string) {
+		c.hookInstall(strings.TrimPrefix(ext, "."), packDir)
+	})
+	if err != nil {
+		c.log.Warn("code_cache_adopt_failed", "repo", e.id, "pack_id", p.PackID, "error", err)
+	}
+	if !linked {
+		return false
+	}
+	e.mu.Lock()
+	inc.packs++
+	inc.objects += p.Objects
+	c.setSize(inc, inc.diskBytes+p.Size, inc.metaBytes)
+	e.mu.Unlock()
+	return true
 }
 
 // installFetched is the install hook's stage once a bundle is split and

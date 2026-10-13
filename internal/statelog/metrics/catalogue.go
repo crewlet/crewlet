@@ -606,6 +606,25 @@ func Catalogue() []Instrument {
 		},
 		// ---- git ------------------------------------------------------
 		{
+			Name: CodeCacheAdoptions, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Pushes this node's git cache was asked to adopt — the " +
+				"pack the push's receive-pack wrote, linked into the cache " +
+				"once its row applied rather than downloaded back by the " +
+				"node that took the push — by `outcome`. `adopted`: linked " +
+				"in by the adoption itself. `handed`: a sync or a verify " +
+				"was writing the repository's directory, and the adoption " +
+				"left the pack to it, staged; it installs the pack from " +
+				"that staging rather than the object store before it lets " +
+				"the directory go, unless it had already begun to download " +
+				"it. `held`: the cache already held the pack. `uncached`: " +
+				"the repository's cache left this node between the push's " +
+				"sync and its adoption — the repository purged — so there " +
+				"was nothing to adopt into. `failed`: the links failed, and " +
+				"the next sync downloads the pack, one GET of its bundle; " +
+				"rising, it is this node's disk refusing writes.",
+		},
+		{
 			Name: CodeCacheBytes, Kind: KindGauge, Unit: UnitBytes,
 			Shows: "What this node's git cache holds on disk — every " +
 				"repository's packs, indexes and refs, plus the downloads and " +
@@ -648,7 +667,9 @@ func Catalogue() []Instrument {
 				"index it could not read, or an object a row names that no " +
 				"pack held — into a new directory beside the damaged one; " +
 				"either rising is disk or object-store damage, which " +
-				"`crewlet code verify` names. `stream` is the code log " +
+				"`crewlet code verify` names. `verify` is that check, asked " +
+				"to repair what it found, rebuilding the repository the same " +
+				"way. `stream` is the code log " +
 				"RECREATED under the cache (provisioned anew, its stamp not " +
 				"the one the cache read under); `rewound` is the log gone " +
 				"BACK under it on the same stream — a broker restored from " +

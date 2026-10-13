@@ -44,7 +44,7 @@ type world struct {
 // newWorld prepares a fresh cache directory and a real gitproc pool over the
 // HOME Prepare names. Nothing is opened yet; the Layout holds the claim until
 // an Open takes it or the case ends.
-func newWorld(t *testing.T) *world {
+func newWorld(t testing.TB) *world {
 	t.Helper()
 	gittest.Require(t)
 	w := &world{logs: &logs{}}
@@ -56,7 +56,7 @@ func newWorld(t *testing.T) *world {
 // builds a real pool over the HOME it names. A Layout opens once, and
 // Prepare moves the last pool's HOME aside, so every boot takes both anew;
 // the Layout before it is released first (nothing, once an Open took it).
-func (w *world) prepare(t *testing.T, dir string) {
+func (w *world) prepare(t testing.TB, dir string) {
 	t.Helper()
 	w.layout.Release()
 	layout, err := cache.Prepare(t.Context(), dir)
@@ -68,14 +68,14 @@ func (w *world) prepare(t *testing.T, dir string) {
 }
 
 // reboot prepares w's directory again: the boot's Prepare.
-func (w *world) reboot(t *testing.T) { w.prepare(t, w.layout.Dir) }
+func (w *world) reboot(t testing.TB) { w.prepare(t, w.layout.Dir) }
 
 // newPool is a real pool over layout's HOME.
-func newPool(t *testing.T, layout cache.Layout) *gitproc.Pool { return newPoolOf(t, layout, "", 0) }
+func newPool(t testing.TB, layout cache.Layout) *gitproc.Pool { return newPoolOf(t, layout, "", 0) }
 
 // newPoolOf is a pool over layout's HOME running the git at path ("" is the
 // one on PATH) with processes slots (0 is two).
-func newPoolOf(t *testing.T, layout cache.Layout, path string, processes int) *gitproc.Pool {
+func newPoolOf(t testing.TB, layout cache.Layout, path string, processes int) *gitproc.Pool {
 	t.Helper()
 	if processes == 0 {
 		processes = 2
@@ -113,7 +113,7 @@ func (w *world) options(t testing.TB, mutate ...func(*cache.Options)) cache.Opti
 
 // open boots a cache over w — Prepare, a pool, Open — and stops it when the
 // case ends.
-func (w *world) open(t *testing.T, mutate ...func(*cache.Options)) *cache.Cache {
+func (w *world) open(t testing.TB, mutate ...func(*cache.Options)) *cache.Cache {
 	t.Helper()
 	w.reboot(t)
 	c, err := cache.Open(t.Context(), w.options(t, mutate...))

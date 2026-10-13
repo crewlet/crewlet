@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/semaphore"
+
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/hostbox"
@@ -55,16 +57,51 @@ type Synced struct {
 
 	// inc is which incarnation Dir is, and entry the repository it is one
 	// of: what Rebuild reads to tell whether that incarnation is still the
-	// one readers are handed.
+	// one readers are handed. owner is the cache that handed it out — the
+	// one whose entry and incarnation these are.
 	inc   *incarnation
 	entry *entry
+	owner *Cache
 }
 
-// entry is one repository's place in the cache. Lock order is ALWAYS
-// Cache.mu, then entry.mu, and nothing holds entry.mu across a git process,
-// an estate call or a file copy.
+// handedOut refuses a Synced this cache did not hand out — a zero one, or
+// another cache's — by name: every method that takes one acts on its
+// incarnation, and only the cache that pinned it may.
+func (c *Cache) handedOut(s Synced, what string) error {
+	if s.inc == nil || s.entry == nil || s.owner != c {
+		return fmt.Errorf("%w: %s names the Synced a sync of this cache handed out", ErrInvalid, what)
+	}
+	return nil
+}
+
+// entry is one repository's place in the cache. Lock order is ALWAYS write,
+// then Cache.mu, then entry.mu; nothing holds Cache.mu or entry.mu across a
+// git process, an estate call or a file copy, and nothing that holds either
+// WAITS for write — an adoption's try of it and a holder's release are taken
+// under entry.mu, and neither waits (adopt.go).
 type entry struct {
 	id string
+
+	// write is what may change what the directory HOLDS, or must see it
+	// whole: held WHOLE (writeExclusive) by every round for its whole body
+	// and by Verify for its listing, and ONE of it by each adoption for its
+	// links. A round writes the directory by steps that assume nothing else
+	// does — a full one sweeps what its snapshot does not name and counts
+	// what it finds, so a pack linked in beside it could be swept as a stray
+	// or counted twice — and Verify's listing must see no step half done;
+	// adoptions link distinct files, so they share it. Taken whole under a
+	// context, so a Verify waiting behind a round's downloads gives up with
+	// its caller; and an adoption only TRIES it: one that finds a round or a
+	// listing holding it or waiting for it hands its pack to that holder
+	// (handed) rather than make a push wait behind somebody else's
+	// downloads — a weighted semaphore's try fails while a whole taker
+	// waits, so adoptions never starve a round.
+	write *semaphore.Weighted
+	// handed is the pushed packs adoptions handed to whoever holds write
+	// whole, by git checksum: staged in tmp/ (adopt.go), claimed by a round
+	// about to download one, and installed by the holder before it lets go
+	// (releaseWrite).
+	handed map[string]*staging
 
 	// mu guards everything below but stateMu, and every incarnation's
 	// fields.
@@ -84,6 +121,12 @@ type entry struct {
 	// maint is the maintenance running on an incarnation of the repository,
 	// if any (maintain.go): one at a time a repository.
 	maint *maintRun
+	// verifying counts the Verify calls checking the repository: no
+	// maintenance run starts while one does (verify.go), from its listing
+	// to its fsck — which a run in the lane's last free slot would refuse.
+	// A run already in flight is never stopped for one: its own files are
+	// admitted instead (maintenanceWriting).
+	verifying int
 	// lastAdded is when a round last added packs: the maintainer's debounce.
 	lastAdded time.Time
 	// uncoveredSince is when the oldest pack the maintainer's index does not
@@ -101,6 +144,11 @@ type entry struct {
 
 	// stateMu serialises persisting the state.
 	stateMu sync.Mutex
+}
+
+// newEntry is repository id's place in the cache, with no incarnation yet.
+func newEntry(id string) *entry {
+	return &entry{id: id, write: semaphore.NewWeighted(writeExclusive)}
 }
 
 // incarnation is one directory of a repository: repos/<id>.<n>.git. A
@@ -219,6 +267,7 @@ func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
 		Release:  sync.OnceFunc(func() { c.release(e, inc) }),
 		inc:      inc,
 		entry:    e,
+		owner:    c,
 	}
 }
 
