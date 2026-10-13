@@ -162,11 +162,16 @@
 // (2.3 ms), so the pool's own share is lost in the fork; 2.3 ms for a
 // rev-parse that reads one object, and 2.5 ms for the same read in a
 // scratch, through its alternate and the guard's second repository; 0.70 ms
-// a process — about 1 400 a second — with every read slot busy; and 22 ms
-// for a cat-file --batch-check of a thousand ids streamed through [Lines]. A
-// clone of an 18 MiB pack of 2 178 objects streams through Run at
-// 146 MiB/s, which is git's own rate for the request (the same upload-pack
-// writing to /dev/null from a shell: about 140 MiB/s), so git and not the
+// a process — about 1 400 a second — with every read slot busy; and 14 ms
+// for a cat-file --batch-check --buffer of a thousand ids streamed through
+// [Lines], against 22 ms without --buffer, which makes git write and flush
+// each answer as it goes and wakes the reader for every line (both
+// re-measured on four vCPUs of a 2.1 GHz Xeon, where the unbuffered figure
+// came out unchanged) — so a caller whose next question never waits on an
+// answer asks for --buffer. A clone of an 18 MiB pack of 2 178 objects
+// streams through Run at 146 MiB/s, which is git's own rate for the request
+// (the same upload-pack writing to /dev/null from a shell: about
+// 140 MiB/s), so git and not the
 // pool is what bounds a clone: the same pack through the pool with git taken
 // out — a stand-in that cats it, its own process start included, so a lower
 // bound on the copy path — moves 860 MiB/s, about 7 Gbit/s and six times

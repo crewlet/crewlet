@@ -467,8 +467,12 @@ func (c *Cache) peel(ctx context.Context, id, dir string, snap snapshot) (map[st
 		}
 		return nil
 	})
+	// --buffer: no tag waits on an answer before it is sent, and without it
+	// git writes and flushes every line on its own — 14 ms against 22 ms a
+	// thousand ids (gitproc's measured section) — paid for every tag a full
+	// round sets, while the round holds the repository's directory.
 	_, err := c.git.Run(ctx, gitproc.Cmd{
-		Dir: dir, Args: []string{"cat-file", "--batch-check=%(objectname)"}, Config: c.ServeConfig(),
+		Dir: dir, Args: []string{"cat-file", "--batch-check=%(objectname)", "--buffer"}, Config: c.ServeConfig(),
 		Stdin: bytes.NewReader(stdin.Bytes()), Stdout: lines, Class: gitproc.ClassRead,
 		Deadline: gitproc.PackWorkDeadline(int64(stdin.Len())),
 	})

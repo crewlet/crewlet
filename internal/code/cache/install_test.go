@@ -213,7 +213,7 @@ func TestAColdSyncRunsNoGit(t *testing.T) {
 		want  [][]string
 	}{
 		{name: "seven packs", packs: cache.MidxPacks - 1},
-		{name: "an annotated tag", packs: 3, tag: true, want: [][]string{{"cat-file", "--batch-check=%(objectname)"}}},
+		{name: "an annotated tag", packs: 3, tag: true, want: [][]string{{"cat-file", "--batch-check=%(objectname)", "--buffer"}}},
 		{name: "twenty packs", packs: 20, want: [][]string{{"multi-pack-index", "write", "--stdin-packs", "--no-progress"}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

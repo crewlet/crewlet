@@ -46,10 +46,11 @@ import (
 //     advertisement view — so the guard's SECOND repository (the alternate,
 //     resolved and checked) is in the figure, and git reads the object
 //     through it.
-//   - cat-file-batch-check-1000 is one cat-file --batch-check over a
-//     thousand of the history's ids, its answers streamed through
+//   - cat-file-batch-check-1000 is one cat-file --batch-check --buffer over
+//     a thousand of the history's ids, its answers streamed through
 //     [gitproc.Lines] — the shape of a fetch's want list checked against a
-//     cache before upload-pack runs.
+//     cache before upload-pack runs, and of a cache round's peel of its
+//     tags.
 //   - parallel-rev-parse is rev-parse from as many goroutines as the read
 //     lane has slots (GOMAXPROCS of each), so every slot is busy: ns/op is
 //     wall time per process across all of them, the node's aggregate rate.
@@ -88,7 +89,7 @@ func BenchmarkRun(b *testing.B) {
 				return nil
 			})
 			_, err := p.Run(b.Context(), gitproc.Cmd{
-				Dir: h.dir, Args: []string{"cat-file", "--batch-check"},
+				Dir: h.dir, Args: []string{"cat-file", "--batch-check", "--buffer"},
 				Stdin: strings.NewReader(h.ids), Stdout: lines,
 				Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
 			})
