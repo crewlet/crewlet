@@ -5,7 +5,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { Shell } from "../Shell.tsx";
 import { Router } from "../router.tsx";
@@ -16,6 +16,24 @@ import type { Recent } from "~/lib/recents.ts";
 import type { ScopeAt } from "../scope.ts";
 import { figuresOf, panelOf, type PanelActions } from "./ProjectSwitcher.tsx";
 import { CONFIG_WRITE_REASONS, type ConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+
+// THE FRAME DIALS ITS SOCKET as soon as the viewer answers (`Shell.tsx`), and
+// jsdom's own WebSocket really dials: refused, it schedules a reconnect that
+// nothing here stops, which then fires after the environment is torn down and
+// throws on a `location` that is gone. A socket that never opens and never
+// closes is what every other suite mounting the frame stands in for it.
+class InertWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  readyState = InertWebSocket.CONNECTING;
+  send(): void {}
+  close(): void {}
+}
+
+beforeEach(() => {
+  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+});
 
 afterEach(() => {
   cleanup();
@@ -317,8 +335,15 @@ describe("in the frame", () => {
     key("p");
     const dialog = await screen.findByRole("dialog", { name: "Switch project" });
     expect(dialog.classList.contains("crewlet-switcher--centered")).toBe(true);
-    await settle();
-    fireEvent.click(within(dialog).getByRole("option", { name: "Split engine, SPLIT, 4 open" }));
+    // THE LISTING IS WAITED FOR, NOT ASSUMED. Away from Work nothing asks
+    // for it until G then P opens the panel, so the panel and the answer it
+    // asked for are drawn on two schedules, and settle()'s fixed count of
+    // microtasks waits on neither: under load the panel was found first and
+    // the click met a list still busy — as it does every time the listing
+    // is answered 300 ms late.
+    fireEvent.click(
+      await within(dialog).findByRole("option", { name: "Split engine, SPLIT, 4 open" }),
+    );
     await waitFor(() => expect(location.hash).toBe("#/work/SPLIT"));
     expect(screen.queryByRole("dialog", { name: "Switch project" })).toBeNull();
   });

@@ -690,6 +690,11 @@ func runMattermostDoctor(_ config.Source, args []string, stdout, stderr io.Write
 	adminToken := fs.String("admin-token", "",
 		"a Mattermost token to run the checks as; empty reads "+
 			"MATTERMOST_ADMIN_TOKEN, and failing that borrows a seat's own")
+	browserURL := fs.String("browser-url", "",
+		"the address people type into their browser to reach Mattermost: the "+
+			"Site URL is held to it and the browser probe is sent there. Empty "+
+			"reads MATTERMOST_PUBLIC_URL; with neither, the Site URL is judged "+
+			"on its own")
 	bootstrap := bootstrapFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -697,7 +702,8 @@ func runMattermostDoctor(_ config.Source, args []string, stdout, stderr io.Write
 	companyPath, given := onePositional(fs, companyPath)
 	if given != 1 {
 		fmt.Fprintln(stderr,
-			"usage: crewlet mattermost doctor <company.yaml> [-admin-token TOKEN]")
+			"usage: crewlet mattermost doctor <company.yaml> [-admin-token TOKEN] "+
+				"[-browser-url URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -730,9 +736,9 @@ func runMattermostDoctor(_ config.Source, args []string, stdout, stderr io.Write
 	// and asking an operator to mint an admin token to find out whether
 	// their company works is a step that exists only to be skipped.
 	//
-	// THE CONFIGURED URL, resolved but NOT normalised away: the whole
-	// point is comparing what this company believes against what the
-	// server reports, so the check has to see the operator's own value.
+	// THE CONFIGURED URL, resolved but NOT normalised away: the checks
+	// dial it and hold its path to the one the server reports, so they
+	// have to see the operator's own value.
 	resolved := *cfg
 	resolved.URL = env.Value(cfg.URL)
 	resolved.Team = env.Value(cfg.Team)
@@ -743,9 +749,17 @@ func runMattermostDoctor(_ config.Source, args []string, stdout, stderr io.Write
 		return err
 	}
 
+	// WHERE PEOPLE BROWSE IS THE OPERATOR'S TO SAY, and the variable is only
+	// a way not to retype the flag: MATTERMOST_PUBLIC_URL is what the
+	// compose stack sets the Site URL from and the bootstrap writes to .env,
+	// so a shell that sourced it asks the question without being told to.
+	browsedAt := strings.TrimSpace(*browserURL)
+	if browsedAt == "" {
+		browsedAt = strings.TrimSpace(config.EnvOnly().Lookup("MATTERMOST_PUBLIC_URL"))
+	}
 	report, err := mattermost.Doctor(ctx, mattermost.DoctorOptions{
 		Client: client, Config: &resolved, Org: organization,
-		SeatToken: mattermost.SeatTokens(env),
+		SeatToken: mattermost.SeatTokens(env), BrowsedAt: browsedAt,
 	})
 	if err != nil {
 		return err
@@ -775,7 +789,7 @@ func printDoctor(w io.Writer, report *mattermost.Report) {
 			"would have reported a consequence rather than a cause. Fix it "+
 			"and run again.")
 	case report.Healthy():
-		fmt.Fprintln(w, "\nEverything this command can check is working.")
+		fmt.Fprintln(w, "\nEverything this command checked is working.")
 	}
 }
 

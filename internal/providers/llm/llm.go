@@ -42,9 +42,9 @@ const (
 // ThinkingBlocks, ToolCalls — is what the engine reads: the tool loop runs the
 // calls, the record shows the prose, and a backend from another vendor
 // rebuilds the turn in its own shape from it. Raw is what the VENDOR reads:
-// the response's own content blocks, exactly as they arrived, handed back to a
-// backend of the same wire format on the next call (see [Message.Raw] for why
-// a rebuild from the neutral view is not good enough).
+// what the response carried in the vendor's own shape, exactly as it arrived,
+// handed back to a backend of the same wire format on the next call (see
+// [Message.Raw] for why a rebuild from the neutral view is not good enough).
 //
 // The JSON tags are a WIRE FORMAT, and they are the field names on purpose.
 // A suspended agent turn serializes its whole conversation into a durable row
@@ -68,11 +68,21 @@ type Message struct {
 	// other. It is what tells a backend whether Raw is in its own format.
 	Origin Origin `json:"Origin,omitzero"`
 
-	// Raw is the vendor's own content blocks for this assistant turn, in
-	// the order the model wrote them, each exactly as the response carried
-	// it — set by a backend whose wire format has such blocks (Anthropic's
-	// Messages API), and replayed by that backend VERBATIM on every later
-	// call of the conversation.
+	// Raw is what this assistant turn carried in the vendor's own shape,
+	// exactly as the response carried it — set by the backend that decoded
+	// the response, read only by a backend of the same wire format
+	// ([Message.Origin]), and handed back by it on every later call of the
+	// conversation. Each wire format has its own:
+	//
+	//   - Anthropic's Messages API: the response's content blocks, in the
+	//     order the model wrote them, each one VERBATIM.
+	//   - The OpenAI Chat Completions format: ONE object, the assistant
+	//     message as the host returned it reduced to what the neutral view
+	//     cannot hold — the reasoning fields each host added beside OpenAI's
+	//     schema (reasoning_content, reasoning, reasoning_details,
+	//     thinking_blocks), a content sent as a list of chunks, and each
+	//     tool call's own fields by its id — and set only on a turn that
+	//     carried any of it (internal/providers/llm/openai, replay.go).
 	//
 	// THE NEUTRAL VIEW CANNOT BE REPLAYED, because it is lossy in exactly
 	// the places a vendor checks. Rebuilt from it, a turn written as
@@ -83,7 +93,11 @@ type Message struct {
 	// bind every thinking block to the conversation before it, byte for
 	// byte; an earlier turn that comes back different invalidates every
 	// block after it, and on an account the vendor enforces that is a 400
-	// the fallback chain does not retry.
+	// the fallback chain does not retry. On the OpenAI wire format the
+	// reasoning has no neutral field at all — ReasoningContent is the
+	// engine's reading of whichever field a host used — and Kimi K3 must
+	// read it on every earlier turn, while DeepSeek and Gemini 3 answer a
+	// tool loop without theirs with a 400.
 	//
 	// THE NEUTRAL VIEW STAYS BESIDE IT, because it is what the engine and
 	// every other backend read. The two are written together, from one
@@ -91,22 +105,27 @@ type Message struct {
 	// afterwards — the conversation is append-only.
 	Raw []json.RawMessage `json:"Raw,omitempty"`
 
-	// Binding is what the request that wrote this assistant turn carried
-	// BESIDE its messages, as a digest in the writing backend's own terms
-	// — set with Raw, by the backend whose vendor binds a turn's reasoning
-	// to it, and compared by that backend on every later call. Anthropic's
-	// is the top-level system prompt and the set of tool definitions, as
-	// sent: Claude Opus 5.5, Sonnet 5.5 and Fable 5.1 refuse a thinking
-	// block replayed into a request whose system prompt or tools differ
-	// from the ones it was written under, so a turn whose Binding is not
-	// the current request's has its thinking SHED rather than replayed —
-	// oldest first, which is the one removal the vendor accepts (see
-	// internal/providers/llm/anthropic).
+	// Binding is what this assistant turn's reasoning is bound to beside
+	// the messages, as a digest in the writing backend's own terms — set
+	// with Raw, by the backend whose vendor binds a turn's reasoning to
+	// something, and compared by that backend on every later call. A turn
+	// whose Binding is not the current request's has its reasoning SHED
+	// rather than replayed.
 	//
-	// Empty on a turn written by a request to a model that runs no check
-	// while it was replaying reasoning a checking model would have shed
-	// (see internal/providers/llm/anthropic). That is a binding nobody can
+	// Anthropic's is the top-level system prompt and the set of tool
+	// definitions, as sent: Claude Opus 5.5, Sonnet 5.5 and Fable 5.1
+	// refuse a thinking block replayed into a request whose system prompt
+	// or tools differ from the ones it was written under, so the shedding
+	// there is oldest first, which is the one removal the vendor accepts
+	// (see internal/providers/llm/anthropic). It is empty on a turn written
+	// by a request to a model that runs no check while it was replaying
+	// reasoning a checking model would have shed — a binding nobody can
 	// show matches, so such a turn's thinking is shed too.
+	//
+	// The OpenAI wire format's is the ENDPOINT, its base URL as a digest:
+	// each host carries reasoning in fields of its own, which another host
+	// on the same wire format may refuse, so a turn's are sent back only to
+	// the endpoint that wrote them (see internal/providers/llm/openai).
 	Binding string `json:"Binding,omitempty"`
 
 	// Failed marks a tool message whose call FAILED — the tool refused,
@@ -133,8 +152,9 @@ type Message struct {
 // in front of it cannot, unbilled and without failing the call; a client that
 // stripped them itself would remove blocks from the middle of the
 // conversation's sequence, which is the one edit that fails every block after
-// it when the conversation returns to the model that wrote them. Model is the
-// record of which one did.
+// it when the conversation returns to the model that wrote them. The OpenAI
+// wire format narrows the same rule to one ENDPOINT ([Message.Binding]) and no
+// further, for the reason given there. Model is the record of which one did.
 //
 // [Raw]: Message.Raw
 type Origin struct {
@@ -338,14 +358,13 @@ type Completion struct {
 	ThinkingBlocks   []ThinkingBlock
 	ToolCalls        []ToolCall
 
-	// Raw is the response's own content blocks, verbatim and in order, for
-	// a backend whose wire format has them — see [Message.Raw]. Nil from a
-	// backend that has none to keep.
+	// Raw is what the response carried in the vendor's own shape — see
+	// [Message.Raw]. Nil from a backend, or a response, with none to keep.
 	Raw []json.RawMessage
 
-	// Binding is the digest of what this call's request carried beside its
-	// messages — see [Message.Binding]. Empty from a backend whose vendor
-	// binds nothing to it.
+	// Binding is the digest of what this answer's reasoning is bound to
+	// beside its messages — see [Message.Binding]. Empty from a backend
+	// whose vendor binds nothing.
 	Binding string
 
 	// StopReason is why the model stopped writing this response — see

@@ -50,7 +50,7 @@ units:
 |-------|----------|-------------|
 | `kind: human` | yes | Marks the seat as human |
 | `contact.slack_user_id` | no | Slack member ID (`U…`) — `<@…>` mentions and the channel an agent DMs on escalation |
-| `contact.mattermost_user_id` | no | [Mattermost](../integrations/mattermost.md) **username**: the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID. Stored as written, so write it in the case Mattermost shows |
+| `contact.mattermost_user_id` | no | [Mattermost](../integrations/mattermost.md) **username**: the name an agent writes as a literal `@username` mention, and the account it opens a DM channel with. Not the opaque 26-character user ID. Lowercased, because Mattermost stores every username in lowercase and finds one without case |
 | `contact.atlassian_account_id` | no | Atlassian Cloud account ID. One ID covers Jira assignments, Confluence `<ri:user>` mentions and webhook sender attribution on both |
 | `contact.github_login` | no | GitHub username: review requests, sender attribution. Lowercased |
 | `contact.gitlab_username` | no | GitLab username: assignment, review and mention routing, sender attribution. Lowercased |
@@ -82,8 +82,13 @@ routing keys a map on the identity, so the *last* seat in the document takes it,
 while every walk of the org chart answers the *first*. One of the two people
 silently stops receiving their own mail, with both entries looking perfectly
 ordinary — an inbound message resolves to one seat while the same person's
-wakes go to the other. The comparison ignores case and surrounding whitespace,
-because the lookups do.
+wakes go to the other. Surrounding whitespace is never part of an identity, so
+the comparison ignores it on every field. Case is ignored exactly where the
+platform ignores it: a GitHub login, a GitLab username and a Mattermost
+username name one account however they are capitalised, so those three are
+lowercased before anything compares or routes on them. A Slack member ID and
+an Atlassian account ID are opaque ids the platform issues, and are compared
+exactly as written: `U0FOUNDER` and `u0founder` are two values.
 
 Each of these is a place a message can actually be sent. None of them says who
 a person is on the engine's *own* surface — that is the identity directory's,
@@ -95,9 +100,9 @@ whole-value `${VAR}` reference, for example
 `atlassian_account_id: "${ATLASSIAN_FOUNDER_ACCOUNT_ID}"` in a shipped
 example config, where the real ID is instance-specific. Values are
 whitespace-stripped when the organization is normalized. A literal
-`github_login` or `gitlab_username` is lowercased there; a reference is
-stored verbatim (never case-mangled) and its *resolved* value is
-lowercased instead. A reference whose variable is unset still counts as a
+`github_login`, `gitlab_username` or `mattermost_user_id` is lowercased
+there; a reference is stored verbatim (never case-mangled) and its *resolved*
+value is lowercased instead. A reference whose variable is unset still counts as a
 declared identity — the configuration does not warn that its seat is unreachable —
 but the identity is omitted wherever it is consumed until the variable
 resolves, so the raw `${VAR}` text is never emitted. The count of unresolved identities is logged on every published company

@@ -7,7 +7,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
@@ -112,7 +111,7 @@ func (e *Engine) rewireJira(ctx context.Context, c *Company) []string {
 		// every seat would bury it.
 		return nil
 	}
-	e.notify.jira.resolve(ctx, base, jira.DeploymentOf(base), jiraSeatCredentials(c, env))
+	e.notify.jira.resolve(ctx, base, c.Config.Integrations.Atlassian.Declared(), jiraSeatCredentials(c, env))
 	// INTO THE REGISTRY BUILT FOR c, OR NOWHERE. See
 	// [Engine.registryOf]: this pass resolved against c, and an apply
 	// that has since published a newer revision has already registered

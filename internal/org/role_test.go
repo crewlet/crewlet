@@ -317,14 +317,23 @@ func TestContactNormalization(t *testing.T) {
 		want HumanContact
 	}{
 		{
-			name: "case-normalised fields are lowercased",
-			in:   HumanContact{GitHubLogin: "JaneDoe", GitLabUsername: "Jane.Doe"},
-			want: HumanContact{GitHubLogin: "janedoe", GitLabUsername: "jane.doe"},
+			// Each platform compares these without case — Mattermost
+			// lowercases every username it stores and looks one up by
+			// lower(?) — so a capital here names the same account.
+			name: "case-insensitive accounts are lowercased",
+			in: HumanContact{
+				GitHubLogin: "JaneDoe", GitLabUsername: "Jane.Doe",
+				MattermostUserID: "Sarah.Chen",
+			},
+			want: HumanContact{
+				GitHubLogin: "janedoe", GitLabUsername: "jane.doe",
+				MattermostUserID: "sarah.chen",
+			},
 		},
 		{
 			name: "opaque ids keep their case",
-			in:   HumanContact{SlackUserID: "U0HUMAN", AtlassianAccountID: "5b10AC8d", MattermostUserID: "Sarah.Chen"},
-			want: HumanContact{SlackUserID: "U0HUMAN", AtlassianAccountID: "5b10AC8d", MattermostUserID: "Sarah.Chen"},
+			in:   HumanContact{SlackUserID: "U0HUMAN", AtlassianAccountID: "5b10AC8d"},
+			want: HumanContact{SlackUserID: "U0HUMAN", AtlassianAccountID: "5b10AC8d"},
 		},
 		{
 			name: "whitespace is never part of an identity",

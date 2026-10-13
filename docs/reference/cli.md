@@ -60,7 +60,7 @@ subcommand below is served by it.
 | `crewlet gitlab provision <company.yaml>` | Reconcile the config into GitLab: one service account per agent seat, membership, per-agent PATs minted into the config's own `${VAR}` references, and the group webhook. A re-run leaves a working token alone; `-dry-run` reports without touching anything, and a run that cannot record what it minted revokes it. |
 | `crewlet github provision <company.yaml>` | Report a [GitHub](../integrations/github.md) deployment against the config — which account each seat's own credential authenticates as — and register the inbound webhooks with a minted secret: one on the organization where the credential may, otherwise one per named repository. GitHub issues no credentials on a provisioner's behalf, so this run reports more than it changes |
 | `crewlet mattermost provision <company.yaml>` | Create/update one Mattermost bot account per Mattermost-enabled agent, add it to the team + channels, mint its access token into an env file or the [secret store](../concepts/secret-store.md). Keeps each bot's display name in step with the company document. A re-run leaves a working token alone; `-rotate` mints fresh ones, `-handles a,b` narrows the run, `-decommission` disables departed seats' bots. Runs a preflight first: system-admin role, `EnableBotAccountCreation`, `EnableUserAccessTokens`. |
-| `crewlet mattermost doctor <company.yaml>` | Check a [Mattermost](../integrations/mattermost.md) install end to end: reachability, the Site URL every browser inherits, a browser-shaped websocket upgrade, and one real authenticated socket per agent seat |
+| `crewlet mattermost doctor <company.yaml>` | Check a [Mattermost](../integrations/mattermost.md) install end to end: reachability, the Site URL every browser inherits (against the address people browse, given `-browser-url`), a browser-shaped websocket upgrade, and one real authenticated socket per agent seat |
 | `crewlet version` | Show the installed version (`--version` and `-v` too) |
 | `crewlet help` | Show the usage message (`--help` and `-h` too) |
 
@@ -1951,22 +1951,30 @@ A bot this run created is rolled back by revoking every token on it — nothing 
 ## `crewlet mattermost doctor`
 
 ```
-crewlet mattermost doctor <company.yaml> [-admin-token TOKEN] [-config PATH]
+crewlet mattermost doctor <company.yaml> [-browser-url URL] [-admin-token TOKEN]
+                                         [-config PATH]
 ```
 
 Checks a Mattermost install by exercising what actually breaks, in the order it breaks — and **no operator credential is required**: the seat tokens already in the config are what the engine authenticates with, so they are the honest thing to check with, and minting an admin token to find out whether a company works is a step that exists only to be skipped. Pass `-admin-token` (or export `MATTERMOST_ADMIN_TOKEN`) to run the shared checks as somebody else.
 
+**Where people browse is an input.** The server reports where it *believes* it is browsed — its Site URL — and `integrations.mattermost.url` may be any route to it (an in-cluster Service, say), so neither tells the doctor the address people actually type. `-browser-url` does, and falls back to `$MATTERMOST_PUBLIC_URL`, the variable the compose stack sets the Site URL from. Given it, the Site URL is held to it and the browser probe is sent there; without it, the Site URL is judged on its own, the probe can stand in only for a browser at the Site URL, and the `site url` line says what was not asked.
+
+| Flag | Description |
+|------|-------------|
+| `-browser-url` | The address people type into their browser to reach Mattermost. Falls back to `$MATTERMOST_PUBLIC_URL`; must be an absolute `http` or `https` address. |
+| `-admin-token` | A Mattermost token to run the shared checks as. Falls back to `$MATTERMOST_ADMIN_TOKEN`, and failing that borrows a seat's own. |
+
 | Check | What it catches |
 |---|---|
-| `GET /system/ping`, **unauthenticated** | Wrong URL, no route from here. First and without a credential, because a bad token must not make a healthy server look dead — the two have completely different remedies. |
-| `ServiceSettings.SiteURL` vs `integrations.mattermost.url` | The setting with no error message: Mattermost accepts a websocket only from a client whose `Origin` matches SiteURL, so a mismatch silently costs every human live updates while agents keep working. See [The Site URL](../integrations/mattermost.md#the-site-url). A path-only difference is reported separately — the socket is fine, but the server builds its absolute links from its own value. |
-| A websocket upgrade sent **with** a browser's `Origin` | What every human's live feed does, including a reverse proxy that drops `Upgrade`. The Origin carries scheme and host only, because that is the exact string the server compares. |
+| `GET /system/ping`, **unauthenticated** | Wrong URL, no route from here — and a `url` the server redirects, or answers with its web app's page, which names the `url` to set (the engine follows no redirect; see [The address the engine dials](../integrations/mattermost.md#the-address-the-engine-dials)). First and without a credential, because a bad token must not make a healthy server look dead — the two have completely different remedies. |
+| `ServiceSettings.SiteURL` | The setting with no error message: unset, not an absolute `http(s)` address, a default port spelled out, or — given `-browser-url` — not the address people type. Mattermost accepts a **browser's** websocket only when its `Origin` matches the Site URL's scheme and host, so a wrong one silently costs every human live updates while the agents, whose sockets carry no `Origin`, keep working. The Site URL is never compared with `integrations.mattermost.url`: people browse the one and the engine dials the other. See [The Site URL](../integrations/mattermost.md#the-site-url). |
+| A websocket upgrade sent **with** a browser's `Origin` | What every human's live feed does, `AllowCorsFrom` included. Given `-browser-url`, a browser there: sent to that address under the Site URL's path, so a reverse proxy that drops `Upgrade` fails it too. Without it, it carries the Site URL's own `Origin` to `url` and sees nothing in front of the server. The `Origin` is what a browser sends: scheme and host, no path, no default port. |
 | The configured team | Channels are team-scoped, so a team that does not resolve is a company where no bot can be placed. |
 | Per seat: its own credential, a real socket, its channels | A revoked token, a disabled bot, a `${VAR}` that never reached this deployment, or a bot in **no channel** — which hears only direct messages while its account looks perfectly healthy. |
 
 Each seat is checked with **its own** credential, because "the server accepts sockets" and "this bot wakes" are different questions and only the second delivers a message. A seat that fails early is not asked the later ones: one whose token did not resolve is never dialled, and one whose credential is refused is never asked about its channels — reporting those as separate failures would send an operator after faults nobody observed. The same rule governs the run as a whole: an unreachable server, an unreadable server config or a missing credential **stops** the checks and says so, because one failing line with nothing after it otherwise reads as "one thing is wrong" when it means "nothing else was even asked".
 
-Read-only. Exits non-zero when any check fails, so it drops into a deploy script.
+Read-only. Exits non-zero when any check fails, so it drops into a deploy script — and without `-browser-url` or `$MATTERMOST_PUBLIC_URL`, a pass has not asked whether people browse the Site URL.
 
 ---
 

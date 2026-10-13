@@ -367,7 +367,7 @@ holding the credentials and the port.
 
 ### Two Transport Modes
 
-1. **Stdio (Crewlet launches the server)** — The engine spawns MCP servers as child processes (e.g., `npx @anthropic/mcp-atlassian`). Crewlet manages the full lifecycle: start on engine boot, stop on shutdown. Communication uses JSON-RPC 2.0 over stdin/stdout.
+1. **Stdio (Crewlet launches the server)** — The engine spawns MCP servers as child processes (e.g., `npx @anthropic/mcp-atlassian`). Crewlet manages the full lifecycle: a shared server is started by the apply that declares it and a per-role one when its seat is claimed, each is restarted when its resolved spec moves, and each is stopped when it is no longer declared, when its seat is released, or at shutdown (see [Shared vs per-role servers](#shared-vs-per-role-servers)). Communication uses JSON-RPC 2.0 over stdin/stdout.
 
 2. **HTTP/SSE (externally provided)** — The engine connects to an already-running MCP server via URL. Supports JSON and SSE response modes with automatic session management and reconnection.
 
@@ -441,29 +441,54 @@ difference is a lifetime as much as a scope.
 | What it is | One child for the company | A **template**: one child per role that declares credentials for it |
 | Whose identity | Nobody's — it carries no seat's credentials | That seat's, from `role.mcp_env[name]` |
 | Who can call it | Every seat | Only the seat whose child it is |
-| Lifetime | The config **epoch** — started on apply, replaced on the next one | The seat's **lease** — spawned when this node claims the seat, killed when it releases it, and reconciled in place when the org chart changes what the seat declares |
+| Lifetime | The config **epoch** — reconciled on every apply, stopped when a revision drops it | The seat's **lease** — spawned when this node claims the seat, reconciled in place on every apply while it holds it, killed when it releases it |
 | Use it for | A shared knowledge base, a read-only reference server | A tracker, a chat backend, a code host — anywhere the action must be attributable to *this* agent |
 
-**A shared `mcp_servers` edit takes effect on the next turn, not at the next
-restart.** Applying a revision reconciles the shared bridge server by server: an
-entry that did not change is left alone, and one that was added, removed or
-re-pointed starts, stops or restarts **only that child**. A seat mid-turn
-finishes on the tool surface it started with, and its next turn renders the new
-one, the same next-turn promise [tool skills](../concepts/tool-skills.md),
-embeddings and the org chart make.
+**An `mcp_servers` edit takes effect on the next turn, not at the next
+restart** — and so does a seat's `mcp_env`, and a credential a server
+resolves. Applying a revision reconciles every child this node runs, the
+shared ones and the per-role ones of every seat it holds, against the spec the
+revision produces with each `${VAR}` resolved through the secret snapshot that
+apply just re-read. A child whose resolved spec did not change is left alone,
+and one that was added, removed or re-pointed — or whose credential was sealed
+or rotated since it started — starts, stops or restarts **only that child**, so
+the credential re-handshake a restart would cost is paid only by what actually
+changed. A seat mid-turn finishes on the tool surface it started with, and its
+next turn renders the new one, the same next-turn promise
+[tool skills](../concepts/tool-skills.md), embeddings and the org chart make.
+Re-activating an unchanged revision is therefore how a rotated per-agent
+credential reaches the agent's own server, the same
+[rotation gesture](../concepts/control-plane.md#rotation) every other holder
+answers to.
 
-**A per-role `mcp_env` edit takes effect on the next turn too.** Changing a
-seat's `mcp_env` is a configuration write like any other, and the node holding
-that seat reconciles its children in place on the apply, as the `seat_tools` step of
+A per-role child is reconciled just *after* the apply rather than inside it,
+by the node holding its seat, as the `seat_tools` step of
 [the convergence](../concepts/configuration.md#what-follows-a-published-company):
 a server the revision no longer declares for the seat is retired, one it now
-declares is started, and one it still declares is neither stopped nor
-restarted, so the credential re-handshake a restart would cost is paid only by
-what actually changed. The seat keeps its lease throughout. A change to a
-shared `mcp_servers` template is the apply's own reconcile above; what an apply
-does for a held seat is rebuild the catalogue its turns are built against (its
-builtins and the shared servers), which is the half that goes stale on a new
-epoch.
+declares is started, and one whose resolved spec moved is restarted, while the
+seat keeps its lease throughout. A seat the revision removes altogether has
+every child retired by the same step, before placement releases the seat, so
+its credentials stop acting at the vendor as soon as the company stops
+declaring the agent. The apply refiles each held seat's catalogue
+against the new revision and returns, and each seat then restarts or starts
+its own children in the background and refiles its catalogue again when it is
+done. A start can take a whole `startup_timeout_seconds` (two minutes by
+default) when a vendor is down or a package fetch hangs, and an apply that
+waited would hold up everything after it with the new revision already
+current, a role it adds among them, whose inbox drops mail until it exists. A
+restart stops the old child before it starts the new one, so a turn that starts
+in between still lists the old child's tools, and a call to one comes back as a
+tool error the model can read; the seat's next turn has the new child.
+
+**A credential provisioned after the seat was claimed still reaches its
+child.** A seat is claimed as soon as its node can run it, and an integration
+that mints each agent's identity — a Mattermost bot token, an Atlassian API
+token — can seal it a moment later. The child started in between ran with an
+empty credential, and most vendors' servers refuse to start that way. The pass
+that sealed the token re-activates the revision, and the seat starts the child
+with it as soon as that apply has run. An apply that lands while the seat is
+still being claimed is folded into the claim rather than lost, so the seat's
+mailbox opens only once its children are started from the newest snapshot.
 
 **A per-role child belongs to a seat, not to a node.** In a fleet each node
 claims a slice of the company, and it spawns children only for the seats it
@@ -492,6 +517,25 @@ server's **group missing** from the Tools room — which points at the right
 subsystem, where builtins quietly shrinking would not. It is logged as
 `mcp_server_failed` with the reason. Failing the apply instead would take a
 working company offline because one vendor's binary was absent from an image.
+
+**A seat's child that will not start is retried while the seat is held**: 15
+seconds after the first failed attempt, then twice as long after each attempt
+that fails, up to five minutes. Each wait is spread by up to a fifth either way
+so a fleet's seats do not retry one vendor in lockstep, which makes the longest
+six minutes (`mcp_seat_retry_scheduled` gives each one). The base is one seat
+heartbeat and the ceiling the interval a stuck seat's alarm repeats at, so a
+vendor that recovers is noticed within six minutes, and a server that never
+will repeats its failure about as often as that alarm. An apply retries at
+once and starts the series again. A spec that can never launch — no command, no URL —
+is not retried, since nothing about it changes until a revision does; and a
+shared server is retried by the next apply, as before.
+
+**No child is started for a seat this node cannot prove it holds.** A pass
+that an apply or a retry runs, rather than the claim, starts nothing unless the
+seat's lease is still live by this node's clock — a peer may own the seat once
+it has lapsed, and the child would be a second copy of that agent. Releasing
+the seat ends a start in flight rather than waiting out its startup timeout,
+and disarms the retry, so nothing is started behind the release.
 
 ---
 

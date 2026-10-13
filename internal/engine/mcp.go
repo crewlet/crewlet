@@ -32,8 +32,8 @@ import (
 //
 // A SHARED server is one child for the company. It has no seat's credentials
 // in it, every seat may call it, and it lives as long as the epoch — so it is
-// started during the apply, into the epoch's own registry, and stopped when
-// the next apply replaces that epoch.
+// reconciled during the apply, into the epoch's own registry, and stopped when
+// a revision no longer declares it.
 //
 // A PER-ROLE server is a TEMPLATE. Each role that declares mcp_env for it gets
 // its own child carrying that seat's credentials, and those children are tied
@@ -44,6 +44,14 @@ import (
 // N times over. And the credentials in a child ARE one seat's identity, so a
 // child that outlived its seat's lease would let this node keep acting as a
 // seat a peer now runs.
+//
+// Tied to the lease is not FROZEN at the claim, though. While the seat is held
+// every apply reconciles its children too — against the spec the new epoch
+// and the secret snapshot that apply refreshed produce — and a child that
+// would not start is retried; see seatservers.go. Both kinds of server
+// therefore follow one rule: a child whose resolved spec is unchanged is left
+// running, and one whose spec moved, a sealed or rotated credential included,
+// is restarted.
 //
 // # Why a seat needs its own registry
 //
@@ -58,7 +66,7 @@ import (
 // So a claimed seat gets BOTH of its own — its own bridge, holding only its
 // own children, and its own registry, cloned from the epoch's surface. That
 // also makes teardown total: releasing a seat stops one bridge, and there is
-// no way to leave a child of a seat this node no longer holds. [Company.ToolsFor]
+// no way to leave a child of a seat this node no longer holds. [Engine.ToolsFor]
 // is what a turn is built against.
 //
 // # What a failure means
@@ -72,7 +80,8 @@ import (
 // startSharedServers brings up the company-wide children for an epoch.
 //
 // Called from the apply, so a revision that adds, removes or re-points a
-// shared server takes effect on the next turn without a restart.
+// shared server — or rotates a credential one resolves — takes effect on the
+// next turn without a restart.
 func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 	if c == nil || e.mcp == nil {
 		return
@@ -146,10 +155,8 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 // and a child left behind is a process holding a seat's credentials after the
 // engine that vouched for it is gone.
 func (e *Engine) stopSharedServers(ctx context.Context) {
-	for _, bridge := range e.takeAllSeatBridges() {
-		if _, err := bridge.StopAll(ctx); err != nil {
-			log.WarnContext(ctx, "mcp_seat_stop_failed", "error", err)
-		}
+	for _, s := range e.takeAllSeatChildren() {
+		e.retireSeatChildren(ctx, s)
 	}
 	if e.mcp == nil {
 		return
@@ -157,45 +164,6 @@ func (e *Engine) stopSharedServers(ctx context.Context) {
 	if _, err := e.mcp.StopAll(ctx); err != nil {
 		log.WarnContext(ctx, "mcp_stop_failed", "error", err)
 	}
-}
-
-// startSeatServers spawns a claimed seat's own children and files the surface
-// its turns run against, which [Engine.ToolsFor] then answers.
-//
-// It returns nothing: the registry is installed beside the bridge by
-// [Engine.setSeatBridge], under one lock, so the two cannot disagree about
-// which children the seat has — and a returned copy was a second handle on it
-// that no caller read. A seat whose company declares no per-role server keeps
-// the epoch's shared surface, which is the correct answer rather than a
-// special case.
-func (e *Engine) startSeatServers(ctx context.Context, c *Company, handle string) {
-	if c == nil {
-		return
-	}
-	seat := c.Org.AgentSeatByHandle(handle)
-	if seat == nil {
-		return
-	}
-	// THE SEAT'S ID rides every outcome, which is what the heartbeat names
-	// a failing instance by, as a lease names its seat.
-	id, _ := c.Org.AgentIDFor(seat)
-	specs, unconfigured := seatSpecs(c, seat, e.resolver())
-	if len(specs) == 0 {
-		e.setSeatOutcomes(handle, id, unconfigured)
-		return
-	}
-	// A BRIDGE OF ITS OWN, because the bridge's catalogue is keyed by tool
-	// name across every server it runs: two seats' children of one template
-	// publish the same names, and a shared bridge would hand the second
-	// seat nothing while the first served both.
-	bridge := mcp.NewBridge(nil)
-
-	// CLONED, not shared: the seat's own tools must not reach a peer seat,
-	// and the epoch's registry is read by every other seat on this node.
-	reg := c.Tools.Clone()
-	outcomes := slices.Concat(unconfigured, startAll(ctx, reg, specs, bridge, bridge.Add))
-	e.setSeatBridge(ctx, handle, bridge, reg)
-	e.setSeatOutcomes(handle, id, outcomes)
 }
 
 // mcpOutcome is what one start of one MCP instance concluded, kept for the
@@ -212,24 +180,6 @@ type mcpOutcome struct {
 	seat   uuid.UUID // the seat's agent id, uuid.Nil for a shared server
 	tools  int
 	err    error
-}
-
-// setSeatOutcomes records a seat's per-role outcomes, stamped with the seat's
-// agent id, replacing its previous claim's; nil forgets the seat.
-func (e *Engine) setSeatOutcomes(handle string, seat uuid.UUID, outcomes []mcpOutcome) {
-	for i := range outcomes {
-		outcomes[i].seat = seat
-	}
-	e.mcpMu.Lock()
-	defer e.mcpMu.Unlock()
-	if len(outcomes) == 0 {
-		delete(e.mcpSeats, handle)
-		return
-	}
-	if e.mcpSeats == nil {
-		e.mcpSeats = make(map[string][]mcpOutcome)
-	}
-	e.mcpSeats[handle] = outcomes
 }
 
 // mcpStatus is this node's MCP servers as the heartbeat publishes them: one
@@ -311,145 +261,15 @@ func (e *Engine) seatRegistry(c *Company, handle string) *tools.Registry {
 	return c.Tools
 }
 
-// refileSeatTools rebuilds every held seat's registry — and its per-role
-// children — against a newly published company.
-//
-// # Two halves go stale, and they go stale on different publishes
-//
-// THE REGISTRY goes stale on a SETTINGS apply: it is a clone of the epoch's
-// own surface, so a revision that changes a builtin's knobs or the shared MCP
-// servers leaves every held seat serving the previous revision's catalogue to
-// turns running under the new one.
-//
-// THE CHILDREN go stale on an apply that changes a seat, because which ones a
-// seat runs is [seatSpecs] over `role.mcp_servers` and the seat's NAME.
-// Nothing but a lease acquisition ever recomputed them, so giving a seat a
-// tool server was a change that took effect when somebody restarted the
-// process or the seat happened to move to another node. Which looked exactly
-// like a vendor that would not start.
-//
-// So the specs are recomputed here and the loop is RETIRE THEN RECONCILE, the
-// same shape and the same order as [Engine.startSharedServers]: Reconcile is
-// driven by the specs the chart NAMES and therefore never visits a child the
-// chart DROPPED, and retiring before the reconcile is what lets a rename free
-// the name and its tools before the replacement files its own. A child the
-// chart still names is neither stopped nor restarted — it does not learn that
-// anything was published — so the credential re-handshake a restart would cost
-// is paid only by the servers that actually changed.
-//
-// # A seat the company no longer names keeps what it has
-//
-// Its children are its LEASE's, and the release that gives the seat up is what
-// stops them ([Engine.stopSeatServers]); tearing them down from here would
-// stop a seat's servers under a turn that is still running on a lease this
-// node still holds. What it does get is a registry re-cloned from the current
-// epoch, so nothing serves a company that is no longer published.
-//
-// Called AFTER the pointer moves, like the mailbox and scheduler steps and
-// for the same reason: an apply that is refused later must not have swapped
-// the seat surfaces of an epoch that never became current.
-func (e *Engine) refileSeatTools(ctx context.Context, c *Company) {
-	if c == nil || c.Tools == nil {
-		return
-	}
-	env := e.resolver()
-	e.mcpMu.Lock()
-	defer e.mcpMu.Unlock()
-	for handle, bridge := range e.seatMCP {
-		if bridge == nil {
-			continue
-		}
-		reg := c.Tools.Clone()
-		seat := c.Org.AgentSeatByHandle(handle)
-		if seat == nil {
-			// THE COMPANY NO LONGER NAMES IT. Re-file what the bridge
-			// is running so the seat keeps its tools until the lease
-			// release stops them, on a registry cut from the current
-			// epoch. See the note above for why the children stay.
-			refileCatalogue(ctx, reg, handle, bridge)
-			e.seatTools[handle] = reg
-			continue
-		}
-		specs, unconfigured := seatSpecs(c, seat, env)
-		retireSeatServers(ctx, handle, bridge, specs)
-		outcomes := slices.Concat(unconfigured, startAll(ctx, reg, specs, bridge, bridge.Reconcile))
-		e.seatTools[handle] = reg
-		// AND WHAT THIS PASS CONCLUDED replaces what the acquire did, for
-		// the heartbeat: a server the chart now gives the seat that would
-		// not start is the row an operator is looking for, and one the
-		// chart dropped is no longer this seat's to report. Written here
-		// rather than through setSeatOutcomes, whose lock this holds.
-		id, _ := c.Org.AgentIDFor(seat)
-		for i := range outcomes {
-			outcomes[i].seat = id
-		}
-		if len(outcomes) == 0 {
-			delete(e.mcpSeats, handle)
-		} else {
-			if e.mcpSeats == nil {
-				e.mcpSeats = make(map[string][]mcpOutcome)
-			}
-			e.mcpSeats[handle] = outcomes
-		}
-	}
-}
-
-// retireSeatServers stops the children the published chart no longer declares
-// for this seat.
-//
-// The bridge holds ONLY this seat's children — that is why each claimed seat
-// gets one of its own — so every absentee here is genuinely one the chart
-// dropped, and a rename is a drop plus an arrival under the new name.
-func retireSeatServers(ctx context.Context, handle string, bridge *mcp.Bridge,
-	specs []mcp.Spec) {
-
-	declared := make(map[string]struct{}, len(specs))
-	for _, spec := range specs {
-		declared[spec.Name] = struct{}{}
-	}
-	for _, name := range bridge.Servers() {
-		if _, keep := declared[name]; keep {
-			continue
-		}
-		// The Change is discarded rather than filed, on
-		// [Engine.startSharedServers]'s reasoning: the registry being
-		// filled is a BRAND-NEW clone that has not been told about any
-		// of this seat's servers yet, so there is nothing in it to
-		// unregister.
-		if _, err := bridge.Stop(ctx, name); err != nil {
-			log.WarnContext(ctx, "mcp_seat_server_retire_failed", "seat", handle,
-				"server", name, "error", err,
-				"detail", "its tools are gone from this seat's catalogue; the "+
-					"child may have survived and is reaped when the engine stops")
-			continue
-		}
-		log.InfoContext(ctx, "mcp_seat_server_retired", "seat", handle,
-			"server", name,
-			"detail", "the org chart no longer declares this server for the seat")
-	}
-}
-
-// refileCatalogue files a live bridge's existing tools into a fresh registry.
-func refileCatalogue(ctx context.Context, reg *tools.Registry, handle string,
-	bridge *mcp.Bridge) {
-
-	for _, registration := range bridge.Registrations() {
-		if err := reg.RegisterMCP(registration); err != nil {
-			log.WarnContext(ctx, "mcp_tool_refused", "seat", handle,
-				"tool", registration.Tool.Name(), "error", err)
-			continue
-		}
-	}
-}
-
 // startAll brings a set of servers up CONCURRENTLY and files what they
 // contribute into reg in SPEC ORDER.
 //
 // Concurrent because each one is a subprocess spawn, a protocol handshake and
 // a tools/list (hundreds of milliseconds at best and seconds against a vendor
 // that is slow or absent), and they have nothing to do with each other. Done
-// one at a time, a seat with three servers took three times as long to attach
-// as its slowest one, and a seat is not consuming its mailbox until it does.
+// one at a time, an apply with three servers took three times as long as its
+// slowest one, and no turn is built on the epoch until the apply is done. A
+// seat's own children are brought up the same way, by [bringUp].
 //
 // Filed in SPEC ORDER regardless of which finished first, because the registry
 // is keyed by tool name and a collision is resolved by who registered last.
@@ -487,93 +307,11 @@ func startAll(ctx context.Context, reg *tools.Registry, specs []mcp.Spec, bridge
 	return outcomes
 }
 
-// setSeatBridge installs a seat's bridge and the registry filed from it,
-// stopping any predecessor.
-//
-// A predecessor is not hypothetical: a failed acquire releases the same seat,
-// and a re-claim arrives while the previous teardown may not have run.
-//
-// BOTH under one lock, because a registry advertising the tools of a bridge
-// this node no longer runs offers the model entries that can only fail.
-func (e *Engine) setSeatBridge(ctx context.Context, handle string, bridge *mcp.Bridge,
-	reg *tools.Registry,
-) {
-	e.mcpMu.Lock()
-	previous, existed := e.seatMCP[handle]
-	if e.seatMCP == nil {
-		e.seatMCP = make(map[string]*mcp.Bridge)
-	}
-	if e.seatTools == nil {
-		e.seatTools = make(map[string]*tools.Registry)
-	}
-	e.seatMCP[handle] = bridge
-	e.seatTools[handle] = reg
-	e.mcpMu.Unlock()
-	if existed && previous != nil {
-		// Detached from the map first, so nothing can reach it while it
-		// is being shut down.
-		// WithoutCancel: this is a teardown, and the thing being undone
-		// is often the cancellation itself. A cleanup that inherited a
-		// dead context would leave the predecessor's children running.
-		if _, err := previous.StopAll(context.WithoutCancel(ctx)); err != nil {
-			log.WarnContext(ctx, "mcp_seat_stop_failed", "seat", handle, "error", err)
-		}
-	}
-}
-
-// takeSeatBridge removes and returns a seat's bridge, forgetting its
-// registry with it — a surface naming children this node has stopped is
-// worse than the shared one it falls back to.
-func (e *Engine) takeSeatBridge(handle string) *mcp.Bridge {
-	e.mcpMu.Lock()
-	defer e.mcpMu.Unlock()
-	bridge := e.seatMCP[handle]
-	delete(e.seatMCP, handle)
-	delete(e.seatTools, handle)
-	return bridge
-}
-
-// takeAllSeatBridges empties both maps, for shutdown.
-func (e *Engine) takeAllSeatBridges() []*mcp.Bridge {
-	e.mcpMu.Lock()
-	defer e.mcpMu.Unlock()
-	out := make([]*mcp.Bridge, 0, len(e.seatMCP))
-	for _, b := range e.seatMCP {
-		out = append(out, b)
-	}
-	clear(e.seatMCP)
-	clear(e.seatTools)
-	clear(e.mcpSeats)
-	return out
-}
-
-// stopSeatServers kills a released seat's children.
-//
-// TOTAL, and idempotent: the seat's whole bridge goes, so there is no way to
-// leave a child of a seat this node no longer holds — and running for a seat
-// that never got one, which a failed acquire does, is a no-op.
-func (e *Engine) stopSeatServers(ctx context.Context, handle string) {
-	// FORGOTTEN FIRST, and even for a seat that had no bridge: a seat whose
-	// every template failed to resolve has outcomes and no children, and a
-	// released seat's failures are no longer this node's to report.
-	e.setSeatOutcomes(handle, uuid.Nil, nil)
-	bridge := e.takeSeatBridge(handle)
-	if bridge == nil {
-		return
-	}
-	if _, err := bridge.StopAll(ctx); err != nil {
-		log.WarnContext(ctx, "mcp_seat_stop_failed", "seat", handle, "error", err)
-		return
-	}
-	log.InfoContext(ctx, "mcp_seat_stopped", "seat", handle)
-}
-
-// register starts one server and files what it serves.
+// file applies one bridge change to one registry.
 //
 // The registrations carry their own origin, so nothing here can file a
 // server's tool as a builtin — which is the reading that makes a failed
 // server look like a missing builtin instead.
-// file applies one bridge change to one registry.
 func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Change, err error) {
 	if err != nil {
 		// Logged, not returned. One vendor's server failing to start

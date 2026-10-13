@@ -21,15 +21,19 @@ import (
 // it last — see [TestACommandLogsToTheProcessSinkNotItsCallersWriter].
 // Installing io.Discard once, here, is what a process legitimately does.
 func TestMain(m *testing.M) {
-	// THE TWO CASES THAT RE-EXECUTE THIS BINARY, as the node they stop: by
-	// a signal, and by taking its broker connection away. Before the sink
-	// below, which each child installs for itself: its log is what the
-	// parent reads the order of the shutdown from.
+	// THE THREE CASES THAT RE-EXECUTE THIS BINARY: as the node they stop, by
+	// a signal and by taking its broker connection away, and as the process
+	// a second interrupt kills. Before the sink below, which each node probe
+	// installs for itself: its log is what the parent reads the order of
+	// the shutdown from.
 	if os.Getenv(drainProbeEnv) != "" {
 		runDrainProbe()
 	}
 	if os.Getenv(lostBrokerProbeEnv) != "" {
 		runLostBrokerProbe()
+	}
+	if os.Getenv(interruptProbeEnv) != "" {
+		runInterruptProbe()
 	}
 	logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
 	os.Exit(m.Run())

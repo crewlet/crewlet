@@ -466,8 +466,9 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 func TestFleetContract(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
-	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet {
-		return openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
+	coordtest.RunFleet(t, func(t *testing.T) func() coord.Fleet {
+		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
+		return func() coord.Fleet { return openFleetForTest(t, nc, prefix) }
 	})
 }
 

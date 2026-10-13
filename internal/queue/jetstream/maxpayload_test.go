@@ -230,12 +230,12 @@ func TestAnEmbeddedBrokerWithoutTheCeilingFailsTheBootAndBlamesTheBuild(t *testi
 		removeScratch(scratch)
 		t.Fatalf("configure the broker: %v", err)
 	}
-	go ns.Start()
-	t.Cleanup(func() { shutdownAndClean(ns, scratch) })
+	started := startJoined(ns)
+	t.Cleanup(func() { shutdownAndClean(ns, started, scratch) })
 	if !ns.ReadyForConnections(acceptTimeout) {
 		t.Fatalf("the broker was not ready within %v", acceptTimeout)
 	}
-	broken := &embeddedServer{ns: ns, inProcess: true}
+	broken := &embeddedServer{ns: ns, started: started, inProcess: true}
 
 	for _, opener := range []struct {
 		name string

@@ -553,21 +553,31 @@ flowchart TD
 
 **No engine-level timeout on the drain.** On a signal, step 5 waits as long as in-flight turns need, and the listener stays up for all of it. We don't try to second-guess "too long", because the host already provides that cutoff:
 
-- **Interactive:** a second Ctrl+C tells us you're done waiting.
+- **Interactive:** a second Ctrl+C tells us you're done waiting — the first, on a drain the node started itself.
 - **Kubernetes:** `terminationGracePeriodSeconds` (default 30 s) — after which the kubelet sends SIGKILL. The default is never enough: set it to your longest turn plus 60 s, plus any `preStop` sleep.
 - **systemd:** `TimeoutStopSec` (default 90 s) — same SIGKILL fallback. The default covers turns up to 30 s; raise it to your longest turn plus 60 s once turns run longer.
 - **Docker / Compose:** `docker stop -t`, `docker run --stop-timeout`, or Compose's `stop_grace_period` (default 10 s) — same SIGKILL fallback, and too short for any turn: set it to your longest turn plus 60 s.
 
 Embedding our own grace window would duplicate that decision in two places and inevitably disagree. Size the orchestrator's grace period to at least your longest turn plus 60 s (a multi-tool executor → reviewer turn can comfortably take 2–5 minutes): the drain needs the longest turn, and what follows it needs up to about 50 s on a node that has lost both its stores (see "A member that has lost both stores" above, and [Probes](../guides/deployment.md#probes)).
 
-**Force stop (second signal).** The first signal starts the drain and
-*hands the signals back to the operating system*, so a second SIGINT or
-SIGTERM does what it always does: the process dies immediately, with no
-cleanup. That handover is what makes the unbounded drain above safe to
-offer — without it the engine would still be the installed handler, every
-further press would be swallowed, and an operator watching a drain from
-the terminal they started it in would have no way to abort it short of
-SIGKILL from somewhere else.
+**Force stop (second signal).** The first signal *hands the signals back to
+the operating system* the moment it arrives, so a second SIGINT or SIGTERM
+does what it always does: the process dies immediately, with no cleanup.
+That holds from the first moment of `crewlet run`, while the node is still
+booting as much as while it drains, because a boot can wait unboundedly too.
+A boot that fails once the engine is up runs the same drain. An embedded
+broker that is still recovering a large store cannot be interrupted, so a
+first Ctrl+C during that recovery waits for it to finish (the log says
+`embedded_start_cancel_waits`) before the boot gives up. The handover is what
+makes those unbounded waits safe to offer. Without it the engine would still
+be the installed handler, every further press would be swallowed, and an
+operator watching a drain or a slow boot from the terminal they started it in
+would have no way to abort it short of SIGKILL from somewhere else. A node
+that [stops itself](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too)
+(`engine_fatal`) has had no first signal, so it hands the signals back as its
+drain starts, and the FIRST SIGINT or SIGTERM during that drain is the one
+that exits at once; its `engine_draining` hint says so, naming `an interrupt`
+rather than `a second interrupt`.
 
 A turn killed that way leaves its trigger **unacknowledged** rather than
 NAK'd, because nothing gets to run. The broker redelivers it once its ack

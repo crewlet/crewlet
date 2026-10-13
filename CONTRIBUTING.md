@@ -17,9 +17,11 @@ loops below; the engine itself needs no services.
 
 Take golangci-lint as a **prebuilt release**, not via `go install ...@latest`:
 that builds it with the linter module's own minimum Go rather than the newest,
-and a golangci-lint built with a Go older than `go.mod`'s `go` line refuses
-this module outright instead of linting it — so the gate reports nothing at
-all rather than disagreeing. `make lint` checks this and says so.
+and a golangci-lint built with a Go whose language version (major.minor) is
+older than that of `go.mod`'s `go` line refuses this module outright instead of
+linting it — so the gate reports nothing at all rather than disagreeing. Only
+the language version counts: a linter built with go1.27.0 lints a module at
+`go 1.27.2`. `make lint` checks this and says so.
 
 ```bash
 git clone https://github.com/crewlet/crewlet.git

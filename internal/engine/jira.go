@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
+	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -53,10 +54,10 @@ type jiraIdentities struct {
 // credential however many callers race it, and a caller that waited holds the
 // answer by the time this returns, which is what the register below depends
 // on.
-func (j *jiraIdentities) resolve(ctx context.Context, url string, deploy jira.Deployment, creds []atlassian.Credential) {
+func (j *jiraIdentities) resolve(ctx context.Context, url string, declared atlassianhost.Deployment, creds []atlassian.Credential) {
 	j.identityCache.resolve(ctx, creds, func(cred atlassian.Credential) string {
 		client, err := jira.NewClient(jira.ClientOptions{
-			URL: url, Email: cred.Email, Token: cred.Token, Deployment: deploy,
+			URL: url, Email: cred.Email, Token: cred.Token, Declared: declared,
 		})
 		if err != nil {
 			log.WarnContext(ctx, "jira_seat_client_failed", "error", err.Error())
@@ -120,7 +121,8 @@ func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*
 			"engine: jira: neither url (%q) nor cloud_id (%q) resolved to "+
 				"anything", cfg.URL, cfg.CloudID)
 	}
-	deploy := jira.DeploymentOf(base)
+	declared := c.Config.Integrations.Atlassian.Declared()
+	deploy := jira.DeploymentOf(base, declared)
 
 	// THE ORG CREDENTIAL IS OPTIONAL and its absence is a documented
 	// degradation rather than a failure: without it an event reaches
@@ -129,7 +131,7 @@ func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*
 	var watchers jira.Watchers
 	if token := strings.TrimSpace(env.Value(cfg.Token)); token != "" {
 		client, err := jira.NewClient(jira.ClientOptions{
-			URL: base, Email: env.Value(cfg.Email), Token: token,
+			URL: base, Email: env.Value(cfg.Email), Token: token, Declared: declared,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("engine: jira: %w", err)
@@ -149,7 +151,7 @@ func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*
 				"its assignee and anyone mentioned and nobody else")
 	}
 
-	e.notify.jira.resolve(ctx, base, deploy, jiraSeatCredentials(c, env))
+	e.notify.jira.resolve(ctx, base, declared, jiraSeatCredentials(c, env))
 	registered := e.intoLiveRegistry(func(reg *notify.Registry) int {
 		return e.notify.jira.register(reg, c, env)
 	})
@@ -222,17 +224,9 @@ func (e *Engine) reconcileJira(ctx context.Context, c *Company) {
 	log.InfoContext(ctx, "jira_reconciled", "company", c.Config.Name)
 }
 
-// jiraBaseURL is the REST base, resolved.
-//
-// The config's own BaseURL() prefers the cloud gateway, and this resolves
-// each half's `${VAR}` first — a cloud id is as much a deployment-specific
-// value as a hostname, and companies do reference it.
+// jiraBaseURL is the REST base, resolved ([config.Jira.ResolvedBaseURL]).
 func jiraBaseURL(cfg *config.Jira, env *config.Resolver) string {
-	resolved := config.Jira{
-		URL:     strings.TrimSpace(env.Value(cfg.URL)),
-		CloudID: strings.TrimSpace(env.Value(cfg.CloudID)),
-	}
-	return resolved.BaseURL()
+	return cfg.ResolvedBaseURL(env.Value)
 }
 
 // jiraShareableURL is the base a person's browser can open.

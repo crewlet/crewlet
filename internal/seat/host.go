@@ -467,6 +467,35 @@ func (h *Host) MayStart(handle string) (int64, bool) {
 	return epoch, true
 }
 
+// Provable reports whether this node can still prove it holds a seat's lease:
+// the seat is in the held set — establishing included — and its last renew
+// was less than one TTL ago, so by this node's own clock the lease has not
+// lapsed.
+//
+// NOT [Host.MayStart], which answers a narrower question for another caller.
+// A turn runs for minutes, so admitting one wants exclusivity for a stretch
+// still to come, and a seat that is still establishing must not take one at
+// all. Acting as the seat for one INSTANT — starting a process that carries
+// its credentials, which the release following a lost lease stops again —
+// needs only that the lease is live NOW: and it is live while the seat
+// establishes, having been taken moments ago and renewed by the heartbeat
+// since, and it is still live one heartbeat after a renew that is merely
+// late. Asked through MayStart, an apply landing on a renew's boundary would
+// be refused for a seat this node plainly holds.
+//
+// A lease past its TTL is one a peer may already hold, which is the one
+// answer this must never get wrong: the heartbeat drops such a seat at its
+// next beat, and until it does this says no. Every stamp it measures from is
+// read before the store call it records — the claim's ([Host.Sweep]) and each
+// renew's ([Host.Heartbeat]) — so the TTL is counted from no later than the
+// store counts it.
+func (h *Host) Provable(handle string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	held := h.held[handle]
+	return held != nil && h.now().Sub(held.renewedAt) < h.ttl
+}
+
 // EpochFor is the fencing token for a seat, or false if not held here.
 //
 // Unlike [Host.MayStart] this does NOT check freshness: it is for

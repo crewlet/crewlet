@@ -1,9 +1,12 @@
 package mattermost_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +15,7 @@ import (
 	"time"
 
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -260,23 +264,90 @@ func TestNoSeatsIsNotAFailure(t *testing.T) {
 	}
 }
 
-// THE SILENT FAILURE: Mattermost accepts a websocket only from a browser
-// whose Origin matches its Site URL, so a mismatch blinds every human while
-// agents keep working. Nothing else in the system reports it.
-func TestASiteURLMismatchIsReported(t *testing.T) {
+// syncBuffer is a log destination one test reads while the process writes.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// captureLogs points the process-wide logger at a buffer for one test and
+// puts the default back afterwards. Only a test that is not parallel may
+// call it: the logger belongs to the process.
+func captureLogs(t *testing.T) *syncBuffer {
+	t.Helper()
+	var out syncBuffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+	return &out
+}
+
+// THE ADDRESS THE ENGINE DIALS IS NOT COMPARED WITH THE SITE URL. Here the
+// engine reaches the server at 127.0.0.1 while people browse a public name —
+// the split every operator-managed deployment has, dialling the in-cluster
+// Service. The engine warned that browsers would fail, on every one of them,
+// while the browsers worked: they use the Site URL, and the origin check
+// never sees the engine's sockets, which carry no Origin.
+//
+// Not parallel: it reads the process-wide log.
+func TestAnotherRouteToTheServerIsNotWarnedAbout(t *testing.T) {
+	logs := captureLogs(t)
 	inst := newInstance(t, map[string]mattermost.User{
 		"tok-swe": {ID: "bot-swe", Username: "agent-swe"},
 	})
 	inst.siteURL = "https://chat.example.com"
 	tr := transport(t, inst, nil)
-
-	// It is a WARNING, not a failure: the agents work, and refusing to
-	// start would take away the half that does.
 	if err := tr.Start(t.Context()); err != nil {
-		t.Fatalf("a Site URL mismatch stopped the transport: %v", err)
+		t.Fatalf("Start: %v", err)
 	}
 	if got := tr.Handles(); len(got) != 1 {
 		t.Fatalf("Handles = %v", got)
+	}
+	// The read that judges it ran: the cadence it carries was applied.
+	if got := tr.StatusRefresh(); got != 2*time.Second {
+		t.Fatalf("StatusRefresh = %v: the instance was never read", got)
+	}
+	if strings.Contains(logs.String(), "mattermost_site_url") {
+		t.Errorf("a different route to the server was reported:\n%s", logs)
+	}
+}
+
+// WHAT THE SERVER ITSELF CANNOT USE IS WARNED ABOUT, in the sentence the
+// doctor prints: a Site URL its own validation accepts and no browser can
+// match. It is a WARNING, not a failure: the agents work, and refusing to
+// start would take away the half that does.
+//
+// Not parallel: it reads the process-wide log.
+func TestASiteURLTheServerCannotUseIsWarnedAbout(t *testing.T) {
+	logs := captureLogs(t)
+	inst := newInstance(t, map[string]mattermost.User{
+		"tok-swe": {ID: "bot-swe", Username: "agent-swe"},
+	})
+	inst.siteURL = "localhost:8065"
+	tr := transport(t, inst, nil)
+	if err := tr.Start(t.Context()); err != nil {
+		t.Fatalf("a Site URL the server cannot use stopped the transport: %v", err)
+	}
+	if got := tr.Handles(); len(got) != 1 {
+		t.Fatalf("Handles = %v", got)
+	}
+	out := logs.String()
+	if !strings.Contains(out, mattermost.EventSiteURLRefusesBrowsers) {
+		t.Fatalf("no %s in:\n%s", mattermost.EventSiteURLRefusesBrowsers, out)
+	}
+	if !strings.Contains(out, "absolute http or https") {
+		t.Errorf("the warning does not carry the doctor's sentence:\n%s", out)
 	}
 }
 

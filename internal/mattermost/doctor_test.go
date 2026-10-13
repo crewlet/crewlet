@@ -3,6 +3,11 @@ package mattermost_test
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"path"
+	"slices"
 	"strings"
 	"testing"
 
@@ -13,8 +18,16 @@ import (
 
 // dials records what the doctor asked for and answers how a test wants.
 type dials struct {
+	targets []string
 	origins []string
 	tokens  []string
+	// site, when set, makes every dial answer as a server with this Site
+	// URL and this AllowCorsFrom would — Mattermost's own origin rule
+	// ([mattermost.AdmitsOrigin]), not this fake's idea of it.
+	site, allowCorsFrom string
+	// noSite makes every dial answer as a server with NO Site URL does,
+	// which compares the Origin with the Host the upgrade was sent to.
+	noSite bool
 	// refuse answers this error for a dial carrying this origin, which
 	// is how a real server refuses a mismatched one.
 	refuseOrigin string
@@ -22,9 +35,30 @@ type dials struct {
 	refuseToken string
 }
 
-func (d *dials) dial(_ context.Context, _, origin, token string) error {
+// seatOrigins is the origin of every dial made with a seat's token.
+func (d *dials) seatOrigins(seatTokens ...string) []string {
+	var out []string
+	for i, token := range d.tokens {
+		if slices.Contains(seatTokens, token) {
+			out = append(out, d.origins[i])
+		}
+	}
+	return out
+}
+
+func (d *dials) dial(_ context.Context, target, origin, token string) error {
+	d.targets = append(d.targets, target)
 	d.origins = append(d.origins, origin)
 	d.tokens = append(d.tokens, token)
+	if d.site != "" || d.noSite {
+		u, err := url.Parse(target)
+		if err != nil {
+			return err
+		}
+		if !mattermost.AdmitsOrigin(origin, u.Host, d.site, d.allowCorsFrom) {
+			return errors.New("expected handshake response status code 101 but got 403")
+		}
+	}
 	if d.refuseOrigin != "" && origin == d.refuseOrigin {
 		return errors.New("unexpected HTTP response: 403 Forbidden")
 	}
@@ -69,29 +103,37 @@ func finding(t *testing.T, report *mattermost.Report, check string) mattermost.F
 	return mattermost.Finding{}
 }
 
-// A SITE URL THAT DOES NOT MATCH BLINDS EVERY HUMAN while agents keep
-// working — which is why this command exists: the failure has no symptom
-// anybody reports.
-func TestAMismatchedSiteURLIsReportedAsBlindingHumans(t *testing.T) {
+// A SITE URL ON ANOTHER ADDRESS IS NOT A FAULT. People browse the Site URL
+// and the engine dials whatever reaches the server — on Kubernetes, the
+// in-cluster Service — so the two differing says nothing about anybody's
+// live feed. The doctor used to fail this, and the running engine warned
+// that browsers would fail, on deployments whose browsers worked.
+func TestASiteURLOnAnotherAddressPasses(t *testing.T) {
 	t.Parallel()
 	srv := newChatServer()
-	srv.siteURL = "https://chat.internal.example.com"
-	report := doctorAgainst(t, srv, nil)
-	f := finding(t, report, "site url")
-	if f.OK {
-		t.Fatalf("a mismatched SiteURL passed: %+v", f)
+	srv.siteURL = "https://chat.example.com"
+	d := &dials{site: srv.siteURL}
+	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
+		o.Dial = d.dial
+		o.Org = &org.Organization{Name: "Nimbus", Roles: []*org.Role{
+			chatSeat("SWE", "${MM_TOKEN_SWE}", "eng"),
+		}}
+		o.SeatToken = func(*org.Role) (string, bool) { return "tok-swe", true }
+		srv.issue("user-swe", "tok-swe")
+		srv.join("eng", "user-swe")
+	})
+	for _, check := range []string{"site url", "browser socket", "seat swe"} {
+		if f := finding(t, report, check); !f.OK {
+			t.Errorf("%s failed on a split-horizon deployment: %q", check, f.Detail)
+		}
 	}
-	if !strings.Contains(f.Detail, "live feed") {
-		t.Errorf("the detail does not say what breaks: %q", f.Detail)
-	}
-	if report.Healthy() {
-		t.Error("the report reads healthy with a mismatched SiteURL")
+	if !report.Healthy() {
+		t.Errorf("the report is unhealthy: %+v", report.Findings)
 	}
 }
 
 // A MATCHING SITE URL PASSES, including when it differs in case or a
-// trailing slash: this check exists to tell an operator their humans are
-// blind, so a false alarm is worse than useless.
+// trailing slash.
 func TestAMatchingSiteURLPasses(t *testing.T) {
 	t.Parallel()
 	srv := newChatServer()
@@ -103,72 +145,318 @@ func TestAMatchingSiteURLPasses(t *testing.T) {
 	}
 }
 
-// AN UNSET SITE URL IS THE SAME FAILURE and names where to set it.
+// AN UNSET SITE URL IS REPORTED for what it breaks, and names where to set
+// it — the sentence the running engine logs too.
 func TestAnUnsetSiteURLIsReported(t *testing.T) {
 	t.Parallel()
 	srv := newChatServer()
 	srv.siteURL = " "
-	report := doctorAgainst(t, srv, nil)
-	f := finding(t, report, "site url")
-	if f.OK || !strings.Contains(f.Detail, "System Console") {
-		t.Errorf("finding = %+v", f)
-	}
-}
-
-// A PATH MISMATCH IS ITS OWN FINDING: the socket works, so reporting it as
-// a socket problem would send an operator to fix something that is fine.
-func TestAPathMismatchIsNotReportedAsASocketProblem(t *testing.T) {
-	t.Parallel()
-	srv := newChatServer()
+	d := &dials{noSite: true}
+	var configured string
 	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
-		srv.siteURL = o.Config.URL + "/chat"
+		o.Dial = d.dial
+		configured = o.Config.URL
 	})
 	f := finding(t, report, "site url")
-	if f.OK {
-		t.Fatal("a path mismatch passed")
+	want, _ := mattermost.JudgeSiteURL("")
+	if f.OK || f.Detail != want.Detail || !strings.Contains(f.Detail, "System Console") {
+		t.Errorf("finding = %+v", f)
 	}
-	if !strings.Contains(f.Detail, "websockets work") {
-		t.Errorf("the detail reads as a socket failure: %q", f.Detail)
+	// AND THE BROWSER PROBE AGREES WITH IT: with no Site URL the server
+	// admits an Origin naming the host an upgrade arrives at, so the probe
+	// stands in for a browser at the address it dials — and passes, as the
+	// finding beside it says browsers do. Without that Origin it would
+	// claim every person's websocket refused.
+	if f := finding(t, report, "browser socket"); !f.OK {
+		t.Errorf("browser socket failed against an unset Site URL: %q", f.Detail)
+	}
+	if len(d.origins) == 0 || d.origins[0] != mattermost.BrowserOrigin(configured) {
+		t.Errorf("the probe sent Origin %q, want the dialled address's %q",
+			d.origins, mattermost.BrowserOrigin(configured))
 	}
 }
 
-// THE UPGRADE IS SHAPED EXACTLY AS A BROWSER'S. A probe sending no Origin,
-// or one carrying a path, passes a check every real browser fails.
-func TestTheBrowserProbeSendsTheOriginABrowserWouldSend(t *testing.T) {
+// A DEFAULT PORT IN THE URL IS WRITTEN AS A BROWSER WRITES IT. With no Site
+// URL the server compares the Origin's host with the Host header as strings;
+// a browser at https://chat.example.com:443 sends neither with the port, and
+// a probe that dialled the address as written would send a Host with it and
+// be refused where every browser is admitted.
+func TestTheProbeAddressesTheServerAsABrowserDoes(t *testing.T) {
 	t.Parallel()
 	srv := newChatServer()
+	srv.siteURL = " "
+	d := &dials{noSite: true}
+	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
+		o.Dial = d.dial
+		o.Config.URL = "https://chat.example.com:443"
+	})
+	if f := finding(t, report, "browser socket"); !f.OK {
+		t.Errorf("browser socket = %q", f.Detail)
+	}
+	if len(d.targets) == 0 || d.targets[0] != "wss://chat.example.com/api/v4/websocket" {
+		t.Errorf("the probe went to %v", d.targets)
+	}
+}
+
+// A SITE URL NO BROWSER CAN MATCH — one the server's own validation accepts —
+// fails both the setting and the browser probe, while the seats, whose
+// sockets carry no Origin, still connect.
+func TestASiteURLNoBrowserCanMatchIsReported(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	srv.siteURL = "localhost:8065"
+	d := &dials{site: srv.siteURL}
+	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
+		o.Dial = d.dial
+		o.Org = &org.Organization{Name: "Nimbus", Roles: []*org.Role{
+			chatSeat("SWE", "${MM_TOKEN_SWE}", "eng"),
+		}}
+		o.SeatToken = func(*org.Role) (string, bool) { return "tok-swe", true }
+		srv.issue("user-swe", "tok-swe")
+		srv.join("eng", "user-swe")
+	})
+	if f := finding(t, report, "site url"); f.OK || !strings.Contains(f.Detail, "absolute") {
+		t.Errorf("site url = %+v", f)
+	}
+	if f := finding(t, report, "browser socket"); f.OK {
+		t.Errorf("browser socket passed against a Site URL no browser can match: %q", f.Detail)
+	}
+	if f := finding(t, report, "seat swe"); !f.OK {
+		t.Errorf("the seat failed, though its socket carries no Origin: %q", f.Detail)
+	}
+}
+
+// A URL THE SERVER REDIRECTS STOPS THE RUN AT THE FIRST QUESTION, naming the
+// address to set: a Mattermost served under a Site URL path redirects every
+// request outside it, and the engine follows no redirect — so nothing below
+// could be asked, and an operator needs the address, not a list of failures.
+func TestAURLTheServerRedirectsStopsTheRunNamingTheAddress(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	api := http.StripPrefix("/chat", http.HandlerFunc(srv.serve))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/chat/") {
+			r.URL.Path = path.Join("/chat", r.URL.Path)
+			http.Redirect(w, r, r.URL.String(), http.StatusFound)
+			return
+		}
+		api.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	client, err := mattermost.NewClient(mattermost.ClientOptions{URL: server.URL, Token: adminToken})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := enabledChat()
+	cfg.URL = server.URL
+	report, err := mattermost.Doctor(t.Context(), mattermost.DoctorOptions{
+		Client: client, Config: cfg, Dial: (&dials{}).dial,
+	})
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	f := finding(t, report, "reachable")
+	if f.OK || !report.Stopped() {
+		t.Fatalf("a redirected url did not stop the run: %+v", report.Findings)
+	}
+	if want := "set the url to " + server.URL + "/chat"; !strings.Contains(f.Detail, want) {
+		t.Errorf("the finding does not say %q: %q", want, f.Detail)
+	}
+}
+
+// A SITE URL THAT IS NOT WHERE PEOPLE BROWSE IS THE FAULT THIS COMMAND EXISTS
+// FOR, and only the person running it can name where they browse. Here the
+// Site URL was left on localhost while people use another address — the
+// compose stack's first mistake — and with an http Site URL behind a TLS
+// proxy, the scheme alone. Judged on its own, either Site URL is usable, so
+// without the address people type both passed as healthy.
+func TestASiteURLPeopleDoNotBrowseIsReported(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ site, browsed string }{
+		{"http://localhost:8065", "http://203.0.113.7:8065"},
+		{"http://chat.example.com", "https://chat.example.com"},
+	} {
+		srv := newChatServer()
+		srv.siteURL = tc.site
+		d := &dials{site: tc.site}
+		report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
+			o.Dial = d.dial
+			o.BrowsedAt = tc.browsed
+		})
+		f := finding(t, report, "site url")
+		if f.OK || !strings.Contains(f.Detail, tc.browsed) ||
+			!strings.Contains(f.Detail, "Set ServiceSettings.SiteURL") {
+			t.Errorf("Site URL %s browsed at %s: site url = %+v", tc.site, tc.browsed, f)
+		}
+		if f := finding(t, report, "browser socket"); f.OK {
+			t.Errorf("Site URL %s browsed at %s: a browser there was admitted: %q",
+				tc.site, tc.browsed, f.Detail)
+		}
+		if report.Healthy() {
+			t.Errorf("Site URL %s browsed at %s: the report is healthy", tc.site, tc.browsed)
+		}
+	}
+}
+
+// THE ADDRESS PEOPLE BROWSE PASSES WHEN THE SITE URL IS IT, however each is
+// spelled — and a company url on another route still passes beside it.
+func TestASiteURLWherePeopleBrowsePasses(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	srv.siteURL = "https://chat.example.com/team"
+	d := &dials{site: srv.siteURL}
+	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
+		o.Dial = d.dial
+		o.BrowsedAt = "https://Chat.Example.com/team/channels/town-square"
+		o.Config.URL += "/team"
+	})
+	for _, check := range []string{"site url", "browser socket"} {
+		if f := finding(t, report, check); !f.OK {
+			t.Errorf("%s = %q", check, f.Detail)
+		}
+	}
+	if f := finding(t, report, "site url"); !strings.Contains(f.Detail, "agrees") {
+		t.Errorf("site url does not say the two agree: %q", f.Detail)
+	}
+}
+
+// GIVEN WHERE PEOPLE BROWSE, THE BROWSER PROBE IS A BROWSER THERE: sent to
+// that address, under the Site URL's path where the web app opens its
+// socket, carrying that Origin — so it passes through whatever is in front
+// of the server, which a probe sent to this company's url never sees.
+func TestTheBrowserProbeGoesWhereABrowserGoes(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	srv.siteURL = "https://chat.example.com/team"
 	d := &dials{}
-	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) { o.Dial = d.dial })
+	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
+		o.Dial = d.dial
+		o.BrowsedAt = "https://chat.example.com:443/team/channels/town-square"
+	})
+	if f := finding(t, report, "browser socket"); !f.OK {
+		t.Fatalf("browser socket = %q", f.Detail)
+	}
+	if len(d.targets) == 0 {
+		t.Fatal("nothing was dialled")
+	}
+	if got, want := d.targets[0], "wss://chat.example.com/team/api/v4/websocket"; got != want {
+		t.Errorf("the probe went to %s, want %s", got, want)
+	}
+	if got, want := d.origins[0], "https://chat.example.com"; got != want {
+		t.Errorf("the probe sent Origin %s, want %s", got, want)
+	}
+}
+
+// NOT TOLD WHERE PEOPLE BROWSE, THE REPORT SAYS SO rather than passing the
+// question it did not ask: the Site URL is judged on its own, and the line
+// names how to ask the rest.
+func TestAnUnaskedQuestionIsNamed(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	srv.siteURL = "https://chat.example.com"
+	report := doctorAgainst(t, srv, nil)
+	f := finding(t, report, "site url")
+	if !f.OK || !strings.Contains(f.Detail, "-browser-url") ||
+		!strings.Contains(f.Detail, "not asked") {
+		t.Errorf("site url = %+v", f)
+	}
+	if f := finding(t, report, "browser socket"); !strings.Contains(f.Detail, "not told where people browse") {
+		t.Errorf("browser socket does not say what it stood in for: %q", f.Detail)
+	}
+}
+
+// AN ADDRESS NO BROWSER CAN BE AT IS REFUSED before anything is asked: the
+// run would otherwise hold the Site URL to nothing and call it a mismatch.
+func TestABrowsedAddressMustBeOneABrowserCanBeAt(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"chat.example.com", "/team", "ftp://chat.example.com"} {
+		_, err := doctorRun(t, newChatServer(), func(o *mattermost.DoctorOptions) {
+			o.BrowsedAt = raw
+		})
+		if err == nil {
+			t.Errorf("BrowsedAt %q was accepted", raw)
+		}
+	}
+}
+
+// NOT TOLD WHERE PEOPLE BROWSE, THE BROWSER PROBE CARRIES THE ORIGIN A BROWSER
+// AT THE SITE URL SENDS — not the origin of the address this company dials,
+// which nobody browses — so it asks the server's rule the question a browser
+// at the Site URL asks it.
+func TestTheBrowserProbeSendsTheOriginOfTheSiteURL(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	srv.siteURL = "https://chat.example.com:8443/team"
+	d := &dials{}
+	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
+		o.Dial = d.dial
+		o.Config.URL += "/team"
+	})
 	if f := finding(t, report, "browser socket"); !f.OK {
 		t.Fatalf("browser socket = %q", f.Detail)
 	}
 	if len(d.origins) == 0 {
 		t.Fatal("nothing was dialled")
 	}
-	origin := d.origins[0]
-	if origin == "" {
-		t.Fatal("the probe sent no Origin, which every real browser sends")
-	}
-	if strings.Count(origin, "/") != 2 {
-		t.Errorf("the Origin carries a path: %q — an Origin never does, and "+
-			"the server compares this string exactly", origin)
+	if got, want := d.origins[0], "https://chat.example.com:8443"; got != want {
+		t.Errorf("the probe sent Origin %q, want %q: a browser at the Site URL "+
+			"sends its scheme and host, never a path", got, want)
 	}
 }
 
 // A REFUSED UPGRADE IS THE FINDING THAT MATTERS, because the real symptom
-// is a chat client that just seems slow.
+// is a chat client that just seems slow. Here the Site URL is written with
+// capitals and AllowCorsFrom is set, which makes the server compare a
+// browser's Origin with the Site URL string for string — a refusal the
+// public configuration cannot show, because AllowCorsFrom is not in it, so
+// the setting passes and only the live probe finds it.
 func TestARefusedBrowserUpgradeIsReported(t *testing.T) {
 	t.Parallel()
 	srv := newChatServer()
+	srv.siteURL = "https://Chat.Example.com"
 	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
-		o.Dial = (&dials{refuseOrigin: mattermost.BrowserOrigin(o.Config.URL)}).dial
+		o.Dial = (&dials{site: srv.siteURL, allowCorsFrom: "https://admin.example.com"}).dial
 	})
+	if f := finding(t, report, "site url"); !f.OK {
+		t.Fatalf("site url = %q, though the setting alone is sound", f.Detail)
+	}
 	f := finding(t, report, "browser socket")
 	if f.OK {
 		t.Fatal("a refused upgrade passed")
 	}
 	if !strings.Contains(f.Detail, "silent") {
 		t.Errorf("the detail does not say the failure is silent: %q", f.Detail)
+	}
+}
+
+// THE SEAT PROBES ARE THE ENGINE'S OWN HANDSHAKE: no Origin. A probe carrying
+// one is judged by the browser rule the engine is not subject to, and would
+// call a working seat deaf on any deployment that dials another address.
+func TestTheSeatProbesCarryNoOrigin(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	srv.siteURL = "https://chat.example.com"
+	d := &dials{site: srv.siteURL}
+	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
+		o.Dial = d.dial
+		o.Org = &org.Organization{Name: "Nimbus", Roles: []*org.Role{
+			chatSeat("SWE", "${MM_TOKEN_SWE}", "eng"),
+		}}
+		o.SeatToken = func(*org.Role) (string, bool) { return "tok-swe", true }
+		srv.issue("user-swe", "tok-swe")
+		srv.join("eng", "user-swe")
+	})
+	if f := finding(t, report, "seat swe"); !f.OK {
+		t.Errorf("seat swe = %q", f.Detail)
+	}
+	origins := d.seatOrigins("tok-swe")
+	if len(origins) == 0 {
+		t.Fatal("the seat was never dialled")
+	}
+	for _, origin := range origins {
+		if origin != "" {
+			t.Errorf("a seat probe sent Origin %q", origin)
+		}
 	}
 }
 

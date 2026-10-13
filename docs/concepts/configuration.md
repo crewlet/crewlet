@@ -410,7 +410,7 @@ in a fixed order, and names each stage it got through.
 9. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
 10. **`maintenance`** — rebuild the retention sweep, on a node's **first** company (or the apply that started the native halves). Its job list is read once, and on a node that booted unconfigured it was read before there were native halves to contribute the tracker's repairs and the inbox sweep, or a company to state the conversation horizon — so it swept none of those until a restart. Every operation ledger is swept from boot either way: the ledgers are the core runtime's. **After** the swap, because it reads those horizons off the current company. The old sweep stops, its in-flight tick waited out, before the new one starts. **Conditional:** only on that first apply, and only on a node that publishes.
 11. **`learning_passes`**: hand the background learning loops (episode compaction, the skill curator, clustered synthesis and promotion) the passes this revision turns on, built from its models, credentials and knobs. **After** the swap, because the loops walk the current company's seats: handed over earlier they would run the new revision's passes over the previous company's roster, and a refusal later in the same apply would leave them there for a revision this node never served. The loops themselves are armed once per process and keep their clocks across an apply (see [Agent Learning](agent-learning.md#trigger-threshold-gated-on-a-slow-loop)), so this is also where a node that booted with no company, or a company that gained its first provider, starts running them. Reported on every apply, including one on a node with no store or no worker role, which has no loops to hand anything to. Not part of the convergence below, because nothing it builds is derived from the org chart.
-12. — 19. **the convergence**: everything derived from the *published company itself*, brought up to it. These are not the apply's own stages: they are the same list a node's boot runs, through the same function, because a boot publishes a company exactly as an activation does. They are described under [What follows a published company](#what-follows-a-published-company) below, and an apply names each of them in `applied_subsystems` in that order: `parties`, `seat_identities`, `seat_tools`, `tracker_projects`, `knowledge_containers`, `mailboxes`, `scheduler`, `published`. `mailboxes` is where a company that gained its first model provider lets through the mail every seat inbox held while it had none — after the seat tools, because the first thing a released inbox does is run a turn.
+12. — 19. **the convergence**: everything derived from the *published company itself*, brought up to it. These are not the apply's own stages: they are the same list a node's boot runs, through the same function, because a boot publishes a company exactly as an activation does. They are described under [What follows a published company](#what-follows-a-published-company) below, and an apply names each of them in `applied_subsystems` in that order: `parties`, `seat_identities`, `seat_tools`, `tracker_projects`, `knowledge_containers`, `mailboxes`, `scheduler`, `published`. `seat_tools` hands each held seat's per-role children their reconcile and does **not wait** for it: a start is a subprocess handshake that can take a whole `startup_timeout_seconds`, and with the new company already current every step after it would otherwise wait behind it. `mailboxes` is where a company that gained its first model provider lets through the mail every seat inbox held while it had none — after the seat tools, because the first thing a released inbox does is run a turn.
 
 Then a `config_revision_applied` event is published on
 `crewlet.config.revision_applied` with `status`, the `applied_subsystems` list
@@ -525,22 +525,45 @@ published before the replacement files its own. Taking a leaking integration
 offline by deleting its `mcp_servers` entry therefore takes effect on the next
 turn, which is what the rest of this section already promised.
 
-**Per-role children are not on this path.** They belong to a seat's *lease*
-rather than to the epoch: the apply-time reconcile above skips every non-shared
-server, and a role's `mcp_env` — which carries the per-agent Slack/GitHub
-credentials — is never part of a spec it compares. Such a child is spawned when
-its seat is claimed, and it is reconciled by the `seat_tools` step of
-[the convergence](#what-follows-a-published-company): an apply that adds,
-removes or re-credentials a server for a seat this node holds retires the
-children that are gone and starts the ones that arrived, in place, without
-releasing the seat and without touching the children the revision still names.
+**Per-role children are reconciled too, but by the seat rather than by the
+epoch.** They belong to a seat's *lease*: spawned when the seat is claimed and
+torn down when it is released, and only ever on the node holding it — so the
+reconcile above, over the epoch's specs, skips every non-shared server, and
+each node instead reconciles the children of the seats it holds, in the
+`seat_tools` step of [the convergence](#what-follows-a-published-company), once
+the new company is current. The spec compared there is the template with the
+seat's `mcp_env` laid over it — which carries the per-agent Slack, GitHub or
+Mattermost credential — resolved through the snapshot this apply re-read. So an
+apply that stops declaring a server for a seat retires that child, one that
+starts declaring one starts it, and an `mcp_env` edit, or a credential sealed
+or rotated since the child started, restarts **only that seat's child**, on the
+apply that carried it — in place, without releasing the seat — and every other
+child keeps running. A seat the revision removes altogether loses all its
+children in the same step, while this node still holds it: placement releases
+the seat afterwards, up to a sweep interval later, and a child left running
+until then would go on acting at the vendor for an agent the company no longer
+has.
 
-The step rebuilds both halves because both go stale on an apply: the
-**registry** is a clone of the epoch's surface, and the **children** are the
-seat's `mcp_env` and its name. A child the revision still names is neither
-stopped nor restarted — it never learns anything was published — so the
+The same step rebuilds each held seat's **registry**. The registry is a clone
+of the epoch's surface and goes stale the moment a new epoch is published,
+while a child is a running process holding that seat's credentials and must
+not be restarted for a config edit that did not name it. So an apply re-files
+each seat's live children into a fresh clone of the new epoch's builtins and
+shared servers first, and only then reconciles the children themselves; a
+child whose resolved spec did not move never learns the apply happened, so the
 credential re-handshake a restart would cost is paid only by the servers that
 actually changed.
+
+Unlike the shared servers, which are reconciled *before* the swap and so hold
+the apply until each has started, a seat's children are reconciled after it
+and the apply does not wait for them. A turn that starts in between runs on
+the seat's refiled registry, which still lists the children as the apply found
+them, and a call to one being restarted comes back as a tool error the model
+can read; the seat refiles its registry again once its reconcile is done, so
+its next turn sees the restarted children. A child that would not start is
+retried on its own as well, while the seat is held, and no reconcile starts a
+child for a seat this node can no longer prove it holds. See
+[Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
 
 ### What follows a published company
 
@@ -560,7 +583,7 @@ So there is **one list**, and both paths run it. In order:
 |---|---|---|
 | `parties` | The party index every routing decision resolves a name through | A registry is derived from one org and answers for it permanently. Left behind, every lookup of a new seat answers "nobody matches" — the same answer a stranger gets, so nothing fails and nothing is logged |
 | `seat_identities` | The vendor **account** each seat holds, re-resolved for Jira, GitLab and GitHub | A code host names a seat by an account, and which account a seat holds is read from the seat's own credential. The lookups are keyed on the token and cached, so a company whose credentials did not move spends no requests |
-| `seat_tools` | Each held seat's registry, and its per-role MCP children | Both halves are described under [Shared MCP servers](#live-propagation) above |
+| `seat_tools` | Each held seat's registry, and its per-role MCP children | Both halves are described under [Shared MCP servers](#live-propagation) above. The registry is refiled before the step returns; the children are each seat's own reconcile, which the step hands over and does not wait for, because a start can take a whole `startup_timeout_seconds` |
 | `tracker_projects` | The projects the org chart names, as objects, stamped with the revision's activation instant | A project belongs to a **unit**, so the revision that first names one is usually the one that adds the unit. A create takes its key from the project's own counter, so a project that is not an object refuses every task filed into it |
 | `knowledge_containers` | The containers each unit's and seat's `space:` names | Same reason, one subsystem along |
 | `mailboxes` | A durable subscription per seat; the release of every inbox held while the company had no model; a fresh judgement of every seat [parked on its token budget](agent-runtime.md#the-budget-park) against the ceilings now current; and the end of every [pause](agent-runtime.md#pausing-a-seat) whose seat the revision removed | Until a mailbox exists, every event published to that seat is **dropped** rather than retained. A convergence rather than a walk: it asks the broker what is missing and writes only that, so a company whose mailboxes all exist costs a comparison and no consumer proposals at all — and it runs unconditionally, because a mailbox lost under a company nobody edited is a fact about the broker that no comparison of two companies would notice. A pause is keyed by the seat's id, so it is cleared only when the seat itself is gone |
@@ -594,8 +617,10 @@ because no apply ran.
 **The order is not arbitrary.** A released inbox runs a turn immediately, and
 that turn resolves parties, loads its tool surface and files work into a
 project — so everything a turn reads is converged before the mailboxes are
-ensured and any held mail is let through. `published` is last, because it tells
-every open dashboard what this node now serves.
+ensured and any held mail is let through, except a seat's per-role children,
+which `seat_tools` hands their reconcile and does not wait for (see above).
+`published` is last, because it tells every open dashboard what this node now
+serves.
 
 ### The API half
 

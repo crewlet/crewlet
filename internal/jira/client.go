@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/httpx"
 )
 
@@ -26,11 +27,15 @@ import (
 //
 // Jira Cloud serves /rest/api/3 and names people by accountId. Jira Data
 // Center serves /rest/api/2 — v3 is a 404 there — and names them by name.
-// Asking an operator to declare which they run would be a knob whose only
-// honest answer is already in the address they gave, so it is DERIVED: a
-// cloud id, or a host under Atlassian's own domains, is Cloud; anything else
-// is Data Center. [ClientOptions.Deployment] overrides the derivation for the
-// one case it cannot see — a Cloud site behind a vanity domain.
+// Which one an address is on is DERIVED, by the one rule config validation
+// and the Confluence client derive it by ([atlassianhost.Of]): a host of
+// Atlassian's own Clouds — a site, or the gateway a cloud id is read through
+// — is Cloud, and any other host is what the company declared in
+// integrations.atlassian.deployment ([ClientOptions.Declared]), or Data
+// Center when it declared nothing. The declaration is what places a Cloud
+// site no host list can name — Atlassian Isolated Cloud's, at a base domain
+// of its own — and it is the same input a test server standing in for Cloud
+// at a loopback address is given.
 
 // Deployment is which Jira an address names.
 type Deployment string
@@ -48,11 +53,12 @@ func (d Deployment) Valid() bool { return d == Cloud || d == DataCenter }
 
 // APIPath is the REST prefix this deployment serves.
 //
-// Cloud for the zero value, which is what [DeploymentOf] answers for an
-// address it cannot place: a v3 call against Data Center 404s with the
-// version in the path, which names the problem, while a v2 call against
-// Cloud succeeds against a DEPRECATED surface that returns different
-// identity fields — a silent misroute rather than a loud miss.
+// Cloud for the zero value — a deployment nobody derived, since
+// [DeploymentOf] answers one of the two for every address — because a v3
+// call against Data Center 404s with the version in the path, which names
+// the problem, while a v2 call against Cloud succeeds against a DEPRECATED
+// surface that returns different identity fields: a silent misroute rather
+// than a loud miss.
 func (d Deployment) APIPath() string {
 	if d == DataCenter {
 		return "/rest/api/2"
@@ -60,20 +66,11 @@ func (d Deployment) APIPath() string {
 	return "/rest/api/3"
 }
 
-// cloudHosts are the domains only Atlassian Cloud answers on.
-var cloudHosts = []string{".atlassian.net", ".atlassian.com", ".jira.com"}
-
-// DeploymentOf derives the deployment from a base address.
-func DeploymentOf(base string) Deployment {
-	parsed, err := url.Parse(strings.TrimSpace(base))
-	if err != nil {
-		return DataCenter
-	}
-	host := strings.ToLower(parsed.Hostname())
-	for _, suffix := range cloudHosts {
-		if strings.HasSuffix(host, suffix) {
-			return Cloud
-		}
+// DeploymentOf derives the deployment of a base address, in a company that
+// declared declared ([atlassianhost.Unknown] for one that declared nothing).
+func DeploymentOf(base string, declared atlassianhost.Deployment) Deployment {
+	if atlassianhost.Of(base, declared) == atlassianhost.Cloud {
+		return Cloud
 	}
 	return DataCenter
 }
@@ -92,7 +89,10 @@ type Client struct {
 	base   string
 	auth   string
 	deploy Deployment
-	http   *http.Client
+	// declared is the [ClientOptions.Declared] this client was built with,
+	// for a client built beside it at the same address.
+	declared atlassianhost.Deployment
+	http     *http.Client
 }
 
 // ClientOptions configure a [Client].
@@ -108,9 +108,18 @@ type ClientOptions struct {
 	// Token is the API token or PAT.
 	Token string
 
-	// Deployment overrides the derivation from URL. The zero value
-	// derives, which is right for every address that names itself.
-	Deployment Deployment
+	// Declared is the deployment the company declared in
+	// integrations.atlassian.deployment ([config.Atlassian.Declared]), or
+	// [atlassianhost.Unknown] for one that declared nothing. It decides the
+	// deployment of an address whose host is not one of Atlassian's Clouds'
+	// own ([DeploymentOf]), and of no other: a host the rule recognises is
+	// Cloud whatever was declared.
+	//
+	// EVERY CLIENT BUILT FOR A COMPANY PASSES THE COMPANY'S. Leaving it out
+	// answers Data Center for an Isolated Cloud site, so this client would
+	// read v2 where the validator admitted the company as Cloud; a test in
+	// internal/atlassianhost refuses a construction that omits it.
+	Declared atlassianhost.Deployment
 
 	HTTP *http.Client
 }
@@ -129,7 +138,7 @@ type ClientOptions struct {
 // address rather than the console's way of naming a product.
 func RESTBase(base string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	if DeploymentOf(base) == Cloud {
+	if atlassianhost.IsSite(base) {
 		base = strings.TrimRight(strings.TrimSuffix(base, "/jira"), "/")
 	}
 	return base
@@ -145,19 +154,17 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if token == "" {
 		return nil, fmt.Errorf("jira: no api token")
 	}
-	deploy := opts.Deployment
-	if !deploy.Valid() {
-		deploy = DeploymentOf(base)
-	}
+	deploy := DeploymentOf(base, opts.Declared)
 	client := opts.HTTP
 	if client == nil {
 		client = httpx.Client(ClientTimeout)
 	}
 	return &Client{
-		base:   base,
-		auth:   authHeader(strings.TrimSpace(opts.Email), token),
-		deploy: deploy,
-		http:   client,
+		base:     base,
+		auth:     authHeader(strings.TrimSpace(opts.Email), token),
+		deploy:   deploy,
+		declared: opts.Declared,
+		http:     client,
 	}, nil
 }
 

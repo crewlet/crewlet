@@ -734,6 +734,67 @@ which must come back as a tool call. A gateway that does not serve
 `/v1/models` is reported as *not served* rather than as a failure. See the
 [CLI reference](../reference/cli.md#crewlet-llm).
 
+### Reasoning models behind an OpenAI-compatible endpoint
+
+OpenAI's Chat Completions format has no field for a model's reasoning, so
+every host that serves a reasoning model over it added its own, and most now
+require it back on the next request. An `openai` or `openai-compatible` entry
+keeps whatever reasoning a response carried, **exactly as the host sent it**,
+and sends it back on every later round of the same tool loop, in the same
+field and the same shape:
+
+| Host | What a response carries | What the vendor says about sending it back |
+|---|---|---|
+| Moonshot (`kimi-k3`, `kimi-k2.7-code`), Together's Kimi K3 | `reasoning_content` | Required for K3 "in multi-turn conversations and tool-call loops"; K3 always thinks and was trained to read it |
+| DeepSeek | `reasoning_content` | With `tools` in the request, every earlier turn's, or a **400**; ignored without `tools` |
+| Fireworks, Z.ai, SGLang, MiniMax | `reasoning_content` (MiniMax: or `reasoning_details`, when its thinking is split out) | Interleaved thinking must see it again |
+| OpenRouter | `reasoning` and `reasoning_details` (text with a signature, summaries, encrypted payloads) | The details' sequence must match what the model produced; `reasoning_content` is accepted as an alias |
+| Groq, vLLM, Ollama, Together's other models | `reasoning` | Accepted on input (vLLM's interleaved thinking relies on it) |
+| A LiteLLM proxy in front of Claude | `thinking_blocks`, signed | Required beside a tool call, or Anthropic answers **400** |
+| Gemini 3 on Google's OpenAI-compatible endpoint | a thought signature on each tool call (`extra_content`; LiteLLM's `provider_specific_fields`) | Required on the calls of the current step, or **400** |
+| Mistral reasoning models | `content` as a list of chunks, the thinking in a `thinking` chunk | Send the whole message back, thinking chunk included |
+| OpenAI | nothing | — |
+
+There is **no setting** for this. Every field above goes back only to the
+**endpoint that wrote it** — the same `base_url`, whatever the model or the
+key — because a field one host emits is one another may refuse, and a refused
+request is a 400 the [fallback chain](../concepts/architecture.md#2-inside-one-node)
+does not retry. A response that carried none of it (OpenAI's own, and any
+model that does not reason) changes nothing about the requests that follow.
+The reasoning is read for the dashboard as before (the readable trace, from
+`reasoning_content`, `reasoning` or a thinking chunk), and a Mistral answer's
+visible text is its `text` chunks rather than the list's JSON.
+
+**An empty reasoning is still sent.** A round that reasoned nothing goes back
+with the empty value its host sent (`"reasoning_content": ""`); only a `null`
+counts as no field. And once any turn of a request carries
+`reasoning_content`, every assistant turn of it does — the empty string for a
+round whose stream never named the field, and for a turn another endpoint or
+backend wrote, whose reasoning this host cannot read — because Moonshot
+refuses an assistant tool-call message whose `reasoning_content` is missing
+while thinking is on, and DeepSeek wants every earlier turn's. No other field
+is filled in: an empty `reasoning_details` block would be a sequence the model
+never produced.
+
+**Within one tool loop, and across a suspension.** Every assistant turn in a
+request belongs to the phase that is still running: a new turn starts from
+its [conversation ledger](../concepts/conversation-sessions.md), never from an
+earlier turn's messages, so no reasoning crosses from one task into the next.
+A coding run that suspends the loop parks the reasoning with the conversation,
+and the resumed rounds send it back as the suspended ones would have.
+
+**A fallback to another endpoint carries none of the first one's reasoning.**
+When a chain moves a running loop to a member on a different `base_url`, the
+turns the first member wrote go to the second without their reasoning. Once the
+second member has written a turn of that loop carrying `reasoning_content`, the
+first member's turns go to it with an empty one, which is what Moonshot and
+DeepSeek check for. Before that, and on a host that checks more than the
+field's presence (Gemini 3's thought signatures within a step, a LiteLLM
+proxy's signed thinking blocks), the request may be refused, and the turn then
+fails on that member as it would on any 400. A chain whose members serve such a
+model should keep them on one endpoint: two `providers.llm` entries on the same
+`base_url` with different keys or models share their reasoning.
+
 ## Tier A
 
 Tier A (`crewlet.yaml`, restart-only) says where this node's stream, store and
@@ -1607,7 +1668,7 @@ units:
 |-------|------|----------|-------------|
 | `name` | string | yes | The seat's display name — what people read. It is NOT how anything refers to this seat: `manages:` and a unit's `lead:` both take the `handle` below |
 | `kind` | `agent` \| `human` | no | Who holds the seat (default `agent`). `human` marks a [human seat](../concepts/humans-in-the-org.md) — addressable, never spawned; rejects every runtime-only field below. It is also where a person joins: every person holds exactly one human seat, invited onto it or created on it from that seat in **Agents › Org chart** (or `crewlet iam invite -seat`), so a company that declares no `kind: human` seat at all can admit nobody — legitimate for a company its agents run alone through Tier A tokens, and named in an `advisory` warning at `roles` by `crewlet validate` and every `/config` write. Its `contact` identities are optional: a seat with none is legitimate, and the same two name it in an `advisory` warning at the seat's `contact` |
-| `contact` | dict | no | A human seat's external identities — optional, see `kind` above; refused on an agent seat: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`. Each accepts a literal ID or exactly one whole-value `${VAR}` reference, resolved at use time through the [secret store](../concepts/secret-store.md) and then the environment, by every consumer alike; values are whitespace-stripped, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)). **No two seats may declare the same identity** — an external account belongs to one person, and a duplicate is refused rather than silently sending one of them somebody else's mail. Every one is a place a message can be sent; who a person is on the engine's own surface — the dashboard, the API, the operator tool server — is not here but in the identity directory, which binds each person to the seat they were invited or created on (`crewlet iam bind` moves them to another) (see [Acting as your seat](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)) |
+| `contact` | dict | no | A human seat's external identities — optional, see `kind` above; refused on an agent seat: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`. Each accepts a literal ID or exactly one whole-value `${VAR}` reference, resolved at use time through the [secret store](../concepts/secret-store.md) and then the environment, by every consumer alike; values are whitespace-stripped, the names of platforms that ignore case (`github_login`, `gitlab_username`, `mattermost_user_id`) are lowercased while Slack and Atlassian ids keep theirs, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)). **No two seats may declare the same identity** — an external account belongs to one person, and a duplicate is refused rather than silently sending one of them somebody else's mail. Every one is a place a message can be sent; who a person is on the engine's own surface — the dashboard, the API, the operator tool server — is not here but in the identity directory, which binds each person to the seat they were invited or created on (`crewlet iam bind` moves them to another) (see [Acting as your seat](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api)) |
 | `availability` | string | no | Human seats only — free-text availability rendered into rosters and `lookup_colleague` results |
 | `avatar` | dict | no | **Agent seats only.** How the dashboard draws this seat wherever it shows who the seat is: `character`, one of the thirty Crewlet characters (`crewlet`, `hexlet`, `peaklet`, `prismlet`, `towerlet`, `bricklet`, `gemlet`, `coglet`, `pluslet`, `shieldlet`, `stacklet`, `sparklet`, `cloudlet`, `foxlet`, `rocketlet`, `crownlet`, `cactlet`, `wisplet`, `heartlet`, `flasklet`, `chiplet`, `duolet`, `chatlet`, `pagelet`, `archlet`, `dashlet`, `octlet`, `conelet`, `hivelet`, `folderlet`), and `color`, one of `purple`, `cyan`, `green`, `amber`, `rose` or `blue`. Either may be left out: an absent character is `crewlet`, the original, and an absent colour is `purple`, so a seat that says nothing is drawn as every agent was before a seat could choose. Presentation only: no prompt, route or placement reads it, and it survives a rename because nothing derives it from the name. An id outside those lists, or the block on a human seat (a person is drawn as themself), is refused by an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to). The org builder offers both as pickers in the seat's editor and in the Add dialog, which suggests a character no agent wears yet |
 | `goal` | string | no | Individual mission statement |
@@ -1727,7 +1788,7 @@ integrations:
     # site_url: "https://acme.atlassian.net"  # with cloud_id: the base for links people open
     token: "${JIRA_API_TOKEN}"            # API token (org read account)
     email: "${JIRA_EMAIL}"                # Cloud only — the account's email, for Basic auth
-    webhook_secret: "${JIRA_WEBHOOK_SECRET}"  # Data Center only — HMAC-SHA256 secret
+    webhook_secret: "${JIRA_WEBHOOK_SECRET}"  # HMAC-SHA256 secret — required on Data Center
 
   confluence:                            # the knowledge base
     url: "${CONFLUENCE_URL}"              # a Data Center instance, or a Cloud site
@@ -1773,8 +1834,10 @@ integrations:
 ```
 
 > **There is no address in this block.** Where people reach this deployment is [`api.external_url`](#tier-a), and where vendors and sandboxes reach it, when it publishes a listener for them alone, is `api.public.external_url` — both in the operator's own Tier A file, because the session cookie and the origin check are decided *before* a company document is loaded, and are part of what authenticates the request that would go on to load one. `api.external_url` is also what [tool-skill](../concepts/tool-skills.md#skill-variables) prose reaches as the reserved variable `${crewlet_base_url}`, which is why a company may not declare a `skill_variables` entry of that name.
+
 - **`forge_app_id`** — verifies the Forge Invocation Token (FIT) on Cloud webhooks against Atlassian's JWKS; the `aud` claim must match. Required when Jira Cloud delivers through the Forge app.
-- **`jira`** — the Atlassian tracker, served end to end. Give `url` **or** `cloud_id`, never both — they are two ways to name one instance and `crewlet validate` refuses the ambiguity. `token` is the org read account (an issue's watchers are the one routing input a webhook never carries); `email` switches authentication to Cloud's Basic scheme; `site_url` is the human base for links when the instance is named by a cloud id. `webhook_secret` is **required for Data Center** and unused on Cloud, whose events arrive through the Forge app instead. Each seat's own credential lives in `mcp_env.atlassian` (or `mcp_env.jira`) and is what the engine resolves its account id from — see [Jira](../integrations/jira.md).
+- **`atlassian`** — the Atlassian organization one service account per agent seat is created in, plus which Atlassian the company runs. `deployment` is `cloud` or `data_center`; the dashboard's form opens on `cloud`, and a value written here also decides the deployment of a `jira` or `confluence` `url` whose host is not one of Atlassian's own — which is how an Atlassian Isolated Cloud site, at a base domain of its own, is configured. `org_id` and `api_key` (an **unscoped** organization API key) are Cloud only. See [Jira](../integrations/jira.md#configuration).
+- **`jira`** — the Atlassian tracker, served end to end. Give `url` **or** `cloud_id`, never both — they are two ways to name one instance and `crewlet validate` refuses the ambiguity. `token` is the org read account (an issue's watchers are the one routing input a webhook never carries); `email` switches authentication to Cloud's Basic scheme; `site_url` is the human base for links when the instance is named by a cloud id, and the Cloud whose gateway that id is read through (Government Cloud's for a `…atlassian-us-gov-mod.net` site). Which deployment `url` names is derived from its host — and, for a host that is not Atlassian's own, from `atlassian.deployment`. `webhook_secret` is **required for Data Center**; on Cloud it signs the admin webhook the engine registers, and is not required because a company on the Forge relay has no HMAC in its path. Each seat's own credential lives in `mcp_env.atlassian` (or `mcp_env.jira`) and is what the engine resolves its account id from — see [Jira](../integrations/jira.md).
 - **`confluence`** — the knowledge base, and the **query-time search** behind every turn's "Relevant knowledge" block and the `search_knowledge` tool. Same address rule as `jira`: `url` **or** `cloud_id`, never both. `token` is the org read account a seat with no Confluence credential of its own searches under; a seat WITH one searches as itself and Confluence enforces its page permissions natively. `webhook_secret` is required for Data Center and unused on Cloud. The knowledge backend is **single-homed** — the engine wires exactly one `knowledge.Searcher`, because two would make an agent's answer to "what do we already know about this" depend on which one was asked. Scope reads with `knowledge.scope`; publish with [`crewlet confluence import`](../reference/cli.md#crewlet-confluence-import). See [Confluence](../integrations/confluence.md).
 - **`slack`** — the hosted chat backend. The org-level block carries **no credentials at all**: Slack gives each agent its OWN app, so the token and signing secret live on each role's `integrations.slack`, and this block holds only the working-indicator settings. **`typing_status`** takes `always` / `addressed` and defaults to `always`, and Slack is where that default costs least: its indicator renders TEXT, so a phase change is something the person waiting can actually read, which is also what makes `status_phrases` worth having here. There is no `off`. Inbound events arrive per seat at `/webhooks/slack/{handle}`, verified against that seat's own signing secret. Provision with [`crewlet slack provision`](../reference/cli.md#crewlet-slack-provision). See [Slack Integration](../integrations/slack.md).
 - **`mattermost`** — the self-hosted chat backend, and the one integration that is **both** inbound and outbound: enabling it starts the outbound transport *and* the websocket fleet that holds one connection per agent seat (Mattermost has no usable inbound webhook, so nothing has to reach the engine — no public URL, no tunnel). `url` and `team` are both **required** when enabled. Per-agent identity lives on each role's `integrations.mattermost.bot_token`, named again as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess. **`typing_status`** takes `always` / `addressed` and defaults to `always`, which on this backend is the expensive one: the indicator has to be re-asserted every few seconds rather than every 45, so a multi-minute turn costs one to two orders of magnitude more requests than Slack's for strictly less information. Most Mattermost deployments want `addressed`. There is deliberately no `status_phrases`: Mattermost renders a fixed client-side indicator with no API for the text. The `provisioning:` sub-block is read only by [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision), not the engine. A company may run Mattermost and Slack together — they are different workspaces with different people in them, and an org migrating from one to the other runs both for a while. See [Mattermost Integration](../integrations/mattermost.md).

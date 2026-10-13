@@ -443,8 +443,14 @@ vet: ## run go vet (ci: build + vet)
 # dependency surface Dependabot does not watch (.github/dependabot.yml).
 #
 # What IS checked is that the linter can run at all. golangci-lint refuses a
-# module whose `go` line is newer than the Go it was itself built with, and
-# says so as a config-load error that names neither the fix nor the cause. The
+# module whose Go LANGUAGE version — the `go` line's major.minor — is newer
+# than the language of the Go it was itself built with, and says so as a
+# config-load error that names neither the fix nor the cause. The language and
+# not the patch, because that is golangci-lint's own rule (CheckGoVersion in
+# its pkg/goutil, which trims both sides to major.minor), and comparing patches
+# here refused the very linter CI runs: the prebuilt releases trail Go's patch
+# releases (v2.14.0, the newest when go.mod moved to 1.27.2, is built with
+# go1.27.0 and lints this module), so `make check` could pass nowhere. The
 # trap is that the obvious way to get "the latest" — `go install ...@latest` —
 # builds it with the LINTER MODULE's own minimum Go, which is behind ours, so
 # it produces a binary that lints nothing. Only the prebuilt releases are built
@@ -463,16 +469,19 @@ lint: ## run golangci-lint (ci: golangci-lint)
 	} >&2
 	@built=$$(golangci-lint version 2>/dev/null | sed -n 's/.*built with go\([0-9][0-9.]*\).*/\1/p'); \
 	need=$$(sed -n 's/^go \([0-9][0-9.]*\)$$/\1/p' go.mod); \
+	built_lang=$$(printf '%s' "$$built" | cut -d. -f1,2); \
+	need_lang=$$(printf '%s' "$$need" | cut -d. -f1,2); \
 	if [ -n "$$built" ] && [ -n "$$need" ] && \
-	   [ "$$(printf '%s\n%s\n' "$$need" "$$built" | sort -V | head -1)" != "$$need" ]; then \
-	  { echo "golangci-lint is built with go$$built, but go.mod targets $$need."; \
+	   [ "$$(printf '%s\n%s\n' "$$need_lang" "$$built_lang" | sort -V | head -1)" != "$$need_lang" ]; then \
+	  { echo "golangci-lint is built with go$$built, but go.mod targets $$need:"; \
+	    echo "  language $$need_lang is newer than the linter's $$built_lang."; \
 	    echo "  It will refuse this module rather than lint it, so this gate"; \
 	    echo "  would report nothing at all."; \
 	    echo "  Install a PREBUILT RELEASE from"; \
 	    echo "  https://golangci-lint.run/welcome/install/ — those are built with"; \
 	    echo "  a current Go. 'go install ...@latest' is NOT enough: it builds"; \
 	    echo "  the linter with the linter module's own minimum Go, which is"; \
-	    echo "  older than $$need."; \
+	    echo "  older than $$need_lang."; \
 	    exit 1; \
 	  } >&2; \
 	fi

@@ -104,7 +104,8 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// the builtins, because this is the surface every seat's is cloned
 	// from. Per-role children are NOT here: they belong to a seat's lease
 	// rather than to the epoch, and this node holds only some of the
-	// company's seats — see mcp.go.
+	// company's seats, so they are reconciled seat by seat once this epoch
+	// is current — see seatservers.go.
 	//
 	// A server that will not start does not fail the apply. It costs that
 	// server's tools; refusing the epoch over it would take a working

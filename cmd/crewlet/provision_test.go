@@ -8,6 +8,8 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -384,6 +386,71 @@ func TestTheMattermostCommandSharesTheProvisioningRules(t *testing.T) {
 		t.Fatal("a run with no administrator token was accepted")
 	} else if !strings.Contains(err.Error(), "MATTERMOST_ADMIN_TOKEN") {
 		t.Errorf("the refusal does not name the variable: %v", err)
+	}
+}
+
+// WHERE PEOPLE BROWSE REACHES THE DOCTOR from the flag, or from the variable
+// the compose stack sets the Site URL from — the one fact about browsers the
+// engine's own configuration cannot give it. Here the server's Site URL is
+// localhost and people browse another address: told nothing, the doctor can
+// only judge the Site URL on its own; told by either, it fails it.
+//
+// Not parallel: it sets the process environment.
+func TestTheDoctorIsToldWherePeopleBrowse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v4/system/ping":
+			w.Write([]byte(`{"status":"OK"}`))
+		case "/api/v4/config/client":
+			w.Write([]byte(`{"SiteURL":"http://localhost:8065"}`))
+		case "/api/v4/users/me":
+			w.Write([]byte(`{"id":"user-ceo","username":"agent-ceo"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"message":"not here"}`))
+		}
+	}))
+	t.Cleanup(server.Close)
+	path := filepath.Join(t.TempDir(), "company.yaml")
+	doc := strings.Replace(chatCompanyDoc, "url: https://chat.example.com", "url: "+server.URL, 1)
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Setenv("MM_TOKEN_CEO", "tok-ceo")
+	siteLine := func(args ...string) string {
+		t.Helper()
+		var out, errs bytes.Buffer
+		// The run fails whatever it is told, because this stand-in
+		// upgrades no socket; only the site url line is the question.
+		_ = run(append([]string{"mattermost", "doctor", path}, args...), &out, &errs)
+		for _, line := range strings.Split(out.String(), "\n") {
+			if strings.Contains(line, "site url") {
+				return line
+			}
+		}
+		t.Fatalf("no site url line in:\n%s\n%s", out.String(), errs.String())
+		return ""
+	}
+
+	// An address refused at once, so the browser probe sent there fails
+	// fast rather than waiting out a dial timeout.
+	const browsed = "http://127.0.0.1:1"
+	t.Setenv("MATTERMOST_PUBLIC_URL", "")
+	if line := siteLine(); !strings.HasPrefix(line, "ok") || !strings.Contains(line, "-browser-url") {
+		t.Errorf("told nothing: %s", line)
+	}
+	if line := siteLine("-browser-url", browsed); !strings.HasPrefix(line, "FAIL") ||
+		!strings.Contains(line, browsed) {
+		t.Errorf("told by the flag: %s", line)
+	}
+	t.Setenv("MATTERMOST_PUBLIC_URL", browsed)
+	if line := siteLine(); !strings.HasPrefix(line, "FAIL") || !strings.Contains(line, browsed) {
+		t.Errorf("told by MATTERMOST_PUBLIC_URL: %s", line)
+	}
+	// The flag outranks the variable, as every flag here does.
+	if line := siteLine("-browser-url", "http://localhost:8065"); !strings.HasPrefix(line, "ok") {
+		t.Errorf("the flag did not outrank the variable: %s", line)
 	}
 }
 

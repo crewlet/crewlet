@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -140,10 +141,13 @@ func TestTheEmbeddedServerIsGivenTheLoggerBeforeItStarts(t *testing.T) {
 		t.Fatal("the embedded server is never given a logger; nats-server " +
 			"installs none of its own and discards every line in silence")
 	}
-	start := strings.Index(src, "go ns.Start()")
-	if start < 0 {
+	// THE CALL STATEMENT, however it is wrapped: Start runs on a goroutine
+	// startEmbedded joins, so the line is the call alone.
+	where := regexp.MustCompile(`(?m)^\s*ns\.Start\(\)\s*$`).FindStringIndex(src)
+	if where == nil {
 		t.Fatal("cannot find the server start; this guard has gone stale")
 	}
+	start := where[0]
 	if install > start {
 		t.Error("the logger is installed after Start — the boot, where stream " +
 			"recovery and store failures report, would log nowhere")

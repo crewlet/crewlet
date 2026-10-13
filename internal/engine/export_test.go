@@ -36,6 +36,37 @@ func WithSweepEvery(opts Options, every time.Duration) Options {
 	return opts
 }
 
+// WithSeatRetryBase is opts with a seat's per-role child that would not start
+// retried first after base rather than after [seatServerRetryBase], for a test
+// outside the package that must watch a retry bring the child up.
+func WithSeatRetryBase(opts Options, base time.Duration) Options {
+	opts.seatRetryBase = base
+	return opts
+}
+
+// SettleSeatServers waits until no seat this node holds has a pass over its
+// per-role children in flight, for a test outside the package that reads what
+// an apply's reconcile of those children did: the apply hands each seat's
+// pass to the seat's runner and returns without waiting for it, so a read
+// straight after the apply sees the children as the apply found them. A
+// runner is chosen before the apply returns, so every pass it asked for has
+// ended — its surface filed — when this does.
+func SettleSeatServers(e *Engine) {
+	e.mcpMu.Lock()
+	held := make([]*seatChildren, 0, len(e.seatMCP))
+	for _, s := range e.seatMCP {
+		held = append(held, s)
+	}
+	e.mcpMu.Unlock()
+	for _, s := range held {
+		s.mu.Lock()
+		for s.running {
+			s.idle.Wait()
+		}
+		s.mu.Unlock()
+	}
+}
+
 // SeedStore writes the migrated store image ([storetest.Seed]) where b's store
 // opens, for a case booting a node on a path of its own: the node's file
 // unless the store is scratch — discarded at open, so a seed would only be

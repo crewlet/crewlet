@@ -73,12 +73,16 @@ func (s *CoordStore) clock() time.Time {
 
 // casRetries bounds one read-decide-write.
 //
-// Sixteen, matching the coordination store's own loops. Contention here is a
-// seat's own turns plus a recovering peer — two or three writers at the very
-// worst — so exhausting this many rounds is a store that is not settling
-// rather than a queue of legitimate writers, and it is reported as an error
-// instead of as a lost race: a caller told "somebody else got there" stops,
-// while a caller told "no answer" retries.
+// A COUNT, unlike the time the fleet store retries its own lost races for
+// (internal/coord/kv's race.go), and for the reason that file gives its own
+// counted loops: what a write here races ends the race of itself. The time
+// bound exists for records whose writers nothing limits — the token counter, a
+// credential's cooldown — while a run's record is written only by its seat's
+// own turns and a peer recovering it, two or three writers at the very worst.
+// Sixteen is that several times over, so exhausting it is a store that is not
+// settling rather than a queue of legitimate writers, and it is reported as an
+// error instead of as a lost race: a caller told "somebody else got there"
+// stops, while a caller told "no answer" retries.
 const casRetries = 16
 
 // BeginLaunch opens a launch on this turn's row. See the contract on

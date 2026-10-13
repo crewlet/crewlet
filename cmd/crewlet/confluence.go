@@ -74,13 +74,10 @@ func runConfluenceImport(_ config.Source, args []string, stdout, stderr io.Write
 	}
 	defer closeEnv()
 
-	resolved := config.Confluence{
-		URL:     strings.TrimSpace(env.Value(cfg.URL)),
-		CloudID: strings.TrimSpace(env.Value(cfg.CloudID)),
-	}
 	client, err := confluence.NewClient(confluence.ClientOptions{
-		URL: resolved.BaseURL(), Email: env.Value(cfg.Email),
-		Token: env.Value(cfg.Token),
+		URL: cfg.ResolvedBaseURL(env.Value), Email: env.Value(cfg.Email),
+		Token:    env.Value(cfg.Token),
+		Declared: company.Integrations.Atlassian.Declared(),
 	})
 	if err != nil {
 		return err
@@ -192,13 +189,10 @@ func runConfluenceResync(_ config.Source, args []string, stdout, stderr io.Write
 	}
 	defer closeEnv()
 
-	resolved := config.Confluence{
-		URL:     strings.TrimSpace(env.Value(cfg.URL)),
-		CloudID: strings.TrimSpace(env.Value(cfg.CloudID)),
-	}
 	client, err := confluence.NewClient(confluence.ClientOptions{
-		URL: resolved.BaseURL(), Email: env.Value(cfg.Email),
-		Token: env.Value(cfg.Token),
+		URL: cfg.ResolvedBaseURL(env.Value), Email: env.Value(cfg.Email),
+		Token:    env.Value(cfg.Token),
+		Declared: company.Integrations.Atlassian.Declared(),
 	})
 	if err != nil {
 		return err
@@ -287,11 +281,7 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 	}
 	defer closeEnv()
 
-	resolved := config.Confluence{
-		URL:     strings.TrimSpace(env.Value(cfg.URL)),
-		CloudID: strings.TrimSpace(env.Value(cfg.CloudID)),
-	}
-	base := resolved.BaseURL()
+	base := cfg.ResolvedBaseURL(env.Value)
 	if base == "" {
 		return fmt.Errorf(
 			"confluence: neither integrations.confluence.url (%q) nor cloud_id "+
@@ -305,6 +295,7 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 	}
 	client, err := confluence.NewClient(confluence.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
+		Declared: company.Integrations.Atlassian.Declared(),
 	})
 	if err != nil {
 		return err

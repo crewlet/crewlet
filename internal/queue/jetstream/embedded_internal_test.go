@@ -236,12 +236,24 @@ func listeningBroker(t *testing.T) *embeddedServer {
 		removeScratch(scratch)
 		t.Fatalf("configure a listening broker: %v", err)
 	}
-	go ns.Start()
-	t.Cleanup(func() { shutdownAndClean(ns, scratch) })
+	started := startJoined(ns)
+	t.Cleanup(func() { shutdownAndClean(ns, started, scratch) })
 	if !ns.ReadyForConnections(acceptTimeout) {
 		t.Fatalf("a listening broker was not ready within %v", acceptTimeout)
 	}
-	return &embeddedServer{ns: ns, scratch: scratch}
+	return &embeddedServer{ns: ns, started: started, scratch: scratch}
+}
+
+// startJoined starts ns the way [startEmbedded] does — on a goroutine whose
+// end the returned channel reports — so a cleanup through [shutdownAndClean]
+// waits for the Start it may overlap rather than racing it.
+func startJoined(ns *server.Server) <-chan struct{} {
+	started := make(chan struct{})
+	go func() {
+		defer close(started)
+		ns.Start()
+	}()
+	return started
 }
 
 // AN EXTERNAL SERVER'S HANDSHAKE IS NOT GIVEN THE EMBEDDED MEMBER'S BUDGET.
@@ -275,7 +287,15 @@ func TestAnExternalDialKeepsItsOwnHandshakeBudget(t *testing.T) {
 // droppingInfoJS drops the account report it is asked for — returning only
 // when the request's own term ends, as a request a metadata group with no
 // leader never replies to does — until it has dropped `drop` of them, and
-// then answers it.
+// then answers at once.
+//
+// THE ANSWER IS ITS OWN, never the real server's. The wait gives every ask
+// the same term, and the cases shorten it to 20 ms so three dropped asks cost
+// little; a real round trip under a loaded race build ran past that term, the
+// wait rightly asked a fifth time, and the case reported the count it exists
+// to pin as a defect (1 run in 900 beside three busy CPUs, and once in 20 runs
+// of this package). How often the wait asks is the assertion, so the latency
+// of an answer must not decide it.
 type droppingInfoJS struct {
 	jetstream.JetStream
 	drop  int32
@@ -287,7 +307,7 @@ func (f *droppingInfoJS) AccountInfo(ctx context.Context) (*jetstream.AccountInf
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	return f.JetStream.AccountInfo(ctx)
+	return &jetstream.AccountInfo{}, nil
 }
 
 // A CLUSTERED MEMBER IS READY ONLY ONCE THE METADATA LEADER ANSWERS IT, not

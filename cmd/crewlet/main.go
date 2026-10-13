@@ -1106,7 +1106,7 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// signal — because a graceful drain is the difference between a
 	// restart that resumes cleanly and one that redelivers half-finished
 	// turns. Nothing else in the process may install a handler.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := interruptContext()
 	defer stop()
 
 	// TRACING BEFORE THE ENGINE, because engine.New starts subscriptions
@@ -1298,25 +1298,21 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	var fatal error
 	select {
 	case <-ctx.Done():
+		// The signals are already handed back by now (see
+		// [interruptContext]), so the second interrupt the drain line below
+		// promises does what it says.
 	case <-e.Fatal():
 		fatal = e.FatalCause()
+		// NO SIGNAL ARRIVED, so interruptContext still holds both: handed
+		// back here, an operator's FIRST interrupt during this drain ends it.
+		// Left installed, that press would only cancel a context the drain
+		// is already detached from, and be swallowed.
+		stop()
 		log.ErrorContext(ctx, "engine_fatal", "error", fatal,
 			"detail", "this node cannot go on running: it stops the way a signal "+
 				"stops it and exits non-zero, for whatever supervises it to start "+
 				"it again")
 	}
-
-	// HAND THE SIGNALS BACK before draining, so a SECOND interrupt kills
-	// the process. Until this runs, signal.NotifyContext is still the
-	// installed handler and has already cancelled its context, so every
-	// further SIGINT is swallowed — leaving an operator watching a drain
-	// they cannot abort from the terminal they started it in, with SIGKILL
-	// from somewhere else as the only way out.
-	//
-	// That escape hatch is what makes the unbounded drain below safe to
-	// offer: the bound belongs to whoever supervises the process, and for
-	// an operator at a terminal the second press IS their bound.
-	stop()
 
 	// Said BEFORE the drain, which can take minutes: this line is what an
 	// operator at a terminal reads to learn what the node is waiting for and
@@ -1347,10 +1343,19 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// With the queue's own gone the drain waits for nothing — the turns are
 	// cancelled, see the shutdown below — and a line promising they finish
 	// first would describe a drain this node is not running.
+	//
+	// AND WHICH PRESS ENDS IT on what stopped the node: after a signal it is
+	// the SECOND interrupt, the first having started this drain, while a
+	// fatal started it with none, so the operator's first press is the one
+	// that exits.
+	press := "a second interrupt"
+	if fatal != nil {
+		press = "an interrupt"
+	}
 	draining := []any{"in_flight", e.Backends().Queue.InFlightCount(),
 		"detail", "the turns already running finish before this node stops; " +
 			"until they have, " + probes,
-		"hint", "a second interrupt exits at once, leaving those turns to be " +
+		"hint", press + " exits at once, leaving those turns to be " +
 			"redelivered once their ack window elapses"}
 	select {
 	case <-e.AcksLost():
@@ -1363,15 +1368,16 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	}
 	log.InfoContext(ctx, "engine_draining", draining...)
 
-	// Detached from the signal context, which is already cancelled: that is
-	// what woke us. The drain waits for in-flight turns, bounded only by the
+	// Detached from the signal context, which a signal has already cancelled
+	// when that is what woke us. The drain waits for in-flight turns, bounded only by the
 	// context it is given, so handing it this one would abandon every turn
 	// already running and make the shutdown the opposite of graceful.
 	//
 	// The bound belongs to whatever supervises the process: a container
-	// runtime's kill grace, or the operator's second interrupt that the
-	// stop() above just re-armed. Both already have one and can see things
-	// this process cannot.
+	// runtime's kill grace, or the operator's next interrupt, which the
+	// signal that woke us handed back to the operating system (see
+	// [interruptContext]) and a fatal hands back above. Both already have one
+	// and can see things this process cannot.
 	//
 	// THE SAME DRAIN ON A FATAL, with no signal behind it and so no kill
 	// grace running, and it still ends — for a reason that depends on which
@@ -1390,6 +1396,30 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		return fmt.Errorf("the node stopped itself: %w", fatal)
 	}
 	return nil
+}
+
+// interruptContext is the context `crewlet run` lives under: cancelled by the
+// first SIGINT or SIGTERM, and HANDING BOTH SIGNALS BACK to the operating
+// system the moment it is, so a SECOND one kills the process.
+//
+// At the first signal rather than once the node is serving, because a
+// serving node's drain is not the only unbounded wait. A boot has them too:
+// a boot that fails once the engine is up runs the same drain, and an
+// embedded broker still recovering a large store cannot be interrupted
+// (internal/queue/jetstream's startEmbedded waits the recovery out). While
+// signal.NotifyContext is still the installed handler, every further press is
+// swallowed, which left an operator with no way to abort from the terminal
+// they started the node in short of SIGKILL from somewhere else. The escape
+// hatch is what makes those unbounded waits safe to offer: the bound belongs
+// to whoever supervises the process, and for an operator at a terminal the
+// second press IS their bound.
+//
+// The returned stop releases the signals without one having arrived; calling
+// it again is harmless.
+func interruptContext() (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	context.AfterFunc(ctx, stop)
+	return ctx, stop
 }
 
 // shutdown is the one order a node comes down in, whatever stopped it.

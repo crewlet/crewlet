@@ -1076,13 +1076,15 @@ func describeUnits(units []placedUnit) string {
 // # Compared as the values SIT
 //
 // [HumanContact.Normalize] has already trimmed every value and folded the
-// ones whose field is canonically lowercase, leaving a ${VAR} reference
-// exempt. So the text stored on the contact IS the text each consumer routes
-// on, and comparing it as it sits is what makes this rule agree with them:
-// folding here as well would refuse `slack_user_id` values differing only in
-// case, which the registry keys apart and no inbound payload confuses, and it
-// would call `${FOO}` and `${foo}` one reference when the environment they
-// resolve from does not.
+// ones whose platform compares accounts without case (see contactField's
+// lowercase), leaving a ${VAR} reference exempt. So the text stored on the
+// contact IS the text each consumer routes on, and comparing it as it sits is
+// what makes this rule agree with them: `Jane` and `jane` collide as
+// Mattermost usernames, because they are one account there, while folding
+// here as well would refuse `slack_user_id` values differing only in case,
+// which the registry keys apart and no inbound payload confuses, and it would
+// call `${FOO}` and `${foo}` one reference when the environment they resolve
+// from does not.
 //
 // Per FIELD, not per transport: Jira and Confluence share `atlassian_account_id`
 // and reporting one collision twice would read as two problems.

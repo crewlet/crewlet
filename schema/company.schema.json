@@ -14,7 +14,7 @@
           "x-crewlet-secret": true
         },
         "deployment": {
-          "description": "Which Atlassian this company runs: cloud or data_center. Default cloud.",
+          "description": "Which Atlassian this company runs: cloud or data_center. The form opens on cloud; a value written here also decides a Jira or Confluence url whose host is not Atlassian's own.",
           "type": [
             "string",
             "number",

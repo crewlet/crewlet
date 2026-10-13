@@ -74,7 +74,18 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 	e.rewireGitHub(ctx, c)
 	steps = append(steps, "seat_identities")
 
-	e.refileSeatTools(ctx, c)
+	// THE SEAT TOOL SURFACES, and the per-role children behind them. Each
+	// held seat's registry is a clone of the published company's surface,
+	// so it is refiled here, at once, or a turn would run under this company
+	// with the previous one's builtins and knobs; and each held seat's
+	// children are then converged on what this company and the secret
+	// snapshot now resolve — a child whose spec moved (a revision's edit, a
+	// credential sealed or rotated) restarted, one that never started
+	// started, one the seat no longer declares stopped — by the seat's own
+	// runner and NOT WAITED FOR, because a start can take a whole startup
+	// timeout and every step below would wait behind a vendor's handshake.
+	// See seatservers.go.
+	e.reconcileSeatServers(ctx)
 	steps = append(steps, "seat_tools")
 
 	// THE TRACKER'S PROJECTS AND THE KNOWLEDGE CONTAINERS, before any mail
