@@ -440,6 +440,18 @@ func (f *fleet) start(t *testing.T) *memory.Queue {
 	return q
 }
 
+// fleetAttempt is how long a fleet's router gives one node, for a read and a
+// write alike: production's read attempt ([ReadAttempt]), five times a
+// holder's own floor wait ([statelog.ReadBudget]), so a node behind the
+// caller's floor says so before its asker stops listening rather than reading
+// as silent — and an answering node, a behind one included, is never judged
+// silent because the machine running the suite was busy: a second past the
+// floor wait was measured too little for that on a loaded machine. A node
+// that is gone costs none of it: the twin's ask ends as soon as every
+// answerer has answered or failed, so only a node that HANGS waits an attempt
+// out, and the case that hangs one gives its router a budget of its own.
+const fleetAttempt = ReadAttempt
+
 // router is a router on node self over the fleet, answering in-process from
 // local where it is given one.
 func (f *fleet) router(t *testing.T, self string, local *fakeNode) *Router {
@@ -453,7 +465,7 @@ func (f *fleet) router(t *testing.T, self string, local *fakeNode) *Router {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.readBudget, r.writeBudget = 300*time.Millisecond, 300*time.Millisecond
+	r.readBudget, r.writeBudget = fleetAttempt, fleetAttempt
 	return r
 }
 
@@ -732,9 +744,9 @@ func TestAFloorOnAnotherDomainsLogNeverHoldsAnOperation(t *testing.T) {
 			rep, err)
 	}
 
-	// LONGER THAN THE HOLDER'S FLOOR WAIT, so it says it is behind before
-	// the asker stops listening.
-	f.client.writeBudget = statelog.ReadBudget + time.Second
+	// The fleet's attempt is longer than the holder's floor wait
+	// ([fleetAttempt]), so it says it is behind before the asker stops
+	// listening.
 	_, _, err = f.client.Pages().Comment(t.Context(), pages.Actor{}, "p", pages.NewComment{})
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) || !strings.Contains(err.Error(), "has not applied") ||

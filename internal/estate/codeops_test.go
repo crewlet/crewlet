@@ -494,8 +494,9 @@ func TestAProposalCarriesItsAttemptToTheCommitter(t *testing.T) {
 	if len(deadlines) != 2 {
 		t.Fatalf("the committer was proposed %d pushes, want 2", len(deadlines))
 	}
-	// The fleet's routers hold a shortened write attempt; production's is
-	// writeAttempt, which TestARoutedPushCanBeDecidedInsideItsAttempt holds.
+	// The fleet's routers hold a shortened write attempt ([fleetAttempt]);
+	// production's is writeAttempt, which
+	// TestARoutedPushCanBeDecidedInsideItsAttempt holds.
 	attempt := f.client.writeBudget
 	if got := deadlines[0]; got.Before(asked.Add(attempt)) || got.After(answered.Add(attempt)) {
 		t.Errorf("a push from a caller with no deadline was served under %v, want the router's write "+
