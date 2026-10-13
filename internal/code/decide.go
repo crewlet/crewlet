@@ -233,12 +233,14 @@ type decided struct {
 
 // decideBatch is one round's decision over the rows tx holds, for the batch in
 // order: the entries of the record, every proposal's answer, and the version
-// the decision read. Pure over (the rows, the batch, limits, now): v is the
-// protection verdicts the batch's earlier rounds formed, which this round
+// the decision read. Pure over (the rows, the batch, limits, retention, now):
+// retention is code.deleted_retention_days on the deciding node's epoch, from
+// which a deleted repository's refusal names when its purge may begin; v is
+// the protection verdicts the batch's earlier rounds formed, which this round
 // reads only where its own snapshot holds the rules they were formed under.
 func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposal,
-	limits Limits, now time.Time, v *verdicts) (entries []PushEntry, answers []decided,
-	version int64, err error) {
+	limits Limits, retention time.Duration, now time.Time, v *verdicts) (entries []PushEntry,
+	answers []decided, version int64, err error) {
 
 	answers = make([]decided, len(batch))
 	ids := make([]string, 0, len(batch))
@@ -278,21 +280,25 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		return nil, nil, 0, err
 	}
 	var refused Refusal
+	var detail string
 	switch {
 	case !found, repo.status == RepoStatusDeleted, repo.status == RepoStatusPurging:
-		refused = RefusalRepoDeleted
+		// WHICH OF FOUR STATES, because each has its own remedy
+		// ([RepoGone]): a deleted repository comes back when declared again,
+		// one being purged or purged never does.
+		gone := RepoGone{ID: repoID, Name: repo.name, Status: repo.status,
+			DeletedAt: repo.deletedAt, Retention: retention}
+		if !found {
+			if gone.Name, gone.Purged, err = deletionIn(ctx, tx, repoID); err != nil {
+				return nil, nil, 0, err
+			}
+		}
+		refused, detail = RefusalRepoDeleted, gone.Detail()
 	case repo.status == RepoStatusArchived:
 		refused = RefusalRepoArchived
+		detail = fmt.Sprintf("repository %s is archived and read-only", repo.name)
 	}
 	if refused != "" {
-		named := repoID
-		if found {
-			named = repo.name
-		}
-		detail := fmt.Sprintf("repository %s is %s", named, map[Refusal]string{
-			RefusalRepoDeleted:  "deleted; declaring it again restores it until its purge",
-			RefusalRepoArchived: "archived and read-only",
-		}[refused])
 		for _, i := range open {
 			answers[i].refused, answers[i].detail = refused, detail
 			answers[i].commands = refuseEvery(batch[i].Commands, refused, detail)
@@ -353,14 +359,18 @@ type pushRepo struct {
 	tombstones int
 	liveBytes  int64
 	version    int64
+	// deletedAt is when a deleted or purging repository was deleted, and
+	// zero for any other.
+	deletedAt time.Time
 }
 
 // pushRepoIn reads a repository's row for the push decide.
 func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, error) {
 	var r pushRepo
 	var status string
+	var deleted sql.NullInt64
 	err := tx.QueryRowContext(ctx, decideRepoSQL, id).Scan(&r.name, &status, &r.refs,
-		&r.tombstones, &r.liveBytes, &r.version)
+		&r.tombstones, &r.liveBytes, &r.version, &deleted)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return pushRepo{}, false, nil
@@ -368,7 +378,29 @@ func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, err
 		return pushRepo{}, false, fmt.Errorf("code: read repository %s for its pushes: %w", id, err)
 	}
 	r.status = RepoStatus(status)
+	if deleted.Valid {
+		r.deletedAt = store.DecodeTime(deleted.Int64)
+	}
 	return r, true, nil
+}
+
+// deletionIn reads the deletion marker of a repository the push decide found
+// no row of: its name, and true where the marker exists — a repository whose
+// purge completed, which the marker records for ever — and false for an id no
+// repository on this log had. Read only on a refusal's path, one point read
+// over the marker's primary key: that one, and the committer's answer to a
+// batch the marker's gate refused ([Committer.purgedDetail]), which names the
+// repository by the same row.
+func deletionIn(ctx context.Context, tx *sql.Tx, id string) (string, bool, error) {
+	var name string
+	err := tx.QueryRowContext(ctx, decideDeletionSQL, id).Scan(&name)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("code: read repository %s's deletion marker: %w", id, err)
+	}
+	return name, true, nil
 }
 
 // pushRowsIn reads the push rows ids name, by push id, in ONE statement over
@@ -682,9 +714,10 @@ func protectionDetail(c Command, rule Protection, r Refusal) string {
 // The push decide's statements, each registered in plan_test.go. The refs a
 // batch names are read by the applier's own statement (refsNamedSQL).
 const (
-	decideRepoSQL = `SELECT name, status, refs, tombstones, live_bytes, version FROM code_repos
-		WHERE id = ?`
-	pushesNamedSQL = `SELECT ` + pushColumns + ` FROM code_pushes
+	decideRepoSQL = `SELECT name, status, refs, tombstones, live_bytes, version, deleted_at
+		FROM code_repos WHERE id = ?`
+	decideDeletionSQL = `SELECT name FROM code_deletions WHERE repo_id = ?`
+	pushesNamedSQL    = `SELECT ` + pushColumns + ` FROM code_pushes
 		WHERE push_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
 	expiredTombstoneCountSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_refs
 		WHERE repo_id = ? AND target = '' AND at < ? LIMIT ?)`

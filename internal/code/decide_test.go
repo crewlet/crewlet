@@ -81,14 +81,23 @@ func decideIn(t *testing.T, e *estate, limits Limits, batch ...Proposal) ([]Push
 // verdicts the batch's earlier rounds formed.
 func decideRound(t *testing.T, e *estate, limits Limits, v *verdicts, batch ...Proposal) ([]PushEntry, []decided) {
 	t.Helper()
+	return decideOn(t, e, decideRepo, limits, DefaultDeletedRetention, v, batch...)
+}
+
+// decideOn runs one round of the decide over e's rows for repoID, on an epoch
+// whose code.deleted_retention_days is retention.
+func decideOn(t *testing.T, e *estate, repoID string, limits Limits, retention time.Duration,
+	v *verdicts, batch ...Proposal) ([]PushEntry, []decided) {
+
+	t.Helper()
 	var (
 		entries []PushEntry
 		answers []decided
 	)
 	if err := e.db.Read(context.Background(), func(tx *sql.Tx) error {
 		var err error
-		entries, answers, _, err = decideBatch(context.Background(), tx, decideRepo, batch, limits,
-			decideAt, v)
+		entries, answers, _, err = decideBatch(context.Background(), tx, repoID, batch, limits,
+			retention, decideAt, v)
 		return err
 	}); err != nil {
 		t.Fatalf("decide: %v", err)
@@ -491,5 +500,102 @@ func TestAPushIdIsDecidedOnce(t *testing.T) {
 	}
 	if answers[3].dupOf != 2 {
 		t.Fatalf("the repeat of a push id in the batch is %+v, want the first's answer", answers[3])
+	}
+}
+
+// A PUSH TO A REPOSITORY IT CANNOT REACH IS TOLD WHAT BECAME OF IT. Four
+// states answer repo_deleted, and each has its own remedy: a deleted
+// repository comes back as it was when declared again — until its purge,
+// whose earliest instant the sentence names, on the deciding epoch's
+// retention — while one being purged, or purged, never comes back and its
+// name declared again is a new, empty repository, and an id no repository
+// had is none at all. One sentence for the four told a client whose
+// repository was gone for good to declare it again to restore it.
+//
+// Mutation: answer every state with the deleted sentence and the purging,
+// purged and unknown cases fail on "restores"; drop the marker read and the
+// purged case fails as unknown; decide with the default retention and the
+// deleted case names the wrong instant.
+func TestARefusedRepositorySaysWhatBecameOfIt(t *testing.T) {
+	t.Parallel()
+	const retention = 30 * 24 * time.Hour
+	deleted := func(t *testing.T, e *estate) {
+		e.apply(rec(t, RepoSubject(decideRepo), OpDelete, Scope{RepoPath(decideRepo)},
+			LifecycleRecord{RepoID: decideRepo, ConfigEpoch: 1, Reason: "removed from code.repos"}))
+	}
+	const never = "0190f3c4-0000-7000-8000-00000000dead"
+	for name, tc := range map[string]struct {
+		settle func(t *testing.T, e *estate)
+		repo   string
+		want   []string
+		never  []string
+	}{
+		"deleted": {
+			settle: deleted, repo: decideRepo,
+			want: []string{"repository web is deleted", "declaring it again in code.repos restores it",
+				"may begin from " + applyClock.Add(retention).Format(time.RFC3339)},
+			never: []string{"new, empty", "being purged", "does not exist"},
+		},
+		"being purged": {
+			settle: func(t *testing.T, e *estate) {
+				deleted(t, e)
+				e.apply(partOf(t, decideRepo, 1))
+			},
+			repo: decideRepo,
+			want: []string{"repository web is being purged", "cannot be undone",
+				"creates a new, empty repository"},
+			never: []string{"restores", "does not exist"},
+		},
+		"purged": {
+			settle: func(t *testing.T, e *estate) {
+				deleted(t, e)
+				e.apply(rec(t, RepoSubject(decideRepo), OpPurge,
+					Scope{NamePath(NameToken("web")), RepoPath(decideRepo)},
+					Purge{RepoID: decideRepo, Name: "web", Reason: "past retention"}))
+			},
+			repo:  decideRepo,
+			want:  []string{"repository web was purged", "creates a new, empty repository"},
+			never: []string{"restores", "being purged", "does not exist"},
+		},
+		"never created": {
+			repo:  never,
+			want:  []string{"repository " + never + " does not exist"},
+			never: []string{"restores", "purged"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := decideEstate(t)
+			if tc.settle != nil {
+				tc.settle(t, e)
+			}
+			p := proposalOf(cmd("refs/heads/main", oid("A"), oid("B")),
+				cmd("refs/heads/fresh", ZeroOID, oid("N")))
+			p.RepoID = tc.repo
+			entries, answers := decideOn(t, e, tc.repo, DefaultLimits(), retention, &verdicts{}, p)
+			if len(entries) != 0 {
+				t.Fatalf("the refused push is %d entries of a record, want none", len(entries))
+			}
+			a := answers[0]
+			if a.refused != RefusalRepoDeleted {
+				t.Fatalf("the push is refused %q, want %q", a.refused, RefusalRepoDeleted)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(a.detail, want) {
+					t.Errorf("the refusal says %q, which does not say %q", a.detail, want)
+				}
+			}
+			for _, never := range tc.never {
+				if strings.Contains(a.detail, never) {
+					t.Errorf("the refusal says %q, which says %q — false of this state", a.detail, never)
+				}
+			}
+			for _, c := range a.commands {
+				if c.Result != ResultNG || c.Reason != RefusalRepoDeleted || c.Detail != a.detail {
+					t.Errorf("%s is %s %q (%q), want ng repo_deleted with the push's sentence",
+						c.Ref, c.Result, c.Reason, c.Detail)
+				}
+			}
+		})
 	}
 }

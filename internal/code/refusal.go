@@ -1,9 +1,11 @@
 package code
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/gitref"
 )
@@ -33,7 +35,9 @@ const (
 	RefusalBadRef Refusal = "bad_ref"
 	// RefusalRepoArchived is a push to a read-only repository.
 	RefusalRepoArchived Refusal = "repo_archived"
-	// RefusalRepoDeleted is a push to a deleted repository.
+	// RefusalRepoDeleted is a push to a repository that is deleted, being
+	// purged, purged or not there at all — four states with four remedies,
+	// so its sentence is formed from the state ([RepoGone.Detail]).
 	RefusalRepoDeleted Refusal = "repo_deleted"
 	// RefusalRepoSize is a push past code.limits.repo_max_bytes.
 	RefusalRepoSize Refusal = "repo_size"
@@ -101,7 +105,7 @@ var sentences = map[Refusal]string{
 	RefusalReservedRef:     "only refs/heads/ and refs/tags/ are pushed; refs/crewlet/ is the engine's",
 	RefusalBadRef:          "not a ref: git's check-ref-format rules, at most 255 bytes of UTF-8 under refs/<namespace>/",
 	RefusalRepoArchived:    "the repository is archived and read-only",
-	RefusalRepoDeleted:     "the repository is deleted; declaring it again restores it until its purge",
+	RefusalRepoDeleted:     "the repository is deleted, being purged or gone, and takes no push",
 	RefusalRepoSize:        "the repository would hold more than code.limits.repo_max_bytes",
 	RefusalRepoRefs:        "the repository holds as many refs as one repository may",
 	RefusalUploadExpired:   "the pack was uploaded too long ago to be committed; run git push again",
@@ -123,6 +127,70 @@ func (r Refusal) Sentence() string {
 		return s
 	}
 	return string(r)
+}
+
+// RepoGone is what became of a repository a push is refused repo_deleted for,
+// as the rows that refuse it hold it: the one input of the sentence that
+// refusal carries ([RepoGone.Detail]).
+//
+// ONE CODE, FOUR STATES, FOUR REMEDIES. A repository removed from code.repos
+// is DELETED, and declaring it again brings it back as it was — until its
+// purge begins, code.deleted_retention_days after the deletion at the
+// earliest. Once its purge has begun it is PURGING, which has no undo: the
+// name declared again waits for the purge (code_repo_awaits_purge) and is
+// then a NEW, empty repository. A PURGED one has left only its deletion
+// marker, and its name declared again is likewise a new repository. And an
+// id no record ever created is no repository at all. The code stays one,
+// because what a client does about all four is the same — it cannot push
+// there — but one sentence for the four told a client whose repository was
+// being purged, or was gone, that declaring it again would restore it: the
+// one remedy that is false there.
+type RepoGone struct {
+	// ID is the repository the push named.
+	ID string
+	// Name is its name — its row's, or its deletion marker's once purged —
+	// and "" where nothing this node holds names it, or the marker that does
+	// could not be read: the id names it then.
+	Name string
+	// Status is its row's, deleted or purging, and "" where it has no row.
+	Status RepoStatus
+	// DeletedAt is when a repository with a row was deleted, and Retention
+	// code.deleted_retention_days on the deciding node's epoch: how long
+	// after DeletedAt its purge may begin. Either zero is not known, and no
+	// instant is stated.
+	DeletedAt time.Time
+	Retention time.Duration
+	// Purged is a repository with no row whose deletion marker this node
+	// holds: its purge has completed.
+	Purged bool
+}
+
+// Detail is the sentence of a push refused repo_deleted for g: what became of
+// the repository and what, if anything, brings it back.
+//
+// A deleted repository's sentence names the instant its purge may begin — the
+// deletion plus the deciding node's retention: the earliest the code-retention
+// duty begins it under that epoch, which runs on a tick and may begin it
+// later. Named as when the purge MAY BEGIN, never as "restorable until", which
+// would promise an instant nothing holds the purge to.
+func (g RepoGone) Detail() string {
+	named := cmp.Or(g.Name, g.ID)
+	switch {
+	case g.Status == RepoStatusDeleted && !g.DeletedAt.IsZero() && g.Retention > 0:
+		return fmt.Sprintf("repository %s is deleted; declaring it again in code.repos restores it "+
+			"as it was, until its purge, which may begin from %s (code.deleted_retention_days after "+
+			"its deletion)", named, g.DeletedAt.Add(g.Retention).UTC().Format(time.RFC3339))
+	case g.Status == RepoStatusDeleted:
+		return fmt.Sprintf("repository %s is deleted; declaring it again in code.repos restores it "+
+			"as it was, until its purge", named)
+	case g.Status == RepoStatusPurging:
+		return fmt.Sprintf("repository %s is being purged, which cannot be undone; once the purge "+
+			"completes, declaring its name in code.repos creates a new, empty repository", named)
+	case g.Purged:
+		return fmt.Sprintf("repository %s was purged and holds nothing; declaring its name in "+
+			"code.repos creates a new, empty repository", named)
+	}
+	return fmt.Sprintf("repository %s does not exist", g.ID)
 }
 
 // StatelessRefusal is the rules of the push decide that no state decides —

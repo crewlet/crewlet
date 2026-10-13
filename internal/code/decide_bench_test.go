@@ -139,7 +139,7 @@ func BenchmarkDecideABatch(b *testing.B) {
 		round := func(v *verdicts) error {
 			return e.db.Read(ctx, func(tx *sql.Tx) error {
 				_, answers, _, err := decideBatch(ctx, tx, shape.repo, shape.batch, DefaultLimits(),
-					applyClock, v)
+					DefaultDeletedRetention, applyClock, v)
 				if err != nil {
 					return err
 				}

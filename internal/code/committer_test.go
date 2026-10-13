@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // THE COMMITTER, through the whole path: proposals queued, decided in one
@@ -69,7 +71,8 @@ func committerOn(t *testing.T, n *node, pub code.Publisher,
 	}
 	o := code.CommitterOptions{
 		Publisher: pub, DB: n.db.Reader(), NodeID: n.id, Limits: code.DefaultLimits,
-		Now: func() time.Time { return harnessAt }, Metrics: rec,
+		Retention: func() time.Duration { return code.DefaultDeletedRetention },
+		Now:       func() time.Time { return harnessAt }, Metrics: rec,
 	}
 	for _, f := range tune {
 		f(&o)
@@ -1226,16 +1229,24 @@ func TestAPushAnsweredWithNoRecordWritesNothing(t *testing.T) {
 
 // A PUSH IS REFUSED WHOLE FOR WHAT ITS PACK OR ITS REPOSITORY IS: a pack
 // named too long ago, one past the repository's limit, and a repository
-// archived or deleted.
+// archived or deleted — the deleted one told, through the committer's own
+// Retention, when its purge may begin: the deletion's instant on the rows
+// plus the deciding epoch's code.deleted_retention_days, which this case sets
+// to something other than the default so that a committer deciding with any
+// other retention names the wrong instant and fails it.
 func TestAPushIsRefusedForItsPackOrItsRepository(t *testing.T) {
 	t.Parallel()
 	size := 32 + code.IndexBytesFor(1) + code.ReverseBytesFor(1)
+	const retention = 11 * 24 * time.Hour
 	for name, tc := range map[string]struct {
 		minted  time.Time
 		limit   int64
 		settle  func(t *testing.T, n *node, repo string)
 		reason  code.Refusal
 		refused code.Refusal
+		// says is what the refusal's sentence must say, given the
+		// repository's id and the node holding its rows.
+		says func(t *testing.T, n *node, repo string) string
 	}{
 		"an expired upload":          {minted: harnessAt.Add(-objstore.RecordWithin), reason: code.RefusalUploadExpired},
 		"past the repository's size": {minted: harnessAt, limit: size - 1, reason: code.RefusalRepoSize},
@@ -1244,13 +1255,26 @@ func TestAPushIsRefusedForItsPackOrItsRepository(t *testing.T) {
 				s := suiteSettings()
 				s.Archived = true
 				n.ensure("web", s, t2)
-			}},
+			},
+			says: func(*testing.T, *node, string) string { return "repository web is archived" }},
 		"deleted": {minted: harnessAt, reason: code.RefusalRepoDeleted, refused: code.RefusalRepoDeleted,
 			settle: func(t *testing.T, n *node, repo string) {
 				if _, err := n.store.DeleteRepo(t.Context(), n.activate(t2), repo); err != nil {
 					t.Fatal(err)
 				}
 				n.drain()
+			},
+			says: func(t *testing.T, n *node, repo string) string {
+				var deleted int64
+				if err := n.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
+					return tx.QueryRowContext(t.Context(),
+						`SELECT deleted_at FROM code_repos WHERE id = ?`, repo).Scan(&deleted)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				return "repository web is deleted; declaring it again in code.repos restores it as " +
+					"it was, until its purge, which may begin from " +
+					store.DecodeTime(deleted).Add(retention).UTC().Format(time.RFC3339)
 			}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1268,6 +1292,7 @@ func TestAPushIsRefusedForItsPackOrItsRepository(t *testing.T) {
 						return l
 					}
 				}
+				o.Retention = func() time.Duration { return retention }
 			})
 			before := n.end()
 			res, err := c.Propose(t.Context(), packed(proposal(repo,
@@ -1279,6 +1304,11 @@ func TestAPushIsRefusedForItsPackOrItsRepository(t *testing.T) {
 				t.Fatalf("the push is %s %s (%q), want %s with a detail", got.Result, got.Reason,
 					got.Detail, tc.reason)
 			}
+			if tc.says != nil {
+				if want := tc.says(t, n, repo); !strings.Contains(res.Answer.Detail, want) {
+					t.Fatalf("the refusal says %q, want it to say %q", res.Answer.Detail, want)
+				}
+			}
 			if res.Answer.Refused != tc.refused {
 				t.Fatalf("the push's refusal is %q, want %q", res.Answer.Refused, tc.refused)
 			}
@@ -1288,6 +1318,60 @@ func TestAPushIsRefusedForItsPackOrItsRepository(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A COMMITTER IS REFUSED WITHOUT WHAT IT DECIDES AND ANSWERS FROM: each
+// required option unset is a constructor error naming it, never a default a
+// decision would read as the company's own.
+func TestACommitterRefusesWhatItCannotWorkWithout(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	for name, tc := range map[string]struct {
+		unset func(*code.CommitterOptions)
+		names string
+	}{
+		"no publisher": {func(o *code.CommitterOptions) { o.Publisher = nil }, "write authority"},
+		"no estate":    {func(o *code.CommitterOptions) { o.DB = store.ReplicatedReader{} }, "replicated estate"},
+		"no node id":   {func(o *code.CommitterOptions) { o.NodeID = "" }, "deciding node's id"},
+		"no limits":    {func(o *code.CommitterOptions) { o.Limits = nil }, "code.limits"},
+		"no retention": {func(o *code.CommitterOptions) { o.Retention = nil }, "code.deleted_retention_days"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			o := code.CommitterOptions{
+				Publisher: n.pub, DB: n.db.Reader(), NodeID: n.id, Limits: code.DefaultLimits,
+				Retention: func() time.Duration { return code.DefaultDeletedRetention },
+			}
+			tc.unset(&o)
+			c, err := code.NewCommitter(o)
+			if err == nil {
+				c.Stop(t.Context())
+				t.Fatal("NewCommitter took options it cannot work without")
+			}
+			if !strings.Contains(err.Error(), tc.names) {
+				t.Fatalf("NewCommitter: %v; want it to name %q", err, tc.names)
+			}
+		})
+	}
+}
+
+// purgedRepo is a repository named name on n, deleted past the retention and
+// purged by a retention pass to its deletion marker — the one the applier
+// writes, holding the name — and its id.
+func purgedRepo(t *testing.T, n *node, name string) string {
+	t.Helper()
+	n.ensure(name, described(name), t1)
+	id := n.mustID(name)
+	n.deleteAt(id, harnessAt.Add(-2*keep))
+	var p purged
+	if report, err := passOver(n.store, n.reader, &p).Pass(t.Context()); err != nil ||
+		!slices.Equal(report.Purged, []string{name}) {
+		t.Fatalf("Pass = %+v, %v; want %s purged", report, err, name)
+	}
+	if marked := n.count(`SELECT COUNT(*) FROM code_deletions WHERE repo_id = ? AND name = ?`,
+		id, name); marked != 1 {
+		t.Fatalf("the purge of %s left %d markers naming it, want one", name, marked)
+	}
+	return id
 }
 
 // refusing is a publisher that refuses every write with err.
@@ -1315,6 +1399,15 @@ func (r refusing) Publish(context.Context, statelog.Request) (statelog.Result, e
 // have landed: an eviction there is about this node, and the runner-up
 // commits the push under the same id (no node holds a row of it); a marker
 // there is the repository's deletion, naming no record of the push.
+//
+// A MARKER'S REFUSAL NAMES THE REPOSITORY BY THE MARKER'S NAME: the marker
+// cases run against a repository a retention pass purged, so the marker is
+// the one the applier wrote, and a client is told "repository web was
+// purged" — the sentence the decide forms for the same state — rather than an
+// id it never typed; only where this node holds no marker to read (its
+// estate replaced since the gate read one) does the id name it. Mutation:
+// drop the committer's read of the marker and the three cases with one name
+// the id and fail.
 func TestARefusalBeforeTheAppendIsNotServing(t *testing.T) {
 	t.Parallel()
 	at := statelog.Position{Stream: code.Domain{}.Stream().Name, Generation: 1, Seq: 42}
@@ -1333,6 +1426,9 @@ func TestARefusalBeforeTheAppendIsNotServing(t *testing.T) {
 		notServing bool
 		refused    code.Refusal
 		position   statelog.Position
+		// purged runs the case against a repository whose purge completed,
+		// its deletion marker written by the applier.
+		purged bool
 	}{
 		"behind the point the write needs":   {err: refusal(statelog.ReasonBehind, at), notServing: true},
 		"holding a record it cannot decode":  {err: refusal(statelog.ReasonDeferred, at), notServing: true},
@@ -1347,18 +1443,25 @@ func TestARefusalBeforeTheAppendIsNotServing(t *testing.T) {
 			refused: code.RefusalNotApplied, position: at},
 		"evicted at another operation's record": {err: refusal(statelog.ReasonEvicted, at),
 			notServing: true},
-		"a purged repository": {err: refusal(statelog.ReasonDeleted, none), refused: code.RefusalRepoDeleted},
+		"a purged repository": {err: refusal(statelog.ReasonDeleted, none),
+			refused: code.RefusalRepoDeleted, purged: true},
 		"a purged repository's marker dropped the record": {err: dropped(statelog.ReasonDeleted, at),
-			refused: code.RefusalRepoDeleted, position: at},
+			refused: code.RefusalRepoDeleted, position: at, purged: true},
 		"a purged repository's marker at another operation's record": {
-			err: refusal(statelog.ReasonDeleted, at), refused: code.RefusalRepoDeleted},
+			err: refusal(statelog.ReasonDeleted, at), refused: code.RefusalRepoDeleted, purged: true},
+		"a marker this node no longer holds": {err: refusal(statelog.ReasonDeleted, none),
+			refused: code.RefusalRepoDeleted},
 		"a lost race": {err: fmt.Errorf("publish: %w", statelog.ErrConflict), refused: code.RefusalBusy},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			n := newNode(t)
+			repo := "0190f3c4-0000-7000-8000-00000000c0de"
+			if tc.purged {
+				repo = purgedRepo(t, n, "web")
+			}
 			c, _ := committerOn(t, n, refusing{tc.err})
-			res, err := c.Propose(t.Context(), proposal("0190f3c4-0000-7000-8000-00000000c0de",
+			res, err := c.Propose(t.Context(), proposal(repo,
 				update("refs/heads/main", code.ZeroOID, oidOf("B"))))
 			if tc.notServing {
 				var refusal *statelog.Unavailable
@@ -1380,6 +1483,18 @@ func TestARefusalBeforeTheAppendIsNotServing(t *testing.T) {
 			if tc.refused == code.RefusalNotApplied &&
 				!strings.Contains(res.Answer.Detail, tc.position.String()) {
 				t.Fatalf("the detail %q does not name where the record landed", res.Answer.Detail)
+			}
+			// A DELETION MARKER IS A PURGE THAT COMPLETED, which nothing
+			// undoes: told to declare the repository again to restore it,
+			// a client is told the one remedy false here — and told it of
+			// the repository by the name the marker holds.
+			named := "repository " + repo + " was purged"
+			if tc.purged {
+				named = "repository web was purged"
+			}
+			if tc.refused == code.RefusalRepoDeleted && (!strings.Contains(res.Answer.Detail, named) ||
+				strings.Contains(res.Answer.Detail, "restores")) {
+				t.Fatalf("the detail %q does not say %q for good", res.Answer.Detail, named)
 			}
 		})
 	}

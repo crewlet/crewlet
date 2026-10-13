@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -203,6 +205,66 @@ func TestARemovedRepositoryIsDeletedAndRestorable(t *testing.T) {
 	if restored.Status != code.RepoStatusActive || restored.ID != api.ID {
 		t.Errorf("after an activation that declares it again, api is %s with id %s, want "+
 			"active under its old id %s", restored.Status, restored.ID, api.ID)
+	}
+}
+
+// A PUSH TO A REMOVED REPOSITORY IS TOLD WHEN ITS PURGE MAY BEGIN UNDER THE
+// EPOCH'S OWN RETENTION.
+//
+// The committer names the instant from its CommitterOptions.Retention, and
+// what the node hands it there is the seam this case holds: the epoch's
+// code.deleted_retention_days ([Engine.codeDeletedRetention]), the reading
+// the code-retention duty purges by. A company that keeps a deleted
+// repository thirty days and is told the default week's instant would be told
+// to restore it by a date three weeks before its purge may begin — so the
+// retention here is anything but the default, and the push goes through the
+// node's own router to the committer the runtime built.
+//
+// Mutation: wire the committer's Retention to code.DefaultDeletedRetention and
+// the push is told the week's instant, and fails.
+func TestAPushToARemovedRepositoryIsToldTheEpochsRetention(t *testing.T) {
+	t.Parallel()
+	const days = 30
+	retained := func(doc string) string {
+		return strings.Replace(doc, "code:\n  native: true\n",
+			fmt.Sprintf("code:\n  native: true\n  deleted_retention_days: %d\n", days), 1)
+	}
+	e := newSandboxNode(t, parseCompany(t, retained(codeReposDoc(webRepo("")+apiRepo, ""))))
+	servesCodeReads(t, e)
+	reconciled(t, e)
+	retention := days * 24 * time.Hour
+	if got := e.codeDeletedRetention(); got != retention || got == code.DefaultDeletedRetention {
+		t.Fatalf("the premise: the epoch keeps a deleted repository %v, want %v — anything "+
+			"but the default %v", got, retention, code.DefaultDeletedRetention)
+	}
+
+	applyReconciled(t, e, retained(codeReposDoc(webRepo(""), "")))
+	api := mustRepo(t, e, "api")
+	if api.Status != code.RepoStatusDeleted || api.DeletedAt.IsZero() {
+		t.Fatalf("the premise: api, no longer declared, is %s deleted at %v", api.Status,
+			api.DeletedAt)
+	}
+	push := code.Proposal{
+		PushID: uuid.Must(uuid.NewV7()).String(), RepoID: api.ID,
+		Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"},
+		Node:      e.id, ReceivedAt: time.Now().UTC(),
+		Commands: []code.Command{{Ref: "refs/heads/main", Old: code.ZeroOID,
+			New: "0123456789abcdef0123456789abcdef01234567"}},
+	}
+	res, err := e.router.Code().Propose(t.Context(), push)
+	if err != nil {
+		t.Fatalf("a push to the deleted repository: %v; want it answered", err)
+	}
+	if res.Answer.Refused != code.RefusalRepoDeleted {
+		t.Fatalf("a push to the deleted repository is answered %+v, want it refused %s",
+			res.Answer, code.RefusalRepoDeleted)
+	}
+	want := "repository api is deleted; declaring it again in code.repos restores it as it " +
+		"was, until its purge, which may begin from " +
+		api.DeletedAt.Add(retention).UTC().Format(time.RFC3339)
+	if !strings.Contains(res.Answer.Detail, want) {
+		t.Fatalf("the push is told %q, want %q: the deletion plus the epoch's %d days",
+			res.Answer.Detail, want, days)
 	}
 }
 

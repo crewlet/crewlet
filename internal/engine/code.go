@@ -49,10 +49,14 @@ import (
 
 // codeInForce is the code host's settings IN FORCE at the current epoch
 // ([Company.codeInForce]) — none set where no company is current yet. Read per
-// call, by the committer's decide and the reader's repository detail (the
-// limits) and by the code-retention duty's every pass (the retention), so a
-// revision's settings hold from its activation on, with no restart: they are
-// an epoch's, never the runtime's.
+// call: by the committer's decide and the reader's repository detail (the
+// limits), by the code-retention duty's every pass (the retention), and by the
+// committer's every batch (the retention again, for the repo_deleted sentence,
+// [code.RepoGone], which names when a deleted repository's purge may begin —
+// the same reading the duty purges by, so under one revision the two name
+// one instant). So a revision's settings hold from its activation on, with no
+// restart: they are an epoch's, never the runtime's — and therefore each
+// node's, while a revision is applied node by node on each node's own clock.
 func (e *Engine) codeInForce() config.Code {
 	c := e.Company()
 	switch {
@@ -69,8 +73,19 @@ func (e *Engine) codeInForce() config.Code {
 func (e *Engine) codeLimits() code.Limits { return code.LimitsOf(e.codeInForce()) }
 
 // codeDeletedRetention is how long a deleted repository waits for its purge at
-// the current epoch ([Engine.codeInForce]), the default applied — the
-// code-retention pass's [code.Retention.Retention], read at every pass.
+// the current epoch ([Engine.codeInForce]), the default applied. Two readers,
+// one reading: the code-retention pass's [code.Retention.Retention], read at
+// every pass, and the committer's [code.CommitterOptions.Retention], read at
+// every batch for the repo_deleted sentence ([code.RepoGone]) — so under one
+// revision a push to a deleted repository is told the instant the duty purges
+// from, and a revision that moves code.deleted_retention_days moves what a
+// push is told with it. Not the same instant at every moment: the duty runs on
+// its lease holder and the committer on the repository's rendezvous-first
+// data node, each reading its own node's epoch at its own moment (a pass, a
+// batch), so while such a revision is applied node by node the two may each
+// answer from a different one — which is why the sentence names the instant
+// as the earliest the purge may begin on the deciding node's epoch, never as
+// a promise.
 func (e *Engine) codeDeletedRetention() time.Duration {
 	return e.codeInForce().DeletedRetention()
 }

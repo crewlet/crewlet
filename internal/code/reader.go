@@ -186,8 +186,13 @@ func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position
 }
 
 // Resolve answers the repository a name names, deleted and purging ones
-// included — the caller decides what a deleted repository answers (git answers
-// 404 naming the restore deadline).
+// included — the caller decides what such a repository answers, and answers
+// it with [RepoGone]'s sentence for its state, built from the ref's Status and
+// DeletedAt and the deciding epoch's code.deleted_retention_days: a deleted
+// one is told when its purge MAY BEGIN, and a purging one that nothing brings
+// it back. Never a "restorable until" deadline, which would promise an
+// instant nothing holds the purge to, and which a purge already begun does not
+// have at all.
 func (r *Reader) Resolve(ctx context.Context, q ResolveQuery) (RepoRef, error) {
 	if err := pointLevel(q.Fresh); err != nil {
 		return RepoRef{}, err

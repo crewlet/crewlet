@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/gitref"
@@ -299,5 +300,84 @@ func TestAtomicRefusesEveryOtherCommand(t *testing.T) {
 	clean := cmds[:3]
 	if out := code.Atomic(clean); &out[0] != &clean[0] {
 		t.Error("a push with no refusal was copied rather than returned as it is")
+	}
+}
+
+// A GONE REPOSITORY'S SENTENCE NAMES ITS STATE, and promises a restore only
+// where declaring it again restores it: a deleted repository, which is told
+// the instant its purge may begin where both the deletion's instant and the
+// epoch's retention are known, and no instant where either is not — never a
+// date computed from a zero. The code's own sentence, which a client sees
+// where no detail was formed, holds for all four states, so it promises
+// nothing.
+func TestAGoneRepositorysSentenceNamesItsState(t *testing.T) {
+	t.Parallel()
+	const id = "0190f3c4-0000-7000-8000-00000000901e"
+	deletedAt := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
+	week := 7 * 24 * time.Hour
+	for name, tc := range map[string]struct {
+		gone  code.RepoGone
+		want  []string
+		never []string
+	}{
+		"deleted": {
+			gone: code.RepoGone{ID: id, Name: "web", Status: code.RepoStatusDeleted,
+				DeletedAt: deletedAt, Retention: week},
+			want:  []string{"repository web is deleted", "restores it", "may begin from 2031-04-09T03:14:00Z"},
+			never: []string{"new, empty"},
+		},
+		"deleted, its deletion's instant not known": {
+			gone:  code.RepoGone{ID: id, Name: "web", Status: code.RepoStatusDeleted, Retention: week},
+			want:  []string{"repository web is deleted", "restores it", "until its purge"},
+			never: []string{"may begin from"},
+		},
+		"deleted, the epoch's retention not known": {
+			gone:  code.RepoGone{ID: id, Name: "web", Status: code.RepoStatusDeleted, DeletedAt: deletedAt},
+			want:  []string{"repository web is deleted", "restores it"},
+			never: []string{"may begin from", "2031"},
+		},
+		"being purged": {
+			gone: code.RepoGone{ID: id, Name: "web", Status: code.RepoStatusPurging,
+				DeletedAt: deletedAt, Retention: week},
+			want:  []string{"repository web is being purged", "cannot be undone", "new, empty repository"},
+			never: []string{"restores", "2031"},
+		},
+		"purged": {
+			gone:  code.RepoGone{ID: id, Name: "web", Purged: true},
+			want:  []string{"repository web was purged", "new, empty repository"},
+			never: []string{"restores"},
+		},
+		"purged, no name held": {
+			gone:  code.RepoGone{ID: id, Purged: true},
+			want:  []string{"repository " + id + " was purged", "declaring its name"},
+			never: []string{"restores"},
+		},
+		"never created": {
+			gone:  code.RepoGone{ID: id},
+			want:  []string{"repository " + id + " does not exist"},
+			never: []string{"restores", "purged"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := tc.gone.Detail()
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("%q does not say %q", got, want)
+				}
+			}
+			for _, never := range tc.never {
+				if strings.Contains(got, never) {
+					t.Errorf("%q says %q, which is false of this state", got, never)
+				}
+			}
+			if strings.HasSuffix(got, ".") {
+				t.Errorf("%q ends with a full stop, and a client prints it mid-line", got)
+			}
+		})
+	}
+	if s := code.RefusalRepoDeleted.Sentence(); strings.Contains(s, "restore") {
+		t.Errorf("repo_deleted's own sentence %q promises a restore, which is false of a "+
+			"repository being purged, purged, or never created", s)
 	}
 }
