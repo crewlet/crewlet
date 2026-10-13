@@ -116,15 +116,15 @@ type MCPServerStatus struct {
 	// template.
 	Shared bool
 
-	// Started is how many instances started and listed their tools.
-	// What happened to a child AFTER it started is not observed here:
-	// the bridge learns of a child that died only when its next call
-	// fails, and that call's own result is where that is reported.
+	// Started is how many instances are serving: started, listed their
+	// tools, and still up as of this beat. A child that died since is not
+	// counted here but under Failed until its bridge has brought it back.
 	Started int
 
-	// Failed is how many did not: a child that would not start or list
-	// its tools, and a config whose ${VAR} references did not resolve
-	// into a launchable spec.
+	// Failed is how many are not: a child that would not start or list
+	// its tools, one that died after starting and is being restarted, and
+	// a config whose ${VAR} references did not resolve into a launchable
+	// spec.
 	Failed int
 
 	// Tools is how many tools one started instance serves — the largest,

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -53,14 +54,17 @@ roles:
 }
 
 // A SERVER THAT WOULD NOT START IS ON THE HEARTBEAT, which is the one row an
-// operator opening the settings screen is looking for. The bridge keeps
-// nothing of a failed start, so a status read off the bridge would show this
-// server as never configured — and a released seat's failures, and a server
-// the next revision dropped, must leave the heartbeat with them.
+// operator opening the settings screen is looking for. A seat's bridge keeps
+// nothing of a failed start, so a status read off the bridge alone would show
+// that server as never configured; the shared bridge keeps it to retry, and
+// reports it down with why — and a released seat's failures, and a server the
+// next revision dropped, must leave the heartbeat with them.
 func TestAFailedMCPStartReachesTheHeartbeatAndLeavesWithItsOwner(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	e := &Engine{mcp: mcp.NewBridge(nil)}
+	e := &Engine{}
+	e.mcp = mcp.NewBridge(nil, e.sharedSupervision())
+	t.Cleanup(func() { _, _ = e.mcp.StopAll(context.Background()) })
 	company := mcpStatusCompany(t, true)
 	e.epoch.current.Store(company)
 

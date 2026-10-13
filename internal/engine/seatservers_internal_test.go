@@ -81,7 +81,7 @@ roles:
 // the lease is provable again.
 func TestAPassStartsNoChildForASeatThisNodeCannotProve(t *testing.T) {
 	t.Parallel()
-	e := &Engine{mcp: mcp.NewBridge(nil)}
+	e := &Engine{mcp: mcp.NewBridge(nil, mcp.Supervision{})}
 	e.epoch.current.Store(mcpStatusCompany(t, false))
 	var provable atomic.Bool
 	s := heldSeatChildren(t, e, "ceo", provable.Load)
@@ -118,7 +118,7 @@ func TestAPassStartsNoChildForASeatThisNodeCannotProve(t *testing.T) {
 // concluded.
 func TestAnApplyDoesNotWaitForASeatsPass(t *testing.T) {
 	t.Parallel()
-	e := &Engine{mcp: mcp.NewBridge(nil)}
+	e := &Engine{mcp: mcp.NewBridge(nil, mcp.Supervision{})}
 	e.epoch.current.Store(mcpStatusCompany(t, false))
 	unblock := make(chan struct{})
 	heldSeatChildren(t, e, "ceo", func() bool {
@@ -165,7 +165,7 @@ func TestAnApplyDoesNotWaitForASeatsPass(t *testing.T) {
 // another goroutine ran it would find nothing concluded.
 func TestAnApplyBeforeTheClaimsFirstPassIsFoldedIntoIt(t *testing.T) {
 	t.Parallel()
-	e := &Engine{mcp: mcp.NewBridge(nil)}
+	e := &Engine{mcp: mcp.NewBridge(nil, mcp.Supervision{})}
 	e.epoch.current.Store(mcpStatusCompany(t, false))
 	var passes atomic.Int32
 
@@ -208,7 +208,7 @@ func TestAnApplyBeforeTheClaimsFirstPassIsFoldedIntoIt(t *testing.T) {
 // seconds before anything was concluded.
 func TestAnApplyWhileTheClaimRetiresAPredecessorIsFoldedIntoIt(t *testing.T) {
 	t.Parallel()
-	e := &Engine{mcp: mcp.NewBridge(nil)}
+	e := &Engine{mcp: mcp.NewBridge(nil, mcp.Supervision{})}
 	e.epoch.current.Store(hangingCompany(t, 2))
 
 	stuck, unstick := make(chan struct{}), make(chan struct{})
@@ -254,7 +254,7 @@ func TestAnApplyWhileTheClaimRetiresAPredecessorIsFoldedIntoIt(t *testing.T) {
 // the wait below — and a pass is what starts children.
 func TestAReleasedSeatRunsNoPassAgain(t *testing.T) {
 	t.Parallel()
-	e := &Engine{mcp: mcp.NewBridge(nil), seatRetryBase: time.Millisecond}
+	e := &Engine{mcp: mcp.NewBridge(nil, mcp.Supervision{}), mcpRetryBase: time.Millisecond}
 	e.epoch.current.Store(mcpStatusCompany(t, false))
 	var passes atomic.Int32
 	s := heldSeatChildren(t, e, "ceo", func() bool {
@@ -293,7 +293,7 @@ func TestAReleasedSeatRunsNoPassAgain(t *testing.T) {
 func TestAReleaseEndsAStartInFlight(t *testing.T) {
 	t.Parallel()
 	company := hangingCompany(t, 60)
-	e := &Engine{mcp: mcp.NewBridge(nil)}
+	e := &Engine{mcp: mcp.NewBridge(nil, mcp.Supervision{})}
 	e.epoch.current.Store(company)
 	s := heldSeatChildren(t, e, "ceo", func() bool { return true })
 
@@ -334,7 +334,7 @@ func TestOnlyAFailureThatCanPassIsRetried(t *testing.T) {
 	s := heldSeatChildren(t, e, "ceo", func() bool { return true })
 
 	invalid := mcp.Spec{Name: mcp.InstanceName("tracker", "CEO")}
-	if outcomes, retry := bringUp(t.Context(), s, []mcp.Spec{invalid}); retry ||
+	if outcomes, retry := bringUp(t.Context(), s, []mcp.Spec{invalid}, false); retry ||
 		len(outcomes) != 1 || outcomes[0].err == nil {
 		t.Errorf("a spec with no command: outcomes %+v, retry %v; want one failure "+
 			"and no retry", outcomes, retry)
@@ -343,32 +343,35 @@ func TestOnlyAFailureThatCanPassIsRetried(t *testing.T) {
 		Name:    mcp.InstanceName("tracker", "CEO"),
 		Command: "/nonexistent/definitely-not-a-tracker-server",
 	}
-	if _, retry := bringUp(t.Context(), s, []mcp.Spec{absent}); !retry {
+	if _, retry := bringUp(t.Context(), s, []mcp.Spec{absent}, false); !retry {
 		t.Error("a start that failed for a reason that can pass was not retried")
 	}
 }
 
-// THE RETRY IS BOUNDED: it doubles from the base and, however long the child
-// keeps failing, waits no longer than the ceiling spread by its jitter — a
-// wait past that would leave a vendor that recovered unnoticed for longer than
-// the seat host's own alarm interval allows for, and an unbounded doubling
-// overflows into a negative wait that reads as "due now", every tick.
-func TestTheSeatRetryDoublesUpToItsCeiling(t *testing.T) {
+// A SEAT'S RETRY IS THE MCP RESTART SCHEDULE, and the engine's one knob moves
+// it: the base doubling up to twenty bases, each wait spread by a fifth either
+// way ([mcp.RestartWait], whose own suite holds the schedule). A second copy of
+// that schedule here, anchored to the same seat cadence by a comment of its
+// own, is what the next change to one of them would leave behind — and an
+// unbounded doubling overflows into a negative wait that reads as "due now",
+// every tick.
+func TestASeatRetryWaitsOnTheMCPRestartSchedule(t *testing.T) {
 	t.Parallel()
-	e := &Engine{}
-	within := func(failures int, want time.Duration) {
+	within := func(e *Engine, failures int, want time.Duration) {
 		t.Helper()
-		got := e.seatRetryDelay(failures)
-		low := time.Duration(float64(want) * (1 - seatServerRetryJitter))
-		high := time.Duration(float64(want) * (1 + seatServerRetryJitter))
-		if got < low || got > high {
+		low, high := want*4/5, want*6/5
+		if got := e.seatRetryDelay(failures); got < low || got > high {
 			t.Errorf("retry after %d failures waits %v, want %v ± a fifth", failures, got, want)
 		}
 	}
-	within(1, seatServerRetryBase)
-	within(2, 2*seatServerRetryBase)
-	within(3, 4*seatServerRetryBase)
+	defaults := &Engine{}
+	within(defaults, 1, mcp.RestartBase)
+	within(defaults, 2, 2*mcp.RestartBase)
+	within(defaults, 3, 4*mcp.RestartBase)
 	for _, failures := range []int{6, 20, 1 << 20} {
-		within(failures, seatServerRetryCeiling)
+		within(defaults, failures, mcp.RestartCeiling)
 	}
+	scaled := &Engine{mcpRetryBase: time.Second}
+	within(scaled, 1, time.Second)
+	within(scaled, 1<<20, 20*time.Second)
 }

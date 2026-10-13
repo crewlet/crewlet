@@ -25,7 +25,9 @@ import (
 // published, never mutated, so each new one gets a new
 // registry — and a node that equipped only its first epoch would serve a
 // company whose agents lost every builtin at the first config change, with
-// nothing failing.
+// nothing failing. (The registry's shared MCP tools are the one part refiled
+// after it is published, by the shared bridge's own supervision; the builtins
+// never are. See mcpsupervise.go.)
 
 // equip registers the node-backed builtins into an epoch.
 //

@@ -89,10 +89,16 @@ func annotationsFromSDK(a *sdk.ToolAnnotations) Annotations {
 // version for the Mcp-Protocol-Version header. Both are handled explicitly
 // where the HTTP transport is built (see newHTTPTransport); the stdio
 // transport does not implement the interface at all, so it loses nothing.
+//
+// It is also where the end of a session is SEEN, on either transport: see
+// probeConn.Read.
 type probeTransport struct {
 	inner sdk.Transport
 	hints *hintTable
 	log   *slog.Logger
+
+	// ended is told when the connection's read side fails. See probeConn.Read.
+	ended func(cause string)
 }
 
 func (p *probeTransport) Connect(ctx context.Context) (sdk.Connection, error) {
@@ -104,6 +110,7 @@ func (p *probeTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 		Connection: conn,
 		hints:      p.hints,
 		log:        p.log,
+		ended:      p.ended,
 		pending:    map[any]struct{}{},
 	}, nil
 }
@@ -118,6 +125,7 @@ type probeConn struct {
 
 	hints *hintTable
 	log   *slog.Logger
+	ended func(cause string)
 
 	mu      sync.Mutex
 	pending map[any]struct{}
@@ -132,9 +140,22 @@ func (c *probeConn) Write(ctx context.Context, msg jsonrpc.Message) error {
 	return c.Connection.Write(ctx, msg)
 }
 
+// Read passes one message up, and a read that fails ENDS THE SESSION.
+//
+// The SDK's connection reads in one loop and stops at the first error —
+// end of the stream, a frame it cannot decode, a remote session the server
+// forgot — and every call still waiting is then answered with that error. So
+// a failed read is the moment the session died, whichever transport carried
+// it, and it is recorded HERE, before the error reaches the calls it is about
+// to fail: a call answered "EOF" by a server that crashed under it finds the
+// server already known to be gone, and is refused for that rather than for an
+// error that names a pipe.
 func (c *probeConn) Read(ctx context.Context) (jsonrpc.Message, error) {
 	msg, err := c.Connection.Read(ctx)
 	if err != nil {
+		if c.ended != nil {
+			c.ended("the session ended (" + err.Error() + ")")
+		}
 		return msg, err
 	}
 	resp, ok := msg.(*jsonrpc.Response)

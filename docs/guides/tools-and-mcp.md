@@ -269,7 +269,11 @@ skill guard holds back until its skill is loaded, is `forbidden`.
 
 **An MCP server's failure carries no class.** Its prose is the server's, and
 the engine will not guess a class from text it did not write; a reader that
-needs one treats an unclassified failure as the server's own.
+needs one treats an unclassified failure as the server's own. What the engine
+refuses **about** a server is classed: a call to one that is not running
+(down and being restarted, or stopped), or whose session ended with the call
+in flight, is `unavailable`, in the engine's own words. See
+[A server that dies, or will not start](#a-server-that-dies-or-will-not-start).
 
 ---
 
@@ -316,7 +320,7 @@ Instead of building hardcoded API wrappers for external tools (Jira, Slack, Conf
 ```mermaid
 flowchart TD
     subgraph ENGINE["Crewlet engine"]
-        BRIDGE["<b>Bridge</b><br/>owns every MCP server:<br/>start, stop, restart on apply"]
+        BRIDGE["<b>Bridge</b><br/>owns every MCP server:<br/>start, stop, restart on apply<br/>or when one dies"]
         STDIO["<b>stdio child</b><br/>the engine spawns the server<br/>and speaks JSON-RPC 2.0 over<br/>stdin/stdout"]
         HTTP["<b>HTTP / SSE client</b><br/>connects to an already-running<br/>server by URL"]
         REG[("<b>tool registry</b><br/>each discovered tool registered<br/>as <code>mcp:&lt;server&gt;</code>, globally<br/>or in a per-role map")]
@@ -337,7 +341,7 @@ holding the credentials and the port.
 
 ### Two Transport Modes
 
-1. **Stdio (Crewlet launches the server)** — The engine spawns MCP servers as child processes (e.g., `npx @anthropic/mcp-atlassian`). Crewlet manages the full lifecycle: a shared server is started by the apply that declares it and a per-role one when its seat is claimed, each is restarted when its resolved spec moves, and each is stopped when it is no longer declared, when its seat is released, or at shutdown (see [Shared vs per-role servers](#shared-vs-per-role-servers)). Communication uses JSON-RPC 2.0 over stdin/stdout.
+1. **Stdio (Crewlet launches the server)** — The engine spawns MCP servers as child processes (e.g., `npx @anthropic/mcp-atlassian`). Crewlet manages the full lifecycle: a shared server is started by the apply that declares it and a per-role one when its seat is claimed, each is restarted when its resolved spec moves or when it dies (see [A server that dies, or will not start](#a-server-that-dies-or-will-not-start)), and each is stopped when it is no longer declared, when its seat is released, or at shutdown (see [Shared vs per-role servers](#shared-vs-per-role-servers)). Communication uses JSON-RPC 2.0 over stdin/stdout.
 
 2. **HTTP/SSE (externally provided)** — The engine connects to an already-running MCP server via URL. Supports JSON and SSE response modes with automatic session management and reconnection.
 
@@ -346,6 +350,105 @@ holding the credentials and the port.
 On connect the engine (identifying itself as `crewlet` in the handshake) negotiates the newest protocol the server speaks: it probes the modern `server/discover` method first and falls back to the legacy `initialize` handshake automatically. Servers built on older MCP SDKs may log a one-time "unknown method" warning when they see the probe — harmless, and it stays out of your console because of the rule below.
 
 A stdio server's **stderr is never passed through raw**. Every line the child process writes (startup banners, tracebacks, that probe warning) becomes a structured `server_stderr` DEBUG event attributed to the server, instead of foreign log lines interleaving with the engine's own stream. When a server fails to start, the last lines it wrote are surfaced with the failure as a single `server_stderr_tail` ERROR event — that tail usually names the real cause (bad token, missing binary, import error). Run with `-debug` to watch a server's full stderr live.
+
+### A server that dies, or will not start
+
+Every server the engine runs is watched from the moment it starts until it is
+stopped. For a stdio server the engine waits on the process it launched, so a
+child that exits (a crash, an out-of-memory kill, a package runner that quit
+while its real server held the pipes) is noticed when it happens, not when the
+next call fails. For either transport, a session the connection reports ended
+counts too: the server closed its output while its process ran on, or a
+remote server forgot the session.
+
+**Its tools stay listed, and refuse.** A call to one gets a failed result in
+the engine's own words, classed `unavailable` (see
+[When a tool refuses](#when-a-tool-refuses)). It names the server, what took it
+down (for a stdio child, its exit status) and when the next restart is, and it
+never reports a broken pipe. A call that was in flight when the server went
+down is refused the same way, and so is one in flight when the engine stopped
+the server (a revision removed or replaced it, or its seat was let go). Unless
+the tool is annotated read-only, that result is also marked as possibly having
+taken effect, because the call was sent and no answer came back, so the agent
+checks before it repeats a write.
+The tools stay in the catalogue rather than leaving it, so a turn that already
+holds them is told what happened, and the prompt does not change on every
+crash.
+
+**The engine restarts it on its own**, once it has reaped whatever the old
+process left behind. The schedule, which is also the one a start that failed
+is retried on:
+
+- A server's first death is restarted at once, whether it came up on its
+  first start or on a retry of a start that failed, and so is any death after
+  its child had been up for **five minutes or more**. It was healthy, and a
+  turn that needs it is being refused.
+- Every other attempt waits: **15 seconds** after a failed attempt, or after a
+  restarted child that died again within five minutes, then **twice as long**
+  after each attempt that does not bring it back, up to **5 minutes**. Each wait is
+  spread by up to a fifth either way so a fleet does not retry one vendor in
+  lockstep, which makes the longest six minutes. 15 seconds is one seat
+  heartbeat and 5 minutes the interval a seat's persistent failure is repeated
+  at, so a server that never comes back logs its failure about that often.
+
+A restart that lists the same tools changes nothing anywhere: every registry
+keeps the same tools, now answered by the new process. A restart that lists
+**different** tools (a newer package version fetched on relaunch, a server
+whose tool list depends on its vendor) refiles the catalogue it belongs to: a
+shared server's into the company's catalogue and every held seat's surface, a
+per-role child's into its seat's. The next turn sees what the server serves
+now.
+
+**A shared server whose start failed is retried on the same schedule**, 15
+seconds after the failed start and doubling from there. A vendor that was down
+at boot, or a DNS blip, costs that server's tools until it answers, not until
+somebody next applies the configuration. When it comes up, its tools reach
+every seat without an apply. A per-role child whose start failed is retried on
+the same schedule by its seat (see
+[Shared vs per-role servers](#shared-vs-per-role-servers)). A spec that can
+never launch (no command, no URL) is not retried, since nothing about it
+changes until a revision does.
+
+**An apply asks every server it finds down to try again at once**, shared or a
+held seat's own, and starts its schedule again. It does not wait for the
+attempt, and it does not restart the server: the spec has not moved, so there
+is nothing to restart it into. Re-activating the revision is therefore the
+gesture for a vendor you know is back. The down server's tools stay where the
+apply files them, in the same order as when it is up, refusing until it is
+back.
+
+**A per-role child is restarted only by the node that holds its seat.** The
+child is the seat's identity at the vendor, so before every restart it makes on
+its own the engine checks that this node can still prove it holds the seat's
+lease, the same check the seat's own reconcile makes before it starts a child.
+When it cannot, the restart is held back and asked again one heartbeat later,
+until the node proves the lease again or lets the seat go. Letting the seat go
+stops the child and every restart it had due. The seat's own reconcile leaves
+a child that died to this watch rather than starting a second copy beside it,
+unless the child's resolved spec has moved (a revision edited it, or a
+credential it resolves was sealed or rotated). Then the reconcile restarts it
+into the new spec, as it does a running child whose spec moved, since a restart
+from the old spec would bring back what the revision replaced. A child whose
+start failed is the reconcile's to retry, as before.
+
+On the [heartbeat](../concepts/coordination.md#what-a-node-says-about-itself),
+and so on the dashboard's MCP servers screen, a server that is down counts as
+failed, with what took it down, until it is back.
+
+| Log event | Level | What it means |
+|---|---|---|
+| `server_exited` | error | A server's session ended under the engine: `cause` (for a stdio child, its exit status), `up_seconds`, and the child's last stderr lines in `stderr_tail` |
+| `server_restart_failed` | error | An attempt the engine made on its own failed: `attempt`, `error`, and `retry_in_seconds` until the next |
+| `server_restart_held_back` | warn | A per-role child's restart is waiting for its node to prove it holds the seat |
+| `server_start_retry_scheduled` | info | A shared server's start failed and will be retried |
+| `server_restarted` | info | The server is back: `attempt`, `down_seconds`, and what took it down in `was` |
+| `server_catalogue_changed` | info | It came back with different tools: `added`, `removed` |
+
+A server that keeps logging `server_exited` soon after each `server_restarted`
+is crashing on something it is asked to do or on its own environment, and its
+`stderr_tail` usually says which. A run of `server_restart_failed` is a server
+that cannot start at all, which is the same diagnosis as a failed first start
+(`server_stderr_tail` above).
 
 ---
 
@@ -437,8 +540,9 @@ down or a package fetch hangs, and an apply that waited would hold up
 everything after it with the new revision already current, a role it adds
 among them, whose inbox drops mail until it exists. A restart stops the old
 child before it starts the new one, so a turn that starts in between still
-lists the old child's tools, and a call to one comes back as a tool error the
-model can read; the seat's next turn has the new child.
+lists the old child's tools, and a call to one is refused, classed
+`unavailable`, as a server no longer running on this node; the seat's next
+turn has the new child.
 
 **A credential provisioned after the seat was claimed still reaches its
 child.** A seat is claimed as soon as its node can run it, and an integration
@@ -487,8 +591,10 @@ heartbeat and the ceiling the interval a stuck seat's alarm repeats at, so a
 vendor that recovers is noticed within six minutes, and a server that never
 will repeats its failure about as often as that alarm. An apply retries at
 once and starts the series again. A spec that can never launch — no command, no URL —
-is not retried, since nothing about it changes until a revision does; and a
-shared server is retried by the next apply, as before.
+is not retried, since nothing about it changes until a revision does. It is
+the schedule every server is retried on: a shared server whose start failed,
+and any child that dies after starting, follow it too (see
+[A server that dies, or will not start](#a-server-that-dies-or-will-not-start)).
 
 **No child is started for a seat this node cannot prove it holds.** A pass
 that an apply or a retry runs, rather than the claim, starts nothing unless the
