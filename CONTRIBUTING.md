@@ -535,8 +535,9 @@ that a value in it changes what the engine *does*, not merely that it parses.
 
 ## Dependency updates
 
-Dependabot watches every dependency surface this repository has, and opens a
-pull request when any of them has a newer release:
+Dependabot watches every dependency manifest this repository has, and opens a
+pull request when any of them has a newer release (the tool servers the docs
+launch are not in a manifest, and a test holds them instead — see below):
 
 | Surface | Ecosystem | What it covers |
 |---|---|---|
@@ -649,6 +650,23 @@ adding its `updates:` entry in the same change. Nothing reports the omission:
 a manifest Dependabot has not been told about simply never produces a pull
 request, which is indistinguishable from one that has nothing to update. The
 Go module itself went the length of the rewrite that way.
+
+The tool servers the docs, the examples and the skills launch are versions
+Dependabot cannot see: they sit in a page's YAML or a setup step's command
+line, not in a manifest. [`internal/config/toolservers_test.go`](internal/config/toolservers_test.go)
+holds them instead. Every package a document fetches by name — an
+`mcp_servers` entry, a `uvx`, `npx`, `npm exec` or `pip install` it tells
+somebody to run — names an exact release; every server a document launches is
+listed in `pinnedToolServers` with `readAt`, the release what the documents
+say about it (its tool names, its variables) was read against; and every
+document names that one release. So moving one means reading the new release
+first, correcting whatever moved, and setting `readAt` in the same change —
+and since nothing proposes the move, check the registry whenever you touch
+those pages. Reading it includes running the documented launch through
+`initialize` and `tools/list`: a runner pins the package it is given and
+resolves every dependency the package leaves unbounded at its newest, so a
+release whose source reads right can still fail to start — `mcp-linear` 0.1.1
+declares `mcp>=0.1.0` and dies at import on mcp 2.
 
 Security updates are separate: they come from published advisories rather than
 this file, are enabled in the repository's settings, and are held back by
