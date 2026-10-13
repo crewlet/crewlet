@@ -1174,7 +1174,7 @@ units:
                   # coding agent fast env + dependency management without
                   # touching the box's system Python.
                   commands:
-                    - "command -v uv >/dev/null 2>&1 || pip install --quiet uv"
+                    - "command -v uv >/dev/null 2>&1 || pip install --quiet uv==0.13.0"
                   brief: >-
                     Python workspace: you own the Phase-2 framework repo
                     (gitlab.com/nimbus-hq/nimbusflow once created). uv is
