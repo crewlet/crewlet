@@ -35,6 +35,22 @@ type instance struct {
 	// what says a read was made as ONE seat rather than on a client the
 	// transport shares.
 	reads []string
+
+	// people is the accounts the server holds by username, for the
+	// batched username read; asked is every list of names it was asked
+	// about, each with the token it arrived on. peopleStatus, when set, is
+	// what that read answers instead, and refusesPeople names the tokens
+	// it refuses.
+	people        map[string]mattermost.User
+	asked         []askedPeople
+	peopleStatus  int
+	refusesPeople map[string]bool
+}
+
+// askedPeople is one batched username read: the names, and the token.
+type askedPeople struct {
+	names []string
+	token string
 }
 
 func newInstance(t *testing.T, identities map[string]mattermost.User) *instance {
@@ -91,6 +107,34 @@ func newInstance(t *testing.T, identities map[string]mattermost.User) *instance 
 						"message": "another channel entirely", "create_at": 5000},
 				},
 			})
+		case strings.HasSuffix(r.URL.Path, "/users/usernames"):
+			var names []string
+			json.NewDecoder(r.Body).Decode(&names)
+			inst.mu.Lock()
+			inst.asked = append(inst.asked, askedPeople{names: names, token: token})
+			status, refused := inst.peopleStatus, inst.refusesPeople[token]
+			var users []mattermost.User
+			for _, name := range names {
+				// EXACT, as the server's own store matches them.
+				if u, ok := inst.people[name]; ok {
+					users = append(users, u)
+				}
+			}
+			inst.mu.Unlock()
+			if _, ok := inst.identities[token]; !ok || refused {
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write([]byte(`{"message":"Invalid or expired session"}`))
+				return true
+			}
+			if status != 0 {
+				w.WriteHeader(status)
+				w.Write([]byte(`{"message":"the database is not answering"}`))
+				return true
+			}
+			if users == nil {
+				users = []mattermost.User{}
+			}
+			json.NewEncoder(w).Encode(users)
 		case strings.HasSuffix(r.URL.Path, "/typing"):
 			inst.mu.Lock()
 			inst.typing = append(inst.typing, r.URL.Path)
@@ -179,10 +223,12 @@ func TestStartResolvesEachSeatsIdentity(t *testing.T) {
 	}
 }
 
-// BOTH namespaces, because the two halves of the system see different
-// identifiers: a payload names a poster by user id, a person typing a
-// mention uses the username.
-func TestStartRegistersBothHalvesOfTheIdentity(t *testing.T) {
+// A BOT IS REGISTERED BY THE ID A PAYLOAD NAMES IT BY, in the bot namespace —
+// and by nothing else. Its username was registered in the transport's own
+// namespace too, which no lookup is ever handed a username for, and which now
+// holds the people's user ids: a 26-character lowercase username is a valid
+// one, so the two kinds of key could collide in one map.
+func TestStartRegistersTheBotByTheIDItsPostsCarry(t *testing.T) {
 	inst := newInstance(t, map[string]mattermost.User{
 		"tok-swe": {ID: "bot-swe", Username: "agent-swe", IsBot: true},
 	})
@@ -194,17 +240,16 @@ func TestStartRegistersBothHalvesOfTheIdentity(t *testing.T) {
 	if err := tr.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// A payload naming the bot by id resolves...
+	// A payload naming the bot by id resolves, through the bot namespace
+	// a lookup in the transport's own falls back to.
 	if p, ok := reg.ByExternalID(mattermost.Backend, "bot-swe"); !ok || p.Handle != "swe" {
 		t.Fatalf("the bot id resolved to %+v", p)
 	}
-	// ...and so does a person's mention by name.
-	if p, ok := reg.ByExternalID(mattermost.Backend, "agent-swe"); !ok || p.Handle != "swe" {
-		t.Fatalf("the username resolved to %+v", p)
+	if got := reg.ExternalID(notify.BotNamespace(mattermost.Backend), "swe"); got != "bot-swe" {
+		t.Fatalf("the bot namespace holds %q for the seat", got)
 	}
-	// The outbound direction names the bot the way a person addresses it.
-	if got := reg.ExternalID(mattermost.Backend, "swe"); got != "agent-swe" {
-		t.Fatalf("the outbound id is %q", got)
+	if ids := reg.Identities(mattermost.Backend); len(ids) != 0 {
+		t.Fatalf("the people's namespace holds an agent's key: %v", ids)
 	}
 }
 

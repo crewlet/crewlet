@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -57,6 +58,88 @@ func TestThePartyRegistryFollowsTheAppliedCompany(t *testing.T) {
 	// survive into a company that no longer has that seat.
 	if e.Registry() == reg {
 		t.Fatal("the apply reused the previous registry")
+	}
+}
+
+// A PERSON ON MATTERMOST IS THE SEAT THEIR USERNAME NAMES, from boot and
+// across an apply.
+//
+// The chart names a person by username and a post names its author by user
+// id, so the registry used to hold a key no post ever looked up and every
+// person reached the agents as a stranger. The engine hands the chat
+// transport its people at boot and on every apply, and the transport asks the
+// server what each name holds: a name nobody holds after the apply takes the
+// person's old account back and is reported.
+func TestAMattermostPersonIsTheSeatTheirUsernameNames(t *testing.T) {
+	t.Parallel()
+	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/users/me"):
+			w.Write([]byte(`{"id":"bot-ceo","username":"ceo","is_bot":true}`))
+		case strings.HasSuffix(r.URL.Path, "/users/usernames"):
+			var names []string
+			json.NewDecoder(r.Body).Decode(&names)
+			users := []map[string]string{}
+			if slices.Contains(names, "jane") {
+				users = append(users, map[string]string{"id": "u-jane", "username": "jane"})
+			}
+			json.NewEncoder(w).Encode(users)
+		case strings.HasSuffix(r.URL.Path, "/config/client"):
+			w.Write([]byte(`{}`))
+		default:
+			// The websocket among them: the seat keeps reconnecting in
+			// the background, which is no part of what is asserted.
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"message":"not here"}`))
+		}
+	}))
+	t.Cleanup(chat.Close)
+	withFounder := func(username string) string {
+		return strings.Replace(strings.Replace(companyDoc, `  - name: CEO
+    handle: ceo
+    llm: zulu`, `  - name: CEO
+    handle: ceo
+    llm: zulu
+    integrations:
+      mattermost:
+        bot_token: ${MM_CEO_TOKEN}`, 1), `      slack_user_id: U0FOUNDER`, `      slack_user_id: U0FOUNDER
+      mattermost_user_id: `+username, 1) + `
+integrations:
+  mattermost:
+    enabled: true
+    url: ${TEST_MM_URL}
+    team: eng
+`
+	}
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, withFounder("Jane")),
+		Environment: config.MapSource{"MM_CEO_TOKEN": "tok-ceo", "TEST_MM_URL": chat.URL}})
+
+	if p, ok := e.Registry().ByExternalID("mattermost", "u-jane"); !ok || p.Handle != "founder" || !p.Human {
+		t.Fatalf("a post by the founder's account names %+v, want the founder", p)
+	}
+	if got := e.Mattermost().PeopleFindings(); len(got) != 0 {
+		t.Fatalf("a person the server holds was reported: %+v", got)
+	}
+
+	// THE APPLY names the founder by an account nobody holds. It changes
+	// nothing a socket is built from, so the transport is not rebuilt: it
+	// is handed the new people and asks again.
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, withFounder("jane.doe")), time.Now()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for len(e.Mattermost().PeopleFindings()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("a name nobody holds was never reported")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := e.Mattermost().PeopleFindings(); got[0].Subject != "founder" {
+		t.Fatalf("the finding is about %q", got[0].Subject)
+	}
+	if p, ok := e.Registry().ByExternalID("mattermost", "u-jane"); ok {
+		t.Fatalf("the founder's old account still names %+v", p)
 	}
 }
 

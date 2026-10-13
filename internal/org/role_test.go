@@ -530,6 +530,23 @@ func TestTheOperatorIDIsAnAttributionAndNotAnAddress(t *testing.T) {
 	}
 }
 
+// A MATTERMOST CONTACT IS A NAME, AND THE ONLY ONE. Every other contact field
+// is the id that surface's events carry and registers as written; this one is
+// the username a mention is written with while a post carries the user id, so
+// registered as written it matched no post at all. Whatever reads the answer
+// leaves the name to the transport that can ask the server what it holds.
+func TestOnlyTheMattermostContactIsAName(t *testing.T) {
+	t.Parallel()
+	for _, entry := range contactTransports {
+		if got, want := entry.transport.AddressedByName(), entry.transport == TransportMattermost; got != want {
+			t.Errorf("%s: AddressedByName = %v, want %v", entry.transport, got, want)
+		}
+	}
+	if Transport("a surface this build does not have").AddressedByName() {
+		t.Error("an unknown transport reads as addressed by name")
+	}
+}
+
 // A CONTACT'S FIELDS ARE SHOWN AS WRITTEN, one per config key, and each says
 // whether it resolves by the SAME rule the engine consumes identities by — so
 // a field this reports as resolving is one routing uses, and the reserved
