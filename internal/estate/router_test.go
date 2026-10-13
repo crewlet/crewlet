@@ -1268,7 +1268,7 @@ func TestTheRouterAsksInTheRendezvousOrderOfItsOwnID(t *testing.T) {
 		t.Fatalf("ordering rewrote the placement's own listing %q to %q", listed, held)
 	}
 
-	r.markAnswered(want[3], trackerDomain)
+	r.markAnswered(want[3], trackerDomain, "")
 	r.markSuspect(want[0])
 	if got, w := r.order(trackerDomain, held), []string{want[3], want[1], want[2], want[0]}; !slices.Equal(got, w) {
 		t.Fatalf("with %s answered last and %s silent, agent-2 asks %q, want %q", want[3],
@@ -2169,6 +2169,81 @@ func TestACommitterThatRanNothingHandsTheRepositoryOn(t *testing.T) {
 		t.Fatalf("propose with this node's own committer stopping = (%+v, %v), in-process %d, "+
 			"want it asked first and the runner-up %s's answer", got, err,
 			len(local.proposalsTo(repo)), o[1])
+	}
+}
+
+// A NODE THAT RAN NOTHING FOR A PUSH IS ASKED LAST FOR THE NEXT ONE.
+//
+// A keyed order has no sticky node to move the walk off a node that refused,
+// so a committer that answers `no_backend` — a node in a maintenance mode,
+// whose mode decides no push for the whole window; a committer stopping; a
+// refusal about the node itself — was asked FIRST again by every later push
+// to each repository it ranks first for: the whole encoded proposal sent,
+// decoded and refused, and only then the runner-up. Remembered as an
+// `out_of_service` copy is, for [suspectFor], it is asked last for that
+// operation instead — and only that one: its reads of the code log still
+// serve, so a read's order is not moved — and the memory lapses with the
+// window and clears the moment the node commits a push again.
+func TestAKeyedWriteAsksANodeThatRanNothingLast(t *testing.T) {
+	t.Parallel()
+	holders := []string{"data-a", "data-b", "data-c"}
+	f := newFleet(t, holders...)
+	r := f.router(t, "agent-2", nil)
+	const repo = "repo-declined"
+	o := rendezvous.Order(repo, holders)
+	publishesNothing := fmt.Errorf("%w: this node publishes nothing", code.ErrNotServing)
+	f.nodes[o[0]].set(func(n *fakeNode) { n.codeErr = publishesNothing })
+
+	if got, err := r.Code().Propose(t.Context(), proposalTo(repo, "push-1")); err != nil ||
+		got.OpID != o[1] {
+		t.Fatalf("the first push with %s declining = (%+v, %v), want the runner-up %s's "+
+			"answer", o[0], got, err, o[1])
+	}
+	if got, err := r.Code().Propose(t.Context(), proposalTo(repo, "push-2")); err != nil ||
+		got.OpID != o[1] {
+		t.Fatalf("the second push = (%+v, %v), want the runner-up %s's answer", got, err, o[1])
+	}
+	if asked := len(f.nodes[o[0]].proposalsTo(repo)); asked != 1 {
+		t.Fatalf("the node that ran nothing was proposed %d pushes, want only the first: "+
+			"the second asks it last", asked)
+	}
+	if got, want := r.orderFor(opCodePropose.spec, repo, holders),
+		[]string{o[1], o[2], o[0]}; !slices.Equal(got, want) {
+		t.Fatalf("a push to %s is asked of %v, want %v — %s last", repo, got, want, o[0])
+	}
+	// ONLY FOR THE OPERATION IT DECLINED: its copy of the code log is not
+	// out of service, so nothing moves it for a read.
+	if class := r.classes(codeDomain, "", true)(o[0]); class != 1 {
+		t.Fatalf("a read ranks %s in class %d, want 1 — declining a push says nothing "+
+			"about its reads", o[0], class)
+	}
+
+	// THE WINDOW LAPSES: the node is back at its place in the key's order.
+	r.now = func() time.Time { return time.Now().Add(2 * suspectFor) }
+	if got := r.orderFor(opCodePropose.spec, repo, holders); !slices.Equal(got, o) {
+		t.Fatalf("after the window a push to %s is asked of %v, want the key's order %v",
+			repo, got, o)
+	}
+	r.now = time.Now
+
+	// AND A NODE THAT COMMITS A PUSH AGAIN IS ITS PLACE AGAIN AT ONCE.
+	f.nodes[o[0]].set(func(n *fakeNode) { n.codeErr = nil })
+	r.markDeclined(o[0], opCodePropose.spec.name)
+	f.nodes[o[1]].set(func(n *fakeNode) { n.codeErr = publishesNothing })
+	f.nodes[o[2]].set(func(n *fakeNode) { n.codeErr = publishesNothing })
+	if got, err := r.Code().Propose(t.Context(), proposalTo(repo, "push-3")); err != nil ||
+		got.OpID != o[0] {
+		t.Fatalf("with only %s committing = (%+v, %v), want its answer", o[0], got, err)
+	}
+	if class := r.classes(codeDomain, opCodePropose.spec.name, false)(o[0]); class != 1 {
+		t.Fatalf("after %s committed a push it ranks in class %d for pushes, want 1 — "+
+			"the decline it answered before is over", o[0], class)
+	}
+	for _, refused := range o[1:] {
+		if class := r.classes(codeDomain, opCodePropose.spec.name, false)(refused); class != 2 {
+			t.Fatalf("%s, which ran nothing for the push, ranks in class %d, want 2",
+				refused, class)
+		}
 	}
 }
 
