@@ -33,8 +33,13 @@ import (
 // config is not gitproc.RepoConfig or that holds a commondir or a foreign
 // alternate, and git cannot read a repository whose HEAD is not a symbolic
 // ref, so a cache damaged there would refuse every round that could repair
-// it. The pack files last (sweepPacks), once the new refs are in, so a
-// reader of the old refs never loses a pack they name.
+// it. objects/pack is listed once, after the install (packStrays), and
+// whatever there is no pack's file goes at that listing, before the round's
+// index: no reader of any ref reads one, and a dead writer's lock among them
+// — a maintenance run killed with its node — would refuse the index, since git
+// writes none over another writer's lock. The pack files last (sweepPacks),
+// once the new refs are in, so a reader of the old refs never loses a pack
+// they name.
 //
 // A DELTA SWEEPS NOTHING: between two rounds of one process nothing but this
 // package has written the directory, and every writer here leaves only image
@@ -207,13 +212,22 @@ func (t *trashing) dirs(inc string) []string {
 }
 
 // packStrays decides the sweep's second half on a full answer, before the
-// round's index and its refs: every file of objects/pack the snapshot does not
-// name — a stray, a pack no row names any more (a log gone back under the
-// cache) — answered for sweepPacks to move once the new refs are in. When one
-// is a pack's, the multi-pack-index and the commit-graph go NOW, first: an
-// index naming a missing pack fails every read of the repository, and the
-// round's own index is then written over exactly the snapshot's packs. It
-// reports whether it dropped them.
+// round's index and its refs: every pack file of objects/pack the snapshot
+// does not name — a stray, a pack no row names any more (a log gone back
+// under the cache) — answered for sweepPacks to move once the new refs are
+// in. When there is one, the multi-pack-index and the commit-graph go NOW,
+// first: an index naming a missing pack fails every read of the repository,
+// and the round's own index is then written over exactly the snapshot's
+// packs.
+//
+// Every other entry the image does not admit goes now too, at this one
+// listing: it is no pack's file, so no reader of the old refs reads it, and
+// what such entries are — a lock or a temporary file a maintenance run
+// killed with its node left, since no run is in flight beside a full round —
+// is what would refuse the round's index below. Kept for sweepPacks, the lock
+// was refused the index, whose failure removed it from under the sweep that
+// had listed it, and the round failed on the move. It reports whether it
+// moved anything.
 func (c *Cache) packStrays(inc *incarnation, snap snapshot) ([]string, bool, error) {
 	packDir := filepath.Join(inc.dir, "objects", "pack")
 	want := map[string]bool{}
@@ -227,21 +241,30 @@ func (c *Cache) packStrays(inc *incarnation, snap snapshot) ([]string, bool, err
 		return nil, false, err
 	}
 	var strays []string
-	dropPack := false
+	now := &trashing{c: c}
 	for _, d := range list {
 		name := d.Name()
-		if (want[name] || midxFile.MatchString(name)) && d.Type().IsRegular() {
-			continue
+		switch {
+		case (want[name] || midxFile.MatchString(name)) && d.Type().IsRegular():
+		case strings.HasPrefix(name, "pack-"):
+			strays = append(strays, name)
+		default:
+			if now.move(filepath.Join(packDir, name)); now.err != nil {
+				return nil, now.moved, now.err
+			}
 		}
-		strays = append(strays, name)
-		dropPack = dropPack || strings.HasPrefix(name, "pack-")
 	}
-	if dropPack {
+	if now.moved {
+		if err = syncDir(packDir); err != nil {
+			return nil, true, err
+		}
+	}
+	if len(strays) > 0 {
 		if err = c.dropIndexes(inc); err != nil {
-			return nil, false, err
+			return nil, true, err
 		}
 	}
-	return strays, dropPack, nil
+	return strays, now.moved || len(strays) > 0, nil
 }
 
 // sweepPacks is the sweep's second half, once the refs are in: every stray
