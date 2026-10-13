@@ -374,3 +374,45 @@ func TestTheStandInKeepsWhatTheCallAlreadyCarries(t *testing.T) {
 		})
 	}
 }
+
+// DeepSeek and Moonshot refuse an assistant message without
+// reasoning_content, and the first request after a fallback onto either holds
+// only turns another member wrote — nothing that could show the host speaks
+// the field. Their own APIs are known from the URL, so every assistant turn
+// carries the empty string from that first request on, never another backend's
+// reading of its own turn. A host whose URL says nothing of the kind —
+// OpenAI's, a gateway serving the same models — is sent nothing it did not
+// show it reads.
+func TestDeepSeekAndMoonshotGetReasoningContentFromTheFirstRequest(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		base, model string
+		want        bool
+	}{
+		{"https://api.deepseek.com", "deepseek-flash", true},
+		{"https://api.deepseek.com/v1", "deepseek-pro", true},
+		{"https://api.moonshot.ai/v1", "kimi-k3", true},
+		{"https://API.Moonshot.CN/v1/", "kimi-k2.7-code", true},
+		{"https://api.deepseek.com./v1", "deepseek-flash", true},
+		{"https://openrouter.ai/api/v1", "moonshotai/kimi-k3", false},
+		{"https://api.together.xyz/v1", "moonshotai/Kimi-K3", false},
+		{"https://api.openai.com/v1", "gpt-test", false},
+		{"https://api.deepseek.com.example/v1", "deepseek-flash", false},
+	} {
+		t.Run(tc.base+" "+tc.model, func(t *testing.T) {
+			t.Parallel()
+			p, api := providerAt(t, tc.base, tc.model, answerOK)
+			conversation := userTurn("go")
+			conversation.Messages = append(conversation.Messages, foreignStep("call_1")...)
+			complete(t, p, false, conversation)
+			sent := assistantSent(t, api.seen()[0].body)
+			got, carried := sent["reasoning_content"]
+			if carried != tc.want {
+				t.Fatalf("reasoning_content carried = %v (%v), want carried = %v", carried, got, tc.want)
+			}
+			if carried && got != "" {
+				t.Fatalf("a turn another backend wrote went with reasoning_content %q, want the empty string", got)
+			}
+		})
+	}
+}

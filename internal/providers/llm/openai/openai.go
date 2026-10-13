@@ -33,9 +33,10 @@
 //     such field is kept verbatim ([llm.Message.Raw]), an empty one included,
 //     and sent back in the shape it arrived in, to the same endpoint only
 //     ([llm.Message.Binding]), because a field one host emits is one another
-//     may refuse. Once a turn going back carries reasoning_content, every
-//     other turn carries an empty one, because a missing one is what Moonshot
-//     refuses; and a step Gemini 3 did not write goes to Google with the
+//     may refuse. Once a turn going back carries reasoning_content — or from
+//     the first request, on DeepSeek's and Moonshot's own APIs — every other
+//     turn carries an empty one, because a missing one is what Moonshot and
+//     DeepSeek refuse; and a step Gemini 3 did not write goes to Google with the
 //     value Google documents in place of a thought signature, because a
 //     missing one is a 400 (foreign.go). replay.go has the vendors' rules and
 //     the stream's merge.
@@ -149,9 +150,12 @@ type Provider struct {
 	// binding is this endpoint's identity, which a turn's kept reasoning is
 	// bound to and replayed only under — see [endpointBinding].
 	binding string
-	// google is whether the endpoint is one of Google's own, which holds a
-	// turn it did not write to a thought signature — see foreign.go.
-	google bool
+	// reasoningContent is whether the endpoint is a host's own API that
+	// refuses an assistant message without reasoning_content, and google
+	// whether it is one of Google's, which holds a step it did not write to a
+	// thought signature: what the URL says about the host — see foreign.go.
+	reasoningContent bool
+	google           bool
 
 	// noStream latches once this endpoint has answered a streaming request
 	// without streaming. Atomic: one Provider serves every seat
@@ -211,7 +215,9 @@ func New(cfg Config) (*Provider, error) {
 		effort:    shared.ReasoningEffort(cfg.ReasoningEffort),
 		timeout:   timeout,
 		binding:   endpointBinding(baseURL),
-		google:    googleEndpoint(baseURL),
+
+		reasoningContent: reasoningContentHost(baseURL),
+		google:           googleEndpoint(baseURL),
 	}, nil
 }
 
@@ -667,8 +673,10 @@ func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) 
 // carries back, in the host's own fields, the reasoning it came with
 // ([replay]) — and a turn any other endpoint or backend wrote carries none,
 // because its fields are not this host's to read. Once a turn going back
-// carries reasoning_content, every assistant turn does, the empty string where
-// it has none ([speaksReasoningContent]); and where the host holds every step
+// carries reasoning_content, or the endpoint is a host's own API that refuses
+// a message without one ([reasoningContentHost]), every assistant turn does,
+// the empty string where it has none ([speaksReasoningContent]); and where the
+// host holds every step
 // to a thought signature, a step that has none carries the value Google
 // documents for one it did not write ([Provider.signsSteps], foreign.go).
 func (p *Provider) formatMessages(messages []llm.Message) ([]sdk.ChatCompletionMessageParamUnion, error) {
@@ -676,7 +684,7 @@ func (p *Provider) formatMessages(messages []llm.Message) ([]sdk.ChatCompletionM
 	if err != nil {
 		return nil, err
 	}
-	emptyReasoning := speaksReasoningContent(records)
+	emptyReasoning := p.reasoningContent || speaksReasoningContent(records)
 	signing := p.signsSteps(records)
 	out := make([]sdk.ChatCompletionMessageParamUnion, 0, len(messages))
 	for i, m := range messages {

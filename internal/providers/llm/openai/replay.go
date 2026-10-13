@@ -67,12 +67,14 @@ import (
 // no record, so its turn goes back exactly as it always did.
 //
 // AND ONCE A HOST HAS SHOWN IT SPEAKS reasoning_content, every assistant turn
-// of the request carries one ([speaksReasoningContent]). Moonshot refuses a
-// tool-call turn without it while thinking is on, and DeepSeek wants every
-// earlier turn's; but a stream that reasoned nothing can name the field in no
-// fragment, and a turn another endpoint or backend wrote has none this host
-// can read. Each goes back with the empty string, the host's own word for no
-// reasoning — never another backend's reading of its own turn.
+// of the request carries one ([speaksReasoningContent]) — from the first
+// request on DeepSeek's and Moonshot's own APIs, which the URL names
+// (foreign.go). Moonshot refuses a tool-call turn without it while thinking is
+// on, and DeepSeek wants every earlier turn's; but a stream that reasoned
+// nothing can name the field in no fragment, and a turn another endpoint or
+// backend wrote has none this host can read. Each goes back with the empty
+// string, the host's own word for no reasoning — never another backend's
+// reading of its own turn.
 //
 // ONLY TO THE ENDPOINT THAT WROTE IT. "OpenAI-compatible" is one wire format
 // over many hosts, and a field one host emits is a field another may refuse:
@@ -780,7 +782,9 @@ const reasoningContentField = "reasoning_content"
 // backend's reading of its own turn included. The evidence that a host speaks
 // the field is in the request itself, a turn it wrote carrying it, because it
 // is a fact about the HOST: guessed from a model name, it would put a field
-// OpenAI's own endpoint never documented into its requests. No other field is
+// OpenAI's own endpoint never documented into its requests. (The other
+// evidence is the endpoint's URL, where it names DeepSeek's or Moonshot's own
+// API: [reasoningContentHost].) No other field is
 // filled in: OpenRouter's `reasoning` and `reasoning_details` and the rest
 // carry no such rule, and an invented empty block would be a sequence the
 // model never produced.

@@ -759,14 +759,14 @@ visible text is its `text` chunks rather than the list's JSON.
 
 **An empty reasoning is still sent.** A round that reasoned nothing goes back
 with the empty value its host sent (`"reasoning_content": ""`); only a `null`
-counts as no field. And once any turn of a request carries
-`reasoning_content`, every assistant turn of it does — the empty string for a
-round whose stream never named the field, and for a turn another endpoint or
-backend wrote, whose reasoning this host cannot read — because Moonshot
-refuses an assistant tool-call message whose `reasoning_content` is missing
-while thinking is on, and DeepSeek wants every earlier turn's. No other field
-is filled in: an empty `reasoning_details` block would be a sequence the model
-never produced.
+counts as no field. And once any turn of a request carries `reasoning_content`
+— on DeepSeek's and Moonshot's own APIs, from the first request — every
+assistant turn of it does: the empty string for a round whose stream never
+named the field, and for a turn another endpoint or backend wrote, whose
+reasoning this host cannot read — because Moonshot refuses an assistant
+tool-call message whose `reasoning_content` is missing while thinking is on,
+and DeepSeek wants every earlier turn's. No other field is filled in: an empty
+`reasoning_details` block would be a sequence the model never produced.
 
 **Within one tool loop, and across a suspension.** Every assistant turn in a
 request belongs to the phase that is still running: a new turn starts from
@@ -780,10 +780,14 @@ When a chain moves a running loop to a member on a different `base_url`, the
 turns the first member wrote go to the second without their reasoning. Once the
 second member has written a turn of that loop carrying `reasoning_content`, the
 first member's turns go to it with an empty one, which is what Moonshot and
-DeepSeek check for. Before that, and on a host whose rule needs a value only
-its own model can write (a LiteLLM proxy's signed thinking blocks), the request
-may be refused, and the turn then fails on that member as it would on any 400.
-A chain whose members serve such a model should keep them on one endpoint: two
+DeepSeek check for — and on their own APIs, which the `base_url` names
+(`api.deepseek.com`; `api.moonshot.ai` and `api.moonshot.cn`), from the first
+request after the fallback, since that request is the one either would refuse.
+Before that on another host speaking the field (Together's Kimi K3, whose host
+serves other models beside it), and on a host whose rule needs a value only its
+own model can write (a LiteLLM proxy's signed thinking blocks), the request may
+be refused, and the turn then fails on that member as it would on any 400. A
+chain whose members serve such a model should keep them on one endpoint: two
 `providers.llm` entries on the same `base_url` with different keys or models
 share their reasoning.
 
