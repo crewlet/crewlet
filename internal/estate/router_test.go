@@ -89,6 +89,12 @@ type fakeNode struct {
 	// release, when set, holds a floor wait until it is closed.
 	release chan struct{}
 
+	// levelRead, when set, is what a task read runs before it answers: a
+	// read through a REAL statelog reader, whose own waits — the barrier, the
+	// level — are the operation's rather than the serving node's
+	// ([laggingLinearizableRead]).
+	levelRead func(context.Context) error
+
 	// refusesLagging refuses every request while its copy lags, one that
 	// says "answer anyway" included: a server that does not honour the
 	// request's say-so, which the router must still not circle.
@@ -147,13 +153,21 @@ func (f *fakeNode) set(change func(*fakeNode)) {
 	change(f)
 }
 
-func (f *fakeNode) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
+func (f *fakeNode) Tasks(ctx context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
 	f.note("tasks")
 	if q.Units != f.units {
 		return tracker.Answer{}, errors.New("the serving node's chart was not attached")
 	}
 	if f.failWith != nil {
 		return tracker.Answer{}, f.failWith
+	}
+	f.mu.Lock()
+	read := f.levelRead
+	f.mu.Unlock()
+	if read != nil {
+		if err := read(ctx); err != nil {
+			return tracker.Answer{}, err
+		}
 	}
 	return tracker.Answer{TotalHint: 7}, nil
 }

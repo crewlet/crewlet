@@ -467,8 +467,14 @@ const (
 	// answers unknown, naming the operation.
 	CommitBudget = 30 * time.Second
 
-	// ReplyMargin is what a committer leaves between the end of a push's
-	// batch and its asker's deadline: the answer's trip back — its
+	// ReplyMargin is what a serving node leaves between the end of its work
+	// and its asker's deadline: a committer between the end of a push's
+	// batch and the deadline, and every node answering a routed request
+	// between the end of each wait it makes — for the asker's floor, a
+	// read's barrier and its position, a write's own record — and the
+	// deadline, so a node that runs out of time says so while its asker is
+	// still listening (internal/estate marks every request it answers with
+	// it, statelog.WithReplyMargin). It is the answer's trip back — its
 	// encoding and one hop of the broker's request/reply, milliseconds on a
 	// healthy fleet — and the skew between the asker's clock, which stamped
 	// the deadline, and this node's, which reads it, which NTP holds to

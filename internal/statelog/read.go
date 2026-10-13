@@ -102,8 +102,10 @@ const (
 	// could be established either ([ReaderDeps.Health]).
 	RefuseBrokerUnreachable ReadRefusal = "broker_unreachable"
 
-	// RefuseNoQuorum — the barrier did not commit. It is not the same as
-	// unreachable: the broker answered, and a majority did not agree.
+	// RefuseNoQuorum — the barrier did not commit: in the read index's own
+	// budget, or in what a served request's asker left it
+	// ([WithReplyMargin]). It is not the same as unreachable: the broker
+	// answered, and a majority did not agree in that time.
 	RefuseNoQuorum ReadRefusal = "no_quorum"
 
 	// RefuseLogFull — the log is at its byte ceiling and refuses appends,
@@ -611,7 +613,10 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 				fmt.Sprintf("this read names a position on %s and this domain "+
 					"reads %s", target.Stream, r.stream), started)
 		}
-		waitCtx, cancel := context.WithTimeout(ctx, ReadBudget)
+		// WITHIN WHAT THE ASKER LEFT, where the read was asked across a wire
+		// ([WithReplyMargin]): `behind` said after the asker stopped
+		// listening is heard as a node that is gone.
+		waitCtx, cancel, bound := WaitWithin(ctx, ReadBudget)
 		err := r.waiter.WaitCommitted(waitCtx, target)
 		cancel()
 		if err != nil {
@@ -619,7 +624,7 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 				return Answer{}, ctx.Err()
 			}
 			return r.refuse(h, q, RefuseBehind,
-				fmt.Sprintf("this node has not reached %s within %s", target, ReadBudget),
+				fmt.Sprintf("this node has not reached %s within %s", target, bound),
 				started)
 		}
 		answer.Position = r.waiter.Committed()
@@ -793,8 +798,36 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 					"established as the log's end",
 			}
 		}
-		at, err := r.index.Read(ctx)
+		// THE BARRIER'S WAIT ENDS WHERE THE ASKER'S ATTEMPT LEAVES OFF, on a
+		// read asked across a wire ([WithReplyMargin]): it may first wait
+		// out a barrier already in flight and then its own, a read index's
+		// budget each, and a refusal sent after the asker stopped
+		// listening is a node heard as gone.
+		barrierCtx, cancel, served := untilAnswered(ctx)
+		began := time.Now()
+		at, err := r.index.Read(barrierCtx)
+		// WHETHER THE ASKER'S TIME IS WHAT ENDED IT, read before the cancel
+		// below — which ends the context whatever ended the wait — and from
+		// the error too, so a barrier the broker refused (a full log) is
+		// still the broker's answer.
+		ranOut := served && barrierCtx.Err() != nil && errors.Is(err, context.DeadlineExceeded)
+		cancel()
 		if err != nil {
+			switch {
+			case ctx.Err() != nil:
+				// THE CALLER'S OWN ENDING, as the wait below answers
+				// it: a reader that hung up says nothing about the
+				// broker, and counted as `no_quorum` it was a majority
+				// failing to agree on every operator's graph.
+				return Position{}, ctx.Err()
+			case ranOut:
+				return Position{}, &Refused{
+					Code: RefuseNoQuorum, Level: q.Level,
+					Detail: fmt.Sprintf("the barrier this read appended to establish the "+
+						"log's end had not committed after %s, all its asker's attempt left",
+						time.Since(began).Round(time.Millisecond)),
+				}
+			}
 			return Position{}, barrierRefusal(q.Level, err)
 		}
 		// THE FLOOR CANNOT BE PAST THE BARRIER on the stream the barrier

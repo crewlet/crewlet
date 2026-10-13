@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -120,6 +121,16 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, req.Deadline)
 		defer cancel()
+		// EVERY WAIT ENDS A REPLY'S TRIP SHORT OF IT — the floor's below, and
+		// a read's barrier and level and a write's resolution inside the
+		// operation — so a node that runs out of time says so while its
+		// asker is still listening. Run to the deadline itself, a wait's
+		// honest `behind` reached the asker after it had given up on this
+		// node, which then heard a lagging node as a wedged one: asked it
+		// last for suspectFor and told the placement it went unanswered.
+		// code.ReplyMargin is the one margin a serving node leaves, the
+		// committer's between a batch and its asker's deadline included.
+		ctx = statelog.WithReplyMargin(ctx, code.ReplyMargin)
 	}
 	b, wrong, unserved := unservedCopy(ctx, s.local, spec)
 	if unserved {
@@ -229,36 +240,41 @@ func ready(ctx context.Context, self string, spec *opSpec, b Backend, floors []s
 		if floor.Seq == 0 || floor.Stream != spec.floorStream {
 			continue
 		}
-		behind, gone := waitFloor(ctx, b, floor)
+		bound, gone, behind := waitFloor(ctx, b, floor)
 		if gone {
 			obsolete = append(obsolete, floor)
 			continue
 		}
 		if behind != nil {
 			return unservedBehind, fmt.Sprintf("%s has not applied %s within %s: %v",
-				self, floor, statelog.ReadBudget, behind), obsolete
+				self, floor, bound, behind), obsolete
 		}
 	}
 	return "", "", obsolete
 }
 
-// waitFloor waits for this node to apply one floor, within the read budget.
+// waitFloor waits for this node to apply one floor, within the read budget —
+// and, on a request asked across the wire, within what its asker's attempt
+// left ([statelog.WithReplyMargin]), so a node that runs out says it is behind
+// while the asker is still listening.
 //
-// It answers the error to report as "behind", or obsolete when the floor
-// names a generation this node's log has abandoned: a position nobody will
-// ever reach again, which the asker should stop carrying rather than refuse
-// every read on.
-func waitFloor(ctx context.Context, b Backend, floor statelog.Position) (behind error, obsolete bool) {
-	bounded, cancel := context.WithTimeout(ctx, statelog.ReadBudget)
+// It answers the bound it waited within and the error to report as "behind",
+// or obsolete when the floor names a generation this node's log has
+// abandoned: a position nobody will ever reach again, which the asker should
+// stop carrying rather than refuse every read on.
+func waitFloor(ctx context.Context, b Backend, floor statelog.Position) (bound statelog.WaitBound,
+	obsolete bool, behind error) {
+
+	bounded, cancel, bound := statelog.WaitWithin(ctx, statelog.ReadBudget)
 	defer cancel()
 	err := b.Committed(bounded, floor)
 	switch {
 	case err == nil:
-		return nil, false
+		return bound, false, nil
 	case errors.Is(err, statelog.ErrWaitAbandoned):
-		return nil, true
+		return bound, true, nil
 	default:
-		return err, false
+		return bound, false, err
 	}
 }
 

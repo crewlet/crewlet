@@ -1501,7 +1501,10 @@ const (
 // asked of for the record this call's own append put at `at`; any other
 // record is asked by the generation it carries.
 func (p *Publisher) resolve(ctx context.Context, req Request, at Position, landed landing, gen uint32) (Result, error) {
-	waitCtx, cancel := context.WithTimeout(ctx, p.budget(ctx))
+	// WITHIN WHAT THE ASKER LEFT, on a write asked across a wire
+	// ([WithReplyMargin]): `pending` said after the asker stopped listening
+	// is a node heard as gone.
+	waitCtx, cancel, _ := WaitWithin(ctx, p.budget(ctx))
 	defer cancel()
 
 	if err := p.waiter.WaitApplied(waitCtx, req.Scope, at); err != nil {
@@ -2009,8 +2012,7 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 		return nil
 	}
 	started := time.Now()
-	budget := p.budget(ctx)
-	waitCtx, cancel := context.WithTimeout(ctx, budget)
+	waitCtx, cancel, bound := WaitWithin(ctx, p.budget(ctx))
 	defer cancel()
 	err := p.waiter.WaitCommitted(waitCtx, req.Session)
 	p.observeMillis(metrics.StatelogWriteSessionWait, started, metrics.Attrs{
@@ -2027,7 +2029,7 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 		return &Unavailable{
 			Reason: ReasonBehind,
 			Detail: fmt.Sprintf("this node has not applied this caller's own "+
-				"write at %s within %s", req.Session, budget),
+				"write at %s within %s", req.Session, bound),
 			Position: req.Session,
 			OpID:     req.OpID,
 		}
@@ -2045,8 +2047,7 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 // conflict a caller would otherwise be told after sixteen rounds — into a
 // number the caller can retry against.
 func (p *Publisher) waitBehind(ctx context.Context, req Request, at Position) error {
-	budget := p.budget(ctx)
-	waitCtx, cancel := context.WithTimeout(ctx, budget)
+	waitCtx, cancel, bound := WaitWithin(ctx, p.budget(ctx))
 	defer cancel()
 	if err := p.waiter.WaitCommitted(waitCtx, at); err != nil {
 		if ctx.Err() != nil {
@@ -2056,7 +2057,7 @@ func (p *Publisher) waitBehind(ctx context.Context, req Request, at Position) er
 			Reason: ReasonBehind,
 			Detail: fmt.Sprintf("%s is at %s on the log and this node has not "+
 				"applied it within %s, so a write against it would be decided "+
-				"from a state below it", req.Subject, at, budget),
+				"from a state below it", req.Subject, at, bound),
 			Position: at,
 			OpID:     req.OpID,
 		}
