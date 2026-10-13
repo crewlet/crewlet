@@ -387,7 +387,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				// limit an activation moves holds from that activation
 				// on — on every committer at once, since each reads its
 				// own node's current epoch.
-				Limits: e.codeLimits, Metrics: e.metrics, Logger: logging.Get("code"),
+				Limits: e.codeLimits, Retention: e.codeDeletedRetention,
+				Metrics: e.metrics, Logger: logging.Get("code"),
 			}); err != nil {
 				return fmt.Errorf("engine: code committer: %w", err)
 			}

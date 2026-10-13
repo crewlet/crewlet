@@ -165,6 +165,7 @@ func registeredStatements() map[string]statement {
 		"purge state":         {purgeStateSQL, []any{"repo-1", "repo-1"}, []string{repoKey + " (id=?)", deletionKey + " (repo_id=?)"}},
 		"count a gate reject": {countRejectSQL, []any{1, "repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"decide repo":         {decideRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
+		"decide deletion":     {decideDeletionSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"pushes named":        {pushesNamedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
 		"expired tombstones counted": {expiredTombstoneCountSQL, []any{"repo-1", 100, MaxRecordRows},
 			[]string{"COVERING INDEX code_refs_tombstones_idx (repo_id=? AND at<?)"}},

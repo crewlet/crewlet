@@ -327,6 +327,17 @@ the log can replay), the fleet-singleton `code-retention` duty purges it (see
   purged, which the reconcile logs as `code_repo_awaits_purge` — is created
   again at once.
 
+A push to a repository that is not there to take it is refused
+`repo_deleted`, and what follows the code says which of four states the
+committer found, because each has its own remedy:
+
+| State | What the push is told |
+|---|---|
+| deleted | declaring it again in `code.repos` restores it as it was, until its purge, which may begin from the instant named: the deletion plus `code.deleted_retention_days` on the committer's current revision — the earliest the duty begins it under that revision |
+| being purged | the purge cannot be undone; once it completes, declaring the name creates a new, empty repository |
+| purged | it holds nothing; declaring its name creates a new, empty repository |
+| an id no repository had | it does not exist |
+
 The packs a purged repository named are no longer named by any row, so the
 [object collector](object-store.md#collection-and-audit) deletes them a day
 later. The code log itself is trimmed like every other log (see

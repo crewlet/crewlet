@@ -177,7 +177,15 @@
 //     slower ends a pass at most statelog.StallGrace behind. A pass cut
 //     short leaves a repository purging that the next resumes from its
 //     rows, and a purged name is handed on only once this node's rows hold
-//     the purge.
+//     the purge. A push meanwhile is refused repo_deleted, told which of
+//     four states the decide found, because each has its own remedy
+//     ([RepoGone]): a DELETED repository is restored by declaring it again
+//     until its purge, which may begin from the instant the sentence names
+//     (the deletion plus the deciding epoch's code.deleted_retention_days) —
+//     the earliest the duty begins it, on a tick at or after that instant,
+//     and nothing holds the purge to the instant itself; one being PURGED,
+//     or purged, never comes back, and its name declared again is a new,
+//     empty repository; and an id no repository had is none.
 //
 // # Measured
 //

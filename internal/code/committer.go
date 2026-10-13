@@ -140,6 +140,12 @@ type CommitterOptions struct {
 	// Limits is the deciding node's epoch's code.limits. REQUIRED: a
 	// decision input is never defaulted here.
 	Limits func() Limits
+	// Retention is the deciding node's epoch's code.deleted_retention_days:
+	// when a deleted repository's purge may begin, which a push refused
+	// repo_deleted for it is told ([RepoGone]). REQUIRED, like Limits: a
+	// default here would name the wrong instant to every company that set
+	// its own.
+	Retention func() time.Duration
 	// Now is the decide's clock — what upload_expired judges a pack's age by
 	// and a record's authored instant; nil takes the wall clock in UTC.
 	Now func() time.Time
@@ -153,13 +159,14 @@ type CommitterOptions struct {
 // Committer is this node's group commit of pushes, a goroutine a repository
 // with work.
 type Committer struct {
-	pub     Publisher
-	db      store.ReplicatedReader
-	nodeID  string
-	limits  func() Limits
-	now     func() time.Time
-	metrics *metrics.Recorder
-	log     *slog.Logger
+	pub       Publisher
+	db        store.ReplicatedReader
+	nodeID    string
+	limits    func() Limits
+	retention func() time.Duration
+	now       func() time.Time
+	metrics   *metrics.Recorder
+	log       *slog.Logger
 
 	// idle is CommitterIdle, and a test's shorter value (export_test.go).
 	idle time.Duration
@@ -295,11 +302,16 @@ func NewCommitter(o CommitterOptions) (*Committer, error) {
 	case o.Limits == nil:
 		return nil, errors.New("code: a committer needs the epoch's code.limits — what a " +
 			"push's pack is judged against is a decision input, never a default")
+	case o.Retention == nil:
+		return nil, errors.New("code: a committer needs the epoch's code.deleted_retention_days — " +
+			"a push to a deleted repository is told when its purge may begin, which a default " +
+			"would misstate for every company that set its own")
 	}
 	c := &Committer{
-		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, limits: o.Limits, now: o.Now,
-		metrics: o.Metrics, log: o.Logger, idle: CommitterIdle, nodeBytes: CommitterNodeBytes,
-		clock: time.Now, repos: map[string]*repoCommitter{}, stopping: make(chan struct{}),
+		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, limits: o.Limits, retention: o.Retention,
+		now: o.Now, metrics: o.Metrics, log: o.Logger, idle: CommitterIdle,
+		nodeBytes: CommitterNodeBytes, clock: time.Now, repos: map[string]*repoCommitter{},
+		stopping: make(chan struct{}),
 	}
 	if c.now == nil {
 		c.now = func() time.Time { return time.Now().UTC() }
@@ -623,7 +635,7 @@ func (c *Committer) commit(repoID string, batch []*queued) {
 	// the wall clock: the ledger judges what an id's mint instant vouches for
 	// against its own sweeps, never against the decide's clock.
 	opID := statelog.NewOpID(time.Now(), "code.push")
-	limits := c.limits()
+	limits, retention := c.limits(), c.retention()
 	subject := RepoSubject(repoID)
 	scope := []string{RepoPath(repoID)}
 	var last round
@@ -642,8 +654,8 @@ func (c *Committer) commit(repoID string, batch []*queued) {
 			last = round{}
 			now := c.now()
 			formed := verdicts.formed
-			entries, answers, version, err := decideBatch(ctx, tx, repoID, proposals, limits, now,
-				&verdicts)
+			entries, answers, version, err := decideBatch(ctx, tx, repoID, proposals, limits,
+				retention, now, &verdicts)
 			if c.formedInRound != nil {
 				c.formedInRound(verdicts.formed - formed)
 			}
@@ -910,9 +922,10 @@ func (c *Committer) refused(ctx context.Context, repoID string, batch []Proposal
 		if refusal.Landed() {
 			at = refusal.Position
 		}
+		detail := c.purgedDetail(ctx, repoID, opID)
 		for i, p := range batch {
 			out[i].res = ProposeResult{Position: at, OpID: opID,
-				Answer: refuseAll(p, RefusalRepoDeleted, "the repository is purged")}
+				Answer: refuseAll(p, RefusalRepoDeleted, detail)}
 		}
 	case errors.As(err, &refusal) && refusal.Landed():
 		// THE BATCH'S RECORD LANDED AND APPLIES NOWHERE: a gate drops it at
@@ -947,4 +960,29 @@ func (c *Committer) refused(ctx context.Context, repoID string, batch []Proposal
 			out[i].err = failed
 		}
 	}
+}
+
+// purgedDetail is the sentence of a batch the repository's deletion marker
+// refused: [RepoGone]'s purged state, NAMED BY THE MARKER — the row the gate
+// that refused it read, which holds the name for ever — in one point read over
+// its primary key, the decide's own (deletionIn), so one state is one sentence
+// whichever path refused it. Named by the id instead, a client is told of a
+// repository it never typed and to declare "its name" without being told what
+// that is.
+//
+// The id names it only where the read cannot: no marker row (the estate this
+// node holds was replaced since the gate read it), or a read that failed —
+// which leaves the refusal what it is, because the marker answered it and the
+// name is only how the sentence says so.
+func (c *Committer) purgedDetail(ctx context.Context, repoID, opID string) string {
+	gone := RepoGone{ID: repoID, Purged: true}
+	if err := c.db.Read(ctx, func(tx *sql.Tx) error {
+		name, _, err := deletionIn(ctx, tx, repoID)
+		gone.Name = name
+		return err
+	}); err != nil {
+		c.log.WarnContext(ctx, "code_deletion_marker_unread", "repo", repoID, "op_id", opID,
+			"error", err)
+	}
+	return gone.Detail()
 }
