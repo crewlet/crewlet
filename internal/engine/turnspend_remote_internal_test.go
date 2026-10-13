@@ -168,6 +168,7 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 	q := start()
 	router, err := estate.NewRouter(estate.RouterOptions{
 		Queue: q, Placement: placement, Self: "agent-1", Session: estate.NewSession(),
+		Timing: estate.Production(),
 	})
 	if err != nil {
 		t.Fatalf("estate router: %v", err)

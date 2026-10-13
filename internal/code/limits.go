@@ -430,10 +430,11 @@ const (
 	// queued or just reaching its batch; one whose caller carries none — the
 	// in-process path, where no runner-up is asked while it runs — may wait
 	// in the queue for less than one budget. One whose caller has gone is
-	// never decided. internal/estate holds the router's attempt, less the
-	// serving node's floor wait, to more than a budget and ReplyMargin, so a
-	// routed push can be decided at all (estate imports this package, never
-	// the reverse).
+	// never decided. internal/estate refuses to build a router whose write
+	// attempt, less the serving node's floor wait, holds no more than a
+	// budget and ReplyMargin, so a routed push can be decided at all (estate
+	// imports this package, never the reverse) — and a write attempt can be
+	// scaled no lower than that while this budget stands.
 	//
 	// WHAT A BATCH'S DECIDE CAN COST, against it. The committer forms the
 	// batch's protection verdicts once, before its publish, and the

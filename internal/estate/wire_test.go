@@ -383,7 +383,7 @@ func TestAdmissionsPingIsTheOneTheEnvelopePins(t *testing.T) {
 	asker := &recordingAsker{answer: []byte(`{"node":"data-a","result":{"Tracker":true,"Pages":true}}`)}
 	r, err := NewRouter(RouterOptions{
 		Self: "agent-1", Queue: asker, Placement: &fakePlacement{nodes: []string{"data-a"}},
-		Session: NewSession(),
+		Session: NewSession(), Timing: Production(),
 	})
 	if err != nil {
 		t.Fatal(err)

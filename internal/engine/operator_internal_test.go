@@ -108,7 +108,7 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	})
 	router, err := estate.NewRouter(estate.RouterOptions{
 		Self: "data-self", Queue: start(), Placement: twoDataNodes{},
-		Local: e.local, Session: estate.NewSession(),
+		Local: e.local, Session: estate.NewSession(), Timing: estate.Production(),
 	})
 	if err != nil {
 		t.Fatal(err)

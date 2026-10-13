@@ -459,7 +459,7 @@ func dataNodeOver(t *testing.T, view *coord.LeaseView, now func() time.Time,
 	e.local = localWith(e, now, read)
 	router, err := estate.NewRouter(estate.RouterOptions{
 		Self: "data-self", Queue: silentAsker{}, Placement: e.estatePlacement(),
-		Local: e.local, Session: estate.NewSession(),
+		Local: e.local, Session: estate.NewSession(), Timing: estate.Production(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -598,8 +598,8 @@ func statelessOver(t *testing.T) (*Engine, func(tracker, pages bool)) {
 	asker := &pingAnswerer{}
 	router, err := estate.NewRouter(estate.RouterOptions{
 		Self: "agent-1", Queue: asker, Placement: oneDataNode{},
-		Session: estate.NewSession(),
-		Now:     func() time.Time { return time.Unix(0, clock.Load()) },
+		Session: estate.NewSession(), Timing: estate.Production(),
+		Now: func() time.Time { return time.Unix(0, clock.Load()) },
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -79,6 +79,7 @@ func (e *Engine) newRouter(q estate.Asker, nodeID string) (*estate.Router, error
 	opts := estate.RouterOptions{
 		Self: nodeID, Queue: q, Placement: e.estatePlacement(),
 		Session: estate.NewSession(), Seams: e.serverSeams(),
+		Timing: estate.Production(),
 	}
 	if e.local != nil {
 		opts.Local = e.local
