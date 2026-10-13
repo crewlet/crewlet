@@ -35,19 +35,36 @@ type round struct {
 	fresh statelog.Freshness
 	// waiters is every caller answered by this round.
 	waiters []*waiter
-	// done is closed once every waiter has its answer — and its pin, taken
-	// under the entry's mu before the close, so nothing between the round's
-	// end and a waiter's wake can retire what the waiter is handed.
-	done chan struct{}
+	// rebuild, when set, makes the round a REBUILD of the incarnation of
+	// (rebuild.go): a whole read at linearizable into a new incarnation
+	// beside it, which replaces it once converged. Fixed once the round runs.
+	rebuild RebuildReason
+	of      *incarnation
 }
 
 // waiter is one caller of a round.
 type waiter struct {
-	got Synced
-	err error
-	// gone: the caller's own context ended before the round answered, so the
-	// round pins nothing for it.
+	// fresh is what the caller asked for, and rebuild that it is a Rebuild
+	// caller: what a failed rebuild needs to hand every other caller on to
+	// an ordinary round (Cache.run).
+	fresh   statelog.Freshness
+	rebuild bool
+	got     Synced
+	err     error
+	// done is closed once the caller has its answer — and its pin, taken
+	// under the entry's mu before the close, so nothing between the round's
+	// end and the caller's wake can retire what it is handed. The caller's
+	// own channel rather than its round's, because a caller can outlive the
+	// round it joined: a failed rebuild queues it again.
+	done chan struct{}
+	// gone: the caller's own context ended before a round answered it, so
+	// no round pins anything for it.
 	gone bool
+}
+
+// newWaiter is a caller asking for fresh.
+func newWaiter(fresh statelog.Freshness) *waiter {
+	return &waiter{fresh: fresh, done: make(chan struct{})}
 }
 
 // Sync hands out repoID's directory, PINNED, holding every row up to a
@@ -78,40 +95,56 @@ func (c *Cache) Sync(ctx context.Context, repoID string, fresh statelog.Freshnes
 			e.mu.Unlock()
 			return s, nil
 		}
-		w := &waiter{}
-		r := c.join(e, fresh, w)
+		w := newWaiter(fresh)
+		c.join(e, w)
 		e.mu.Unlock()
-
-		select {
-		case <-r.done:
-			return w.got, w.err
-		case <-ctx.Done():
-		}
-		e.mu.Lock()
-		select {
-		case <-r.done:
-			// Answered while the caller gave up: the pin the round took
-			// for it goes back.
-			got := w.got
-			e.mu.Unlock()
-			if got.Release != nil {
-				got.Release()
-			}
-		default:
-			w.gone = true
-			e.mu.Unlock()
-		}
-		return Synced{}, fmt.Errorf("cache: waiting for %s's sync: %w", repoID, context.Cause(ctx))
+		return c.await(ctx, e, w)
 	}
+}
+
+// await is w's answer, or ctx's end, whichever comes first. A caller that
+// gives up leaves the round running for everyone else, and gives back the pin
+// the round took for it if the answer raced its leaving.
+func (c *Cache) await(ctx context.Context, e *entry, w *waiter) (Synced, error) {
+	select {
+	case <-w.done:
+		return w.got, w.err
+	case <-ctx.Done():
+	}
+	e.mu.Lock()
+	select {
+	case <-w.done:
+		// Answered while the caller gave up: the pin the round took for it
+		// goes back.
+		got := w.got
+		e.mu.Unlock()
+		if got.Release != nil {
+			got.Release()
+		}
+	default:
+		w.gone = true
+		e.mu.Unlock()
+	}
+	return Synced{}, fmt.Errorf("cache: waiting for %s's sync: %w", e.id, context.Cause(ctx))
+}
+
+// answer hands w its answer and wakes it; e.mu is held. A caller that is
+// gone is pinned nothing.
+func (c *Cache) answer(e *entry, w *waiter, inc *incarnation, kind SyncKind, err error) {
+	switch {
+	case w.gone:
+	case err != nil:
+		w.err = err
+	default:
+		w.got = c.pin(e, inc, kind)
+	}
+	close(w.done)
 }
 
 // checkSync refuses a request that is not a sync, before any estate call.
 func (c *Cache) checkSync(repoID string, fresh statelog.Freshness) error {
-	c.lifeMu.Lock()
-	stopped := c.stopped
-	c.lifeMu.Unlock()
 	switch {
-	case stopped:
+	case c.isStopped():
 		return ErrStopped
 	case !canonicalID(repoID):
 		return fmt.Errorf("%w: repository id %q is not a canonical lowercase UUID (it becomes a path component)",
@@ -187,20 +220,24 @@ func reached(at, floor statelog.Position) bool {
 // queued one. A stale or consistent-prefix caller with no floor reached here
 // because no incarnation of the repository is converged in this process, and
 // any round answers it.
-func (c *Cache) join(e *entry, fresh statelog.Freshness, w *waiter) *round {
-	if r := e.running; r != nil && answers(r.fresh, fresh) {
+func (c *Cache) join(e *entry, w *waiter) {
+	if r := e.running; r != nil && answers(r.fresh, w.fresh) {
 		r.waiters = append(r.waiters, w)
-		return r
+		return
 	}
+	c.queue(e, w)
+	c.start(e)
+}
+
+// queue adds w to the round queued behind the one running, making it when
+// there is none; e.mu is held.
+func (c *Cache) queue(e *entry, w *waiter) {
 	if e.next == nil {
-		e.next = &round{fresh: fresh, done: make(chan struct{})}
+		e.next = &round{fresh: w.fresh}
 	} else {
-		e.next.fresh = merge(e.next.fresh, fresh)
+		e.next.fresh = merge(e.next.fresh, w.fresh)
 	}
 	e.next.waiters = append(e.next.waiters, w)
-	r := e.next
-	c.start(e)
-	return r
 }
 
 // answers reports whether a round already running at have answers a caller
@@ -256,27 +293,37 @@ func (c *Cache) start(e *entry) {
 	}
 	r := e.next
 	e.next, e.running = nil, r
-	go c.run(e, r, r.fresh)
+	go c.run(e, r)
 }
 
 // run is one round, on a goroutine of the cache's own: converge, then answer
-// every caller still waiting — each with its own pin, taken before the round
-// says it is done — and start the round queued behind it.
-func (c *Cache) run(e *entry, r *round, fresh statelog.Freshness) {
-	inc, kind, err := c.converge(e, fresh)
+// every caller still waiting — each with its own pin, taken before it is
+// woken — and start the round queued behind it.
+//
+// A REBUILD THAT FAILED ANSWERS ONLY ITS OWN CALLERS. The callers of an
+// ordinary round it was queued over (queueRebuild) asked for a sync, not a
+// repair: the incarnation the rebuild would have replaced is still current
+// and still serving, so each of them is queued again for an ordinary round
+// on it rather than told of a repair somebody else asked for — unless the
+// round found the repository purged, which answers everybody. The failure is
+// also recorded on that incarnation (failedRebuild), which is what the next
+// Rebuild of it is refused by.
+func (c *Cache) run(e *entry, r *round) {
+	inc, kind, err := c.converge(e, r.fresh, r.rebuild)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	requeue := r.rebuild != "" && err != nil && !e.dead
+	if requeue {
+		failedRebuild(r.of, err)
+	}
 	for _, w := range r.waiters {
-		switch {
-		case w.gone:
-		case err != nil:
-			w.err = err
-		default:
-			w.got = c.pin(e, inc, kind)
+		if requeue && !w.rebuild && !w.gone {
+			c.queue(e, w)
+			continue
 		}
+		c.answer(e, w, inc, kind, err)
 	}
 	e.running = nil
-	close(r.done)
 	c.start(e)
 }
 
@@ -290,7 +337,10 @@ func (c *Cache) run(e *entry, r *round, fresh statelog.Freshness) {
 //     full disk, an operator's rm, a log restored behind it while the node
 //     was down) at the price of one full read per repository per boot, and
 //     every later round is a delta, because nothing but this process has
-//     touched the directory since.
+//     touched the directory since. A REBUILD round (rebuild.go) makes a new
+//     incarnation BESIDE the current one whatever it holds, reads it whole
+//     at linearizable, and replaces the current one only once it has
+//     converged; failing, it throws the new one away.
 //  2. read the snapshot (read.go). Two answers are not yet answers, and are
 //     read again ONCE at linearizable before anything is concluded from
 //     them — a copy behind the log may give either: no such repository (a
@@ -321,7 +371,7 @@ func (c *Cache) run(e *entry, r *round, fresh statelog.Freshness) {
 //
 // A FIRST incarnation that fails is kept, with no state, so the next round —
 // full, because it has none — reuses every pack it installed.
-func (c *Cache) converge(e *entry, fresh statelog.Freshness) (*incarnation, SyncKind, error) {
+func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReason) (_ *incarnation, _ SyncKind, err error) {
 	if !c.enter() {
 		return nil, "", ErrStopped
 	}
@@ -336,6 +386,19 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness) (*incarnation, Sync
 	inc := e.current
 	full := inc == nil || inc.state == nil || !inc.converged
 	e.mu.Unlock()
+	// A REBUILD reads the repository whole into a new incarnation beside the
+	// current one (replaced), which serves until the new one has converged;
+	// a rebuild that fails moves what it built into trash/ and leaves the
+	// old one serving.
+	var replaced, building *incarnation
+	if rebuild != "" {
+		replaced, inc, full = inc, nil, true
+		defer func() {
+			if err != nil && building != nil {
+				c.abandon(e, building)
+			}
+		}()
+	}
 
 	// escalate reads the round again at linearizable, once, and reports
 	// whether it will: an answer only a copy behind the log can have given
@@ -360,7 +423,8 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness) (*incarnation, Sync
 			e.mu.Unlock()
 		}
 		markStream, markAt := c.mark.read()
-		snap, err := c.read(ctx, e.id, at, stream, full, fresh)
+		var snap snapshot
+		snap, err = c.read(ctx, e.id, at, stream, full, fresh)
 		switch {
 		case errors.Is(err, code.ErrRepoNotFound) && escalate():
 			continue
@@ -373,13 +437,16 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness) (*incarnation, Sync
 		}
 		if c.mark.saw(snap.streamCreated, snap.position) {
 			c.log.Info("code_cache_log_recreated", "repo", e.id, "was", markStream, "now", snap.streamCreated)
-			epoch = c.reread(rebuildStream, func(i *incarnation) bool {
+			epoch = c.reread(RebuildStream, func(i *incarnation) bool {
 				return !i.stream.IsZero() && !i.stream.Equal(snap.streamCreated)
 			})
 		}
 		if inc == nil {
-			if inc, err = c.newIncarnation(e); err != nil {
+			if inc, err = c.newIncarnation(e, rebuild == ""); err != nil {
 				return nil, "", fmt.Errorf("cache: sync %s: incarnation: %w", e.id, err)
+			}
+			if rebuild != "" {
+				building = inc
 			}
 		}
 		linearizable := fresh.Level == statelog.ReadLinearizable
@@ -393,7 +460,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness) (*incarnation, Sync
 			}
 			c.log.Warn("code_cache_log_rewound", "repo", e.id, "was", was.String(), "now", snap.position.String())
 			c.mark.set(snap.streamCreated, snap.position)
-			epoch = c.reread(rebuildRewound, func(*incarnation) bool { return true })
+			epoch = c.reread(RebuildRewound, func(*incarnation) bool { return true })
 			if !snap.full {
 				full = true
 				continue
@@ -409,7 +476,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness) (*incarnation, Sync
 		if snap.restreamed {
 			e.mu.Lock()
 			if inc.reread == "" {
-				inc.reread = rebuildStream
+				inc.reread = RebuildStream
 			}
 			e.mu.Unlock()
 		}
@@ -430,6 +497,9 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness) (*incarnation, Sync
 		case err != nil:
 			return nil, "", err
 		}
+		if rebuild != "" {
+			c.promote(e, replaced, inc, rebuild, time.Since(began))
+		}
 		c.account(e, inc, snap, res, time.Since(began))
 		return inc, snap.kind(), nil
 	}
@@ -440,7 +510,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness) (*incarnation, Sync
 // until then, and the reason is counted when that read completes. It answers
 // the epoch a round's convergence must still find to count as one. Rare — a
 // log recreated or gone back under the node — so a walk of every entry.
-func (c *Cache) reread(reason string, which func(*incarnation) bool) uint64 {
+func (c *Cache) reread(reason RebuildReason, which func(*incarnation) bool) uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	epoch := c.rereads.Add(1)
@@ -469,6 +539,13 @@ type applied struct {
 func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snapshot, epoch uint64) (applied, error) {
 	var res applied
 	if snap.full {
+		// The sweep lists the directory and moves whatever lies outside the
+		// image — a running maintenance's lock and temporary files among
+		// it — and may remove a pack the run's index would name, which
+		// fails every read of the repository. So a full round stops a
+		// maintenance on its incarnation first, and none starts while a
+		// round runs (maintain.go).
+		c.stopMaintenance(e, inc)
 		trashed, err := c.tidy(inc, snap)
 		if err != nil {
 			return res, fmt.Errorf("cache: sync %s: sweep: %w", e.id, err)
@@ -516,10 +593,26 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	// position and this one changed the directory, so a restart's next
 	// delta from the state re-reads rows that moved nothing here.
 	e.mu.Lock()
-	changed := snap.full || added > 0 || removed || refsWritten || indexed ||
-		!snap.streamCreated.Equal(inc.stream) || !sameRepo(inc.repo, snap.repo)
+	// wrote: the round wrote into the directory — packs in or out, refs, the
+	// index, a file swept out of it.
+	wrote := added > 0 || removed || refsWritten || indexed || res.trashed
+	changed := snap.full || wrote || !snap.streamCreated.Equal(inc.stream) || !sameRepo(inc.repo, snap.repo)
 	prevAt, prevStream, prevRepo := inc.at, inc.stream, inc.repo
 	inc.at, inc.stream, inc.repo = snap.position, snap.streamCreated, snap.repo
+	if snap.full {
+		// The directory holds exactly the snapshot's packs now: their rows'
+		// count, whatever an install that removed and reinstalled a damaged
+		// one added on the way.
+		inc.objects = 0
+		for _, p := range snap.packs {
+			inc.objects += p.Objects
+		}
+	}
+	if wrote {
+		// No longer exactly what the last rebuild attempt read: a rebuild
+		// may make something else of it (rebuild.go).
+		inc.unmoved = false
+	}
 	e.mu.Unlock()
 	if changed {
 		if err := c.persist(ctx, e, inc, true); err != nil {
@@ -535,13 +628,13 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	if snap.full {
 		e.mu.Lock()
 		inc.converged = c.rereads.Load() == epoch
-		var reason string
+		var reason RebuildReason
 		if inc.converged {
 			reason, inc.reread = inc.reread, ""
 		}
 		e.mu.Unlock()
 		if reason != "" && c.metrics != nil {
-			c.metrics.Add(metrics.CodeCacheRebuilds, 1, metrics.Attrs{"reason": reason})
+			c.metrics.Add(metrics.CodeCacheRebuilds, 1, metrics.Attrs{"reason": string(reason)})
 		}
 	}
 	return res, nil
@@ -558,11 +651,33 @@ func sameRepo(a, b code.RepoRef) bool {
 }
 
 // account is a completed round's record: its duration by kind, its log line,
-// a repository alone over the budget, and the gauges.
+// a repository alone over the budget, and the gauges — and what it tells the
+// background work.
+//
+//   - Packs added restart the maintainer's debounce (lastAdded): a burst of
+//     pushes lands before the index that covers it is written. The first of
+//     them no index covers starts its ceiling (uncoveredSince): pushes that
+//     never stop for a debounce still have their packs indexed within
+//     MidxMaxWait.
+//   - The cache over its budget kicks the janitor at once, rather than at its
+//     tick: a burst of cold syncs would otherwise overshoot the budget by
+//     everything that arrived in a minute.
+//   - A FULL round kicks the maintainer: it may have made the incarnation one
+//     the maintainer works on (converged in this process) or written the
+//     round's index without a bitmap, either of them due at once once its
+//     packs have stood still. A delta adding packs needs no kick — they are
+//     due only after the debounce, which the maintainer's tick is.
 func (c *Cache) account(e *entry, inc *incarnation, snap snapshot, res applied, took time.Duration) {
 	kind := snap.kind()
 	e.mu.Lock()
 	bytes, refs := inc.diskBytes+inc.metaBytes, inc.refs
+	if res.packsAdded > 0 {
+		now := c.now()
+		e.lastAdded = now
+		if e.uncoveredSince.IsZero() {
+			e.uncoveredSince = now
+		}
+	}
 	e.mu.Unlock()
 	if c.metrics != nil {
 		c.metrics.Observe(metrics.CodeCacheSyncDuration, took, metrics.Attrs{"kind": string(kind)})
@@ -573,15 +688,19 @@ func (c *Cache) account(e *entry, inc *incarnation, snap snapshot, res applied, 
 		// Served whatever its size: a request is waiting for it.
 		c.log.Warn("code_cache_over_budget", "repo", e.id, "bytes", bytes, "budget", c.maxBytes)
 	}
-	if res.trashed {
+	if res.trashed || c.total() > c.maxBytes {
 		c.kick()
+	}
+	if snap.full {
+		c.kickMaintainer()
 	}
 	c.setGauges()
 }
 
 // purge takes a repository the rows no longer hold out of the cache: every
-// incarnation retired (each goes into trash/ with its last reader), the
-// entry gone, and every caller queued behind the round told why. Only a
+// incarnation retired (each goes into trash/ with its last reader, the
+// unpinned current one once both locks are let go), the entry gone, and
+// every caller queued behind the round told why. Only a
 // LINEARIZABLE not-found purges (converge), and it answers the callers that
 // arrived after the round began as well: a repository's id is minted once
 // and never comes back, so no read that began after them could find it.
@@ -592,19 +711,19 @@ func (c *Cache) purge(e *entry, cause error) {
 	if c.entries[e.id] == e {
 		delete(c.entries, e.id)
 	}
+	var gone string
 	if e.current != nil {
-		c.retire(e, e.current)
+		gone = c.retire(e, e.current)
 	}
 	if r := e.next; r != nil {
 		e.next = nil
 		for _, w := range r.waiters {
-			if !w.gone {
-				w.err = cause
-			}
+			c.answer(e, w, nil, "", cause)
 		}
-		close(r.done)
 	}
 	e.mu.Unlock()
 	c.mu.Unlock()
+	// The move into trash/ is made holding no lock, as an eviction's is.
+	c.trash(gone)
 	c.setGauges()
 }

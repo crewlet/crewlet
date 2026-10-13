@@ -25,20 +25,6 @@ import (
 // the snapshot is read again from page 1. Every row is validated here, before
 // anything is written: a ref goes into a file git parses line by line.
 
-// The reasons crewlet.code.cache.rebuilds counts a repository read whole
-// again for, each counted once its whole read completes.
-const (
-	// rebuildStream is a cache whose log was RECREATED under it — its
-	// stream identity is not the one the cache read from (ADR-0035: a
-	// stream the engine provisions again is stamped anew; a snapshot
-	// restore is not a recreation).
-	rebuildStream = "stream"
-	// rebuildRewound is a cache AHEAD of its log on the same stream: a
-	// linearizable answer below a position this cache read, which only a
-	// log that went back can give — a broker restored from an older copy.
-	rebuildRewound = "rewound"
-)
-
 // snapshot is one complete answer, every page applied.
 type snapshot struct {
 	full bool

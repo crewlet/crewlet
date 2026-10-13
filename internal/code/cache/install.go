@@ -267,6 +267,7 @@ func (c *Cache) installOne(ctx context.Context, e *entry, inc *incarnation, pack
 	}
 	e.mu.Lock()
 	inc.packs++
+	inc.objects += p.Objects
 	c.setSize(inc, inc.diskBytes+p.Size, inc.metaBytes)
 	e.mu.Unlock()
 	return nil

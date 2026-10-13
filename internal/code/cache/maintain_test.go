@@ -2,8 +2,11 @@ package cache_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -16,17 +19,19 @@ import (
 // nothing compacts them, so the request a cold cache was synced for would
 // otherwise be served by git searching every pack's index for every object.
 // The round's index has no bitmap — a merge of the packs' own indexes — and
-// a busy node answers without it rather than wait: slower, never wrong.
+// a busy node answers without it rather than wait: slower, never wrong. The
+// bitmap is the maintainer's, due as soon as the packs have stood still.
 func TestAFullRoundIndexesManyPacksBeforeItAnswers(t *testing.T) {
 	t.Parallel()
 	t.Run("at MidxPacks", func(t *testing.T) {
 		t.Parallel()
 		w := newSyncWorld(t, onMemory)
+		clk := newClock()
 		repo := w.repo(t, 1)
 		for range cache.MidxPacks {
 			w.push(t, repo, "refs/heads/main", nil)
 		}
-		c := w.open(t)
+		c := w.open(t, clk.on)
 		s := w.sync(t, c, repo)
 		packDir := filepath.Join(s.Dir, "objects", "pack")
 		if !statOK(t, filepath.Join(packDir, "multi-pack-index")) {
@@ -47,6 +52,15 @@ func TestAFullRoundIndexesManyPacksBeforeItAnswers(t *testing.T) {
 		}
 		dst := filepath.Join(t.TempDir(), "clone.git")
 		w.client.Run(t, "", "-c", "protocol.version=2", "clone", "--bare", "--no-local", s.Dir, dst)
+
+		clk.Add(cache.MidxDebounce)
+		if ran := cache.MaintainerPass(c); len(ran) != 1 {
+			t.Fatalf("the maintainer ran %v over a round's index with no bitmap, want the repository", ran)
+		}
+		if doc := readStateDoc(t, s.Dir); doc.Midx.Packs != cache.MidxPacks || !doc.Midx.Bitmap {
+			t.Errorf("after the maintainer the state's midx is %+v, want %d packs with the bitmap", doc.Midx, cache.MidxPacks)
+		}
+		bitmapOf(t, filepath.Join(s.Dir, "objects", "pack"))
 	})
 	t.Run("before the peel", func(t *testing.T) {
 		t.Parallel()
@@ -107,20 +121,7 @@ func TestAFullRoundIndexesManyPacksBeforeItAnswers(t *testing.T) {
 // reading a stdin that gives nothing until then.
 func holdSlot(t *testing.T, pool *gitproc.Pool, class gitproc.Class) {
 	t.Helper()
-	started, release := make(chan struct{}), make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, _ = pool.Run(context.Background(), gitproc.Cmd{
-			Args: []string{"hash-object", "--stdin"}, Class: class, Deadline: 5 * time.Minute,
-			Stdin: &blocking{started: started, release: release},
-		})
-	}()
-	<-started
-	t.Cleanup(func() {
-		close(release)
-		<-done
-	})
+	holdSlotUntil(t, pool, class)
 }
 
 // blocking is a stdin that says it was read, then gives nothing until
@@ -144,17 +145,18 @@ func (b *blocking) Read([]byte) (int, error) {
 // maintainer's — so a full round asks the FILE, not the state, which reads
 // none beside an index on disk when it was unreadable. A pack the round will
 // sweep takes the index with it, and the round writes one of its own over the
-// packs it keeps.
+// packs it keeps, to which the maintainer adds the bitmap.
 func TestARoundNeverReplacesAnIndexThatExists(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
+	clk := newClock()
 	repo := w.repo(t, 1)
 	for range cache.MidxPacks {
 		w.push(t, repo, "refs/heads/main", nil)
 	}
 	before := w.log.state()
 	_, last := w.push(t, repo, "refs/heads/main", nil)
-	c := w.open(t)
+	c := w.open(t, clk.on)
 	s := w.sync(t, c, repo)
 	packDir := filepath.Join(s.Dir, "objects", "pack")
 	midx := filepath.Join(packDir, "multi-pack-index")
@@ -165,14 +167,14 @@ func TestARoundNeverReplacesAnIndexThatExists(t *testing.T) {
 	bitmap := bitmapOf(t, packDir)
 	first := inode(t, midx)
 
-	c = w.reopen(t, c)
+	c = w.reopen(t, c, clk.on)
 	w.sync(t, c, repo)
 	if inode(t, midx) != first || !statOK(t, bitmap) {
 		t.Error("a full round after a restart replaced the index on disk, or its bitmap")
 	}
 
 	write(t, filepath.Join(s.Dir, "crewlet-state.json"), `{"format":`)
-	c = w.reopen(t, c)
+	c = w.reopen(t, c, clk.on)
 	w.sync(t, c, repo)
 	if inode(t, midx) != first || !statOK(t, bitmap) {
 		t.Error("a full round with an unreadable state replaced the index on disk, or its bitmap")
@@ -191,6 +193,15 @@ func TestARoundNeverReplacesAnIndexThatExists(t *testing.T) {
 	}
 	if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
 		t.Errorf("fsck after a pack was swept from under the index: %v", err)
+	}
+
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Fatalf("the maintainer ran %v after the round's own index, want the repository", ran)
+	}
+	bitmapOf(t, filepath.Join(s.Dir, "objects", "pack"))
+	if doc := readStateDoc(t, s.Dir); doc.Midx.Packs != cache.MidxPacks || !doc.Midx.Bitmap {
+		t.Errorf("after the maintainer the state's midx is %+v, want %d packs with the bitmap", doc.Midx, cache.MidxPacks)
 	}
 }
 
@@ -219,4 +230,872 @@ func inode(t *testing.T, path string) uint64 {
 		t.Fatal(err)
 	}
 	return info.Sys().(*syscall.Stat_t).Ino
+}
+
+// THE MAINTAINER INDEXES AFTER A BURST: once a repository's packs have stood
+// still for MidxDebounce it writes a multi-pack-index with its bitmap and a
+// commit-graph, which git serves; then nothing for MidxMinInterval, and
+// nothing while a burst is still landing — the debounce, not the count, is
+// what holds a due repository back.
+func TestTheMaintainerIndexesAfterABurst(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	for range 9 {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	c := w.open(t, clk.on)
+	s := w.sync(t, c, repo)
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Fatalf("the maintainer ran %v while the packs a round just added had not stood still", ran)
+	}
+	ranAt := clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 || ran[0] != repo {
+		t.Fatalf("the maintainer ran %v, want %s", ran, repo)
+	}
+	packDir := filepath.Join(s.Dir, "objects", "pack")
+	bitmapOf(t, packDir)
+	if !statOK(t, filepath.Join(packDir, "multi-pack-index")) || !statOK(t, filepath.Join(s.Dir, "objects", "info", "commit-graph")) {
+		t.Fatal("the maintainer left no multi-pack-index or no commit-graph")
+	}
+	if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
+		t.Errorf("fsck over the maintainer's files: %v", err)
+	}
+	dst := filepath.Join(t.TempDir(), "clone.git")
+	w.client.Run(t, "", "-c", "protocol.version=2", "clone", "--bare", "--no-local", s.Dir, dst)
+	doc := readStateDoc(t, s.Dir)
+	if doc.Midx.Packs != 9 || !doc.Midx.Bitmap || !doc.Midx.LastRun.Equal(ranAt) || doc.Midx.Bytes != heldBy(t, s.Dir)-doc.DiskBytes {
+		t.Errorf("the persisted midx is %+v, want 9 packs, the bitmap, last run at %v and the maintainer's bytes", doc.Midx, ranAt)
+	}
+	if got := w.logs.lines(t, "code_cache_maintained"); len(got) != 1 || got[0]["packs"] != float64(9) {
+		t.Errorf("code_cache_maintained = %v, want one line of 9 packs", got)
+	}
+
+	clk.Add(time.Minute)
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Errorf("the maintainer ran %v inside MidxMinInterval", ran)
+	}
+
+	// Eight more packs make it due by count; landed just before the
+	// interval is up, they hold it back until they have stood still.
+	clk.Set(ranAt.Add(cache.MidxMinInterval - cache.MidxDebounce/2))
+	for range cache.MidxPacks {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	w.sync(t, c, repo)
+	clk.Set(ranAt.Add(cache.MidxMinInterval))
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Errorf("the maintainer ran %v while a burst was still landing", ran)
+	}
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Errorf("the maintainer ran %v once the burst stood still, want the repository", ran)
+	}
+}
+
+// A REPOSITORY THAT NEVER STANDS STILL IS STILL MAINTAINED: pushed to more
+// often than every MidxDebounce, its packs never stand still, and a debounce
+// with no ceiling would leave every one of them outside any index for as long
+// as the pushes kept coming — every lookup a search of each pack's own .idx.
+// So the oldest pack no index covers waits MidxMaxWait at most, however
+// recent the newest is: the one run the interval allows, at exactly that
+// bound and not a pass sooner.
+func TestARepositoryThatNeverStandsStillIsStillMaintained(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	w.sync(t, c, repo).Release()
+	first := clk.Now() // the round added the packs no index covers
+	var ranAt []time.Time
+	for clk.Now().Before(first.Add(cache.MidxMaxWait + cache.MidxDebounce)) {
+		clk.Add(cache.MidxDebounce - time.Second)
+		w.push(t, repo, "refs/heads/main", nil)
+		w.sync(t, c, repo).Release()
+		if ran := cache.MaintainerPass(c); len(ran) == 1 {
+			ranAt = append(ranAt, clk.Now())
+		}
+	}
+	if len(ranAt) != 1 {
+		t.Fatalf("pushed every %v for %v, the maintainer ran at %v; want once, the first pass at or past "+
+			"MidxMaxWait (%v) after the first pack it did not cover", cache.MidxDebounce-time.Second,
+			cache.MidxMaxWait+cache.MidxDebounce, ranAt, cache.MidxMaxWait)
+	}
+	if waited := ranAt[0].Sub(first); waited < cache.MidxMaxWait || waited >= cache.MidxMaxWait+cache.MidxDebounce {
+		t.Errorf("the run came %v after the first pack it covers, want within a push of MidxMaxWait (%v)",
+			waited, cache.MidxMaxWait)
+	}
+}
+
+// ONE PACK IS INDEXED ONCE, AND EIGHT MORE AGAIN: the bitmap and the
+// commit-graph are what a clone counts objects from and what a walk reads
+// commits from, and neither needs a second pack to be worth having — a
+// history imported in one push is one pack, and without them every clone of
+// it walks the whole history. So a repository with no index is due at its
+// first pack, and one with the maintainer's is due again only once MidxPacks
+// packs have gathered beside it — fewer are served from their own indexes at
+// the cost of a handful of extra searches. An empty repository has nothing
+// to index.
+func TestOnePackIsIndexedOnceAndEightMoreAgain(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	empty, repo := w.repo(t, 1), w.repo(t, 2)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	w.sync(t, c, empty).Release()
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 || ran[0] != repo {
+		t.Fatalf("the maintainer ran %v, want the repository of one pack and not the empty one", ran)
+	}
+	bitmapOf(t, filepath.Join(s.Dir, "objects", "pack"))
+	if !statOK(t, filepath.Join(s.Dir, "objects", "info", "commit-graph")) {
+		t.Error("the run over one pack left no commit-graph")
+	}
+	if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
+		t.Errorf("fsck over an index of one pack: %v", err)
+	}
+
+	for range cache.MidxPacks - 1 {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	w.sync(t, c, repo).Release()
+	clk.Add(cache.MidxMinInterval)
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Errorf("the maintainer ran %v with %d packs beside its index", ran, cache.MidxPacks-1)
+	}
+	w.push(t, repo, "refs/heads/main", nil)
+	w.sync(t, c, repo).Release()
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Errorf("the maintainer ran %v with %d packs beside its index, want the repository", ran, cache.MidxPacks)
+	}
+}
+
+// THE DUTY CYCLE BOUNDS A HEAVY REPOSITORY: a run that took two minutes is
+// not followed by another for twenty — MidxDutyCycle times as long — however
+// soon MidxMinInterval allows one, so no repository takes more than a tenth of
+// a core's time. What the last run took survives a restart in the state.
+func TestTheDutyCycleBoundsAHeavyRepository(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	s := w.sync(t, c, repo)
+	ranAt := clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Fatalf("the maintainer ran %v, want the repository", ran)
+	}
+	c.Stop(context.Background())
+	doc := readStateDoc(t, s.Dir)
+	doc.Midx.Took = 2 * time.Minute
+	writeState(t, s.Dir, doc)
+
+	c = w.open(t, clk.on)
+	for range cache.MidxPacks {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	w.sync(t, c, repo)
+	clk.Set(ranAt.Add(cache.MidxMinInterval))
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Errorf("the maintainer ran %v %v after a run that took two minutes", ran, cache.MidxMinInterval)
+	}
+	clk.Set(ranAt.Add(cache.MidxDutyCycle * 2 * time.Minute))
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Errorf("the maintainer ran %v twenty minutes after a two-minute run, want the repository", ran)
+	}
+}
+
+// MAINTENANCE NEVER DELAYS A SYNC: the maintainer holds a pin, never the
+// repository's round, so a sync that removes nothing completes while a run is
+// in flight and leaves it running; and a sync that must remove a pack STOPS
+// the run first — an index naming a missing pack fails every read of the
+// repository — rather than wait for it to finish.
+func TestMaintenanceNeverDelaysASync(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	for range 3 {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	before := w.log.state()
+	_, dropped := w.push(t, repo, "refs/heads/main", nil)
+	reached := make(chan struct{})
+	var once sync.Once
+	ended := make(chan error, 1)
+	c := w.open(t, clk.on, func(o *cache.Options) {
+		cache.BeforeMaintaining(o, func(ctx context.Context, step string) {
+			if step != "multi-pack-index" {
+				return
+			}
+			once.Do(func() { close(reached) })
+			<-ctx.Done()
+			ended <- ctx.Err()
+		})
+	})
+	w.sync(t, c, repo)
+	clk.Add(cache.MidxDebounce)
+	passed := make(chan []string, 1)
+	go func() { passed <- cache.MaintainerPass(c) }()
+	select {
+	case <-reached:
+	case <-time.After(hangDetector):
+		t.Fatalf("the maintainer started no run in %v", hangDetector)
+	}
+
+	w.push(t, repo, "refs/heads/main", nil)
+	ctx, cancel := context.WithTimeout(t.Context(), hangDetector)
+	defer cancel()
+	s, err := c.Sync(ctx, repo, linearizable)
+	if err != nil {
+		t.Fatalf("a sync while a maintenance run is held: %v", err)
+	}
+	s.Release()
+	if !cache.Maintaining(c, repo) {
+		t.Fatal("a sync that removes nothing stopped the maintenance run")
+	}
+
+	w.log.recreate(before)
+	s, err = c.Sync(ctx, repo, linearizable)
+	if err != nil {
+		t.Fatalf("a sync that removes a pack while a maintenance run is held: %v", err)
+	}
+	defer s.Release()
+	select {
+	case err := <-ended:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("the held run's context ended with %v, want a cancellation", err)
+		}
+	case <-time.After(hangDetector):
+		t.Fatal("a sync that removed a pack left the maintenance run on its incarnation running")
+	}
+	select {
+	case ran := <-passed:
+		if len(ran) != 0 {
+			t.Errorf("a cancelled run was reported as maintained: %v", ran)
+		}
+	case <-time.After(hangDetector):
+		t.Fatalf("the maintainer's pass has not ended %v after its run was cancelled", hangDetector)
+	}
+	if got := w.logs.lines(t, "code_cache_maintenance_cancelled"); len(got) != 1 || got[0]["step"] != "multi-pack-index" {
+		t.Errorf("code_cache_maintenance_cancelled = %v, want one line at multi-pack-index", got)
+	}
+	packDir := filepath.Join(s.Dir, "objects", "pack")
+	if statOK(t, filepath.Join(packDir, "pack-"+dropped.GitChecksum+".idx")) {
+		t.Error("the pack the recreated log does not name is still installed")
+	}
+	if statOK(t, filepath.Join(packDir, "multi-pack-index.lock")) {
+		t.Error("the cancelled run left its lock")
+	}
+	if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
+		t.Errorf("fsck after a sync stopped a maintenance run: %v", err)
+	}
+}
+
+// A SWEEP DROPS THE MULTI-PACK-INDEX WITH A PACK: a full round that removes a
+// pack the rows no longer name takes the index, its bitmap and the
+// commit-graph with it, so no reader meets an index naming a pack that is
+// gone — and the maintainer writes a new one once it is due again.
+func TestASweepDropsTheMultiPackIndexWithAPack(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	w.push(t, repo, "refs/heads/main", nil)
+	before := w.log.state()
+	_, dropped := w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	s := w.sync(t, c, repo)
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Fatalf("the maintainer ran %v, want the repository", ran)
+	}
+	packDir := filepath.Join(s.Dir, "objects", "pack")
+	bitmap := bitmapOf(t, packDir)
+	graph := filepath.Join(s.Dir, "objects", "info", "commit-graph")
+
+	w.log.recreate(before)
+	s = w.sync(t, c, repo)
+	for _, path := range []string{
+		filepath.Join(packDir, "pack-"+dropped.GitChecksum+".pack"),
+		filepath.Join(packDir, "multi-pack-index"), bitmap, graph,
+	} {
+		if statOK(t, path) {
+			t.Errorf("%s is still there after the sweep removed a pack under it", path)
+		}
+	}
+	if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
+		t.Errorf("fsck after a pack was removed under the index: %v", err)
+	}
+	if doc := readStateDoc(t, s.Dir); doc.Midx.Packs != 0 || doc.Midx.Bitmap || doc.Midx.Bytes != 0 {
+		t.Errorf("the state's midx is %+v after its files were dropped, want none", doc.Midx)
+	}
+
+	clk.Add(cache.MidxMinInterval)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Fatalf("the maintainer ran %v after the sweep, want the repository", ran)
+	}
+	bitmapOf(t, packDir)
+}
+
+// MAINTENANCE RUNS ONLY IN A FREE MAINTENANCE SLOT: a pool of two process
+// slots has one maintenance slot, and with it held the maintainer runs and
+// records nothing — it never waits for one, and a run that never started is
+// no run — and runs once it is free.
+func TestMaintenanceRunsOnlyInAFreeMaintenanceSlot(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	s := w.sync(t, c, repo)
+	clk.Add(cache.MidxDebounce)
+	if got := w.pool.Slots(gitproc.ClassMaintenance); got != 1 {
+		t.Fatalf("the pool has %d maintenance slots, want 1", got)
+	}
+	release := holdSlotUntil(t, w.pool, gitproc.ClassMaintenance)
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Fatalf("the maintainer ran %v with the maintenance slot held", ran)
+	}
+	if doc := readStateDoc(t, s.Dir); !doc.Midx.LastRun.IsZero() || doc.Midx.Packs != 0 {
+		t.Errorf("a run refused a slot recorded %+v", doc.Midx)
+	}
+	if got := w.logs.lines(t, "code_cache_maintenance_failed"); len(got) != 0 {
+		t.Errorf("a run refused a slot logged a failure: %v", got)
+	}
+	release()
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Errorf("the maintainer ran %v with the slot free, want the repository", ran)
+	}
+}
+
+// ONE LONG RUN DOES NOT HOLD THE OTHERS BACK: a bitmap over the largest
+// repository the defaults admit is hours, and the maintenance lane is half the
+// node's cores — so with a run held in flight, another repository due in the
+// same pass runs to its end in a slot of its own rather than waiting behind
+// it. A lane of three slots: the maintainer keeps one free for a person.
+func TestOneLongRunDoesNotHoldTheOthersBack(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	w.processes = 6
+	clk := newClock()
+	a, b := w.repo(t, 1), w.repo(t, 2)
+	for _, repo := range []string{a, b} {
+		w.push(t, repo, "refs/heads/main", nil)
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	held, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	c := w.open(t, clk.on, func(o *cache.Options) {
+		cache.BeforeMaintaining(o, func(ctx context.Context, step string) {
+			first := false
+			once.Do(func() { first = true })
+			if first {
+				close(held)
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+			}
+		})
+	})
+	if got := w.pool.Slots(gitproc.ClassMaintenance); got != 3 {
+		t.Fatalf("the pool has %d maintenance slots, want 3", got)
+	}
+	sa, sb := w.sync(t, c, a), w.sync(t, c, b)
+	defer sa.Release()
+	defer sb.Release()
+	clk.Add(cache.MidxDebounce)
+	passed := make(chan []string, 1)
+	go func() { passed <- cache.MaintainerPass(c) }()
+	select {
+	case <-held:
+	case <-time.After(hangDetector):
+		t.Fatalf("the maintainer started no run in %v", hangDetector)
+	}
+	// A pass that waited for its first run would never reach this: the held
+	// run ends only once the case lets it.
+	eventually(t, "the other repository's run ends while the first is held", func() bool {
+		return len(w.logs.lines(t, "code_cache_maintained")) == 1
+	})
+	ended := w.logs.lines(t, "code_cache_maintained")[0]["repo"]
+	dirs := map[string]string{a: sa.Dir, b: sb.Dir}
+	heldRepo := map[string]string{a: b, b: a}[ended.(string)]
+	if !cache.Maintaining(c, heldRepo) {
+		t.Errorf("the held run on %s is not in flight", heldRepo)
+	}
+	if !statOK(t, filepath.Join(dirs[ended.(string)], "objects", "info", "commit-graph")) {
+		t.Errorf("the run that ended left %s with no commit-graph", ended)
+	}
+	close(release)
+	select {
+	case ran := <-passed:
+		if len(ran) != 2 {
+			t.Errorf("the pass answered %v, want both repositories once the held run was let go", ran)
+		}
+	case <-time.After(hangDetector):
+		t.Fatalf("the pass has not ended %v after its held run was let go", hangDetector)
+	}
+}
+
+// THE MAINTAINER LEAVES A MAINTENANCE SLOT FOR A PERSON: `crewlet code
+// verify`, which every refused rebuild tells an operator to run, checks a
+// repository in the maintenance lane and is refused, never queued, when no
+// slot is free — so however long the maintainer's runs last, one slot of a
+// lane of two is never theirs. Two repositories due, each run holding a slot
+// for as long as the case lets it: one run starts, and a maintenance-class
+// process started meanwhile is admitted.
+func TestTheMaintainerLeavesAMaintenanceSlotForAPerson(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	w.processes = 4
+	clk := newClock()
+	a, b := w.repo(t, 1), w.repo(t, 2)
+	for _, repo := range []string{a, b} {
+		w.push(t, repo, "refs/heads/main", nil)
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	// Each run holds a maintenance slot of its own until the case lets it
+	// go, as the git of a long run does, and says so once it holds it.
+	release, holding := make(chan struct{}), make(chan struct{}, 2)
+	c := w.open(t, clk.on, func(o *cache.Options) {
+		cache.BeforeMaintaining(o, func(ctx context.Context, step string) {
+			if step != "multi-pack-index" {
+				return
+			}
+			//nolint:contextcheck // the slot is the case's, held for the run
+			let := holdSlotUntil(t, w.pool, gitproc.ClassMaintenance)
+			holding <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			let()
+		})
+	})
+	if got := w.pool.Slots(gitproc.ClassMaintenance); got != 2 {
+		t.Fatalf("the pool has %d maintenance slots, want 2", got)
+	}
+	sa, sb := w.sync(t, c, a), w.sync(t, c, b)
+	defer sa.Release()
+	defer sb.Release()
+	clk.Add(cache.MidxDebounce)
+
+	started, wait := cache.StartMaintainerPass(c)
+	for range started {
+		select {
+		case <-holding:
+		case <-time.After(hangDetector):
+			t.Fatalf("a run the pass started holds no slot after %v", hangDetector)
+		}
+	}
+	if len(started) != 1 {
+		t.Errorf("the pass started runs on %v in a lane of two slots, want one: the other slot is a person's", started)
+	}
+	_, err := w.pool.Run(t.Context(), gitproc.Cmd{Args: []string{"version"}, Class: gitproc.ClassMaintenance, Deadline: time.Minute})
+	if err != nil {
+		t.Errorf("a maintenance-class process started while the maintainer runs = %v, want it admitted", err)
+	}
+	close(release)
+	if ran := wait(); len(ran) != len(started) {
+		t.Errorf("the pass's runs ended as %v, want %v maintained", ran, started)
+	}
+}
+
+// MAINTENANCE RUNS BESIDE THE LARGEST AS MEMORY ALLOWS: a bitmap holds about
+// 256 bytes an object of its repository, and a node that has just joined
+// finds its largest repositories due together — so the runs beside the
+// largest in flight are held to an allowance, while the largest itself, the
+// price of serving its repository at all, starts whenever a slot is free.
+// Three repositories due in a lane with room for three runs, and an allowance
+// that holds one of the two smaller beside the larger: two run, and the third
+// waits for the next pass.
+func TestMaintenanceRunsBesideTheLargestAsMemoryAllows(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	w.processes = 8
+	clk := newClock()
+	large, small1, small2 := w.repo(t, 1), w.repo(t, 2), w.repo(t, 3)
+	for range 4 {
+		w.push(t, large, "refs/heads/main", nil)
+	}
+	for _, repo := range []string{small1, small2} {
+		w.push(t, repo, "refs/heads/main", nil)
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	release := make(chan struct{})
+	c := w.open(t, clk.on, func(o *cache.Options) {
+		cache.BeforeMaintaining(o, func(ctx context.Context, step string) {
+			if step != "multi-pack-index" {
+				return
+			}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		})
+	})
+	if got := cache.MaintenanceMemory(c); got != int64(w.pool.Slots(gitproc.ClassRead))*cache.MaintenanceMemoryPerCore {
+		t.Errorf("the maintenance allowance is %d, want MaintenanceMemoryPerCore for each of the pool's %d cores",
+			got, w.pool.Slots(gitproc.ClassRead))
+	}
+	for _, repo := range []string{large, small1, small2} {
+		defer w.sync(t, c, repo).Release()
+	}
+	el, e1, e2 := cache.MaintenanceEstimate(c, large), cache.MaintenanceEstimate(c, small1), cache.MaintenanceEstimate(c, small2)
+	allowance := max(e1, e2)
+	if el <= allowance || e1+e2 <= allowance || e1 == 0 {
+		t.Fatalf("estimates %d (large), %d and %d against an allowance of %d: the case needs the large run past "+
+			"the allowance and one small run, not two, within it", el, e1, e2, allowance)
+	}
+	cache.SetMaintenanceMemory(c, allowance)
+	clk.Add(cache.MidxDebounce)
+
+	started, wait := cache.StartMaintainerPass(c)
+	// Most packs left uncovered first, then by id: the large repository,
+	// then the first of the two small ones.
+	want := []string{large, min(small1, small2)}
+	slices.Sort(want)
+	if !slices.Equal(started, want) {
+		t.Errorf("the pass started runs on %v, want the large repository and one small one beside it, %v", started, want)
+	}
+	close(release)
+	wait()
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Errorf("the next pass ran %v, want the repository the allowance left waiting", ran)
+	}
+}
+
+// A MAINTENANCE RUN IS ESTIMATED BY ITS REPOSITORY'S OBJECTS, as the packs'
+// rows count them — a multiplication, never a read of the disk — and the
+// count is exact on every incarnation the maintainer may run on: set whole by
+// a full round (a restart's first, which installs nothing it already holds),
+// and raised by every pack a delta installs.
+func TestAMaintenanceRunIsEstimatedByItsRepositorysObjects(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	var objects int64
+	for range 3 {
+		_, row := w.push(t, repo, "refs/heads/main", nil)
+		objects += row.Objects
+	}
+	c := w.open(t)
+	w.sync(t, c, repo).Release()
+	if got, want := cache.MaintenanceEstimate(c, repo), objects*cache.MaintenanceBytesPerObject; got != want {
+		t.Errorf("a cold sync's estimate is %d, want %d objects at %d bytes", got, objects, cache.MaintenanceBytesPerObject)
+	}
+	c = w.reopen(t, c)
+	w.sync(t, c, repo).Release()
+	if got, want := cache.MaintenanceEstimate(c, repo), objects*cache.MaintenanceBytesPerObject; got != want {
+		t.Errorf("after a restart's full round, which installs nothing, the estimate is %d, want %d", got, want)
+	}
+	_, row := w.push(t, repo, "refs/heads/main", nil)
+	objects += row.Objects
+	w.sync(t, c, repo).Release()
+	if got, want := cache.MaintenanceEstimate(c, repo), objects*cache.MaintenanceBytesPerObject; got != want {
+		t.Errorf("after a delta installed a pack, the estimate is %d, want %d", got, want)
+	}
+}
+
+// A COMMIT-GRAPH REFUSED A SLOT IS DUE ON ITS OWN: the index's step can
+// succeed and the graph's be refused — another process took the maintenance
+// slot between the two — and a repository whose index is current would then
+// never be due again until MidxPacks more packs land: every walk in it,
+// negotiation and the push's ancestry checks among them, parsing every commit
+// for good. So the graph is recorded apart from the index, the refusal is no
+// failure, and once the interval has passed a run writes the graph alone,
+// leaving the index on disk as it is.
+func TestACommitGraphRefusedASlotIsDueOnItsOwn(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	w.push(t, repo, "refs/heads/main", nil)
+	var take sync.Once
+	var release func()
+	c := w.open(t, clk.on, func(o *cache.Options) {
+		cache.BeforeMaintaining(o, func(_ context.Context, step string) {
+			if step == "commit-graph" {
+				// Held past the run's own context, which ends with the run.
+				//nolint:contextcheck // the slot is the case's, not the run's
+				take.Do(func() { release = holdSlotUntil(t, w.pool, gitproc.ClassMaintenance) })
+			}
+		})
+	})
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	ranAt := clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Fatalf("a run whose commit-graph was refused a slot was reported as maintained: %v", ran)
+	}
+	release()
+	midx := filepath.Join(s.Dir, "objects", "pack", "multi-pack-index")
+	graph := filepath.Join(s.Dir, "objects", "info", "commit-graph")
+	if !statOK(t, midx) || statOK(t, graph) {
+		t.Fatal("the index's step did not write the index, or the refused graph's step wrote a graph")
+	}
+	if doc := readStateDoc(t, s.Dir); doc.Midx.Packs != 2 || !doc.Midx.Bitmap || doc.Midx.Graph || !doc.Midx.LastRun.Equal(ranAt) {
+		t.Errorf("the state's midx is %+v, want the index of 2 packs with its bitmap, no graph, the run at %v", doc.Midx, ranAt)
+	}
+	if got := w.logs.lines(t, "code_cache_maintenance_failed"); len(got) != 0 {
+		t.Errorf("a step refused a slot was logged as a failure: %v", got)
+	}
+	first := inode(t, midx)
+
+	clk.Add(time.Minute)
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Errorf("the maintainer ran %v inside MidxMinInterval of the run that wrote the index", ran)
+	}
+	clk.Set(ranAt.Add(cache.MidxMinInterval))
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Fatalf("the maintainer ran %v for a repository with no commit-graph, want it", ran)
+	}
+	if !statOK(t, graph) {
+		t.Error("the graph's own run left no commit-graph")
+	}
+	if inode(t, midx) != first {
+		t.Error("the graph's own run wrote the index again")
+	}
+	if doc := readStateDoc(t, s.Dir); !doc.Midx.Graph {
+		t.Errorf("the state's midx is %+v after the graph's run, want its graph", doc.Midx)
+	}
+}
+
+// A RUN STOPPED FROM OUTSIDE IS NO RUN: a rolling deploy's Stop, a full
+// round's sweep or a retire ends a run its repository did not fail, and
+// recorded as one it would push the next run back by the interval — or by
+// MidxDutyCycle times however long it had run, hours for a bitmap a deploy
+// cut short near its end — with nothing written. So nothing is recorded or
+// persisted, and after a restart the repository is due once its packs have
+// stood still.
+func TestARunStoppedFromOutsideIsNoRun(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	w.push(t, repo, "refs/heads/main", nil)
+	reached := make(chan struct{})
+	var once sync.Once
+	c := w.open(t, clk.on, func(o *cache.Options) {
+		cache.BeforeMaintaining(o, func(ctx context.Context, step string) {
+			once.Do(func() { close(reached) })
+			<-ctx.Done()
+		})
+	})
+	s := w.sync(t, c, repo)
+	s.Release()
+	clk.Add(cache.MidxDebounce)
+	passed := make(chan []string, 1)
+	go func() { passed <- cache.MaintainerPass(c) }()
+	select {
+	case <-reached:
+	case <-time.After(hangDetector):
+		t.Fatalf("the maintainer started no run in %v", hangDetector)
+	}
+	c.Stop(context.Background())
+	select {
+	case ran := <-passed:
+		if len(ran) != 0 {
+			t.Errorf("a run Stop ended was reported as maintained: %v", ran)
+		}
+	case <-time.After(hangDetector):
+		t.Fatalf("the pass has not ended %v after Stop", hangDetector)
+	}
+	if doc := readStateDoc(t, s.Dir); !doc.Midx.LastRun.IsZero() || doc.Midx.Took != 0 {
+		t.Errorf("a run Stop ended persisted %+v, want no run", doc.Midx)
+	}
+
+	c = w.open(t, clk.on)
+	w.sync(t, c, repo).Release()
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Errorf("after the restart the maintainer ran %v once the packs stood still, want the repository", ran)
+	}
+}
+
+// holdSlotUntil holds one slot of class in pool until the release it answers
+// is called (or the case ends).
+func holdSlotUntil(t *testing.T, pool *gitproc.Pool, class gitproc.Class) func() {
+	t.Helper()
+	started, release := make(chan struct{}), make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = pool.Run(context.Background(), gitproc.Cmd{
+			Args: []string{"hash-object", "--stdin"}, Class: class, Deadline: 5 * time.Minute,
+			Stdin: &blocking{started: started, release: release},
+		})
+	}()
+	<-started
+	stop := sync.OnceFunc(func() {
+		close(release)
+		<-done
+	})
+	t.Cleanup(stop)
+	return stop
+}
+
+// A FAILED MAINTENANCE LEAVES NOTHING BEHIND: the run is the only writer of
+// the index and the commit-graph in its incarnation, so a lock still there
+// when it fails — a killed writer's, which git cannot remove — is its own to
+// remove, as is the temporary file git writes a bitmap into, which git does
+// not clean up when it is killed. A failed run is still a run: it waits out
+// MidxMinInterval, and the one after it succeeds.
+func TestAFailedMaintenanceLeavesNothingBehind(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	s := w.sync(t, c, repo)
+	debris := []string{
+		filepath.Join(s.Dir, "objects", "pack", "multi-pack-index.lock"),
+		filepath.Join(s.Dir, "objects", "pack", "tmp_bitmap_Ab12Cd"),
+		filepath.Join(s.Dir, "objects", "info", "commit-graph.lock"),
+	}
+	for _, path := range debris {
+		write(t, path, "a killed writer's\n")
+	}
+	ranAt := clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Fatalf("a run git refused was reported as maintained: %v", ran)
+	}
+	for _, path := range debris {
+		if statOK(t, path) {
+			t.Errorf("the failed run left %s", path)
+		}
+	}
+	if got := w.logs.lines(t, "code_cache_maintenance_failed"); len(got) != 1 || got[0]["step"] != "multi-pack-index" {
+		t.Errorf("code_cache_maintenance_failed = %v, want one line at multi-pack-index", got)
+	}
+	if doc := readStateDoc(t, s.Dir); !doc.Midx.LastRun.Equal(ranAt) || doc.Midx.Packs != 0 {
+		t.Errorf("the failed run recorded %+v, want its end and no index", doc.Midx)
+	}
+	clk.Add(time.Minute)
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Errorf("the maintainer ran %v inside MidxMinInterval of a failed run", ran)
+	}
+	clk.Set(ranAt.Add(cache.MidxMinInterval))
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Errorf("the maintainer ran %v after a failed run's interval, want the repository", ran)
+	}
+}
+
+// THE MAINTAINER WORKS ONLY ON WHAT THIS PROCESS HAS READ WHOLE: a directory
+// a previous process left may hold strays its first round is about to sweep,
+// and an index written over them would be dropped with them. Once a round has
+// converged it, it is due.
+func TestTheMaintainerWaitsForAWholeRead(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	w.sync(t, c, repo)
+	c = w.reopen(t, c, clk.on)
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Fatalf("the maintainer ran %v over a directory this process has not read whole", ran)
+	}
+	w.sync(t, c, repo)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Errorf("the maintainer ran %v once a round converged it, want the repository", ran)
+	}
+}
+
+// A STARTED CACHE MAINTAINS AT ITS TICKS, AND STOP ENDS A RUN: Start runs
+// the maintainer, which looks at every tick and runs what is due then — not
+// before — and Stop cancels a run in flight and waits for it, so the
+// directory is free — the claim back — when Stop returns. Each tick is a
+// send the maintainer must take, so the one after a pass is taken only once
+// that pass has ended.
+func TestStopEndsAMaintenanceRun(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	w.push(t, repo, "refs/heads/main", nil)
+	ticks := make(chan time.Time)
+	reached := make(chan struct{})
+	var once sync.Once
+	c := w.open(t, clk.on, func(o *cache.Options) {
+		cache.MaintainerTicksFrom(o, ticks)
+		cache.BeforeMaintaining(o, func(ctx context.Context, step string) {
+			once.Do(func() { close(reached) })
+			<-ctx.Done()
+		})
+	})
+	// The round's kick is pending when the cache starts: the first tick's
+	// pass answers it, and the second is taken once that pass has ended.
+	w.sync(t, c, repo)
+	c.Start(t.Context())
+	tick := func() {
+		t.Helper()
+		select {
+		case ticks <- time.Now():
+		case <-time.After(hangDetector):
+			t.Fatalf("the maintainer did not take a tick in %v", hangDetector)
+		}
+	}
+	tick()
+	tick()
+	select {
+	case <-reached:
+		t.Fatal("the maintainer ran a repository whose packs had not stood still")
+	default:
+	}
+	// The second tick's pass may still be running as the clock moves, and
+	// may run the repository itself; else the next tick does.
+	clk.Add(cache.MidxDebounce)
+	select {
+	case ticks <- time.Now():
+	case <-reached:
+	case <-time.After(hangDetector):
+		t.Fatalf("the maintainer did not take a tick in %v", hangDetector)
+	}
+	select {
+	case <-reached:
+	case <-time.After(hangDetector):
+		t.Fatalf("the maintainer's tick started no run in %v", hangDetector)
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		c.Stop(context.Background())
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(hangDetector):
+		t.Fatalf("Stop has not returned %v after it cancelled a maintenance run", hangDetector)
+	}
+	if got := w.logs.lines(t, "code_cache_maintenance_cancelled"); len(got) != 1 {
+		t.Errorf("code_cache_maintenance_cancelled logged %d times, want once", len(got))
+	}
+	layout, err := cache.Prepare(t.Context(), w.layout.Dir)
+	if err != nil {
+		t.Fatalf("Prepare after Stop returned = %v, want the directory free", err)
+	}
+	layout.Release()
 }

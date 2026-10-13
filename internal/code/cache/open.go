@@ -52,6 +52,17 @@ type Cache struct {
 	// discard), so the gauges a round sets cost two loads, never a walk of
 	// every repository on the node under the lock every sync takes.
 	heldBytes, heldRepos atomic.Int64
+	// scratchBytes is what scratch/ held when the janitor last measured it:
+	// a push's scratch is written by its client's receive-pack, so only the
+	// disk knows.
+	scratchBytes atomic.Int64
+	// maint is the maintenance runs in flight, each with its estimated
+	// memory, and maintMemory what the runs beside the largest of them may
+	// be estimated at together (MaintenanceMemoryPerCore for each of the
+	// pool's cores): a pass admits a run against both (maintain.go). A
+	// field, so the suite can narrow it (export_test.go).
+	maint       maintFlight
+	maintMemory int64
 	// mark is the code log as this process has seen it answered, and
 	// rereads counts the marks made for whole reads (Cache.reread): one log
 	// under every repository, so what one round learns of it reaches all.
@@ -72,9 +83,10 @@ type Cache struct {
 	life   context.Context
 	cancel context.CancelFunc
 
-	// kicks wakes the janitor at once: buffered one, sent without
-	// blocking, so any number of kicks before a pass are one pass.
-	kicks chan struct{}
+	// kicks wakes the janitor at once, and maintKicks the maintainer:
+	// buffered one, sent without blocking, so any number of kicks before a
+	// pass are one pass.
+	kicks, maintKicks chan struct{}
 
 	// mu guards entries. Lock order: Cache.mu, then entry.mu.
 	mu      sync.Mutex
@@ -142,8 +154,10 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 		dir: b.dir, maxBytes: o.MaxBytes, git: o.Git, objects: o.Objects, fetch: o.Fetch, limits: o.Limits,
 		faults: o.Faults, log: o.Logger, metrics: o.Metrics, now: o.Now, knobs: o.knobs,
 		fetchConcurrency: FetchConcurrency, fetches: newFetchSlots(NodeFetches),
+		maintMemory:  int64(o.Git.Slots(gitproc.ClassRead)) * MaintenanceMemoryPerCore,
 		releaseClaim: sync.OnceFunc(b.claim.Release),
-		kicks:        make(chan struct{}, 1), entries: map[string]*entry{}, idle: make(chan struct{}),
+		kicks:        make(chan struct{}, 1), maintKicks: make(chan struct{}, 1),
+		entries: map[string]*entry{}, idle: make(chan struct{}),
 	}
 	if c.log == nil {
 		c.log = log
@@ -303,10 +317,11 @@ func (c *Cache) leave() {
 	}
 }
 
-// Start starts the cache's background work — the janitor — under ctx: it
-// ends with ctx or with [Cache.Stop], whichever comes first. A second call,
-// or a call after Stop, does nothing. A cache that is never started still
-// opens and pins; nothing is removed from trash/ until it is.
+// Start starts the cache's background work — the janitor and the
+// maintainer — under ctx: each ends with ctx or with [Cache.Stop], whichever
+// comes first. A second call, or a call after Stop, does nothing. A cache
+// that is never started still opens, syncs and pins; nothing is removed from
+// trash/, evicted or maintained until it is.
 func (c *Cache) Start(ctx context.Context) {
 	c.lifeMu.Lock()
 	defer c.lifeMu.Unlock()
@@ -315,11 +330,19 @@ func (c *Cache) Start(ctx context.Context) {
 	}
 	c.started = true
 	go c.janitor(ctx)
+	go c.maintainer(ctx)
+}
+
+// isStopped reports whether Stop has begun.
+func (c *Cache) isStopped() bool {
+	c.lifeMu.Lock()
+	defer c.lifeMu.Unlock()
+	return c.stopped
 }
 
 // Stop ends the cache: it marks it stopped — nothing of the cache's starts
 // in the directory again — and ends its lifetime, so what runs under it
-// ends with it. The claim on the directory goes back the moment nothing of
+// ends with it: a round's downloads, a maintenance run's git. The claim on the directory goes back the moment nothing of
 // the cache's is running in it: at once, before Stop returns, when nothing
 // is (whatever ctx says — that is decided under the cache's own lock, never
 // raced against a context that may already have ended); otherwise Stop

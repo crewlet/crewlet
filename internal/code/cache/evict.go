@@ -1,30 +1,50 @@
 package cache
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // THE JANITOR: one goroutine, owned by Start, that gives back the disk the
-// cache has decided to give back. Whatever is removed is first RENAMED into
-// trash/ — an instant at any size, on one filesystem — and removed here, in
-// the background: a request that lets go of the last pin on a 20 GiB
-// directory, or a boot that moves a crashed process's scratch aside, returns
-// at once rather than waiting on the removal.
+// cache has decided to give back, and holds the cache to its budget. Whatever
+// is removed is first RENAMED into trash/ — an instant at any size, on one
+// filesystem — and removed here, in the background: a request that lets go
+// of the last pin on a 20 GiB directory, or a boot that moves a crashed
+// process's scratch aside, returns at once rather than waiting on the
+// removal.
+//
+// A CACHE IS EVICTED TO ITS BUDGET AND FOR NO OTHER REASON. Over the budget,
+// the repositories used least recently go first, each a directory renamed
+// into trash/; under it, nothing goes, however long a repository has been
+// idle. An idle repository costs disk the budget already bounds, while
+// evicting it costs ONE GET A PUSH the next time anybody fetches it — nothing
+// compacts a repository's packs — so a weekend's idle eviction was every
+// repository nobody fetched re-downloaded whole on Monday, on every git node.
+// A cache older than the rows' tombstone horizon is brought forward by a
+// whole read that reuses every pack it holds, so correctness never needed an
+// eviction either. A repository a request holds is never evicted, even over
+// the budget: it is served, and goes the first pass after its last reader —
+// or the maintenance run that pinned it — lets go, which kicks the janitor
+// for exactly that, as a round that grows the cache past its budget does,
+// rather than leaving it to the tick.
 //
 // It is also what makes a repository's LAST USE survive a restart: a boot
 // reads it from the disk (the state file's modification), and a state is
 // rewritten only when its directory changes, so a repository fetched all day
 // and pushed to rarely would otherwise come back from every restart as the
-// least recently used entry there is. Every tick stamps the moment of last
-// use onto each repository used since the tick before — a metadata write,
-// no content and no fsync, so a boot finds it to within [EvictInterval].
+// least recently used entry there is — the first the budget evicts. Every
+// tick stamps the moment of last use onto each repository used since the tick
+// before — a metadata write, no content and no fsync, so a boot finds it to
+// within [EvictInterval].
 
 // janitor runs a pass at once (the boot has just moved scratch/ and tmp/
 // into trash/), then whenever it is kicked or [EvictInterval] passes, until
@@ -69,11 +89,24 @@ func (c *Cache) janitor(ctx context.Context) {
 	}
 }
 
-// janitorPass removes everything in trash/. A removal that fails is logged
-// and left for the next pass: what is in trash/ is never read again, so a
-// failure costs disk and nothing else. An ended ctx, or a cache that is
-// stopping, stops the pass between entries.
+// janitorPass is one pass, in order: trash/ emptied; scratch/ measured; the
+// cache evicted to its budget, least recently used first — and trash/ emptied
+// again when anything was, so an eviction gives its disk back within the
+// pass; then the gauges.
 func (c *Cache) janitorPass(ctx context.Context) {
+	c.emptyTrash(ctx)
+	c.measureScratch(ctx)
+	if c.evictToBudget(ctx) > 0 {
+		c.emptyTrash(ctx)
+	}
+	c.setGauges()
+}
+
+// emptyTrash removes everything in trash/. A removal that fails is logged and
+// left for the next pass: what is in trash/ is never read again, so a failure
+// costs disk and nothing else. An ended ctx, or a cache that is stopping,
+// stops the pass between entries.
+func (c *Cache) emptyTrash(ctx context.Context) {
 	trash := filepath.Join(c.dir, trashDir)
 	list, err := os.ReadDir(trash)
 	if err != nil {
@@ -92,6 +125,114 @@ func (c *Cache) janitorPass(ctx context.Context) {
 			c.log.Warn("code_cache_trash_failed", "path", path, "error", err)
 		}
 	}
+}
+
+// measureScratch sets what scratch/ holds — a push's scratch repository, an
+// advertisement view — from the disk, the only thing that knows: what a
+// receive-pack writes there is the client's to decide. An entry that cannot
+// be read is logged and left out; an ended ctx keeps the last measure.
+//
+// Only a file whose ONLY NAME is in scratch/ counts. A file there with a
+// second name is one of the cache's own — a view's packed-refs linked from
+// its incarnation, an adopted push's pack linked into the incarnation before
+// its scratch goes — whose bytes are on the disk once and already in the
+// total through that incarnation. Counted again, every adopted push would
+// evict as many bytes more of the repositories used least recently, each a
+// cold sync later. The other name is never in trash/: the pass empties trash/
+// before it measures.
+func (c *Cache) measureScratch(ctx context.Context) {
+	n, err := sizeUnder(ctx, filepath.Join(c.dir, scratchDir), soleNames, func(path string, err error) {
+		c.log.Warn("code_cache_scratch_unmeasured", "path", path, "error", err)
+	})
+	if err == nil {
+		c.scratchBytes.Store(n)
+	}
+}
+
+// total is what the cache holds against its budget: every incarnation's
+// files, current and retiring, the downloads in flight in tmp/, and scratch/
+// as the janitor last measured it.
+func (c *Cache) total() int64 {
+	return c.heldBytes.Load() + c.tmpBytes.Load() + c.scratchBytes.Load()
+}
+
+// evictToBudget evicts repositories, least recently used first, while the
+// cache is over its budget, and answers how many. Only an EVICTABLE entry is
+// a candidate (evictable), and one that stops being one before its turn is
+// passed over; none left over the budget, and the pass stops there.
+func (c *Cache) evictToBudget(ctx context.Context) int {
+	if c.total() <= c.maxBytes {
+		return 0
+	}
+	type candidate struct {
+		e        *entry
+		lastUsed time.Time
+	}
+	var candidates []candidate
+	c.mu.Lock()
+	for _, e := range c.entries {
+		e.mu.Lock()
+		if evictable(e) {
+			candidates = append(candidates, candidate{e: e, lastUsed: e.current.lastUsed})
+		}
+		e.mu.Unlock()
+	}
+	c.mu.Unlock()
+	slices.SortFunc(candidates, func(a, b candidate) int {
+		return cmp.Or(a.lastUsed.Compare(b.lastUsed), strings.Compare(a.e.id, b.e.id))
+	})
+	evicted := 0
+	for _, cand := range candidates {
+		if c.total() <= c.maxBytes || ctx.Err() != nil || c.life.Err() != nil {
+			break
+		}
+		if c.evict(cand.e) {
+			evicted++
+		}
+	}
+	return evicted
+}
+
+// evictable reports whether e may be evicted now; e.mu is held. Its current
+// incarnation unpinned — a request is reading it, or the maintainer is — with
+// no round running or queued, no maintenance running, and no RETIRING
+// incarnation: a reader still finishing on one a rebuild replaced keeps that
+// directory in repos/, and is served from it whatever becomes of the entry.
+func evictable(e *entry) bool {
+	return !e.dead && e.current != nil && e.current.pins == 0 && e.running == nil && e.next == nil &&
+		e.maint == nil && len(e.retiring) == 0
+}
+
+// evict takes e out of the cache: the entry dead and gone from the cache's
+// map — the next sync of the repository starts cold, with a new entry — and
+// its incarnation's directory renamed into trash/. The DECISION is made under
+// the cache's mu and then the entry's, the conditions checked again, so
+// nothing that pinned or started on it since it was chosen loses its
+// directory; the rename and the log line come after both are let go, because
+// every sync of every repository on the node takes the cache's mu to find its
+// entry, and a budget held tight evicts after nearly every cold sync. A sync
+// of the repository in between makes a new entry, whose first incarnation
+// takes the next free number beside the directory still on its way out.
+func (c *Cache) evict(e *entry) bool {
+	c.mu.Lock()
+	e.mu.Lock()
+	if !evictable(e) {
+		e.mu.Unlock()
+		c.mu.Unlock()
+		return false
+	}
+	inc := e.current
+	bytes, idle := inc.diskBytes+inc.metaBytes, c.now().Sub(inc.lastUsed)
+	e.dead = true
+	if c.entries[e.id] == e {
+		delete(c.entries, e.id)
+	}
+	gone := c.retire(e, inc)
+	e.mu.Unlock()
+	c.mu.Unlock()
+	c.trash(gone)
+	c.log.Info("code_cache_evicted", "repo", e.id, "bytes", bytes, "reason", "budget", "idle_for", idle)
+	return true
 }
 
 // recordUse stamps each repository's last use onto the disk, where the next
@@ -149,16 +290,15 @@ func stampUse(dir string, at time.Time) error {
 	return err
 }
 
-// setGauges sets crewlet.code.cache.bytes — what every incarnation holds,
-// current and retiring, plus the downloads in flight in tmp/ — and
-// crewlet.code.cache.repos, the repositories with a directory on this node:
-// both from the running totals, so a round that sets them after it ends pays
-// two loads, however many repositories the node holds.
+// setGauges sets crewlet.code.cache.bytes — the total the budget is held to
+// (total) — and crewlet.code.cache.repos, the repositories with a directory on
+// this node: both from the running totals, so a round that sets them after it
+// ends pays a few loads, however many repositories the node holds.
 func (c *Cache) setGauges() {
 	if c.metrics == nil {
 		return
 	}
-	c.metrics.Set(metrics.CodeCacheBytes, float64(c.heldBytes.Load()+c.tmpBytes.Load()), nil)
+	c.metrics.Set(metrics.CodeCacheBytes, float64(c.total()), nil)
 	c.metrics.Set(metrics.CodeCacheRepos, float64(c.heldRepos.Load()), nil)
 }
 
