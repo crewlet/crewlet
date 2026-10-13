@@ -492,8 +492,9 @@ a provider's round trip away, among them — and the SHA-256 rate under every
 verified byte), one arbitrated write end to end and the applier's drain
 (`internal/statelog`), the store's own drain (`internal/store`), a git
 process through the pool and the index-pack a push runs
-(`internal/code/gitproc`), and the pace a client's connection is held to, on
-a real connection (`internal/api/paced`).
+(`internal/code/gitproc`), a git node's boot of its cache and what a
+directory sync costs a file (`internal/code/cache`), and the pace a client's
+connection is held to, on a real connection (`internal/api/paced`).
 
 It is **not a gate, and no CI job runs it**. A benchmark on a shared runner
 measures the runner's neighbours, and a gate on figures that noisy is one
@@ -503,7 +504,7 @@ each, on one idle machine, and read the two outputs with
 
 | Variable | Default | What it sets |
 |---|---|---|
-| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/code/gitproc`, `internal/api/paced` | which packages are measured |
+| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/code/gitproc`, `internal/code/cache`, `internal/api/paced` | which packages are measured |
 | `BENCH_PATTERN` | `.` | `-bench`, e.g. `Backend/via=member` |
 | `BENCH_TIME` | `3s` | `-benchtime` |
 | `BENCH_COUNT` | `1` | `-count` |

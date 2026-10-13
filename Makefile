@@ -603,10 +603,11 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # the SHA-256 floor under every verified byte), an arbitrated write end to end
 # and the applier's drain (internal/statelog), the store's own drain
 # (internal/store), a git process through the pool end to end and
-# receive-pack's index-pack at one thread (internal/code/gitproc), and the
-# pace a client's connection is held to, on a real connection
-# (internal/api/paced). Each package's doc records what it measured, and on
-# what machine.
+# receive-pack's index-pack at one thread (internal/code/gitproc), a git
+# node's boot of its cache and what a directory sync costs a file
+# (internal/code/cache), and the pace a client's connection is held to, on a
+# real connection (internal/api/paced). Each package's doc records what it
+# measured, and on what machine.
 #
 # NOT A GATE, AND NO CI JOB RUNS IT: a benchmark on a shared runner measures
 # the runner's neighbours, and a gate on figures that noisy is one somebody
@@ -635,13 +636,13 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
                  ./internal/objstore/natsobj ./internal/objstore/natsobj/replicated \
                  ./internal/objstore/s3obj ./internal/statelog ./internal/store \
-                 ./internal/code/gitproc ./internal/api/paced
+                 ./internal/code/gitproc ./internal/code/cache ./internal/api/paced
 BENCH_PATTERN ?= .
 BENCH_TIME    ?= 3s
 BENCH_COUNT   ?= 1
 BENCH_TIMEOUT ?= 2h
 
-bench: ## measure the object store, the state log's write path, git and a client's pace (not a gate)
+bench: ## measure the object store, the state log's write path, git and its cache, and a client's pace (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))
 	$(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
 	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \
