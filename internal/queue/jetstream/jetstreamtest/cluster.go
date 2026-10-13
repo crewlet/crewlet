@@ -249,10 +249,11 @@ const ClusterStartAttempts = 4
 // It bounds the LOOP, and it does so by bounding each attempt within it: every
 // attempt is handed a context carrying what is LEFT of the budget, so a member
 // start that would otherwise wait out its store recovery — which the start
-// does not bound — and then its listener budget is interrupted instead. Consulted only between attempts — which is how this was
-// first written — it bounded how MANY were made and nothing about how long one
-// took, and a single sequential three-member attempt could outlast the whole
-// ceiling before the loop ever looked at it.
+// does not bound — and then its listener budget is interrupted instead.
+// Consulted only between attempts — which is how this was first written — it
+// bounded how MANY were made and nothing about how long one took, and a single
+// sequential three-member attempt could outlast the whole ceiling before the
+// loop ever looked at it.
 //
 // What an attempt should cost when nothing is wrong is still the engine's
 // question and [jsprovision] answers it; this is the harness's ceiling on
@@ -373,10 +374,9 @@ func withFreshPorts(ctx context.Context, t testing.TB, what string,
 	// nothing about how long one took: a member start reaching
 	// [js.StartServer] on an unbounded context waits out its whole store
 	// recovery and then its listener budget, and the members are started
-	// in sequence, so a single
-	// attempt could outlast this whole ceiling before the loop below ever
-	// looked at it. A budget the thing it bounds cannot observe is a
-	// comment, not a bound.
+	// in sequence, so a single attempt could outlast this whole ceiling
+	// before the loop below ever looked at it. A budget the thing it
+	// bounds cannot observe is a comment, not a bound.
 	deadline := time.Now().Add(ClusterStartBudget)
 	for attempt := 1; attempt <= ClusterStartAttempts; attempt++ {
 		// THE SOONER OF THE CEILING AND THIS ATTEMPT'S OWN TERM. Handed the
