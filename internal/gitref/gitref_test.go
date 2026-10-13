@@ -232,6 +232,13 @@ func TestValidOID(t *testing.T) {
 		if got := gitref.ValidOID(tc.oid); got != tc.want {
 			t.Errorf("ValidOID(%q) = %v, want %v", tc.oid, got, tc.want)
 		}
+		if got := gitref.ValidOID([]byte(tc.oid)); got != tc.want {
+			t.Errorf("ValidOID of the bytes of %q = %v, want %v as of the string", tc.oid, got, tc.want)
+		}
+	}
+	line := []byte(hex + " refs/heads/main\n")
+	if allocs := testing.AllocsPerRun(10, func() { gitref.ValidOID(line[:gitref.OIDHexLen]) }); allocs != 0 {
+		t.Errorf("ValidOID of a line's bytes allocated %v times, want none", allocs)
 	}
 	if len(gitref.ZeroOID) != gitref.OIDHexLen || strings.Trim(gitref.ZeroOID, "0") != "" {
 		t.Errorf("ZeroOID %q is not %d zeros", gitref.ZeroOID, gitref.OIDHexLen)
