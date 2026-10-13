@@ -32,8 +32,10 @@ const (
 	// the window closes, so ordinary jitter never registers.
 	WatchdogBeatsPerThreshold = 5
 
-	// WatchdogExitCode marks a self-terminated wedge, distinct from any
-	// ordinary failure so an orchestrator's restart logs say what happened.
+	// WatchdogExitCode marks a node that ended itself — a wedged duty, or
+	// one that declared it can never turn again ([Watchdog.Fail]) — distinct
+	// from any ordinary failure so an orchestrator's restart logs say what
+	// happened. The line on stderr says which of the two it was.
 	WatchdogExitCode = 75
 )
 
@@ -77,6 +79,10 @@ type Stall struct {
 	Lag time.Duration
 	// Threshold is the deadline it blew — the seat lease TTL.
 	Threshold time.Duration
+	// Cause is the duty's own reason when it DECLARED it can never turn
+	// again ([Watchdog.Fail]) rather than stopped beating: nil for a wedge,
+	// whose Lag is the evidence, and set for a declaration, which has none.
+	Cause error
 }
 
 // Watchdog ends the process when a watched duty stops turning past the seat
@@ -255,6 +261,36 @@ func (w *Watchdog) Stop() {
 	watchLog.Info("watchdog_stopped")
 }
 
+// Fail ends the process now, for a duty that has DECLARED it can never turn
+// again — which needs no lease TTL to establish.
+//
+// The one caller is the engine's embedded broker, whose nats-server called
+// Fatalf after its boot (internal/queue/jetstream's Death). Stock
+// nats-server exits the process there, and the reasoning that makes this
+// watchdog exit rather than drain applies to it exactly: every step that
+// would make a drain graceful — acknowledging a turn's work, publishing what
+// it did, giving a seat's lease back — rides that broker, so a drain could
+// only spend the time a turn takes on work none of which can be recorded, and
+// meanwhile answer /health as alive. A node that ends at once is restarted at
+// once, and the restart is what brings a broker back: it recovers its store
+// from what reached the disk.
+//
+// UNCONDITIONAL, unlike a stall: armed or not, started or stopped. A watchdog
+// stands down for a drain because exiting through one abandons the seat
+// release, and a dead broker has already taken that release away; there is
+// nothing for a stand-down to protect. Once, like a stall — a node ends one
+// time, for the first reason that reached it.
+func (w *Watchdog) Fail(duty string, cause error) {
+	w.mu.Lock()
+	if w.fired {
+		w.mu.Unlock()
+		return
+	}
+	w.fired = true
+	w.mu.Unlock()
+	w.onStall(Stall{Duty: duty, Threshold: w.threshold, Cause: cause})
+}
+
 // Lag is how far behind the worst LIVE duty is, for /health: the time since
 // its last beat, once that is longer than the beat interval ([beatCeiling]).
 // A duty whose last beat is older than that has missed one, which is what
@@ -381,11 +417,21 @@ func (w *Watchdog) worst(now time.Time) (name string, lag time.Duration, anyLive
 // same reason: a configured handler may batch, format, or ship lines
 // somewhere, and that is more machinery than a wedged process has earned.
 func hardExit(s Stall) {
-	fmt.Fprintf(os.Stderr,
-		"crewlet: %s stalled %.1fs past the seat lease TTL; exiting so peers can take over "+
-			"cleanly (code %d)\n",
-		s.Duty, s.Lag.Seconds(), WatchdogExitCode)
+	fmt.Fprintln(os.Stderr, exitNotice(s))
 	os.Exit(WatchdogExitCode)
+}
+
+// exitNotice is the one line a node that ends itself leaves on stderr: what
+// stopped, and why that ends the process.
+func exitNotice(s Stall) string {
+	if s.Cause != nil {
+		return fmt.Sprintf("crewlet: %s declared it cannot go on: %v; exiting so "+
+			"this node is restarted rather than left serving on it (code %d)",
+			s.Duty, s.Cause, WatchdogExitCode)
+	}
+	return fmt.Sprintf("crewlet: %s stalled %.1fs past the seat lease TTL; exiting "+
+		"so peers can take over cleanly (code %d)",
+		s.Duty, s.Lag.Seconds(), WatchdogExitCode)
 }
 
 var _ Pulse = (*Host)(nil)

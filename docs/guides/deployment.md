@@ -217,18 +217,19 @@ listener and forms no cluster — while every other reading of the same file
 names the missing field instead.
 
 **A route port something else already holds is refused at startup, by name.**
-This is the one clustering failure with no other symptom: NATS does not fail
-when its route listener cannot bind — it logs the error and carries on serving
-clients, so the node comes up, answers `/health`, and simply never forms a
-route to a peer. Left to report itself, that surfaced two minutes later as a
-readiness timeout blaming peer reachability, which is a network path that is
-fine. The engine now probes the port before it starts the server and refuses:
+The broker binds its route listener last, after it has recovered its whole
+store, so the engine probes the port before it starts the broker and refuses
+in microseconds rather than after a recovery that may take minutes:
 
 ```
 stream.cluster.port 6222 is already in use on 10.0.0.11, so this member's
 route listener cannot bind and it could never form a route to a peer — free
 that port or give this node a different one
 ```
+
+A port taken in the instant between that probe and the bind is refused too,
+as soon as the bind fails, with the operating system's own error on the end of
+the same sentence. `stream.leaf.port` is probed and refused the same way.
 
 **`cluster.advertise` is for when what a member binds is not what its peers can
 dial.** Members learn about each other from the members they already have: when
@@ -1804,7 +1805,7 @@ field keeps all three while a shell redirect throws them away:
 | What | Why it bypasses the handler |
 |---|---|
 | Everything before the Tier A document is read | The log file is named *by* that document, so it cannot be open yet |
-| The [seat watchdog's](../concepts/seat-ownership.md) exit notice | It writes to stderr directly and calls `os.Exit(75)`; a wedged process has not earned a configured handler |
+| The [seat watchdog's](../concepts/seat-ownership.md) exit notice | It writes to stderr directly and calls `os.Exit(75)`; a wedged process has not earned a configured handler. A broker that declared itself dead leaves by the same exit, after an `embedded_broker_died` line that does go through the handler |
 | "log file *X*: no space left on device" | A sink cannot report its own failure through itself |
 
 **A terminal that is about to go quiet says so.** Before the switch takes
@@ -1945,6 +1946,38 @@ server refused in the error itself. Left to the client's default it was a bare
 line written straight to stderr, outside `logging.file`, outside any level and
 in the middle of a `json` stream; the credentials refusal that comes before a
 [connection closed for good](#an-external-nats-server) was said only there.
+
+#### A broker that declares itself dead
+
+nats-server has one more severity, **fatal**, for a failure it cannot go on
+from: JetStream refusing its store directory, a listener that cannot bind, an
+advertise address it cannot read. A standalone nats-server exits the process
+there. The embedded one does not — the engine owns the process — so the engine
+decides what it means, and it means the same thing a standalone server would:
+
+- **During the boot, the boot fails at once with the broker's own reason.**
+  Nothing waits for a server that has already given up, and the reason is
+  nats-server's own sentence rather than a summary of it:
+
+  ```
+  engine: stream: start embedded nats: embedded nats server could not start:
+  nats-server: Can't start JetStream: storage directory is not a directory
+  ```
+
+  A clustered member is not told its route port was taken unless it was: a
+  bind that failed on `stream.cluster.port` or `stream.leaf.port` because
+  something else holds it is the one fatal reported as a taken port.
+- **After the boot, the node ends.** It logs `embedded_broker_died` at
+  `error`, with the broker's reason, through the ordinary log, then leaves the
+  same way the [seat watchdog](../concepts/seat-ownership.md#a-broker-that-declares-itself-dead)
+  does: a notice on stderr and exit code **75**. It does not drain, as a node
+  whose [connection closed for good](#an-external-nats-server) does, because
+  every step of a drain — acknowledging a turn, publishing what it did, giving
+  a seat's lease back — rides the broker that has just declared itself dead,
+  and a declaration closes no connection for those steps to fail on at once. A
+  node left running on it would answer `/health` while nothing it did could
+  land; ended, it is restarted, and the restart recovers the broker from its
+  store. The same reason on every restart is a setting or a disk to fix.
 
 ### Per-Agent Token Tracking
 

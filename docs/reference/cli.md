@@ -157,7 +157,7 @@ The four overrides — `-roles`, `-api-host`, `-api-port` and `-log-file` — ar
 |---|---|
 | `0` | A signal (`SIGINT`, `SIGTERM`) stopped it, after the drain and the teardown |
 | `1` | It could not start — a refused config, a store or broker it could not open, or a broker connection closed for good while it booted, whose last stderr line names the cause and what to change exactly as the next case's does — **or it stopped itself** because a broker connection it cannot run without was [closed for good](../concepts/seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too): the last stderr line, `crewlet: the node stopped itself: …`, names the cause and what to change, after the drain and teardown in the order a signal takes them — a drain that cancels the turns still running rather than waiting for them when the connection lost was the stream's own, since none of them can be acknowledged |
-| `75` | The [watchdog](../concepts/seat-ownership.md#the-wedged-node-and-why-it-leaves) ended a wedged process, with no shutdown at all |
+| `75` | The [watchdog](../concepts/seat-ownership.md#the-wedged-node-and-why-it-leaves) ended a wedged process, with no shutdown at all — or this node's [embedded broker declared itself dead](../concepts/seat-ownership.md#a-broker-that-declares-itself-dead) after the boot, and the node left by the same exit, with no drain, after an `embedded_broker_died` line in the log and with the broker's own reason on stderr. A broker that declares itself dead *during* the boot fails the start instead, with status `1` |
 
 Both non-zero statuses are a node that wants restarting, so run it under something that restarts a process that exits non-zero (`Restart=on-failure`, a container restart policy).
 

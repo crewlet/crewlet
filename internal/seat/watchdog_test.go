@@ -2,6 +2,9 @@ package seat
 
 import (
 	"context"
+	"errors"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -565,5 +568,84 @@ func TestLagReportsHowFarBehindTheWorstDutyIs(t *testing.T) {
 	slow.set(clock.Now().Add(-time.Hour), false)
 	if lag := w.Lag(); lag != 0 {
 		t.Fatalf("lag = %s, want 0 once the stale duty stopped", lag)
+	}
+}
+
+// --- a duty that DECLARES it cannot go on -----------------------------------
+
+// A DECLARED DEATH ENDS THE PROCESS AT ONCE, armed or not.
+//
+// The embedded broker's Fatalf is the caller: every step a drain would take
+// rides that broker, so there is nothing a stand-down would protect, and a
+// lease TTL of waiting would only be a node answering /health as alive on a
+// broker that has already said it is dead. So Fail fires on a watchdog that
+// was never started, one that is running, and one a drain has stopped — and
+// only once, for the first reason, whatever arrives after it.
+func TestADeclaredDeathEndsTheProcessWhateverTheWatchdogIsDoing(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("nats-server: Can't start JetStream: storage directory is not writable")
+	for name, arm := range map[string]func(*Watchdog){
+		"never started": func(*Watchdog) {},
+		"running": func(w *Watchdog) {
+			w.Watch("seat-heartbeat", &fakePulse{last: time.Now(), live: true})
+			w.Start(context.Background())
+		},
+		"stopped for a drain": func(w *Watchdog) {
+			w.Watch("seat-heartbeat", &fakePulse{last: time.Now(), live: true})
+			w.Start(context.Background())
+			w.Stop()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fired, onStall := caught()
+			w := newWatchdog(time.Minute, nil, onStall)
+			arm(w)
+			defer w.Stop()
+
+			w.Fail("embedded broker", cause)
+			w.Fail("embedded broker", errors.New("a second declaration"))
+
+			select {
+			case got := <-fired:
+				if got.Duty != "embedded broker" || !errors.Is(got.Cause, cause) {
+					t.Fatalf("fired for %q because %v, want the broker's own "+
+						"declaration", got.Duty, got.Cause)
+				}
+			default:
+				t.Fatal("a duty that declared it cannot go on did not end the process")
+			}
+			if len(fired) != 0 {
+				t.Errorf("the process was ended %d more times — a node ends once, "+
+					"for the first reason that reached it", len(fired))
+			}
+		})
+	}
+}
+
+// THE NOTICE SAYS WHICH OF THE TWO IT WAS. Both exits share one code, so the
+// line on stderr is the only thing an operator reading a restart has that
+// tells a wedge from a broker that declared itself dead — and for the
+// declaration it has to carry the broker's own reason, the one fact nothing
+// else in the process outlives.
+func TestTheExitNoticeTellsAStallFromADeclaredDeath(t *testing.T) {
+	t.Parallel()
+	stall := exitNotice(Stall{Duty: "seat-host", Lag: 50 * time.Second, Threshold: time.Minute})
+	if !strings.Contains(stall, "stalled 50.0s") {
+		t.Errorf("a stall's notice does not say how far it stalled: %q", stall)
+	}
+	reason := "nats-server: Error listening on router port: 6222 - address already in use"
+	death := exitNotice(Stall{Duty: "embedded broker", Cause: errors.New(reason)})
+	if !strings.Contains(death, reason) {
+		t.Errorf("a declared death's notice drops the broker's reason: %q", death)
+	}
+	if strings.Contains(death, "stalled") {
+		t.Errorf("a declared death is reported as a stall: %q", death)
+	}
+	for _, line := range []string{stall, death} {
+		if !strings.Contains(line, strconv.Itoa(WatchdogExitCode)) {
+			t.Errorf("the notice does not name the exit code an orchestrator "+
+				"records: %q", line)
+		}
 	}
 }

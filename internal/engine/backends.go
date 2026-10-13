@@ -106,6 +106,12 @@ type Backends struct {
 	// a member can answer in process: the metadata group's membership. Nil
 	// on an external stream, and on backends a caller lent without one.
 	broker brokerMembership
+
+	// death is that same embedded broker declaring it cannot go on — see
+	// [Engine.watchBroker]. Nil on an external stream, whose broker is its
+	// own operator's to keep alive and whose loss the client reconnects
+	// through.
+	death brokerDeath
 }
 
 // Complete reports which of the four a Backends lacks, or nil when it holds
@@ -624,7 +630,8 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 		server.Shutdown()
 		return nil, nil, fmt.Errorf("engine: stream client: %w", err)
 	}
-	out := &Backends{Queue: q, stopServer: server.Shutdown, broker: server}
+	out := &Backends{Queue: q, stopServer: server.Shutdown, broker: server,
+		death: server.Death()}
 	// WATCHED, through the queue: this connection holds every lease the
 	// node renews, so NATS closing it for good is the node's loss exactly
 	// as the queue's own connection closing is, and the queue reports both
