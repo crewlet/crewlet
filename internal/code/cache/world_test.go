@@ -33,6 +33,8 @@ type world struct {
 	layout cache.Layout
 	pool   *gitproc.Pool
 	logs   *logs
+	// gitPath is the git every boot's pool runs; "" is the one on PATH.
+	gitPath string
 }
 
 // newWorld prepares a fresh cache directory and a real gitproc pool over the
@@ -58,16 +60,20 @@ func (w *world) prepare(t *testing.T, dir string) {
 		t.Fatalf("Prepare: %v", err)
 	}
 	t.Cleanup(layout.Release)
-	w.layout, w.pool = layout, newPool(t, layout)
+	w.layout, w.pool = layout, newPoolOf(t, layout, w.gitPath)
 }
 
 // reboot prepares w's directory again: the boot's Prepare.
 func (w *world) reboot(t *testing.T) { w.prepare(t, w.layout.Dir) }
 
 // newPool is a real pool over layout's HOME.
-func newPool(t *testing.T, layout cache.Layout) *gitproc.Pool {
+func newPool(t *testing.T, layout cache.Layout) *gitproc.Pool { return newPoolOf(t, layout, "") }
+
+// newPoolOf is a pool over layout's HOME running the git at path ("" is the
+// one on PATH).
+func newPoolOf(t *testing.T, layout cache.Layout, path string) *gitproc.Pool {
 	t.Helper()
-	pool, err := gitproc.New(t.Context(), gitproc.Options{Home: layout.Home, MaxProcesses: 2})
+	pool, err := gitproc.New(t.Context(), gitproc.Options{Path: path, Home: layout.Home, MaxProcesses: 2})
 	if err != nil {
 		t.Fatalf("gitproc.New over %s: %v", layout.Home, err)
 	}

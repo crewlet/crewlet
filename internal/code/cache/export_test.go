@@ -2,8 +2,11 @@ package cache
 
 import (
 	"context"
+	"io"
 	"os"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/code"
 )
 
 // The suite's knobs into the cache: the background loops' steps run
@@ -62,6 +65,22 @@ func TicksFrom(o *Options, ticks <-chan time.Time) {
 	}
 	o.knobs.ticks = ticks
 }
+
+// BeforePeel makes every round call f with the incarnation's directory as its
+// peel is about to read it.
+func BeforePeel(o *Options, f func(dir string)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.peeling = f
+}
+
+// BuffersOut is the copy buffers the node's download slots hold now, and the
+// most they have held at once.
+func BuffersOut(c *Cache) (now, most int64) { return c.fetches.out.Load(), c.fetches.most.Load() }
+
+// SlotWaiters is how many downloads wait for one of the node's slots.
+func SlotWaiters(c *Cache) int64 { return c.fetches.waiting.Load() }
 
 // Repos is every repository the cache holds, with its current incarnation's
 // number.
@@ -161,6 +180,62 @@ func Persist(ctx context.Context, c *Cache, repoID string, round bool) error {
 	inc := e.current
 	e.mu.Unlock()
 	return c.persist(ctx, e, inc, round)
+}
+
+// MergeRefs merges moves onto the packed-refs in dir — one this cache wrote,
+// whose digest is digest — writing the merged file to w as a delta round's
+// refs step does, and answers how many refs it wrote.
+func MergeRefs(dir string, moves []code.RefRow, digest string, w io.Writer) (int, error) {
+	var out refsFile
+	err := mergeDelta(dir, w, moves, nil, digest, &out)
+	return out.refs, err
+}
+
+// SetFetchConcurrency sets how many downloads one round runs at once. Before
+// any sync.
+func SetFetchConcurrency(c *Cache, n int) { c.fetchConcurrency = n }
+
+// SetNodeFetches sets how many downloads every round on the node shares.
+// Before any sync.
+func SetNodeFetches(c *Cache, n int64) { c.fetches = newFetchSlots(n) }
+
+// SetInstallHook makes every install call fn: "fetched" once a bundle is
+// split and checked, then "pack", "rev" and "idx" after each rename. Before
+// any sync.
+func SetInstallHook(c *Cache, fn func(stage, packDir string)) { c.installHook = fn }
+
+// Waiting is how many callers wait on a round of repoID.
+func Waiting(c *Cache, repoID string) int {
+	e := lookup(c, repoID)
+	if e == nil {
+		return 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	n := 0
+	for _, r := range []*round{e.running, e.next} {
+		if r == nil {
+			continue
+		}
+		for _, w := range r.waiters {
+			if !w.gone {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// Converged reports whether repoID's current incarnation has had a full
+// round in this process.
+func Converged(c *Cache, repoID string) bool {
+	e := lookup(c, repoID)
+	if e == nil {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.current != nil && e.current.converged
 }
 
 func lookup(c *Cache, repoID string) *entry {

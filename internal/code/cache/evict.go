@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // THE JANITOR: one goroutine, owned by Start, that gives back the disk the
@@ -145,6 +147,19 @@ func stampUse(dir string, at time.Time) error {
 		return nil
 	}
 	return err
+}
+
+// setGauges sets crewlet.code.cache.bytes — what every incarnation holds,
+// current and retiring, plus the downloads in flight in tmp/ — and
+// crewlet.code.cache.repos, the repositories with a directory on this node:
+// both from the running totals, so a round that sets them after it ends pays
+// two loads, however many repositories the node holds.
+func (c *Cache) setGauges() {
+	if c.metrics == nil {
+		return
+	}
+	c.metrics.Set(metrics.CodeCacheBytes, float64(c.heldBytes.Load()+c.tmpBytes.Load()), nil)
+	c.metrics.Set(metrics.CodeCacheRepos, float64(c.heldRepos.Load()), nil)
 }
 
 // kick wakes the janitor without waiting for it: a kick already pending

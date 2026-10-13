@@ -10,7 +10,98 @@
 // anything, it is never backed up (its directory carries a CACHEDIR.TAG, so
 // backup tools skip it), and deleting the whole directory loses nothing but
 // time: what a cache holds is derived from the rows and the object store, and
-// is derived again when it is gone.
+// is derived again when it is gone. Its refs are exactly the repository's
+// code_refs at the position its state names, its packs exactly the
+// code_packs there, and [Cache.Sync] writes it by CONVERGENCE — derive the
+// target from the rows, make the directory equal to it — never by replaying
+// what happened.
+//
+// # Convergence, priced for a push on every node
+//
+// A sync after a push on another node is a DELTA: the rows that moved since
+// this cache's position, usually one pack and one ref. So the steady-state
+// work is proportional to what changed, never to the repository: the state
+// is a handful of scalars, rewritten only when the directory changed — a
+// repository fetched a hundred times a second while nobody pushes writes
+// nothing — and a delta neither lists nor sweeps the directory. The FIRST
+// round of a repository in each process asks for the WHOLE answer and
+// sweeps the directory to it (the image: HEAD, config, packed-refs, the
+// state, empty refs/heads and refs/tags, the packs the rows name and the
+// index over them), which is what makes a cache exact from any starting
+// point — a crash, a full disk, an operator's rm, a hand edit, a log
+// restored behind it while the node was down — at the price of one full read
+// per repository per boot, reusing every pack it already holds. Until that
+// round, nothing is answered at once from the state a previous process left:
+// it names positions of the log it was read from, which a restored log
+// reuses for other records. Every later round is a delta, because nothing but
+// this process can have written the directory since.
+//
+// A cache NEVER MOVES BACKWARDS FOR A STALE COPY: a delta from a copy behind
+// it, on the stream it read from, changes nothing — a client that fetched
+// from this node must not see its refs go back. It does go back when the LOG
+// did, which only a read at the log's head can say. A log RECREATED under it
+// — provisioned anew, its stamp not the one the cache read under — shows in
+// any answer's stream identity, and a delta keyed to it is read again whole.
+// A log RESTORED from an older copy keeps its identity (ADR-0035), so only
+// where it ends shows it: a LINEARIZABLE answer below a position this process
+// read — any repository's, since one log is under every one — is the log gone
+// back, and the cache reads the repository whole and converges to what it
+// holds. Either way every repository on the node is marked to be read whole
+// at its next round, and answered nothing at once until then. Two answers
+// read below linearizable are never concluded from as they stand, since a
+// copy behind the log gives both: a full answer below the cache, and "no
+// such repository" — each is asked again at the log's head first, so a
+// stale copy never purges a repository nor takes a cache back.
+//
+// One shape escapes every check: a broker restored under a RUNNING node and
+// written past every position the node read before any of its reads at the
+// log's head lands. The restore runbook's stopped fleet rules it out, and
+// the log's own checks make it rare — every data node ahead of the restored
+// log refuses to serve until an operator re-anchors it, into a generation a
+// delta reads whole — and a node that may have met it is restarted: its first
+// rounds read every repository whole.
+//
+// # The byte path is shaped for S3
+//
+// Packs come from the object store, which in production is S3: GETs are
+// latency-bound and want WIDTH. A push stores ONE object, its pack BUNDLE —
+// the pack, the index and the reverse index its receiving git wrote, back to
+// back — so installing a pack is one GET, split into three files as it
+// streams, and three renames: no node but the receiving one ever runs
+// index-pack, and a cold sync is bound by the network rather than by a core.
+// Up to [FetchConcurrency] downloads run at once, largest first, and at most
+// [NodeFetches] across every sync on the node — half the node to one
+// repository, so a second repository's sync is never starved behind the
+// first one's longest downloads — each holding its slot for its GET alone
+// and its copy buffer with the slot, so the node's download memory is
+// NodeFetches buffers however many syncs wait. Every byte is SHA-256
+// verified against its row on the way in (objstore), and the three sections
+// are held to the row by code.CheckBundle; a bundle that is not its row's is
+// refused and never retried, because the row and the bytes disagree and
+// neither is fixed by asking again. A pack the store does not have, in a
+// round that was not linearizable, is asked about again at linearizable
+// before it is called missing: a copy behind the log may name a pack a purge
+// has since removed.
+//
+// A full round that leaves [MidxPacks] or more packs and no multi-pack-index
+// writes one over exactly those packs — without a bitmap, a merge of the
+// packs' own indexes — before its refs' peel reads them and before it
+// answers: one push is one pack and nothing compacts them, and the request a
+// cold cache was synced for would otherwise be served by git searching every
+// pack's index for every object.
+//
+// # One sync at a time, shared
+//
+// A repository has one round in flight on a node and at most one queued
+// behind it. A caller that needs only what the cache holds — stale, or a
+// session floor it already reaches, of a repository this process has read
+// whole — is answered at once; a LINEARIZABLE
+// caller is answered only by a round that started after it arrived — the
+// statelog.ReadIndex rule, one level up — so a burst of CI clones of one
+// repository costs one barrier and one sync, and none of them is answered by
+// a barrier taken before it asked. Rounds run under the cache's own lifetime,
+// not a caller's: a client that hangs up never cancels the round the others
+// are waiting on.
 //
 // # The directory
 //
@@ -48,8 +139,12 @@
 // in: the files of one step are renamed into place and each directory they
 // landed in is synced ONCE, before any file of a later step names them — so
 // a round that installs a thousand packs into objects/pack pays one
-// directory sync for them, not a thousand. The state file is renamed in
-// LAST, after everything it describes, so it is never ahead of the directory.
+// directory sync for them, not a thousand. So a READER NEVER SEES A REF
+// BEFORE ITS OBJECTS: a pack's files go in before the refs that need them
+// (the .pack, then the .rev, then the .idx — git counts a pack once its .idx
+// exists), and packed-refs and HEAD before the state that claims their
+// position. The state file is renamed in LAST, after everything it
+// describes, so it is never ahead of the directory.
 // It is constant-size — the installed pack set is the directory itself, a
 // pack present once its .idx is (git's own rule) — because a list of every
 // pack rewritten on every sync would be work proportional to the repository
