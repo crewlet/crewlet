@@ -62,8 +62,11 @@ The body is whatever the node sealed. With a keyring configured the coordination
 
 **Every activation carries a later instant than the one it replaces.** The
 pointer records the instant a revision was activated, and every row a
-configuration derives — a tracker project, a knowledge container — is stamped
-with it and refuses an older stamp, so an older configuration applied late
+configuration derives — a tracker project, a knowledge container, a declared
+repository — is stamped with it and refuses an older stamp (a repository
+through the code log's one
+[activation fence](code-host.md#the-reconcile-and-the-activation-fence)
+rather than a stamp of its own), so an older configuration applied late
 cannot walk a newer one back. That guard needs a later activation to carry a
 later instant, and the instant is the activating node's own clock; so inside
 the same compare-and-set that replaces the pointer, an activation whose

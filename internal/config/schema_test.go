@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -132,6 +134,7 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		// field's tag and not the other would leave two enums that agree
 		// today and drift on the next value.
 		{"GitHubProvisioning", "org_webhook", strs(ContainerWebhookModes)},
+		{"CodeProtection", "direct_push", strs(CodeDirectPushes)},
 	}
 	for _, tc := range cases {
 		def, ok := defs[tc.def].(map[string]any)
@@ -216,6 +219,33 @@ func TestNodeIDPatternIsOneRule(t *testing.T) {
 		if got, want := ownPattern(t, field), nodeIDPattern.String(); got != want {
 			t.Fatalf("%s.%s pattern = %v, the validator's nodeIDPattern is %q",
 				tc.def, tc.field, got, want)
+		}
+	}
+}
+
+// THE SCHEMA'S REPOSITORY NAME IS THE GRAMMAR'S. An editor holds code.repos'
+// names to the pattern the schema states, and the validator — like the domain
+// that records them — to gitref.ValidRepoName; the two agree on every name a
+// table can reach for, or an editor underlines a name the engine runs or
+// passes one every node refuses.
+func TestTheRepoNamePatternIsGitrefs(t *testing.T) {
+	t.Parallel()
+	defs, _ := schemaDoc(t, TierCompany)["$defs"].(map[string]any)
+	def, _ := defs["CodeRepo"].(map[string]any)
+	props, _ := def["properties"].(map[string]any)
+	field, ok := props["name"].(map[string]any)
+	if !ok {
+		t.Fatal("the company schema's CodeRepo has no name")
+	}
+	pattern := regexp.MustCompile(ownPattern(t, field))
+	for _, name := range []string{
+		"web", "a", "0", "9lives", "nimbus-web", "a-b-c", "a--b",
+		strings.Repeat("a", 63), strings.Repeat("a", 64), "a" + strings.Repeat("-", 61) + "b",
+		"", "-web", "web-", "Web", "wEb", "web.app", "web.git", "web_app", "web app",
+		"wéb", "web/app", "..", "w@b",
+	} {
+		if got, want := pattern.MatchString(name), gitref.ValidRepoName(name); got != want {
+			t.Errorf("the schema's pattern says %v of %q, gitref.ValidRepoName %v", got, name, want)
 		}
 	}
 }

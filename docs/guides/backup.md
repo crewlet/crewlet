@@ -131,8 +131,11 @@ What is worth knowing about it:
   its own file alone.
 - **The objects come from the object store, not from this node's disk.** The
   rows that name them are the declared ones — a project's files
-  (`tracker_files`) and the pack bundles the company's git repositories'
-  pushes stored (`code_packs`), both live references. On
+  (`tracker_files`) and the pack bundles the company's
+  [git repositories'](../concepts/code-host.md) pushes stored
+  (`code_packs`), both live references — a repository's rows, its refs and
+  settings among them, are in the replicated store copy like every other
+  replicated row, and its packs ride the backup as these objects. On
   `nats` they are already a stream — `OBJ_crewlet_files` — and the stream
   snapshot the backup takes anyway carries them, so no object is copied on its
   own: the manifest's `objects.stream` names the stream. Once the snapshot is

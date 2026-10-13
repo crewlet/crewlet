@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -339,34 +340,42 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 	}
 }
 
-// codeHostLimited is [codeHostCompany] with every code.limits field set.
+// codeHostLimited is [codeHostCompany] with every code.limits field set, and a
+// retention of a year.
 const codeHostLimited = nativeCleanupCompany + `code:
   native: true
+  deleted_retention_days: 365
   limits:
     max_push_bytes: 67108864
     max_blob_bytes: 1048576
     repo_max_bytes: 2147483648
 `
 
-// A REVISION THAT TURNS THE CODE HOST OFF LEAVES THE RUNNING COMMITTER ITS
-// LIMITS.
+// A REVISION THAT TURNS THE CODE HOST OFF LEAVES THE RUNNING HOST ITS SETTINGS
+// — the committer its limits and the retention duty its retention.
 //
-// `code.limits` without `code.native` is refused, so the revision that turns
-// the host off must drop its limits too — and a node whose runtime was built
-// with the host keeps serving it until a restart ([backendSwitches]). Read off
-// that revision, every push the still-running committer decided was held to
-// the defaults: a company that had capped a repository at 2 GiB and a push at
-// 64 MiB was handed 20 GiB repositories and 1 GiB pushes on a host it had just
-// asked to wind down. The limits in force are the newest activated revision's
-// that hosted code, carried from epoch to epoch; a revision that hosts code
-// again brings its own.
-func TestTheCodeLimitsOutliveTheRevisionThatTurnsTheHostOff(t *testing.T) {
+// `code.limits` and `code.deleted_retention_days` without `code.native` are
+// refused, so the revision that turns the host off must drop them too — and a
+// node whose runtime was built with the host keeps serving it until a restart
+// ([backendSwitches]). Read off that revision, every push the still-running
+// committer decided was held to the defaults: a company that had capped a
+// repository at 2 GiB and a push at 64 MiB was handed 20 GiB repositories and
+// 1 GiB pushes on a host it had just asked to wind down — and the
+// still-running retention duty would purge, by the default week, a repository
+// the company had chosen to keep restorable for a year. The settings in force
+// are the newest activated revision's that hosted code, carried from epoch to
+// epoch; a revision that hosts code again brings its own.
+func TestTheCodeSettingsOutliveTheRevisionThatTurnsTheHostOff(t *testing.T) {
 	t.Parallel()
 	e := newSandboxNode(t, parseCompany(t, codeHostLimited))
 	capped := code.Limits{MaxPushBytes: 64 << 20, MaxBlobBytes: 1 << 20, RepoMaxBytes: 2 << 30}
+	year := 365 * 24 * time.Hour
 	if got := e.codeLimits(); got != capped {
 		t.Fatalf("the premise: a company hosting code with limits is held to %+v, want %+v",
 			got, capped)
+	}
+	if got := e.codeDeletedRetention(); got != year {
+		t.Fatalf("the premise: a company keeping deleted repositories a year purges after %v", got)
 	}
 	applyOK(t, e, nativeCleanupCompany)
 	if n := e.native.Load(); n == nil || n.committer == nil || !n.built.runsCode() {
@@ -377,15 +386,27 @@ func TestTheCodeLimitsOutliveTheRevisionThatTurnsTheHostOff(t *testing.T) {
 		t.Errorf("after a revision turned the code host off, the committer it leaves "+
 			"running is held to %+v, want the last hosting revision's %+v", got, capped)
 	}
+	if got := e.codeDeletedRetention(); got != year {
+		t.Errorf("after a revision turned the code host off, the retention duty it leaves "+
+			"running purges after %v, want the last hosting revision's %v", got, year)
+	}
 	// A LATER REVISION THAT CHANGES SOMETHING ELSE carries them on.
 	applyOK(t, e, strings.Replace(nativeCleanupCompany, "name: Acme", "name: Acme Co", 1))
 	if got := e.codeLimits(); got != capped {
 		t.Errorf("a second revision without the code host held the committer to %+v, "+
 			"want %+v carried on", got, capped)
 	}
+	if got := e.codeDeletedRetention(); got != year {
+		t.Errorf("a second revision without the code host purges after %v, want %v carried on",
+			got, year)
+	}
 	applyOK(t, e, codeHostCompany)
 	if got := e.codeLimits(); got != code.DefaultLimits() {
 		t.Errorf("a revision hosting code again with no limits is held to %+v, want the "+
 			"defaults %+v", got, code.DefaultLimits())
+	}
+	if got, want := e.codeDeletedRetention(), (config.Code{}).DeletedRetention(); got != want {
+		t.Errorf("a revision hosting code again with no retention purges after %v, want the "+
+			"default %v", got, want)
 	}
 }

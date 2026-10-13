@@ -664,10 +664,11 @@ func (e *Engine) startCollectorOver(ctx context.Context, n *native) error {
 	return e.startObjectCollector(ctx, refs)
 }
 
-// startNativeDuties arms the native runtime's two fleet-singleton duties — the
-// log's trim, without which a domain's log only grows to its ceiling, and the
-// vector domain's one writer — and the usage publisher every node runs for its
-// own days ([Engine.startUsage]). ONE CALL FOR BOTH CALLERS — [New] and
+// startNativeDuties arms the native runtime's fleet-singleton duties — the
+// log's trim, without which a domain's log only grows to its ceiling, the
+// vector domain's one writer, and, where the runtime hosts code, the purge of
+// deleted repositories ([Engine.startCodeRetention]) — and the usage publisher
+// every node runs for its own days ([Engine.startUsage]). ONE CALL FOR BOTH CALLERS — [New] and
 // [Engine.startNativeFor] — so a runtime met at an apply cannot be missing a
 // writer a boot would have armed: a node that booted unconfigured and was
 // handed its first company by an apply would otherwise never publish a day of
@@ -686,6 +687,10 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// days. Without it the domain replicates an empty stream and every
 	// spend answer is as partial as it was before the domain existed.
 	e.startUsage(ctx, n.log)
+	// AND THE CODE HOST'S PURGE, where the runtime hosts code: without it a
+	// repository removed from code.repos is deleted and never purged, and
+	// its name and its packs are held for ever.
+	e.startCodeRetention(ctx, n)
 }
 
 // stopNative ends this node's native backends. Nil-safe, which is the node
@@ -1159,17 +1164,15 @@ func pagesParserOptions(env *config.Resolver, c *Company) pages.ParserOptions {
 	return pages.ParserOptions{Leads: containerLeads(c.Org), BaseURL: dashboardBase(env, c)}
 }
 
-// reconcileNative swaps the native parsers for a newly applied epoch.
+// reconcileNative brings the native runtime to a newly applied epoch: it says
+// which of the epoch's choices wait for a restart, swaps the native parsers,
+// and applies the chart's projects, the knowledge containers and the
+// repositories code.repos declares.
 //
-// The same edge every vendor reconciler sits on, and for the same reason: a
-// node that kept its boot-time parser would route the new revision's work by
-// the old company's org chart — an item filed into a project whose lead
-// moved would keep waking the seat that used to own it.
-//
-// NOT the projectors, the index, the stores or the feeds. Those follow a
-// coordination FAMILY, which no company revision changes; rebuilding them
-// here would drop this node's projection and re-run a boot reconcile on
-// every configuration edit.
+// NOT the projectors, the index, the stores or the feeds. Those follow the
+// fleet's logs, which no company revision changes; rebuilding them here would
+// drop this node's copy and re-run a boot reconcile on every configuration
+// edit.
 //
 // There is no retirement branch. Switching `tracker.backend` away from
 // native is not a live gesture — the runtime, its halves and its feeds are
@@ -1178,6 +1181,17 @@ func pagesParserOptions(env *config.Resolver, c *Company) pages.ParserOptions {
 // registered until then is the honest state: the records are still there
 // and still reachable. What this does instead is SAY so, first: see
 // [Engine.sayBackendSwitches].
+//
+// # The applies are the runtime's, not the inbound edge's
+//
+// The parsers ride the inbound edge ([Engine.swapNativeParsers]), and a node
+// with none has nothing to swap. The chart, the containers and the
+// repositories do not: they are the RUNTIME's, written through its own
+// writers, and they used to be applied only after the edge's return — so on a
+// node whose edge was not running, every activation's projects, containers
+// and repositories went unapplied with nothing saying so. Each apply is gated
+// on its own writer instead ([Engine.writeSide]), which is the one gate that
+// says whether this node may write at all.
 func (e *Engine) reconcileNative(ctx context.Context, c *Company, activatedAt time.Time) {
 	built, runs := e.runtimeBuilt()
 	if !runs {
@@ -1186,10 +1200,26 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company, activatedAt ti
 	// THE CHOICES THIS RUNTIME WAS NOT BUILT WITH, said once per activation:
 	// the runtime is built once per process, so a revision that moves a
 	// native backend activates cleanly here and changes nothing until a
-	// restart — and before this line nothing said so. FIRST, and above the
-	// inbound edge's return below: the line is about the runtime, and a node
-	// with no edge (one in a maintenance mode) runs one all the same.
+	// restart — and before this line nothing said so. FIRST: the line is
+	// about the runtime, and a node with no edge (one in a maintenance mode)
+	// runs one all the same.
 	e.sayBackendSwitches(ctx, built, c)
+	e.swapNativeParsers(ctx, c)
+	// THE CHART, stamped with the activation this apply is for — see
+	// [Engine.applyChart].
+	e.applyChart(ctx, c, activatedAt)
+	e.applyContainers(ctx, c, activatedAt)
+	e.applyCodeRepos(ctx, c, activatedAt)
+}
+
+// swapNativeParsers swaps the native parsers on this node's inbound edge for
+// the epoch c's, and does nothing on a node whose edge is not running.
+//
+// The same edge every vendor reconciler sits on, and for the same reason: a
+// node that kept its boot-time parser would route the new revision's work by
+// the old company's org chart — an item filed into a project whose lead moved
+// would keep waking the seat that used to own it.
+func (e *Engine) swapNativeParsers(ctx context.Context, c *Company) {
 	e.notify.mu.Lock()
 	svc := e.notify.service
 	e.notify.mu.Unlock()
@@ -1207,10 +1237,6 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company, activatedAt ti
 				"detail", "the previous routing is still current")
 		}
 	}
-	// THE CHART, stamped with the activation this apply is for — see
-	// [Engine.applyChart].
-	e.applyChart(ctx, c, activatedAt)
-	e.applyContainers(ctx, c, activatedAt)
 }
 
 // applyContainers makes the knowledge containers this company names exist.

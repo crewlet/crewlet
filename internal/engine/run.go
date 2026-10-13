@@ -567,6 +567,18 @@ type Engine struct {
 	// chart per tick instead.
 	usage *usageLoop
 
+	// codeRetention is the code-retention duty's loop on this node: the
+	// fleet singleton that purges the repositories deleted past their
+	// retention. On the ENGINE for the embedding duty's reason, and armed
+	// only where the runtime hosts code and the node publishes; it reads
+	// the current epoch's retention per pass.
+	codeRetention *codeRetentionDuty
+
+	// codeRepos runs this node's reconciles of code.repos beside the
+	// applies that ask for them ([codeReconciler]): never nil, and idle on a
+	// node that hosts no code, which never asks.
+	codeRepos *codeReconciler
+
 	// usageEvery is Options.usageEvery.
 	usageEvery time.Duration
 
@@ -938,6 +950,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// A runner per caller would give the loop, the API and a disconnect a
 	// claim map each, which guards nothing.
 	e.setupRunner = sync.OnceValue(e.newSetupRunner)
+	// BUILT BEFORE THE FIRST APPLY THAT ASKS IT, which is the boot's; it
+	// starts nothing until one does.
+	e.codeRepos = newCodeReconciler(e.decideCodeRepos)
 
 	// THE VIEW OF THE FLEET'S DATA NODES, built before the router that asks
 	// it on every request. Building it lists nothing: it runs
@@ -1158,6 +1173,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// AND THE CONTAINERS, for the same reason and on the same terms —
 		// see [Engine.applyContainers], and the bug it fixes.
 		e.applyContainers(ctx, company, opts.ActivatedAt)
+		// AND THE REPOSITORIES, for the containers' reason: the ones
+		// code.repos declares are reconciled from the boot that hosts them
+		// — asked for here and decided beside the boot rather than inside
+		// it, see [Engine.applyCodeRepos].
+		e.applyCodeRepos(ctx, company, opts.ActivatedAt)
 		// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the
 		// epoch is current, and one that found an empty registry would run
 		// a seat with no tools at all — a company that boots cleanly and
@@ -1923,10 +1943,27 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopSeatPauses()
 	e.stopEmbedding()
 	e.stopUsage()
-	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
-	// says: the key means "this process may be publishing", so withdrawing
-	// it while a seat was still finishing a turn would tell a coordinator
-	// the opposite of the truth.
+	// AND THE CODE-RETENTION DUTY, whose every pass publishes purge steps
+	// and re-declarations on the code log: a pass still running past the
+	// withdrawal below would append to a log a capacity coordinator may
+	// already be sealing. Before [Engine.releaseDuties] too, which follows
+	// the withdrawal: its loop claims the duty afresh every turn, so one
+	// still running past the release takes it straight back.
+	e.stopCodeRetention()
+	// AND THE RECONCILE OF code.repos, which runs beside the applies that
+	// ask for it and publishes a record for every repository that changed
+	// ([codeReconciler]): the one in flight is ended, and the next boot
+	// reconciles.
+	e.stopCodeRepos()
+	// AFTER THE DRAIN AND AFTER EVERY STATE-LOG PUBLISHER, which is what the
+	// admission says: the key means "this process may be publishing", and
+	// it is the one thing that keeps a capacity coordinator from taking its
+	// exclusion while this node runs (statelog.AdmissionBlocks). So every
+	// loop above that appends to a log — the trim, the embedding duty, the
+	// usage publisher, the code-retention duty and the reconcile of
+	// code.repos — is stopped before it is withdrawn, and withdrawing it
+	// while a seat was still finishing a turn, or a duty was still
+	// publishing, would tell a coordinator the opposite of the truth.
 	if err := e.withdraw(ctx); err != nil {
 		log.WarnContext(ctx, "admission_not_withdrawn", "err", err,
 			"detail", "a capacity operation will see this node as a possible "+

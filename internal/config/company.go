@@ -254,7 +254,9 @@ func (c *Company) ValidateRunnable() error {
 // Today they are the org's duplicate seat names, duplicate unit names and a
 // unit reference on a seat declared inside another unit (see
 // [org.Organization.ValidateAdmission]), duplicate sandbox setup step names
-// within one list, and a GitHub App on a human seat.
+// within one list, a GitHub App on a human seat, and the code host's two
+// policy bounds — at most [CodeMaxRepos] repositories, and a retention of at
+// most [CodeMaxDeletedRetentionDays] (see [Code.validateAdmission]).
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -264,7 +266,7 @@ func (c *Company) ValidateAdmission() error {
 // caller already built.
 func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateSetupStepNames(),
-		c.validateHumanSeatApps())
+		c.validateHumanSeatApps(), c.Code.validateAdmission(field("code")))
 }
 
 // validateHumanSeatApps refuses a per-seat GitHub App on a human seat.
@@ -511,7 +513,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	p.wrap(c.Scheduling.validate(field("scheduling")))
 	p.wrap(c.Integrations.validate(field("integrations")))
 	p.wrap(c.validateKnowledgeBackend())
-	p.wrap(c.Code.validate(field("code")))
+	p.wrap(c.Code.validate(field("code"), o))
 	p.wrap(c.validateContainerKeys())
 	p.wrap(c.validateProviderKeys())
 	p.wrap(c.validateWorkers())

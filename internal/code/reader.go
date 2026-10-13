@@ -957,6 +957,80 @@ func cutPushCursor(s string) (int64, int64, string, bool) {
 	return at, position, parts[2], true
 }
 
+// RepoLife is one repository as a reconcile of code.repos reads it: its id and
+// its name, whether it is live, deleted or purging, and who manages it — and
+// nothing else.
+type RepoLife struct {
+	ID        string
+	Name      string
+	Status    RepoStatus
+	ManagedBy ManagedBy
+}
+
+// lifePage is how many repositories one page of [Reader.WalkLives] reads: a
+// thousand rows of four short columns — an id, a name of at most 63 bytes,
+// two words — about 150 KB, one statement seeking the name index, so the ten
+// thousand repositories a document may declare are ten statements, each
+// holding one connection of the estate's reader pool for a few milliseconds
+// rather than the whole walk.
+const lifePage = 1_000
+
+// WalkLives hands visit every repository a reconcile of code.repos acts on —
+// active, archived or deleted; a purge's is the code-retention duty's — in
+// name order, a page of [lifePage] at a time, each page one STALE read of
+// this node's rows. A visit's error ends the walk with it.
+//
+// THE RECONCILE'S OWN READ, because the listing a surface reads is the wrong
+// shape for it: [Reader.Read]'s repositories carry the head (a join of
+// code_refs a row), every protection rule of the page, the description and
+// the counters, all of them measured against the page's byte budget — 529 ms
+// and 51 MB allocated over ten thousand repositories of one short rule, and
+// 1.97 s and 352 MB over two thousand at validation's maxima, where a reconcile
+// reads an id, a name, a status and a manager. STALE IS ENOUGH: every
+// decision the reconcile takes from it is taken again inside its own snapshot
+// after the activation's fence, so a row the walk missed is caught at the
+// next apply and one it showed wrongly is decided away.
+func (r *Reader) WalkLives(ctx context.Context, visit func(RepoLife) error) error {
+	query := statelog.Freshness{Level: statelog.ReadStale}.Query(
+		statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+	page := make([]RepoLife, 0, lifePage)
+	after := ""
+	for {
+		_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
+			page = page[:0]
+			rows, err := tx.QueryContext(ctx, livesSQL, after, lifePage)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var (
+					l               RepoLife
+					status, managed string
+				)
+				if err := rows.Scan(&l.ID, &l.Name, &status, &managed); err != nil {
+					return err
+				}
+				l.Status, l.ManagedBy = RepoStatus(status), ManagedBy(managed)
+				page = append(page, l)
+			}
+			return rows.Err()
+		})
+		if err != nil {
+			return fmt.Errorf("code: list the repositories a reconcile acts on: %w", err)
+		}
+		for _, l := range page {
+			if err := visit(l); err != nil {
+				return err
+			}
+		}
+		if len(page) < lifePage {
+			return nil
+		}
+		after = page[len(page)-1].Name
+	}
+}
+
 // dueRepo is one repository the code-retention pass steps: what the pass
 // needs of it and nothing more — its id to step, its name to report and hand
 // on — and where it sits in the listing's order.
@@ -1135,6 +1209,9 @@ const (
 	// predicate repeated verbatim, and keyset on (deleted_at, id): the >=
 	// beside the OR is what keeps the index's range seek, which a bare OR of
 	// the two terms would give up.
+	livesSQL = `SELECT id, name, status, managed_by FROM code_repos
+		WHERE name > ? AND status IN ('active', 'archived', 'deleted')
+		ORDER BY name LIMIT ?`
 	duePurgingSQL = `SELECT id, name, deleted_at FROM code_repos
 		WHERE status = 'purging' AND deleted_at >= ? AND (deleted_at > ? OR id > ?)
 		ORDER BY deleted_at, id LIMIT ?`

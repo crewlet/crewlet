@@ -522,31 +522,34 @@ Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**,
 | `retention` | The state-log **trim**: every 15 minutes it evaluates each domain's floor across every data node's position, the backups and the holds, purges what they all permit, and publishes what it concluded and which term is holding it (see [Retention](../guides/retention.md)) | Two nodes purging and publishing at once would publish two conclusions about one log, and how long a term has been holding is a property of a series of ticks that must be one node's |
 | `embeddings` | Computes the embedding of every page and task whose vector is missing or stale and publishes it to the vectors log, which every node applies | Each node embedding the corpus would be one provider bill per node for one company — the cost the vectors log exists to pay once |
 | `object-collector` | Runs the [object store's](object-store.md#collection-and-audit) two passes against the one store the fleet's files are in: hourly, deletes every object stored and keyed more than a day ago that no row names (and stops deleting when this node's estate is incomplete), and abandons uploads that never finished; daily, audits that every object a live row names is in the store and whole, raising `objects_missing` when one is not. Records each pass in the coordination store | Two collectors are safe — a key is named only by the write that uploaded it, and deleting an object that is gone is not an error — but each would list the whole store and read every row naming an object, for one answer |
+| `code-retention` | Every 15 minutes, where the company [hosts code](code-host.md), finishes every repository purge already begun and then purges the repositories deleted longer ago than `code.deleted_retention_days`, oldest first, in bounded steps paced to a third of each node's write lane; a purged name the current configuration declares again is created at once | Each step is one record on the code log that every data node applies, so a second holder would pay every node's write lane twice and race the first's steps on each repository's one subject |
 
 Without a placement host — the single-node case — the answer is always yes: there is no fleet to be a singleton within. A duty claim that *fails* (an unreachable lease store) skips the tick rather than proceeding: unknown ownership is not ownership, and assuming otherwise is how every node decides it is the singleton at once.
 
-A duty whose one tick can outlast its lease — the embedding duty's index training, the object collector's audit of a large store — **renews the lease while the tick runs**, four times a lease, and the tick is stopped the moment a renewal answers that another node holds the duty, or once none has confirmed it for the lease less one renewal, past which another node could hold it. A renewal the store does not answer — refused, or held on to while the coordination stream's leader moves — is neither: the last confirmation still keeps every other node out, and no renewal waits longer than one renewal interval for its answer, so the next is asked inside that window and one unanswered renewal costs the tick nothing; a tick stopped either way publishes or records nothing more.
+A duty whose one tick can outlast its lease — the embedding duty's index training, the object collector's audit of a large store, a code-retention pass over a long backlog of purges — **renews the lease while the tick runs**, four times a lease, and the tick is stopped the moment a renewal answers that another node holds the duty, or once none has confirmed it for the lease less one renewal, past which another node could hold it. A renewal the store does not answer — refused, or held on to while the coordination stream's leader moves — is neither: the last confirmation still keeps every other node out, and no renewal waits longer than one renewal interval for its answer, so the next is asked inside that window and one unanswered renewal costs the tick nothing; a tick stopped either way publishes or records nothing more.
 
 A duty that decides from a domain's rows — the trim (the evictions the
 tracker's, the knowledge base's and the code log's rows hold), the embedding
-duty (the tracker's, the knowledge base's and the vectors' rows) and the
+duty (the tracker's, the knowledge base's and the vectors' rows), the
 object collector (the tracker's and the code log's, whose rows name the
-objects it collects) — is declined by a node whose copy of any of them is out
-of service: it does not claim it, it gives the duty's lease back if it
+objects it collects) and the code-retention duty (the code log's, whose rows
+say which repositories are due a purge) — is declined by a node whose copy of
+any of them is out of service: it does not claim it, it gives the duty's lease back if it
 holds it, and a node whose copies serve takes the duty at its own next tick
 rather than once the lease lapses
 ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
 Deciding from a wrong copy would act for the whole fleet on rows the node has
 stopped serving: withdraw the vectors of tasks its copy never applied, purge
 past a node its copy still counts as evicted, or hold the collector while every
-pass it ran was refused. The node logs `<duty>_declined` naming the domain —
-`embed_duty_declined`, `retention_duty_declined` or
-`object_collector_declined` — once, `<duty>_given_back` when it gave back a
+pass it ran was refused, or purge a repository its copy says was deleted when
+the fleet has restored it. The node logs `<duty>_declined` naming the domain —
+`embed_duty_declined`, `retention_duty_declined`,
+`object_collector_declined` or `code_retention_duty_declined` — once, `<duty>_given_back` when it gave back a
 lease it held (and `<duty>_not_given_back`, tried again a tick later, when the
 lease store did not answer), and `<duty>_resumed` when the copy is back in
-service. A training tick that is running when its copy goes out of service is
-cut off, as one that loses its lease is, and gives the duty back once it has
-returned.
+service. A training tick or a code-retention pass that is running when its
+copy goes out of service is cut off, as one that loses its lease is, and gives
+the duty back once it has returned.
 
 A claim is not the only way a tick declines. The `integration-reconcile` loop asks a second question first — is this node's [config posture](control-plane.md) current? — and on `shed` or `stuck` it declines *without claiming*, so the lease lapses and a peer on the current revision takes it. That question is about this node's own configuration rather than about ownership, and it is asked only there: the loop is the one duty whose work reaches outside the deployment, so a stale document means accounts and webhooks converged to a revision the fleet has replaced.
 

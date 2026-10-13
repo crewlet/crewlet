@@ -190,14 +190,16 @@ func TestADeferredRecordIsAnsweredAsEnsureRepoAnswersIt(t *testing.T) {
 	}
 }
 
-// A BATCH REFUSED FOR A REASON EVERY DECLARATION SHARES IS EVERY
-// DECLARATION'S ANSWER, from its one publish. A node whose applier is held
-// below the activation's own fence refuses the batch `behind` on that fence's
-// session floor — the floor every per-repository publish waits on too — so
-// each of them would wait out the same budget for the same refusal: at the
-// ten thousand repositories a configuration may declare, hours before the
-// reconcile reported what the first publish already knew. Only a declaration
-// that is not one is answered otherwise, by its own refusal.
+// A BATCH REFUSED FOR A REASON EVERY DECLARATION SHARES IS THE CALL'S ERROR
+// AND EVERY DECLARATION'S ANSWER, from its one publish. A node whose applier
+// is held below the activation's own fence refuses the batch `behind` on that
+// fence's session floor — the floor every per-repository publish waits on too
+// — so each of them would wait out the same budget for the same refusal: at
+// the ten thousand repositories a configuration may declare, hours before the
+// reconcile reported what the first publish already knew. The call says so
+// once, and each declaration it left undecided carries that same error, so a
+// caller logging the call's failure can pass over every one of them. Only a
+// declaration that is not one is answered otherwise, by its own refusal.
 func TestABatchRefusedBehindIsEveryDeclarationsAnswer(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -214,14 +216,15 @@ func TestABatchRefusedBehindIsEveryDeclarationsAnswer(t *testing.T) {
 		{Name: "fresh", Settings: described("new")},
 		{Name: "Not A Name", Settings: described("one")},
 	})
-	if err != nil {
-		t.Fatalf("EnsureRepos: %v", err)
+	var refused *statelog.Unavailable
+	if !errors.As(err, &refused) || refused.Reason != statelog.ReasonBehind {
+		t.Fatalf("EnsureRepos on a node held below its activation's fence = %v, want the "+
+			"batch's own refusal, behind, as the call's error", err)
 	}
 	for i, r := range got[:3] {
-		var refused *statelog.Unavailable
-		if !errors.As(r.Err, &refused) || refused.Reason != statelog.ReasonBehind {
+		if r.Err != err { //nolint:errorlint // the identical value is the assertion
 			t.Errorf("declaration %d on a node held below its activation's fence answered "+
-				"%+v, want the batch's own refusal, behind", i, r)
+				"%+v, want the call's own error, %v", i, r, err)
 		}
 	}
 	if !errors.Is(got[3].Err, code.ErrInvalid) {
@@ -260,10 +263,10 @@ func TestEnsureReposRestoresWhatALaterActivationDeclaresAgain(t *testing.T) {
 	}
 }
 
-// AN OLDER ACTIVATION'S RECONCILE IS SUPERSEDED, declaration by declaration —
-// never answered unchanged from a snapshot a later fence stands in, and from
-// the batch's one publish, since every per-repository decide reads that same
-// fence first and answers the same — and an activation Activate never made
+// AN OLDER ACTIVATION'S RECONCILE IS SUPERSEDED, the call and every declaration
+// in it — never answered unchanged from a snapshot a later fence stands in, and
+// from the batch's one publish, since every per-repository decide reads that
+// same fence first and answers the same — and an activation Activate never made
 // fails the call.
 func TestEnsureReposIsSupersededByALaterActivation(t *testing.T) {
 	t.Parallel()
@@ -286,8 +289,9 @@ func TestEnsureReposIsSupersededByALaterActivation(t *testing.T) {
 		{Name: "steady", Settings: described("same")},
 		{Name: "fresh", Settings: described("new")},
 	})
-	if err != nil {
-		t.Fatalf("EnsureRepos: %v", err)
+	if !errors.Is(err, code.ErrSuperseded) {
+		t.Fatalf("EnsureRepos at a superseded activation = %v, want ErrSuperseded as the "+
+			"call's error: every declaration shares it", err)
 	}
 	for i, r := range got {
 		if !errors.Is(r.Err, code.ErrSuperseded) {

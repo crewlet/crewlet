@@ -15,7 +15,7 @@ The framework models the same structures found in real companies:
 - **Organizational hierarchy** — departments, teams, and individual roles; seats are held by AI agents or [human teammates](humans-in-the-org.md)
 - **Communication** — channels, direct messages, and external tools (Slack or self-hosted [Mattermost](../integrations/mattermost.md), the work-item tracker, the code host)
 - **Task management** — the engine's own work tracker by default (items, threads, hand-offs, a board and an MCP surface), or an external PM tool it deliberately mirrors none of (Jira, GitHub/GitLab issues) — see [The Tracker](task-engine.md)
-- **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code through the [code sandbox](code-sandbox.md)
+- **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code through the [code sandbox](code-sandbox.md); beside those, a company can host its git repositories in the engine itself (`code.native`) — repositories declared in its configuration, kept as replicated rows with each push's bytes in the object store — see [Code Host](code-host.md)
 - **Knowledge** — a shared knowledge base behind one seam, either the engine's own pages (keyword over a BM25 index this node holds, semantic over embeddings the fleet derives once, or the two fused by reciprocal rank fusion — `hybrid` is the default) or a live Confluence search, plus a per-agent private diary (vector similarity computed by the database — hybrid vector ∪ recency candidate selection)
 - **Decision-making** — structured DACI framework with clear authority
 
@@ -206,7 +206,11 @@ internal/
 ├── usage/                # Each node's day, replicated — statelog's fourth
 │                         #   domain: spend, turns and reads that outlive the
 │                         #   node that recorded them
-├── code/                 # The code host. gitproc/ is the one git subprocess
+├── code/                 # The code host — statelog's fifth domain: a
+│                         #   repository's settings, refs and packs as rows,
+│                         #   one subject a repository, the committer that
+│                         #   group-commits its pushes, the activation fence
+│                         #   and the paced purge. gitproc/ is the one git subprocess
 │                         #   wrapper — a built environment, an allowlisted
 │                         #   configuration, slot lanes, process groups and
 │                         #   deadlines — and gitproc/gittest/ the client git

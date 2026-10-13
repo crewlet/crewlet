@@ -33,8 +33,9 @@ flowchart LR
 ```
 
 Today the store holds [a project's files](../guides/work-tracker.md#a-projects-files)
-and the pack bytes of the company's git repositories — one object per push,
-named by its `code_packs` row, a required reference like a file's.
+and the pack bytes of the company's [git repositories](code-host.md) — one
+object per push, named by its `code_packs` row, a required reference like a
+file's.
 It is built for more than that — chat attachments and anything else a row can
 name by key — and every consumer follows the same rule: the estate names the
 object, and the store keeps its bytes.
@@ -167,6 +168,12 @@ bucket is one stream on one replica set. For the three or five data nodes a
 fleet runs that is what any placement would have done anyway. A company whose
 files outgrow one member's disk, or that would rather its files lived in
 storage it already runs, takes the S3 backend.
+
+**S3 is the production store for a company that hosts code.** Every push to a
+[repository the engine hosts](code-host.md) is one object, and nothing removes
+a repository's packs but the repository's own purge, so its repositories grow
+as long as the company works in them — on `nats`, on every member's disk
+beside the logs.
 
 The stream declares **no byte ceiling**, unlike the state logs: the engine
 reserves disk for the company's own records, whose growth the trim governs,

@@ -1,6 +1,6 @@
 # Replication
 
-Crewlet's own tracker, knowledge base and code host are **replicated state machines**
+Crewlet's own tracker, knowledge base and [code host](../concepts/code-host.md) are **replicated state machines**
 (the embeddings and each node's usage history ride the same framework as
 [compacted domains](#two-compacted-domains-the-embeddings-and-each-nodes-day)). One
 ordered stream per domain is the write-ahead log; every node applies it into
@@ -220,12 +220,23 @@ deliberate:
   path is handed both and refuses to append a record that does not carry
   them, because a record naming nobody is one this gate can never drop.
 - **The deletion gate.** A record about a task a purge destroyed — a turn's
-  record of what it spent on the task included — or about a purged page
-  applies nowhere, for ever. This is what stops a redelivery months later
-  resurrecting rows an operator deliberately removed.
+  record of what it spent on the task included — about a purged page, or
+  about a repository whose purge has finished (the last step of a
+  [repository purge](../concepts/code-host.md#deletion-and-purge) leaves
+  only its deletion marker) applies nowhere, for ever. This is what stops a
+  redelivery months later resurrecting rows an operator deliberately removed.
 
 Neither is a bug being worked around: they are what make an eviction and a
 purge mean something on a system where the log outlives the decision.
+
+The code log adds one rule of the same spirit that is not a gate: the
+**activation fence**. Each configuration activation's reconcile of
+`code.repos` publishes one fence record first, and a configuration record
+decided under an older activation than the newest one the log has fenced
+applies — as nothing, identically on every node, because the fence is derived
+from the log — so a node applying an older revision late cannot walk a newer
+one's repositories back (see
+[The reconcile and the activation fence](../concepts/code-host.md#the-reconcile-and-the-activation-fence)).
 
 ### Every node that can write is one the trim waits for
 

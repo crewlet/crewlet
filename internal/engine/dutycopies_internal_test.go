@@ -117,6 +117,15 @@ func TestADutyDeclinesWhileACopyItDecidesFromIsOutOfService(t *testing.T) {
 					newCollectorDuty(nil, copiesNamedBy(refs), claim.giveBack))
 			},
 		},
+		"the code-retention duty": {
+			decidesFrom: []string{codeName},
+			turn: func(t *testing.T, e *Engine, claim *countingClaim) {
+				d := &codeRetentionDuty{claim: claim.claim, giveBack: claim.giveBack,
+					copies:  e.copyOutOfService,
+					renewal: newDutyRenewal(codeRetentionDutyName, codeRetentionDutyTTL)}
+				d.turn(t.Context())
+			},
+		},
 	}
 	for name, duty := range duties {
 		for _, d := range registeredDomains() {
@@ -193,7 +202,16 @@ func TestEveryDutyNamesTheDomainsItDecidesFrom(t *testing.T) {
 			collector, named)
 	}
 
-	for duty, names := range map[string][]string{"embedding": embed, "collector": named} {
+	// THE CODE-RETENTION DUTY PURGES BY THE CODE LOG'S ROWS, and by nothing
+	// else: what is due and what a purge step removes are both read there.
+	retention := (&codeRetentionDuty{}).decidesFrom()
+	if want := []string{codeName}; !slices.Equal(retention, want) {
+		t.Errorf("the code-retention duty decides from %v, want %v", retention, want)
+	}
+
+	for duty, names := range map[string][]string{
+		"embedding": embed, "collector": named, "code-retention": retention,
+	} {
 		for _, name := range names {
 			if !slices.Contains(registered, name) {
 				t.Errorf("the %s duty decides from %q, which is no registered domain", duty, name)
