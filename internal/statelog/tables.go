@@ -377,12 +377,10 @@ func (t tables) advanceAnchor(ctx context.Context, tx *sql.Tx, subject string, p
 	return nil
 }
 
-// anchor reads a subject's arbitration anchor by exact key.
+// anchor reads a subject's arbitration anchor by exact key ([anchorSQL]).
 func (t tables) anchor(ctx context.Context, tx *sql.Tx, subject string, gen uint32) (Position, error) {
 	var packed int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT anchor FROM statelog_anchor WHERE stream = ? AND subject = ?`,
-		t.stream, subject).Scan(&packed)
+	err := tx.QueryRowContext(ctx, anchorSQL, t.stream, subject).Scan(&packed)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Position{Stream: t.stream, Generation: gen}, nil
@@ -395,6 +393,36 @@ func (t tables) anchor(ctx context.Context, tx *sql.Tx, subject string, gen uint
 		Seq:        uint64(packed % GenerationStride),
 	}, nil
 }
+
+// The anchor table's three reads, each held to the index it is written for by
+// TestEveryAnchorStatementSeeksItsKey: the pinned driver's planner, given no
+// statistics — no deployment gathers any — chooses between two indexes that
+// both lead with the stream on the stream alone.
+const (
+	// anchorSQL reads ONE subject's anchor, and names its key: the table's
+	// primary key (stream, subject), whose automatic index is
+	// sqlite_autoindex_statelog_anchor_1. Unnamed, the planner took
+	// statelog_anchor_swept_idx (stream, anchor) on the stream alone and
+	// walked every anchor of the stream for the one it wanted — a scan every
+	// write's snapshot ran, on every domain, growing with every subject the
+	// log had written inside the trim's window: 4.0 ms a read at twenty
+	// thousand anchors and 84 ms at three hundred thousand, against under
+	// 0.2 ms at both by the key (BenchmarkReadingASubjectsAnchor), so each of
+	// ten thousand repository creates was slower than the last.
+	anchorSQL = `SELECT anchor FROM statelog_anchor INDEXED BY sqlite_autoindex_statelog_anchor_1
+		WHERE stream = ? AND subject = ?`
+
+	// sweepAnchorsSQL and anchorsBelowSQL are ranges over
+	// statelog_anchor_swept_idx (stream, anchor), the index the replicated
+	// estate's first migration shipped for exactly these two.
+	sweepAnchorsSQL = `DELETE FROM statelog_anchor WHERE rowid IN (
+		SELECT rowid FROM statelog_anchor
+		WHERE stream = ? AND anchor < ?
+		ORDER BY anchor LIMIT ?)`
+	anchorsBelowSQL = `SELECT COUNT(*) FROM (
+		SELECT 1 FROM statelog_anchor
+		WHERE stream = ? AND anchor < ? LIMIT ?)`
+)
 
 // sweepAnchors removes up to [AnchorsPerTrimmedRecord] of this stream's
 // anchors below below, LOWEST FIRST, and reports how many went — a trimmed
@@ -411,12 +439,7 @@ func (t tables) anchor(ctx context.Context, tx *sql.Tx, subject string, gen uint
 // is one record on one subject, so no two of a stream's anchors are equal and
 // the order has no ties to break.
 func (t tables) sweepAnchors(ctx context.Context, tx *sql.Tx, below Position) (int, error) {
-	res, err := tx.ExecContext(ctx, `
-		DELETE FROM statelog_anchor WHERE rowid IN (
-			SELECT rowid FROM statelog_anchor
-			WHERE stream = ? AND anchor < ?
-			ORDER BY anchor LIMIT ?)`,
-		t.stream, below.Packed(), AnchorsPerTrimmedRecord)
+	res, err := tx.ExecContext(ctx, sweepAnchorsSQL, t.stream, below.Packed(), AnchorsPerTrimmedRecord)
 	if err != nil {
 		return 0, fmt.Errorf("statelog: remove the anchors on %s below %s: %w", t.stream, below, err)
 	}
@@ -433,11 +456,7 @@ func (t tables) sweepAnchors(ctx context.Context, tx *sql.Tx, below Position) (i
 func (t tables) anchorsBelow(ctx context.Context, db ReadEstate, below Position, limit int) (int, error) {
 	var n int
 	err := db.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM (
-				SELECT 1 FROM statelog_anchor
-				WHERE stream = ? AND anchor < ? LIMIT ?)`,
-			t.stream, below.Packed(), limit).Scan(&n)
+		return tx.QueryRowContext(ctx, anchorsBelowSQL, t.stream, below.Packed(), limit).Scan(&n)
 	})
 	if err != nil {
 		return 0, fmt.Errorf("statelog: count the anchors on %s below %s: %w", t.stream, below, err)
