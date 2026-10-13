@@ -98,6 +98,7 @@ const status: McpServersStatusAnswer = {
       started: 2,
       failed: 0,
       tools: 4,
+      unlisted_annotations: [],
       nodes: [
         {
           node: "node-a",
@@ -140,6 +141,7 @@ const status: McpServersStatusAnswer = {
       started: 1,
       failed: 1,
       tools: 26,
+      unlisted_annotations: ["create_pull_reqest"],
       nodes: [
         {
           node: "node-a",
@@ -184,6 +186,7 @@ const status: McpServersStatusAnswer = {
       started: 0,
       failed: 1,
       tools: 0,
+      unlisted_annotations: [],
       nodes: [
         {
           node: "node-a",
@@ -376,6 +379,25 @@ test("a node's failure sits under its chip without repeating the node", async ()
   const reason = within(github).getByText("for backend-dev: 401 Bad credentials");
   expect(reason.classList.contains("mcp-failure")).toBe(true);
   expect(reason.textContent?.startsWith("node-b")).toBe(false);
+});
+
+// AN ANNOTATION KEY NO INSTANCE LISTS IS SAID: counted in the server's row,
+// where there is no room for a list, and named whole on its page — and a
+// server whose keys all match says nothing about them.
+test("a server's annotation keys that match no tool are counted in its row and named on its page", async () => {
+  mount(<Tools />);
+  await settle();
+  const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
+  expect(within(github).getByText("1 tool_annotations key matches no tool")).toBeDefined();
+  const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
+  expect(within(docs).queryByText(/tool_annotations/)).toBeNull();
+  cleanup();
+
+  location.hash = "#/settings/tools/servers/github";
+  mount(<Tools server="github" />);
+  await settle();
+  expect(screen.getByText("Annotation overrides that match no tool")).toBeDefined();
+  expect(screen.getByText("create_pull_reqest", { selector: ".mcp-unlisted li" })).toBeDefined();
 });
 
 // THE SERVERS' GRID NAMES EACH SERVER'S REACH off the grant on the pushed

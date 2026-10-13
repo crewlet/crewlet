@@ -7194,7 +7194,9 @@ arguments, or the address — never an `env` value or a header), who it
 reported*) and **one chip per live node** with what that node started, and
 under THAT chip the first failure it reported, in secondary ink with the seat
 it was launched for — the chip carries the danger tone and names the node, so
-the reason does not repeat either. The engine puts `tool_sources` on every
+the reason does not repeat either. A server with `tool_annotations` keys no
+started instance lists says *n tool_annotations keys match no tool* under its
+name, and its page names them whole. The engine puts `tool_sources` on every
 agent seat it pushes, so a shared server reaches every agent seat and a
 per-seat one the seats granted it. The launch
 is one line cut at its end, never broken inside a token. A node whose last
@@ -7204,8 +7206,8 @@ running* off the same answer — never the registry's origins, which read *0*
 over a table of failing servers. The status names nodes, commands and
 failures, which is one more reason the section is admin's. A row opens the
 **server's page** (`servers/{name}`): its state, transport, instances, reach
-and tool count, the launch whole, and every node's reason as the heartbeat
-carried it, unclamped — the one place a reason the grid clamps can be read
+and tool count, the launch whole, the annotation overrides that match no tool,
+and every node's reason as the heartbeat carried it, unclamped — the one place a reason the grid clamps can be read
 without a pointer — above the
 catalogue narrowed to its origin, whose chip is drawn and selected even when
 the server registered nothing. A reader refused the status (or one whose read

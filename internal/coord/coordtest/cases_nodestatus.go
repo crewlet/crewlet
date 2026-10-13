@@ -26,7 +26,8 @@ var nodeStatusCases = []testCase{
 				// The seat a failed instance was launched for travels by its
 				// ID, as a string a JSON round trip hands back as one.
 				{Server: "jira", Started: 1, Failed: 1, Tools: 9, Error: "401",
-					ErrorSeat: uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8")},
+					ErrorSeat: uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8"),
+					Unlisted:  []string{"jira_add_coment", "linear_get_issue"}},
 			},
 		}
 		h.present("n1", "n1:a", want.Meta())

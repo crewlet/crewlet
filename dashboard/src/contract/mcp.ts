@@ -58,6 +58,13 @@ export interface McpServerStatus {
   failed: number;
   /** The most tools one started instance serves. */
   tools: number;
+  /**
+   * The entry's `tool_annotations` keys that no instance started on a
+   * reporting node lists a tool for, sorted: each overrides nothing anywhere.
+   * A key only some instances lack is not here — a per-seat child serves what
+   * its seat's credentials reach. Empty where no instance started.
+   */
+  unlisted_annotations: string[];
   /** One cell per live node, in `nodes` order. */
   nodes: McpServerNode[];
 }

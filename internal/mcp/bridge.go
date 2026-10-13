@@ -80,6 +80,9 @@ type serverEntry struct {
 	spec   Spec
 	client *client
 	tools  []*Tool
+	// unlisted are the AnnotationOverrides keys this instance's listing
+	// names no tool for (see [Bridge.UnlistedOverrides]).
+	unlisted []string
 }
 
 // NewBridge returns an empty bridge. A nil logger takes the package default.
@@ -144,6 +147,17 @@ func (b *Bridge) Add(ctx context.Context, spec Spec) (Change, error) {
 		}
 		tools = append(tools, newTool(c, def, spec))
 	}
+	// RECORDED, NOT JUDGED. An override keyed on a name this instance does
+	// not list changes nothing here, and this is the one place that holds
+	// both the keys and the listing — but one instance's listing is not the
+	// server's. A server may serve each instance a different set from the
+	// same entry: mcp-atlassian lists no Confluence tool to a seat holding
+	// only a Jira credential, so the entry's confluence_* key is right for
+	// one seat and absent from another's. A warning here would fire on every
+	// such start of a correct configuration. What is wrong is a key NO instance
+	// lists, and only the heartbeat's per-server row (coord.MCPServerStatus)
+	// and the fleet's status answer built from it see every instance.
+	unlisted := unlistedOverrides(spec, defs)
 
 	// Installing without re-checking the name is safe because Add is the only
 	// writer of b.servers (Stop and StopAll only delete), and the reservation
@@ -154,11 +168,14 @@ func (b *Bridge) Add(ctx context.Context, spec Spec) (Change, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	before := maps.Clone(b.tools)
-	b.servers[spec.Name] = &serverEntry{spec: spec, client: c, tools: tools}
+	b.servers[spec.Name] = &serverEntry{spec: spec, client: c, tools: tools, unlisted: unlisted}
 	change := b.reindexLocked(before)
 
-	b.log.Info("tools_discovered", "server", spec.Name,
-		"tool_count", len(tools), "tool_names", toolNames(tools))
+	attrs := []any{"server", spec.Name, "tool_count", len(tools), "tool_names", toolNames(tools)}
+	if len(unlisted) > 0 {
+		attrs = append(attrs, "annotation_keys_unlisted", unlisted)
+	}
+	b.log.Info("tools_discovered", attrs...)
 	return change, nil
 }
 
@@ -400,6 +417,27 @@ func (b *Bridge) ServerTools(name string) []*Tool {
 	return slices.Clone(entry.tools)
 }
 
+// UnlistedOverrides is every tool_annotations key of the running server
+// instance name that names no tool its listing carries — by the server's own
+// name or with the entry's tool_prefix — sorted, or nil when every key names
+// one or the instance is not running.
+//
+// A FACT ABOUT ONE INSTANCE, never a verdict on the key. Such a key overrides
+// nothing on this instance, which is harmless where the server simply does
+// not serve that tool here (a product this seat holds no credential for, a
+// read-only switch) and a typo where no instance serves it — and only a view
+// of every instance can tell the two apart, which is why the bridge records
+// it and the per-server rows built from every instance judge it.
+func (b *Bridge) UnlistedOverrides(name string) []string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	entry, ok := b.servers[name]
+	if !ok {
+		return nil
+	}
+	return slices.Clone(entry.unlisted)
+}
+
 // Entries projects the whole catalogue for the discovery meta-tools.
 func (b *Bridge) Entries() []Entry { return EntriesOf(b.Tools()) }
 
@@ -549,6 +587,26 @@ func mergeChanges(first, second Change) Change {
 
 func sortTools(tools []*Tool) {
 	slices.SortFunc(tools, func(a, b *Tool) int { return cmp.Compare(a.Name(), b.Name()) })
+}
+
+// unlistedOverrides is every AnnotationOverrides key, sorted, that names no
+// tool in the listing under either spelling newTool accepts: the server's own
+// name or the prefixed one. An excluded tool still counts as listed — the
+// server serves it, and the key is spelled right.
+func unlistedOverrides(spec Spec, defs []toolDef) []string {
+	listed := make(map[string]struct{}, 2*len(defs))
+	for _, def := range defs {
+		listed[def.Name] = struct{}{}
+		listed[spec.ToolPrefix+def.Name] = struct{}{}
+	}
+	var out []string
+	for key := range spec.AnnotationOverrides {
+		if _, ok := listed[key]; !ok {
+			out = append(out, key)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 func toolNames(tools []*Tool) []string {

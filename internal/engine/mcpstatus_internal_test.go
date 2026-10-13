@@ -131,3 +131,37 @@ func TestMCPStatusIsOneRowPerServerWithItsInstancesCounted(t *testing.T) {
 		}
 	}
 }
+
+// A KEY IS THE SERVER'S UNLISTED KEY ONLY WHERE NO STARTED INSTANCE LISTS IT.
+// Each seat's child serves what that seat's credentials reach — the jira-only
+// seat's mcp-atlassian lists no Confluence tool — so its unlisted
+// confluence_create_page is the entry being right for a sibling, and only a
+// key every started child lacks (the typo) reaches the row. A failed start
+// lists nothing and is not counted: it would make every key look unlisted.
+func TestMCPStatusNamesOnlyKeysNoStartedInstanceLists(t *testing.T) {
+	t.Parallel()
+	swe := uuid.MustParse("00000000-0000-7000-8000-000000000001")
+	pm := uuid.MustParse("00000000-0000-7000-8000-000000000002")
+	ceo := uuid.MustParse("00000000-0000-7000-8000-000000000003")
+	cto := uuid.MustParse("00000000-0000-7000-8000-000000000004")
+	e := &Engine{
+		mcpShared: []mcpOutcome{{server: "search", tools: 5, unlisted: []string{"search_web"}}},
+		mcpSeats: map[string][]mcpOutcome{
+			"pm":  {{server: "atlassian", seat: pm, tools: 63, unlisted: []string{"confluence_create_page", "jira_add_coment"}}},
+			"cto": {{server: "atlassian", seat: cto, tools: 75, unlisted: []string{"jira_add_coment"}}},
+			"swe": {{server: "atlassian", seat: swe, err: errors.New("401 from swe's token")}},
+			"ceo": {{server: "chat", seat: ceo, tools: 4, unlisted: []string{"b_post", "a_post"}}},
+		},
+	}
+	want := []coord.MCPServerStatus{
+		{Server: "atlassian", Started: 2, Failed: 1, Tools: 75, Error: "401 from swe's token", ErrorSeat: swe,
+			Unlisted: []string{"jira_add_coment"}},
+		{Server: "chat", Started: 1, Tools: 4, Unlisted: []string{"a_post", "b_post"}},
+		{Server: "search", Shared: true, Started: 1, Tools: 5, Unlisted: []string{"search_web"}},
+	}
+	for range 5 { // map order must not reach the payload
+		if got := e.mcpStatus(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("mcp status = %+v\nwant %+v", got, want)
+		}
+	}
+}

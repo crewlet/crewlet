@@ -542,7 +542,7 @@ func bringUp(ctx context.Context, s *seatChildren, specs []mcp.Spec) ([]mcpOutco
 	for i, spec := range specs {
 		outcomes[i].server = mcp.ServerName(spec.Name)
 		if s.bridge.Runs(spec) {
-			outcomes[i].tools = len(s.bridge.ServerTools(spec.Name))
+			outcomes[i].observe(s.bridge, spec.Name)
 			continue
 		}
 		wg.Go(func() {
@@ -560,7 +560,7 @@ func bringUp(ctx context.Context, s *seatChildren, specs []mcp.Spec) ([]mcpOutco
 						"missing from the seat's catalogue rather than the builtins shrinking")
 				return
 			}
-			outcomes[i].tools = len(s.bridge.ServerTools(spec.Name))
+			outcomes[i].observe(s.bridge, spec.Name)
 			if replacing {
 				log.InfoContext(ctx, "mcp_server_restarted", "server", spec.Name,
 					"seat", s.handle, "tools", outcomes[i].tools,

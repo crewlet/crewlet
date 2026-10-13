@@ -97,6 +97,15 @@ type MCPServerRow struct {
 	Started int `json:"started"`
 	Failed  int `json:"failed"`
 	Tools   int `json:"tools"`
+	// UnlistedAnnotations are the entry's tool_annotations keys that no
+	// instance started on a reporting node lists a tool for — by the
+	// server's own name or with the entry's tool_prefix — sorted. Each
+	// overrides nothing anywhere it runs: a misspelling, or a tool the
+	// server no longer serves. A key only SOME instances lack is not here,
+	// because a per-role child serves what its seat's credentials reach and
+	// that key is right for the others. Empty where no instance started,
+	// since nothing listed anything to judge against. ALWAYS A LIST.
+	UnlistedAnnotations []string `json:"unlisted_annotations"`
 	// Nodes is one cell per live node, in [MCPStatusAnswer.Nodes] order.
 	Nodes []MCPServerNode `json:"nodes"`
 }
@@ -195,6 +204,12 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	for _, name := range slices.Sorted(maps.Keys(rows)) {
 		row := rows[name]
 		row.Nodes = make([]MCPServerNode, 0, len(reports))
+		// The keys every node that started an instance names as listed by
+		// none of its own — the node's row is already that intersection
+		// over its instances, so this is the same question asked of the
+		// fleet.
+		var unlisted []string
+		judged := false
 		for _, r := range reports {
 			cell := MCPServerNode{Node: r.node, Reported: r.reported}
 			if m, ok := r.servers[name]; ok {
@@ -204,9 +219,20 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 				row.Started += m.Started
 				row.Failed += m.Failed
 				row.Tools = max(row.Tools, m.Tools)
+				if m.Started > 0 {
+					if !judged {
+						unlisted, judged = slices.Clone(m.Unlisted), true
+					} else {
+						unlisted = slices.DeleteFunc(unlisted, func(key string) bool {
+							return !slices.Contains(m.Unlisted, key)
+						})
+					}
+				}
 			}
 			row.Nodes = append(row.Nodes, cell)
 		}
+		slices.Sort(unlisted)
+		row.UnlistedAnnotations = append([]string{}, unlisted...)
 		row.State = mcpState(anyReported, row.Started, row.Failed)
 		out.Servers = append(out.Servers, *row)
 	}

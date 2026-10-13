@@ -192,7 +192,19 @@ name or the catalogue name with the entry's `tool_prefix` applied (for a
 Slack server with `tool_prefix: slack_`, `conversations_add_message`
 **or** `slack_conversations_add_message`; the raw name wins when both are
 present), so keying by the name you see in the catalogue never silently
-no-ops.
+no-ops. A key that is neither — a tool the server does not list, or one
+it lists under another name — overrides nothing. The server's row on
+**Settings › Tools & MCP** names every key no started instance lists
+(`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)),
+and each instance's `tools_discovered` log line names the keys its own
+listing does not answer (`annotation_keys_unlisted`). Only the first is a
+mistake: one instance's listing is not the server's. A per-role child
+serves what its seat's credentials reach — `mcp-atlassian` lists no
+Confluence tool to a seat holding only a Jira credential — so a
+`confluence_*` key is right for one seat and absent from another's, while
+a key no instance lists is a misspelling or a tool the server no longer
+serves. Take the names from the server's own listing, which its
+`tools_discovered` line carries.
 
 Every tool server — including Jira/Confluence (`atlassian`), Slack, and
 GitHub — is an `mcp_servers` entry, so `tool_annotations` is declared
