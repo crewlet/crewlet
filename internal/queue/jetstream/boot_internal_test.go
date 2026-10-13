@@ -267,12 +267,45 @@ func TestTheBootWaitsTheStartOutAndBoundsTheListeners(t *testing.T) {
 		t.Parallel()
 		ctx, cancel := context.WithCancel(t.Context())
 		time.AfterFunc(timing.listen, cancel)
+		var waits atomic.Int32
 		err := awaitBoot(ctx, bootWait{
 			started: make(chan struct{}), death: newDeath(), ready: readyAt(true),
 			timing: timing, slow: func(time.Duration) {},
+			cancelWaits: func() { waits.Add(1) },
 		})
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("a cancelled boot answered %v", err)
+		}
+		if got := waits.Load(); got != 1 {
+			t.Errorf("a cancel during a start still running said %d times that "+
+				"the shutdown waits for it, want once", got)
+		}
+	})
+
+	// A CANCEL THAT LANDS AS THE START RETURNS waits for nothing, and must
+	// not say it does: both are ready when the wait looks, and the select
+	// picks between them at random, so the case is asked enough times that
+	// an announcement made regardless would turn up.
+	t.Run("a cancel as the start returns announces no wait", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		started := make(chan struct{})
+		close(started)
+		var waits atomic.Int32
+		for range races {
+			// Either answer is right — the boot was cancelled, or it
+			// finished first; only the announcement is under test.
+			_ = awaitBoot(ctx, bootWait{
+				started: started, death: newDeath(), ready: readyAt(true),
+				timing: timing, slow: func(time.Duration) {},
+				cancelWaits: func() { waits.Add(1) },
+			})
+		}
+		if got := waits.Load(); got != 0 {
+			t.Errorf("a cancel that landed after the start had returned said "+
+				"%d times in %d that the shutdown waits for a start in progress",
+				got, races)
 		}
 	})
 }

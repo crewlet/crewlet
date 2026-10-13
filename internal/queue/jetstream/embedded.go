@@ -762,7 +762,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	// THE START, THEN THE LISTENERS — see [listenTimeout] for why only the
 	// second is bounded, and [awaitBoot] for what ends each.
 	err = awaitBoot(ctx, bootWait{
-		server: cfg.ServerName, started: started, death: death,
+		started: started, death: death,
 		ready: ns.ReadyForConnections, listeners: listeners, clustered: clustered,
 		timing: cfg.start.resolved(),
 		slow: func(elapsed time.Duration) {
@@ -775,6 +775,15 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 				"hint", "nothing to do while this repeats; a store that recovers "+
 					"every time but slowly is recovering what it holds, and an "+
 					"interrupt stops the boot once the recovery lets it")
+		},
+		cancelWaits: func() {
+			logging.Get("queue.jetstream").Warn("embedded_start_cancel_waits",
+				"server", cfg.ServerName,
+				"detail", "the embedded broker is still starting — usually "+
+					"recovering its store — and nats-server cannot stop a start "+
+					"in progress, so this waits for it before shutting it down",
+				"hint", "interrupt again to exit at once; the store recovers "+
+					"again at the next start")
 		},
 	})
 	if err != nil {
@@ -789,8 +798,6 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 
 // bootWait is what [awaitBoot] waits on.
 type bootWait struct {
-	// server names the server in what the wait logs.
-	server string
 	// started is closed when the server's Start has returned.
 	started <-chan struct{}
 	// death is the server's declaration that it cannot go on.
@@ -804,6 +811,9 @@ type bootWait struct {
 	// slow is told how long the start has been running, once every
 	// timing.report while it is.
 	slow func(elapsed time.Duration)
+	// cancelWaits is told that the caller cancelled while the start was
+	// still running, so the shutdown after the wait will wait for it.
+	cancelWaits func()
 }
 
 // awaitBoot waits for a starting server: its Start, as long as that takes,
@@ -832,13 +842,15 @@ func awaitBoot(ctx context.Context, w bootWait) error {
 		case <-report.C:
 			w.slow(time.Since(begun))
 		case <-ctx.Done():
-			logging.Get("queue.jetstream").Warn("embedded_start_cancel_waits",
-				"server", w.server,
-				"detail", "the embedded broker is still starting — usually "+
-					"recovering its store — and nats-server cannot stop a start "+
-					"in progress, so this waits for it before shutting it down",
-				"hint", "interrupt again to exit at once; the store recovers "+
-					"again at the next start")
+			// ONLY A START STILL RUNNING IS WAITED FOR. A cancel and a Start
+			// that has returned can both be ready when the select looks, and
+			// it picks between them at random: told regardless, half of
+			// those would announce a wait for a start that had finished.
+			select {
+			case <-w.started:
+			default:
+				w.cancelWaits()
+			}
 			return fmt.Errorf("waiting for the embedded nats server to start: %w",
 				ctx.Err())
 		}
