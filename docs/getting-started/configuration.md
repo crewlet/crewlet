@@ -1684,7 +1684,8 @@ units:
                                         #   native project/space or a Jira/Confluence one
         mcp_env:                        # optional: MCP creds shared by the unit's direct agent roles
           atlassian:                     #   (real tool credentials only; the chat transport
-            JIRA_API_TOKEN: "${BACK_JIRA_TOKEN}"  #   identity is per-agent)
+            JIRA_USERNAME: "${BACK_JIRA_USER}"    #   identity is per-agent; mcp-atlassian takes a
+            JIRA_API_TOKEN: "${BACK_JIRA_TOKEN}"  #   token only beside its account's address)
         roles:
           - name: Tech Lead             # required — unique agent identity
             goal: "..."                 # optional — individual mission
@@ -1975,7 +1976,7 @@ mcp_servers:
   - name: atlassian
     shared: false                       # per-role: token from role.mcp_env.atlassian
     command: uvx
-    args: ["mcp-atlassian"]
+    args: ["mcp-atlassian==0.23.1"]
     env:
       JIRA_URL: "${JIRA_URL}"
       CONFLUENCE_URL: "${CONFLUENCE_URL}"
