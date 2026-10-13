@@ -10,21 +10,56 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codefault"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/hostbox"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // Cache is one node's git cache: the repositories it has been asked to
 // serve, each a bare repository under repos/.
 type Cache struct {
 	// dir is the root, as Prepare resolved it.
-	dir    string
-	faults codefault.Injector
-	log    *slog.Logger
-	now    func() time.Time
-	knobs  *knobs
+	dir      string
+	maxBytes int64
+	git      *gitproc.Pool
+	objects  Objects
+	fetch    Fetcher
+	limits   func() code.Limits
+	faults   codefault.Injector
+	log      *slog.Logger
+	metrics  *metrics.Recorder
+	now      func() time.Time
+	knobs    *knobs
+
+	// fetchConcurrency is how many downloads one round runs at once
+	// (FetchConcurrency), and fetches the node's slots every round's
+	// downloads share (NodeFetches), each with its copy buffer: fields, so
+	// the suite can narrow both before a sync (export_test.go).
+	fetchConcurrency int
+	fetches          *fetchSlots
+	// tmpBytes is what downloads in flight hold in tmp/, until each file
+	// is renamed into place or removed.
+	tmpBytes atomic.Int64
+	// heldBytes is what every incarnation holds — current and retiring, from
+	// the moment it is made or indexed until it is discarded — and
+	// heldRepos the repositories with a current incarnation: RUNNING TOTALS,
+	// moved where what they count moves (setSize, newIncarnation, retire,
+	// discard), so the gauges a round sets cost two loads, never a walk of
+	// every repository on the node under the lock every sync takes.
+	heldBytes, heldRepos atomic.Int64
+	// mark is the code log as this process has seen it answered, and
+	// rereads counts the marks made for whole reads (Cache.reread): one log
+	// under every repository, so what one round learns of it reaches all.
+	mark    logMark
+	rereads atomic.Uint64
+	// installHook, when set, is called at each stage of a pack's install
+	// (the suite's, export_test.go).
+	installHook func(stage, packDir string)
 
 	// releaseClaim gives back this process's hold on the directory, taken
 	// over from Prepare: once, by Stop when nothing of the cache's is
@@ -104,7 +139,9 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 			"run cache.Prepare on the directory again", ErrOptions, b.dir)
 	}
 	c := &Cache{
-		dir: b.dir, faults: o.Faults, log: o.Logger, now: o.Now, knobs: o.knobs,
+		dir: b.dir, maxBytes: o.MaxBytes, git: o.Git, objects: o.Objects, fetch: o.Fetch, limits: o.Limits,
+		faults: o.Faults, log: o.Logger, metrics: o.Metrics, now: o.Now, knobs: o.knobs,
+		fetchConcurrency: FetchConcurrency, fetches: newFetchSlots(NodeFetches),
 		releaseClaim: sync.OnceFunc(b.claim.Release),
 		kicks:        make(chan struct{}, 1), entries: map[string]*entry{}, idle: make(chan struct{}),
 	}
@@ -132,12 +169,9 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 	if err != nil {
 		return nil, err
 	}
-	var bytes int64
-	for _, e := range c.entries {
-		bytes += e.current.diskBytes + e.current.metaBytes
-	}
-	c.log.Info("code_cache_opened", "dir", c.dir, "repos", len(c.entries), "bytes", bytes,
+	c.log.Info("code_cache_opened", "dir", c.dir, "repos", len(c.entries), "bytes", c.heldBytes.Load(),
 		"budget", o.MaxBytes, "trashed", trashed)
+	c.setGauges()
 	opened = true
 	return c, nil
 }
@@ -235,6 +269,8 @@ func (c *Cache) index(b *boot) (int, error) {
 		if inc.lastUsed.IsZero() {
 			inc.lastUsed = c.now()
 		}
+		c.heldBytes.Add(inc.diskBytes + inc.metaBytes)
+		c.heldRepos.Add(1)
 		c.entries[k.id] = &entry{id: k.id, current: inc}
 	}
 	return trashed, nil

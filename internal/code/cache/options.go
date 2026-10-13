@@ -93,6 +93,9 @@ type knobs struct {
 	// — or never, so that no tick can pass for a kick — rather than waiting
 	// a minute for one.
 	ticks <-chan time.Time
+	// peeling runs as a round's peel is about to read the incarnation at
+	// dir.
+	peeling func(dir string)
 }
 
 // validate refuses an Options value naming the field and what to set,

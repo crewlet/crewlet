@@ -606,6 +606,44 @@ func Catalogue() []Instrument {
 		},
 		// ---- git ------------------------------------------------------
 		{
+			Name: CodeCacheBytes, Kind: KindGauge, Unit: UnitBytes,
+			Shows: "What this node's git cache holds on disk — every " +
+				"repository's packs, indexes and refs, plus the downloads in " +
+				"flight — against its budget (git.cache_max_bytes). A cold " +
+				"repository's first sync raises it by the whole repository, " +
+				"since a git node caches every repository it serves whole.",
+		},
+		{
+			Name: CodeCacheRebuilds, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason"},
+			Shows: "Repositories this node's git cache read whole from the " +
+				"rows again, by `reason`: `stream` is the code log " +
+				"RECREATED under the cache (provisioned anew, its stamp not " +
+				"the one the cache read under); `rewound` is the log gone " +
+				"BACK under it on the same stream — a broker restored from " +
+				"an older copy — seen in a read at the log's head below a " +
+				"position the cache had read. Either counts every repository " +
+				"on the node once, as its next sync converges to the rows " +
+				"the log holds rather than taking a delta from a position " +
+				"that log never had or has since given to other records.",
+		},
+		{
+			Name: CodeCacheRepos, Kind: KindGauge, Unit: UnitCount,
+			Shows: "Repositories with a cache on this node. One leaves when " +
+				"its rows are purged; every one that arrives cost a cold sync " +
+				"of the whole repository.",
+		},
+		{
+			Name: CodeCacheSyncDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"kind"},
+			Shows: "How long a completed cache sync took, by `kind` (`delta`: " +
+				"the rows moved since the cache's position; `full`: the whole " +
+				"repository — a cold cache, the first sync of a repository " +
+				"after a restart, a log recreated under it). A delta p95 " +
+				"climbing is a node falling behind its pushes; a full sync's " +
+				"time is mostly its downloads, sixteen at once.",
+		},
+		{
 			Name: CodeGitWait, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"class"},
 			Shows: "How long a git process waited for a slot on this node, by " +

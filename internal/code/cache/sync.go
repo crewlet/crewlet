@@ -1,0 +1,610 @@
+package cache
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+)
+
+// SYNC: the one function that writes a cache, by CONVERGENCE — derive the
+// target from rows, make the directory equal to it — and the single flight
+// that shares its rounds.
+//
+// A repository has one ROUND in flight on a node and at most one queued
+// behind it. A caller that needs only what the cache holds is answered at
+// once; any other joins a round, and a LINEARIZABLE caller joins only a round
+// that starts after it arrived — the statelog.ReadIndex rule one level up:
+// a round already running took its barrier before this caller asked, and may
+// predate the write the caller is about to read. So a burst of CI clones of
+// one repository costs one barrier and one sync, and none of them is answered
+// by a barrier taken before it asked. Rounds run under the cache's own
+// lifetime, never a caller's: a client that hangs up never cancels the round
+// the others are waiting on.
+
+// round is one convergence a repository's callers share.
+type round struct {
+	// fresh is the round's merged requirement: what every caller that
+	// joined it asked for at once. Fixed once the round runs.
+	fresh statelog.Freshness
+	// waiters is every caller answered by this round.
+	waiters []*waiter
+	// done is closed once every waiter has its answer — and its pin, taken
+	// under the entry's mu before the close, so nothing between the round's
+	// end and a waiter's wake can retire what the waiter is handed.
+	done chan struct{}
+}
+
+// waiter is one caller of a round.
+type waiter struct {
+	got Synced
+	err error
+	// gone: the caller's own context ended before the round answered, so the
+	// round pins nothing for it.
+	gone bool
+}
+
+// Sync hands out repoID's directory, PINNED, holding every row up to a
+// position at least as fresh as fresh asks — the one way to a repository's
+// directory. Every caller defers the answer's Release.
+//
+// A caller whose need the cache already meets — a stale or consistent-prefix
+// read, or a session read whose floor the cache has reached, of a repository
+// this process has converged — is answered at once with no estate call
+// (SyncNone). Any
+// other joins a round (see the round rules above); a linearizable caller,
+// and one with a lag bound (which only the estate can measure), is never
+// answered at once. ctx bounds the caller's own wait and nothing else: the
+// round runs on for everyone else.
+func (c *Cache) Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (Synced, error) {
+	if err := c.checkSync(repoID, fresh); err != nil {
+		return Synced{}, err
+	}
+	for {
+		e := c.entryFor(repoID)
+		e.mu.Lock()
+		if e.dead {
+			// Purged since it was looked up: the next look makes a new one.
+			e.mu.Unlock()
+			continue
+		}
+		if s, ok := c.atOnce(e, fresh); ok {
+			e.mu.Unlock()
+			return s, nil
+		}
+		w := &waiter{}
+		r := c.join(e, fresh, w)
+		e.mu.Unlock()
+
+		select {
+		case <-r.done:
+			return w.got, w.err
+		case <-ctx.Done():
+		}
+		e.mu.Lock()
+		select {
+		case <-r.done:
+			// Answered while the caller gave up: the pin the round took
+			// for it goes back.
+			got := w.got
+			e.mu.Unlock()
+			if got.Release != nil {
+				got.Release()
+			}
+		default:
+			w.gone = true
+			e.mu.Unlock()
+		}
+		return Synced{}, fmt.Errorf("cache: waiting for %s's sync: %w", repoID, context.Cause(ctx))
+	}
+}
+
+// checkSync refuses a request that is not a sync, before any estate call.
+func (c *Cache) checkSync(repoID string, fresh statelog.Freshness) error {
+	c.lifeMu.Lock()
+	stopped := c.stopped
+	c.lifeMu.Unlock()
+	switch {
+	case stopped:
+		return ErrStopped
+	case !canonicalID(repoID):
+		return fmt.Errorf("%w: repository id %q is not a canonical lowercase UUID (it becomes a path component)",
+			ErrInvalid, repoID)
+	case fresh.Level == "":
+		return fmt.Errorf("%w: a sync states its freshness", code.ErrBadLevel)
+	case !fresh.Level.Valid():
+		return fmt.Errorf("%w: %q is not a read level", code.ErrBadLevel, fresh.Level)
+	case fresh.Level == statelog.ReadSession && fresh.MinPosition.IsZero():
+		return fmt.Errorf("%w: a session sync names the position it must include", code.ErrBadLevel)
+	case !fresh.MinPosition.IsZero() && fresh.MinPosition.Stream != topics.CodeLogStream:
+		return fmt.Errorf("%w: a sync's floor is on %s, and a repository's rows are on %s",
+			ErrInvalid, fresh.MinPosition.Stream, topics.CodeLogStream)
+	}
+	return nil
+}
+
+// entryFor is repoID's entry, made when there is none.
+func (c *Cache) entryFor(repoID string) *entry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e := c.entries[repoID]
+	if e == nil {
+		e = &entry{id: repoID}
+		c.entries[repoID] = e
+	}
+	return e
+}
+
+// atOnce answers a caller from what e holds, pinned, when that is all it
+// needs; e.mu is held.
+//
+// Only from an incarnation CONVERGED IN THIS PROCESS — never from a state a
+// previous one left: the state's position names a record of the log it was
+// read from, and a log restored from an older copy while the node was down
+// keeps its identity (ADR-0035) and reuses those positions for other
+// records, so a stale or session answer from the state would serve a
+// history the log no longer holds. A repository's first caller after a boot
+// pays the full round D3 reads anyway; every one after it is answered here.
+func (c *Cache) atOnce(e *entry, fresh statelog.Freshness) (Synced, bool) {
+	inc := e.current
+	if inc == nil || !inc.converged || fresh.Bounded() {
+		return Synced{}, false
+	}
+	switch fresh.Level {
+	case statelog.ReadStale, statelog.ReadConsistentPrefix:
+		if !fresh.MinPosition.IsZero() && !reached(inc.at, fresh.MinPosition) {
+			return Synced{}, false
+		}
+	case statelog.ReadSession:
+		if !reached(inc.at, fresh.MinPosition) {
+			return Synced{}, false
+		}
+	default:
+		return Synced{}, false
+	}
+	return c.pin(e, inc, SyncNone), true
+}
+
+// reached reports whether at is at or past floor (both on the code log).
+func reached(at, floor statelog.Position) bool {
+	before, err := at.Before(floor)
+	return err == nil && !before
+}
+
+// join adds w to the round its freshness may be answered by, starting one
+// when none runs; e.mu is held.
+//
+// A linearizable or a bounded caller joins the round QUEUED behind the one
+// running, whose barrier may predate it. A session caller joins the running
+// round when that round is a session round whose floor is at or past its
+// own — it then answers at a position the caller needs — and otherwise the
+// queued one. A stale or consistent-prefix caller with no floor reached here
+// because no incarnation of the repository is converged in this process, and
+// any round answers it.
+func (c *Cache) join(e *entry, fresh statelog.Freshness, w *waiter) *round {
+	if r := e.running; r != nil && answers(r.fresh, fresh) {
+		r.waiters = append(r.waiters, w)
+		return r
+	}
+	if e.next == nil {
+		e.next = &round{fresh: fresh, done: make(chan struct{})}
+	} else {
+		e.next.fresh = merge(e.next.fresh, fresh)
+	}
+	e.next.waiters = append(e.next.waiters, w)
+	r := e.next
+	c.start(e)
+	return r
+}
+
+// answers reports whether a round already running at have answers a caller
+// that arrived asking for want.
+func answers(have, want statelog.Freshness) bool {
+	if want.Level == statelog.ReadLinearizable || want.Bounded() {
+		return false
+	}
+	switch want.Level {
+	case statelog.ReadSession:
+		return have.Level == statelog.ReadSession && reached(have.MinPosition, want.MinPosition)
+	default:
+		return want.MinPosition.IsZero()
+	}
+}
+
+// strength orders the read levels as statelog lists them, strongest first:
+// a merged round reads at the strongest level any of its callers asked for.
+func strength(l statelog.ReadLevel) int {
+	return len(statelog.ReadLevels) - slices.Index(statelog.ReadLevels, l)
+}
+
+// merge is the requirement of a round two callers share: the stronger level,
+// the later floor, and the smaller of each lag bound either set.
+func merge(a, b statelog.Freshness) statelog.Freshness {
+	out := a
+	if strength(b.Level) > strength(a.Level) {
+		out.Level = b.Level
+	}
+	if !b.MinPosition.IsZero() && (out.MinPosition.IsZero() || !reached(out.MinPosition, b.MinPosition)) {
+		out.MinPosition = b.MinPosition
+	}
+	out.MaxLag = smallerSet(a.MaxLag, b.MaxLag)
+	out.MaxLagSeq = smallerSet(a.MaxLagSeq, b.MaxLagSeq)
+	return out
+}
+
+// smallerSet is the smaller of two bounds, a zero being no bound.
+func smallerSet[T time.Duration | uint64](a, b T) T {
+	switch {
+	case a == 0:
+		return b
+	case b == 0:
+		return a
+	}
+	return min(a, b)
+}
+
+// start makes the queued round the running one when none runs; e.mu is held.
+func (c *Cache) start(e *entry) {
+	if e.running != nil || e.next == nil {
+		return
+	}
+	r := e.next
+	e.next, e.running = nil, r
+	go c.run(e, r, r.fresh)
+}
+
+// run is one round, on a goroutine of the cache's own: converge, then answer
+// every caller still waiting — each with its own pin, taken before the round
+// says it is done — and start the round queued behind it.
+func (c *Cache) run(e *entry, r *round, fresh statelog.Freshness) {
+	inc, kind, err := c.converge(e, fresh)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, w := range r.waiters {
+		switch {
+		case w.gone:
+		case err != nil:
+			w.err = err
+		default:
+			w.got = c.pin(e, inc, kind)
+		}
+	}
+	e.running = nil
+	close(r.done)
+	c.start(e)
+}
+
+// converge is one round's body, in order — every step's name is the field
+// its log line and its error carry:
+//
+//  1. pick the incarnation: the entry's, or — once the rows say the
+//     repository exists — a NEW one when it has none. The round is FULL when
+//     the incarnation is new, has no state, or has not had a full round in
+//     this process — so a cache is exact from any starting point (a crash, a
+//     full disk, an operator's rm, a log restored behind it while the node
+//     was down) at the price of one full read per repository per boot, and
+//     every later round is a delta, because nothing but this process has
+//     touched the directory since.
+//  2. read the snapshot (read.go). Two answers are not yet answers, and are
+//     read again ONCE at linearizable before anything is concluded from
+//     them — a copy behind the log may give either: no such repository (a
+//     copy that has not applied its create), and a FULL answer below the
+//     incarnation (a copy behind the cache, or the log gone back: only a
+//     read at the log's head can say which). A linearizable not-found is the
+//     repository PURGED — its id is minted once and never comes back, so
+//     every incarnation is retired, the entry dies, and every caller is
+//     told; a repository no row holds costs no directory.
+//  3. a LINEARIZABLE answer below a position this cache read on the same
+//     stream — its own, or any repository's (the log mark) — is the log gone
+//     BACK under the cache, which a barrier at the log's head cannot answer
+//     otherwise: every incarnation is marked to be read whole, and this one
+//     is, now, and converges to the rows the log holds. Any other answer
+//     below the incarnation is a copy behind it, and changes nothing — the
+//     cache never moves backwards for a stale copy.
+//  4. install every pack the directory does not hold (install.go); a pack
+//     the store does not have, in a round that was not linearizable, reads
+//     the snapshot again ONCE at linearizable (a purge may have removed its
+//     row since the copy that answered).
+//  5. on a full answer, the round's index (maintain.go), before the refs'
+//     peel reads the packs.
+//  6. the refs (refs.go): packed-refs and HEAD, after every pack they need.
+//     A delta onto a packed-refs this cache did not write reads ONCE again,
+//     full.
+//  7. on a full answer, the sweep's pack half (sweep.go).
+//  8. the state, when the directory changed (state.go), renamed in last.
+//
+// A FIRST incarnation that fails is kept, with no state, so the next round —
+// full, because it has none — reuses every pack it installed.
+func (c *Cache) converge(e *entry, fresh statelog.Freshness) (*incarnation, SyncKind, error) {
+	if !c.enter() {
+		return nil, "", ErrStopped
+	}
+	defer c.leave()
+	ctx := c.life
+	began := time.Now()
+	// epoch is the reread mark this round's convergence must still find: a
+	// mark made while it runs is about rows it may have read before it.
+	epoch := c.rereads.Load()
+
+	e.mu.Lock()
+	inc := e.current
+	full := inc == nil || inc.state == nil || !inc.converged
+	e.mu.Unlock()
+
+	// escalate reads the round again at linearizable, once, and reports
+	// whether it will: an answer only a copy behind the log can have given
+	// is asked of the log's head before anything is concluded from it.
+	escalate := func() bool {
+		if fresh.Level == statelog.ReadLinearizable {
+			return false
+		}
+		fresh = statelog.Freshness{Level: statelog.ReadLinearizable}
+		return true
+	}
+	var (
+		askedFull, rewound bool
+		res                applied
+	)
+	for {
+		var at statelog.Position
+		var stream time.Time
+		if inc != nil {
+			e.mu.Lock()
+			at, stream = inc.at, inc.stream
+			e.mu.Unlock()
+		}
+		markStream, markAt := c.mark.read()
+		snap, err := c.read(ctx, e.id, at, stream, full, fresh)
+		switch {
+		case errors.Is(err, code.ErrRepoNotFound) && escalate():
+			continue
+		case errors.Is(err, code.ErrRepoNotFound):
+			err = fmt.Errorf("cache: sync %s: read: %w", e.id, err)
+			c.purge(e, err)
+			return nil, "", err
+		case err != nil:
+			return nil, "", fmt.Errorf("cache: sync %s: read: %w", e.id, err)
+		}
+		if c.mark.saw(snap.streamCreated, snap.position) {
+			c.log.Info("code_cache_log_recreated", "repo", e.id, "was", markStream, "now", snap.streamCreated)
+			epoch = c.reread(rebuildStream, func(i *incarnation) bool {
+				return !i.stream.IsZero() && !i.stream.Equal(snap.streamCreated)
+			})
+		}
+		if inc == nil {
+			if inc, err = c.newIncarnation(e); err != nil {
+				return nil, "", fmt.Errorf("cache: sync %s: incarnation: %w", e.id, err)
+			}
+		}
+		linearizable := fresh.Level == statelog.ReadLinearizable
+		belowMark := markStream.Equal(snap.streamCreated) && !markAt.IsZero() && !reached(snap.position, markAt)
+		switch {
+		case linearizable && (snap.behind || belowMark) && !rewound:
+			rewound = true
+			was := at
+			if belowMark && (!snap.behind || reached(markAt, at)) {
+				was = markAt
+			}
+			c.log.Warn("code_cache_log_rewound", "repo", e.id, "was", was.String(), "now", snap.position.String())
+			c.mark.set(snap.streamCreated, snap.position)
+			epoch = c.reread(rebuildRewound, func(*incarnation) bool { return true })
+			if !snap.full {
+				full = true
+				continue
+			}
+		case snap.behind && snap.full && escalate():
+			continue
+		case snap.behind && !linearizable:
+			// A copy behind this cache answered a delta: nothing to do,
+			// and the cache never moves backwards for one.
+			c.account(e, inc, snap, applied{}, time.Since(began))
+			return inc, snap.kind(), nil
+		}
+		if snap.restreamed {
+			e.mu.Lock()
+			if inc.reread == "" {
+				inc.reread = rebuildStream
+			}
+			e.mu.Unlock()
+		}
+		res, err = c.apply(ctx, e, inc, snap, epoch)
+		var missing *ErrPackMissing
+		switch {
+		case errors.Is(err, errRefsNotOurs) && !snap.full && !askedFull:
+			askedFull, full = true, true
+			continue
+		case errors.As(err, &missing) && !missing.Damaged && escalate():
+			continue
+		case errors.As(err, &missing):
+			// Final: the log's head still names it, or the bytes the
+			// store holds under it are not the row's.
+			c.log.Warn("code_pack_missing", "repo", e.id, "pack_id", missing.Pack.PackID,
+				"object", missing.Pack.Object.String(), "damaged", missing.Damaged)
+			return nil, "", err
+		case err != nil:
+			return nil, "", err
+		}
+		c.account(e, inc, snap, res, time.Since(began))
+		return inc, snap.kind(), nil
+	}
+}
+
+// reread marks every current incarnation which selects for a WHOLE read: its
+// next round reads the repository whole, nothing is answered from it at once
+// until then, and the reason is counted when that read completes. It answers
+// the epoch a round's convergence must still find to count as one. Rare — a
+// log recreated or gone back under the node — so a walk of every entry.
+func (c *Cache) reread(reason string, which func(*incarnation) bool) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	epoch := c.rereads.Add(1)
+	for _, e := range c.entries {
+		e.mu.Lock()
+		if inc := e.current; inc != nil && which(inc) {
+			inc.converged = false
+			if inc.reread == "" {
+				inc.reread = reason
+			}
+		}
+		e.mu.Unlock()
+	}
+	return epoch
+}
+
+// applied is what one round did to its incarnation.
+type applied struct {
+	packsAdded int
+	trashed    bool
+}
+
+// apply makes inc equal to snap — steps 4 to 8 of converge. epoch is the
+// reread mark the round began under: a full answer converges the incarnation
+// only while no mark was made since.
+func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snapshot, epoch uint64) (applied, error) {
+	var res applied
+	if snap.full {
+		trashed, err := c.tidy(inc, snap)
+		if err != nil {
+			return res, fmt.Errorf("cache: sync %s: sweep: %w", e.id, err)
+		}
+		res.trashed = trashed
+	}
+	added, removed, err := c.install(ctx, e, inc, snap)
+	if err != nil {
+		return res, err
+	}
+	res.packsAdded = added
+	res.trashed = res.trashed || removed
+
+	indexed := false
+	var strays []string
+	if snap.full {
+		// The sweep's pack half is DECIDED here and done once the refs are
+		// in; an index that may name a pack it will remove goes now, so the
+		// round's index — over exactly the snapshot's packs — is written
+		// before the refs' peel reads them.
+		var dropped bool
+		if strays, dropped, err = c.packStrays(inc, snap); err != nil {
+			return res, fmt.Errorf("cache: sync %s: sweep: %w", e.id, err)
+		}
+		res.trashed = res.trashed || dropped
+		indexed = c.indexRound(ctx, e, inc, snap)
+	}
+
+	refsWritten, err := c.writeRefs(ctx, e, inc, snap)
+	if err != nil {
+		return res, err
+	}
+
+	if snap.full {
+		trashed, err := c.sweepPacks(e, inc, strays)
+		if err != nil {
+			return res, fmt.Errorf("cache: sync %s: sweep: %w", e.id, err)
+		}
+		res.trashed = res.trashed || trashed
+	}
+
+	// The in-memory fields are what the directory now reflects. When it
+	// CHANGED they are also written down — persist writes them whole —
+	// and otherwise only the position moves: nothing between the state's
+	// position and this one changed the directory, so a restart's next
+	// delta from the state re-reads rows that moved nothing here.
+	e.mu.Lock()
+	changed := snap.full || added > 0 || removed || refsWritten || indexed ||
+		!snap.streamCreated.Equal(inc.stream) || !sameRepo(inc.repo, snap.repo)
+	prevAt, prevStream, prevRepo := inc.at, inc.stream, inc.repo
+	inc.at, inc.stream, inc.repo = snap.position, snap.streamCreated, snap.repo
+	e.mu.Unlock()
+	if changed {
+		if err := c.persist(ctx, e, inc, true); err != nil {
+			// The directory is ahead of its state file and of the position
+			// put back here: the next round's delta re-applies those rows,
+			// which changes nothing twice.
+			e.mu.Lock()
+			inc.at, inc.stream, inc.repo = prevAt, prevStream, prevRepo
+			e.mu.Unlock()
+			return res, fmt.Errorf("cache: sync %s: state: %w", e.id, err)
+		}
+	}
+	if snap.full {
+		e.mu.Lock()
+		inc.converged = c.rereads.Load() == epoch
+		var reason string
+		if inc.converged {
+			reason, inc.reread = inc.reread, ""
+		}
+		e.mu.Unlock()
+		if reason != "" && c.metrics != nil {
+			c.metrics.Add(metrics.CodeCacheRebuilds, 1, metrics.Attrs{"reason": reason})
+		}
+	}
+	return res, nil
+}
+
+// sameRepo reports whether two reads of a repository's row found it the same,
+// whatever position each was read at.
+func sameRepo(a, b code.RepoRef) bool {
+	a.Position, b.Position = statelog.Position{}, statelog.Position{}
+	return a.ID == b.ID && a.Name == b.Name && a.Status == b.Status && a.ManagedBy == b.ManagedBy &&
+		a.Owner == b.Owner && a.DefaultBranch == b.DefaultBranch && a.Description == b.Description &&
+		slices.Equal(a.Protections, b.Protections) && a.DeletedAt.Equal(b.DeletedAt) &&
+		a.Refs == b.Refs && a.LivePacks == b.LivePacks && a.LiveBytes == b.LiveBytes
+}
+
+// account is a completed round's record: its duration by kind, its log line,
+// a repository alone over the budget, and the gauges.
+func (c *Cache) account(e *entry, inc *incarnation, snap snapshot, res applied, took time.Duration) {
+	kind := snap.kind()
+	e.mu.Lock()
+	bytes, refs := inc.diskBytes+inc.metaBytes, inc.refs
+	e.mu.Unlock()
+	if c.metrics != nil {
+		c.metrics.Observe(metrics.CodeCacheSyncDuration, took, metrics.Attrs{"kind": string(kind)})
+	}
+	c.log.Debug("code_cache_synced", "repo", e.id, "kind", kind, "position", snap.position.String(),
+		"packs_added", res.packsAdded, "refs", refs, "bytes", bytes, "took", took)
+	if bytes > c.maxBytes {
+		// Served whatever its size: a request is waiting for it.
+		c.log.Warn("code_cache_over_budget", "repo", e.id, "bytes", bytes, "budget", c.maxBytes)
+	}
+	if res.trashed {
+		c.kick()
+	}
+	c.setGauges()
+}
+
+// purge takes a repository the rows no longer hold out of the cache: every
+// incarnation retired (each goes into trash/ with its last reader), the
+// entry gone, and every caller queued behind the round told why. Only a
+// LINEARIZABLE not-found purges (converge), and it answers the callers that
+// arrived after the round began as well: a repository's id is minted once
+// and never comes back, so no read that began after them could find it.
+func (c *Cache) purge(e *entry, cause error) {
+	c.mu.Lock()
+	e.mu.Lock()
+	e.dead = true
+	if c.entries[e.id] == e {
+		delete(c.entries, e.id)
+	}
+	if e.current != nil {
+		c.retire(e, e.current)
+	}
+	if r := e.next; r != nil {
+		e.next = nil
+		for _, w := range r.waiters {
+			if !w.gone {
+				w.err = cause
+			}
+		}
+		close(r.done)
+	}
+	e.mu.Unlock()
+	c.mu.Unlock()
+	c.setGauges()
+}
