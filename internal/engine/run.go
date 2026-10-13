@@ -893,14 +893,6 @@ type Options struct {
 	// rather than to a deployment, and the knob exists only so a case can
 	// watch a retry bring a child up without waiting fifteen seconds for it.
 	seatRetryBase time.Duration
-
-	// onBrokerDeath replaces what this node does when its embedded broker
-	// declares itself dead, nil for [Engine.brokerDeathExit] — which ends
-	// the process. UNEXPORTED for the reason usageEvery is, and for one more:
-	// what a dead broker means is the engine's decision rather than a
-	// deployment's, and the knob exists only so a case can see the decision
-	// reached without the test binary ending with it.
-	onBrokerDeath func(error)
 }
 
 // New assembles an engine.
@@ -1564,11 +1556,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// AND THE BROKER, whose death ends the process through the same exit —
 	// as soon as there is a watchdog to end it, which is here. See
 	// [Engine.watchBroker].
-	die := e.brokerDeathExit
-	if opts.onBrokerDeath != nil {
-		die = opts.onBrokerDeath
-	}
-	e.watchBroker(ctx, backends.death, die)
+	e.watchBroker(ctx, backends.death)
 	e.node = n
 	e.dispatch = e.buildDispatcher(opts, backends)
 	// THIS NODE ANSWERS FOR THE MEMORY OF THE SEATS IT HOLDS, in every mode
