@@ -388,7 +388,7 @@ func sandboxNode(t *testing.T, company *config.Company) *Engine {
 
 // newSandboxNode is [sandboxNode] before its Start, for a case that has to be
 // listening before the node takes a seat.
-func newSandboxNode(t *testing.T, company *config.Company) *Engine {
+func newSandboxNode(t testing.TB, company *config.Company) *Engine {
 	t.Helper()
 	b := config.DefaultBootstrap()
 	dir := t.TempDir()
@@ -413,7 +413,7 @@ func sandboxDoc(extra string) string {
 	return fmt.Sprintf(sandboxCompanyDoc, extra)
 }
 
-func parseCompany(t *testing.T, doc string) *config.Company {
+func parseCompany(t testing.TB, doc string) *config.Company {
 	t.Helper()
 	c, err := config.ParseCompany([]byte(doc))
 	if err != nil {

@@ -124,8 +124,8 @@ func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Dur
 	case !wrote:
 		return PurgeResult{Done: done}, nil
 	case result.Outcome == statelog.OutcomeUnknown:
-		return PurgeResult{}, fmt.Errorf("code: whether the purge step on %s landed is unknown "+
-			"(operation %s); the next pass decides it again", repoID, opID)
+		return PurgeResult{}, unknownOutcome(ctx, "code: whether the purge step on %s landed is "+
+			"unknown (operation %s); the next pass decides it again", repoID, opID)
 	}
 	return PurgeResult{Done: done, Outcome: result.Outcome, Position: result.Position}, nil
 }

@@ -220,6 +220,22 @@
 // — seventeen to twenty seconds of every data node's reads at ten thousand,
 // for an activation that appends one fence record.
 //
+// A CHANGED ACTIVATION (internal/engine's BenchmarkAChangedActivation, the
+// reconcile end to end on one booted node, its fence, walk and batch read
+// included, one count each, [reconcileInFlight] the width): over the same ten
+// thousand, the activation that creates them all is 18.3–19.5 s, one that
+// deletes them all 17.2–18.5 s, one that restores them all 16.3–17.2 s, and
+// one that changes nothing 0.45–0.53 s. By width, creating them took 67 s
+// one at a time, 35 s two, 25 s four and 18–21 s at every width from eight to
+// a hundred and twenty-eight — a create's round trip is 6.7 ms alone, and
+// the floor is this node's applier and the decisions' own snapshots, about
+// 550 records a second. Before every write's anchor read named its index
+// (internal/statelog's TestEveryAnchorStatementSeeksItsKey) the same three
+// took 21.6, 31.6 and 61.4 s at thirty-two, because each read walked every
+// anchor the log had written and so cost more with every repository decided.
+// No apply waits for any of it: the engine's reconciler runs beside the
+// apply that asks.
+//
 // A DECIDE (BenchmarkDecideABatch, four counts of twenty, a 2.1 GHz Xeon)
 // holds no write lane, and is two parts on the repository's one committer
 // goroutine: the FORMATION of the batch's protection verdicts, before the

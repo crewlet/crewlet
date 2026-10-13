@@ -1,10 +1,13 @@
 package config_test
 
 import (
+	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 )
@@ -183,5 +186,468 @@ func TestRunsStateLogCountsTheCodeHost(t *testing.T) {
 	if !hosting.RunsStateLog() {
 		t.Error("a company hosting its repositories in the engine runs no state log: " +
 			"nothing would decide a push")
+	}
+}
+
+// codeChart is a company with a chart to own repositories: a root seat, and two
+// units — one keyed by its name, one by an id its name does not spell.
+const codeChart = `name: Acme
+roles:
+  - name: CEO
+    handle: ceo
+units:
+  - name: Engineering
+    roles:
+      - name: SWE
+        handle: swe
+  - name: Platform Team
+    id: platform
+    roles:
+      - name: SRE
+        handle: sre
+`
+
+// codeRepos is codeChart hosting code, with repos as code.repos' entries.
+func codeRepos(repos string) string {
+	return codeChart + "code:\n  native: true\n  repos:\n" + repos
+}
+
+// EVERY RULE OF code.repos REFUSES AT THE FIELD IT IS ABOUT, AS ONE PROBLEM.
+//
+// The reconcile builds each repository's record from its declaration against
+// the chart of the activation it applies, so a declaration it cannot record —
+// a name that is no repository name, an owner the chart does not resolve, two
+// rules on one pattern, force on a tag — is refused before it is applied,
+// where an author can find the line, rather than logged on every data node at
+// every activation. One mistake is one problem: a name that is not one is not
+// also a duplicate, and a rule with no pattern is not also a pattern twice.
+func TestTheCodeBlockRefusesByField(t *testing.T) {
+	t.Parallel()
+	web := "    - name: web\n      owner: {unit: Engineering}\n"
+	rule := func(r string) string {
+		return web + "      protect:\n        - " + r + "\n"
+	}
+	for name, tc := range map[string]struct {
+		doc string
+		// path and kind are the one problem the document must be refused
+		// with.
+		path, kind string
+		// says is what the message must name, beside the path.
+		says []string
+	}{
+		"repositories with nothing hosting code": {
+			doc:  codeChart + "code:\n  repos:\n" + web,
+			path: "code.repos", kind: "conflict", says: []string{"code.native"},
+		},
+		"a retention with nothing hosting code": {
+			doc:  codeChart + "code:\n  deleted_retention_days: 30\n",
+			path: "code.deleted_retention_days", kind: "conflict", says: []string{"code.native"},
+		},
+		"a retention past a year": {
+			doc:  codeChart + "code:\n  native: true\n  deleted_retention_days: 366\n",
+			path: "code.deleted_retention_days", kind: "out_of_range", says: []string{"1..365", "366"},
+		},
+		"a negative retention": {
+			doc:  codeChart + "code:\n  native: true\n  deleted_retention_days: -1\n",
+			path: "code.deleted_retention_days", kind: "out_of_range", says: []string{"1..365"},
+		},
+		"no name": {
+			doc:  codeRepos("    - owner: {unit: Engineering}\n"),
+			path: "code.repos[0].name", kind: "missing",
+		},
+		"a name that is no repository name": {
+			doc:  codeRepos("    - name: Web.App\n      owner: {unit: Engineering}\n"),
+			path: "code.repos[0].name", kind: "shape", says: []string{"Web.App", "63"},
+		},
+		"a name ending in a hyphen": {
+			doc:  codeRepos("    - name: web-\n      owner: {unit: Engineering}\n"),
+			path: "code.repos[0].name", kind: "shape",
+		},
+		"one name declared twice": {
+			doc:  codeRepos(web + "    - name: api\n      owner: {seat: swe}\n" + web),
+			path: "code.repos[2].name", kind: "conflict", says: []string{`"web"`, "repos[0]"},
+		},
+		"no owner": {
+			doc:  codeRepos("    - name: web\n"),
+			path: "code.repos[0].owner", kind: "missing",
+		},
+		"two owners": {
+			doc:  codeRepos("    - name: web\n      owner: {unit: Engineering, seat: swe}\n"),
+			path: "code.repos[0].owner", kind: "conflict",
+		},
+		"a unit the chart does not have": {
+			doc:  codeRepos("    - name: web\n      owner: {unit: Marketing}\n"),
+			path: "code.repos[0].owner.unit", kind: "unknown_value",
+			says: []string{"Marketing", "Engineering", "platform"},
+		},
+		"a seat the chart does not have": {
+			doc:  codeRepos("    - name: web\n      owner: {seat: cto}\n"),
+			path: "code.repos[0].owner.seat", kind: "unknown_value", says: []string{"cto", "ceo", "swe"},
+		},
+		"a default branch that is no branch": {
+			doc:  codeRepos(web + "      default_branch: main..next\n"),
+			path: "code.repos[0].default_branch", kind: "shape", says: []string{"main..next"},
+		},
+		"a description past its bound": {
+			doc: codeRepos(web + "      description: " +
+				strings.Repeat("x", config.CodeMaxDescriptionBytes+1) + "\n"),
+			path: "code.repos[0].description", kind: "out_of_range", says: []string{"1025", "1024"},
+		},
+		"too many rules": {
+			doc: func() string {
+				var b strings.Builder
+				b.WriteString(web + "      protect:\n")
+				for i := range config.CodeMaxProtections + 1 {
+					fmt.Fprintf(&b, "        - branch: b%d\n", i)
+				}
+				return codeRepos(b.String())
+			}(),
+			path: "code.repos[0].protect", kind: "out_of_range", says: []string{"65", "64"},
+		},
+		"a rule protecting nothing": {
+			doc:  codeRepos(rule("{allow_delete: true}")),
+			path: "code.repos[0].protect[0]", kind: "missing",
+		},
+		"a rule on a branch and a tag": {
+			doc:  codeRepos(rule("{branch: main, tag: v1}")),
+			path: "code.repos[0].protect[0]", kind: "conflict",
+		},
+		"a branch pattern that is no pattern": {
+			doc:  codeRepos(rule("{branch: 'release/../x'}")),
+			path: "code.repos[0].protect[0].branch", kind: "shape", says: []string{"release/../x"},
+		},
+		"a tag pattern that is no pattern": {
+			doc:  codeRepos(rule("{tag: 'v1:x'}")),
+			path: "code.repos[0].protect[0].tag", kind: "shape", says: []string{"v1:x"},
+		},
+		"one pattern protected twice": {
+			doc: codeRepos(web + "      protect:\n        - branch: main\n        - tag: main\n" +
+				"        - {branch: main, allow_delete: true}\n"),
+			path: "code.repos[0].protect[2]", kind: "conflict",
+			says: []string{"refs/heads/main", "protect[0]"},
+		},
+		"force on a tag": {
+			doc:  codeRepos(rule("{tag: 'v*', allow_force: true}")),
+			path: "code.repos[0].protect[0].allow_force", kind: "conflict", says: []string{"tag never moves"},
+		},
+		"a direct push nobody knows": {
+			doc:  codeRepos(rule("{branch: main, direct_push: admins}")),
+			path: "code.repos[0].protect[0].direct_push", kind: "unknown_value",
+			says: []string{"admins", "persons, none"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := config.ParseCompany([]byte(tc.doc))
+			problems := config.Problems(err)
+			if len(problems) != 1 {
+				t.Fatalf("problems = %+v, want the one at %s: one mistake, one line", problems, tc.path)
+			}
+			p := problems[0]
+			if p.Path != tc.path || p.Kind != tc.kind {
+				t.Errorf("refused at %s (%s), want %s (%s): %s", p.Path, p.Kind, tc.path, tc.kind, p.Message)
+			}
+			for _, want := range tc.says {
+				if !strings.Contains(p.Message, want) {
+					t.Errorf("message = %q, want it to name %q", p.Message, want)
+				}
+			}
+		})
+	}
+}
+
+// A WHOLE DECLARATION IS ACCEPTED: an owner by a unit's NAME, one by a unit's
+// id, one by a seat, a branch glob, a frozen branch and a tag rule — and every
+// repository's default branch protected, so nothing is warned either.
+func TestADeclaredCodeBlockIsAccepted(t *testing.T) {
+	t.Parallel()
+	c, err := config.ParseCompany([]byte(codeChart + `code:
+  native: true
+  deleted_retention_days: 30
+  repos:
+    - name: web
+      owner: {unit: Engineering}
+      description: The customer-facing web app.
+      protect:
+        - branch: main
+        - branch: release/*
+          direct_push: none
+        - tag: "v*"
+          allow_delete: true
+    - name: infra
+      owner: {unit: platform}
+      default_branch: trunk
+      archived: true
+      protect:
+        - {branch: trunk, allow_force: true}
+    - name: notes
+      owner: {seat: ceo}
+      protect:
+        - branch: "**"
+`))
+	if err != nil {
+		t.Fatalf("refused: %v", err)
+	}
+	if got := c.Code.DeletedRetention(); got != 30*24*time.Hour {
+		t.Errorf("deleted_retention_days: 30 reads as %v", got)
+	}
+	for _, w := range c.Warnings() {
+		if strings.HasPrefix(w.Path, "code.") {
+			t.Errorf("a declaration protecting every default branch warned: %s: %s", w.Path, w.Message)
+		}
+	}
+}
+
+// AN UNPROTECTED DEFAULT BRANCH IS WARNED, NEVER REFUSED — through the matcher
+// a push's decide asks (gitref), so a glob that covers the branch protects it
+// and one beside it does not. The warning sits at the field to add, the
+// repository's protect list, and names the branch it is about.
+func TestAnUnprotectedDefaultBranchIsWarned(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		repo   string
+		warns  bool
+		branch string
+	}{
+		"a glob beside it":           {repo: "      protect: [{branch: 'release/*'}]\n", warns: true, branch: "main"},
+		"no rules at all":            {repo: "", warns: true, branch: "main"},
+		"a tag of the same name":     {repo: "      protect: [{tag: main}]\n", warns: true, branch: "main"},
+		"a rule on another branch":   {repo: "      default_branch: trunk\n      protect: [{branch: main}]\n", warns: true, branch: "trunk"},
+		"the branch itself":          {repo: "      protect: [{branch: main}]\n"},
+		"a glob covering every name": {repo: "      protect: [{branch: '**'}]\n"},
+		"a glob covering its own":    {repo: "      default_branch: dev/main\n      protect: [{branch: 'dev/*'}]\n"},
+		// AN ARCHIVED REPOSITORY TAKES NO PUSH AT ALL — the decide refuses
+		// the whole push — so nobody can force-push or delete its branch,
+		// and a warning saying so would be false.
+		"archived, with no rules": {repo: "      archived: true\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, err := config.ParseCompany([]byte(codeRepos(
+				"    - name: web\n      owner: {seat: swe}\n" + tc.repo)))
+			if err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			var found []config.Warning
+			for _, w := range c.Warnings() {
+				if strings.HasPrefix(w.Path, "code.") {
+					found = append(found, w)
+				}
+			}
+			switch {
+			case !tc.warns && len(found) != 0:
+				t.Fatalf("a default branch nobody can force-push or delete warned: %+v", found)
+			case !tc.warns:
+			case len(found) != 1:
+				t.Fatalf("warnings = %+v, want one about the unprotected default branch", found)
+			case found[0].Path != "code.repos[0].protect" || found[0].Kind != config.WarningAdvisory:
+				t.Errorf("warned at %s (%s), want code.repos[0].protect, an advisory",
+					found[0].Path, found[0].Kind)
+			case !strings.Contains(found[0].Message, "web's default branch "+tc.branch+" is unprotected"):
+				t.Errorf("message = %q, want it to name web's default branch %s", found[0].Message, tc.branch)
+			}
+		})
+	}
+}
+
+// THE SCHEMA ADMITS THE RETENTION THE VALIDATOR DOES: 0 is unset, which the
+// decoder reads like an absent key, and a year is the most.
+func TestTheDeletedRetentionIsTheSchemasBounds(t *testing.T) {
+	t.Parallel()
+	field, ok := reflect.TypeFor[config.Code]().FieldByName("DeletedRetentionDays")
+	if !ok {
+		t.Fatal("config.Code has no DeletedRetentionDays")
+	}
+	if got, want := field.Tag.Get("js"),
+		fmt.Sprintf("min=0;max=%d", config.CodeMaxDeletedRetentionDays); got != want {
+		t.Errorf("deleted_retention_days' schema bounds are %q, want %q — the tag was left "+
+			"behind when the constant moved", got, want)
+	}
+}
+
+// THE RETENTION'S DEFAULT IS APPLIED IN ONE PLACE: unset is the default seven
+// days, a set value passes through.
+func TestTheDeletedRetentionResolvesToItsDefault(t *testing.T) {
+	t.Parallel()
+	if got := (config.Code{}).DeletedRetention(); got != config.DefaultCodeDeletedRetentionDays*24*time.Hour {
+		t.Errorf("an unset retention is %v, want the default %d days", got,
+			config.DefaultCodeDeletedRetentionDays)
+	}
+	if got := (config.Code{DeletedRetentionDays: 1}).DeletedRetention(); got != 24*time.Hour {
+		t.Errorf("a retention of one day is %v", got)
+	}
+}
+
+// A DESCRIPTION THAT IS NOT UTF-8 IS REFUSED. YAML cannot carry one, but a
+// document reaches validation as a value too — a PATCH merged in Go — and the
+// description rides every settings record, which the domain refuses then.
+func TestADescriptionThatIsNotUTF8IsRefused(t *testing.T) {
+	t.Parallel()
+	c, err := config.ParseCompany([]byte(codeRepos("    - name: web\n      owner: {seat: swe}\n")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	c.Code.Repos[0].Description = "caf\xe9"
+	problems := config.Problems(c.Validate())
+	if len(problems) != 1 || problems[0].Path != "code.repos[0].description" || problems[0].Kind != "shape" {
+		t.Fatalf("problems = %+v, want one shape problem at code.repos[0].description", problems)
+	}
+}
+
+// THE CODE HOST'S POLICY BOUNDS ARE ADMISSION RULES: a document submitted with
+// more than CodeMaxRepos repositories, or a retention past
+// CodeMaxDeletedRetentionDays, is refused at the field — and a revision being
+// APPLIED that breaks either still runs.
+//
+// Nothing about running depends on either: the reconcile decides any number of
+// declarations, and the retention duty purges by any retention a duration can
+// hold. So a later build that raises either bound admits revisions this build
+// must apply during a rolling upgrade, or the fleet's epoch splits — which is
+// what holding them as runnable rules would do (config's ValidateRunnable).
+//
+// Mutation: put either check back in Code.validate and ValidateRunnable
+// refuses the stored revision.
+func TestTheCodeHostsPolicyBoundsAreAdmissionRules(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	for i := range config.CodeMaxRepos + 1 {
+		fmt.Fprintf(&b, "    - {name: r%d, owner: {seat: swe}, protect: [{branch: main}]}\n", i)
+	}
+	doc := strings.Replace(codeRepos(b.String()), "  native: true\n",
+		fmt.Sprintf("  native: true\n  deleted_retention_days: %d\n", config.CodeMaxDeletedRetentionDays+1), 1)
+	c, err := config.ParseCompanyDocument([]byte(doc))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if err := c.ValidateRunnable(); err != nil {
+		t.Fatalf("ValidateRunnable() = %v: an applied revision past a policy bound still runs, "+
+			"so nothing may refuse to apply it", err)
+	}
+	want := map[string]string{
+		"code.repos":                  strconv.Itoa(config.CodeMaxRepos),
+		"code.deleted_retention_days": strconv.Itoa(config.CodeMaxDeletedRetentionDays),
+	}
+	for _, check := range []struct {
+		name string
+		err  error
+	}{{"Validate", c.Validate()}, {"ValidateAdmission", c.ValidateAdmission()}} {
+		problems := config.Problems(check.err)
+		if len(problems) != len(want) {
+			t.Errorf("%s() = %+v, want one problem each at %v", check.name, problems, want)
+			continue
+		}
+		for _, p := range problems {
+			names, ok := want[p.Path]
+			if !ok || p.Kind != "out_of_range" || !strings.Contains(p.Message, names) {
+				t.Errorf("%s(): %s (%s) %q, want out_of_range at one of %v naming its bound",
+					check.name, p.Path, p.Kind, p.Message, want)
+			}
+		}
+	}
+}
+
+// BenchmarkValidatingTheMostRepositories is what an apply pays for code.repos'
+// runnable rules at their largest: [config.CodeMaxRepos] repositories, half
+// owned by a unit (by name) and half by a seat, each with a rule, on a chart
+// of 300 units and 900 seats whose handles are derived from their names —
+// ValidateRunnable over the whole document, the check every data node runs on
+// every revision it applies, inside the apply. Measured (four vCPUs of a
+// 2.1 GHz Xeon) at 95–101 ms and 29 MB a validation with the owners resolved
+// through one org.Index, against 1.92–1.93 s and 338 MB through the chart's
+// one-off lookups — a walk of every seat, deriving each handle, an owner.
+func BenchmarkValidatingTheMostRepositories(b *testing.B) {
+	var doc strings.Builder
+	doc.WriteString("name: Acme\nunits:\n")
+	for u := range 300 {
+		fmt.Fprintf(&doc, "  - name: Unit %d\n    roles:\n", u)
+		for s := range 3 {
+			fmt.Fprintf(&doc, "      - {name: Seat %d %d}\n", u, s)
+		}
+	}
+	doc.WriteString("code:\n  native: true\n  repos:\n")
+	for i := range config.CodeMaxRepos {
+		owner := fmt.Sprintf("{unit: Unit %d}", i%300)
+		if i%2 == 1 {
+			owner = fmt.Sprintf("{seat: seat-%d-%d}", i%300, i%3)
+		}
+		fmt.Fprintf(&doc, "    - {name: r%d, owner: %s, protect: [{branch: main}]}\n", i, owner)
+	}
+	c, err := config.ParseCompanyDocument([]byte(doc.String()))
+	if err != nil {
+		b.Fatalf("decode: %v", err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := c.ValidateRunnable(); err != nil {
+			b.Fatalf("ValidateRunnable() = %v", err)
+		}
+	}
+}
+
+// A RETENTION NO DURATION HOLDS IS REFUSED TO RUN, however it was admitted:
+// one day past the longest a duration holds, DeletedRetention overflows to a
+// negative duration — a retention every deleted repository has outlived, which
+// the retention duty would answer by purging them all at its next pass, and a
+// purge has no undo. The longest a duration holds still runs, as the policy
+// bound's admission rule allows a later build to raise it that far.
+//
+// Mutation: drop the runnable bound and the overflowing revision applies.
+func TestARetentionNoDurationHoldsIsRefusedToRun(t *testing.T) {
+	t.Parallel()
+	held := int(math.MaxInt64 / int64(24*time.Hour))
+	for _, tc := range []struct {
+		days   int
+		refuse bool
+	}{{held, false}, {held + 1, true}} {
+		doc := codeRepos("    - {name: web, owner: {seat: swe}, protect: [{branch: main}]}\n")
+		doc = strings.Replace(doc, "  native: true\n",
+			fmt.Sprintf("  native: true\n  deleted_retention_days: %d\n", tc.days), 1)
+		c, err := config.ParseCompanyDocument([]byte(doc))
+		if err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		problems := config.Problems(c.ValidateRunnable())
+		switch {
+		case !tc.refuse && len(problems) != 0:
+			t.Errorf("%d days: ValidateRunnable() = %+v, want it to run", tc.days, problems)
+		case !tc.refuse && c.Code.DeletedRetention() <= 0:
+			t.Errorf("%d days: DeletedRetention() = %v, want the duration it says", tc.days,
+				c.Code.DeletedRetention())
+		case tc.refuse && (len(problems) != 1 || problems[0].Path != "code.deleted_retention_days" ||
+			problems[0].Kind != "out_of_range"):
+			t.Errorf("%d days: ValidateRunnable() = %+v, want one out_of_range at "+
+				"code.deleted_retention_days", tc.days, problems)
+		}
+		if tc.refuse {
+			// AND ONCE: the admission rule leaves what the runnable
+			// rule refuses to it.
+			if all := config.Problems(c.Validate()); len(all) != 1 {
+				t.Errorf("%d days: Validate() = %+v, want the one problem", tc.days, all)
+			}
+		}
+	}
+}
+
+// A RULE'S PATTERN IS ONE SPELLING, its namespace before its name, and none
+// for a rule naming neither or both — which the validator refuses, so the
+// reconcile never meets it.
+func TestAProtectionsPatternIsItsNamespacedName(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		rule config.CodeProtection
+		want string
+	}{
+		{config.CodeProtection{Branch: "release/*"}, "refs/heads/release/*"},
+		{config.CodeProtection{Tag: "v*"}, "refs/tags/v*"},
+		{config.CodeProtection{}, ""},
+		{config.CodeProtection{Branch: "main", Tag: "v1"}, ""},
+	} {
+		if got := tc.rule.Pattern(); got != tc.want {
+			t.Errorf("%+v.Pattern() = %q, want %q", tc.rule, got, tc.want)
+		}
+	}
+	if config.CodeDirectPush("").Resolved() != config.CodeDirectPersons ||
+		config.CodeDirectNone.Resolved() != config.CodeDirectNone {
+		t.Error("an unset direct_push does not read as persons, or a set one moved")
 	}
 }

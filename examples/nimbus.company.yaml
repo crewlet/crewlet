@@ -547,6 +547,38 @@ knowledge:
   # and routing, and refused as a unit's own ``space``.
   # See docs/concepts/knowledge-system.md.
 
+# The engine's own git host, beside GitLab rather than instead of it: the
+# control-plane repositories stay where the engineering seats open their
+# merge requests (``integrations.gitlab`` above), and these two are hosted by
+# the engine itself, on its own log — a repository is rows every data node
+# holds, and each push's bytes are one object in the object store.
+#
+# Every activation reconciles this list: a name added is created, a changed
+# setting is settled, and a repository removed from it is DELETED —
+# restorable by declaring it again for ``deleted_retention_days`` (unset:
+# 7) — and purged after that, its name free again.  An owner is a unit (by
+# its id, or its name when it has none) or a seat (by its handle).  A
+# protection rule matches branches or tags by glob (``*`` one path
+# component, ``**`` any number); a ref no rule matches may be force-pushed
+# or deleted, so ``crewlet validate`` warns about a default branch left
+# unprotected.  ``direct_push: none`` freezes the refs it matches.
+# See docs/concepts/code-host.md.
+code:
+  native: true
+  repos:
+    - name: nimbus-web
+      owner: {unit: Engineering}
+      description: The customer-facing web app.
+      protect:
+        - branch: main
+        - branch: release/*
+          direct_push: none
+    - name: infra
+      owner: {seat: agent-cto}
+      description: Deployment manifests for the Nimbus control plane.
+      protect:
+        - branch: main
+
 # All tool MCP servers live here.  Mattermost and GitLab are
 # ``shared: false`` templates — each agent gets its own stdio instance
 # with credentials from ``role.mcp_env`` env vars (the gitlab server is

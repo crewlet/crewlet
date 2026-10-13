@@ -1708,6 +1708,20 @@ code:
     max_push_bytes: 1073741824          # 1 MiB..1 GiB; the largest pack one push sends (default 1 GiB)
     max_blob_bytes: 52428800            # 1 KiB..1 GiB, at most max_push_bytes (default 50 MiB)
     repo_max_bytes: 21474836480         # 1 MiB..1 TiB, at least max_push_bytes (default 20 GiB)
+  deleted_retention_days: 7             # 1..365; how long a removed repository is restorable (default 7)
+  repos:                                # at most 10000
+    - name: nimbus-web                  # one host-name label: a-z, 0-9 and -, at most 63
+      owner: { unit: Engineering }      # exactly one of unit (id or name) and seat (handle)
+      default_branch: main              # default main
+      description: The customer-facing web app.   # at most 1024 bytes
+      archived: false                   # true: read-only, takes no push
+      protect:                          # at most 64 rules
+        - branch: main                  # exactly one of branch and tag
+        - branch: release/**
+          allow_force: false            # a push not descending from the branch (never on a tag)
+          allow_delete: true            # deleting a matching ref
+          direct_push: persons          # persons (default) or none: nothing pushes to it
+        - tag: "v*"
 ```
 
 `code.native` turns on the engine's own **git host**. A repository's refs and packs are records on a log of their own — the code log, beside the tracker's and the knowledge base's — and every data node runs a **committer** that decides the pushes it is asked to commit, publishing each batch as one record. A push is asked of its repository's committer: the first data node in a rendezvous order of the repository's id, which every node computes alike, so a repository's pushes meet at one node whichever node received them, and a committer that stops, or answers nothing, hands each of its repositories to that repository's runner-up with the same push id. A node in a [maintenance mode](../guides/retention.md#the-three-modes) decides none: it refuses a push as a node that ran nothing, and the repository's next committer decides it — so while the whole fleet is in a maintenance mode, no push is committed at all. Like `tracker.backend`, it is part of a node's **native runtime**, built once per process: on a node that runs no native backend yet — a company whose tracker and knowledge base are both a vendor's — the activation that sets it starts the code host with no restart, and on a node whose native runtime is already running, a revision that turns it on or off activates normally and takes effect at each node's restart, which the node says with a `native_backend_needs_restart` warning naming `code.native` (see [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)). Setting it starts the state log even on a company whose tracker and knowledge base are both a vendor's, so it needs a stream that survives a restart, as above.
@@ -1719,6 +1733,15 @@ code:
 - **`repo_max_bytes`** — the most packed bytes one repository may hold. Unset is 20 GiB. It is per **node** as much as per repository: every node that serves a repository keeps a whole copy of it.
 
 The order is checked on what a push is actually held to, the defaults included: `max_push_bytes: 10485760` set alone is refused, because the default `max_blob_bytes` (50 MiB) is larger, and the refusal names the default it met — set both. `code.limits` on a company that does not set `code.native` is refused: it would read as live and limit nothing.
+
+`code.repos` declares the company's repositories, and **every data node reconciles it at every boot and every activation** — beside the apply, which reports the revision applied without waiting for it, so a reconcile that leaves something undone is run again by the node, on a backoff growing from five seconds to five minutes, until it applies: a name added is created, a changed entry's settings are settled, an unchanged one costs nothing, and a repository the configuration created that the document no longer declares is **deleted** — it takes no push, and its refs and packs are kept, so declaring it again under its name restores it. A repository somebody else created is never deleted for being absent here, and nothing is deleted because `code.native` was turned off. What each change does, and the activation fence that keeps a node applying an older revision late from walking a newer one back, is in [Code Host](../concepts/code-host.md#declaring-repositories).
+
+- **`name`** — the address a repository is cloned by, so renaming one deletes it and creates another. Each name is declared once; a second declaration is refused at the later entry.
+- **`owner`** — exactly one of `unit` (its id, or its name where it has none) and `seat` (a handle), resolved against the same document's chart; one the chart does not have refuses the revision, naming the ones it does.
+- **`default_branch`** — any branch name git would take; unset is `main`.
+- **`protect`** — each rule names exactly one of a `branch` and a `tag` pattern, each pattern once. A pattern is a name in git's grammar where a component of `*` matches one component, `*` inside a component any run of characters but `/`, and a component of `**` any number of components (one or more as the last), and a pattern with no `*` matches **only itself**; a glob has at most eight components counting `refs/` and its namespace. Every rule that matches a ref holds, so `allow_force` and `allow_delete` are allowed only where every matching rule allows them, and `direct_push: none` on any of them freezes the ref. `allow_force` on a tag rule is refused: a tag never moves. A ref no rule matches may be force-pushed or deleted, so `crewlet validate` **warns** — and never fails — about each repository whose default branch no rule protects, at its `protect`, naming the rule to add — except an archived one, which takes no push at all.
+
+`code.deleted_retention_days` is how long a deleted repository stays restorable: 1 to 365 days — and, like the 10 000 repositories `code.repos` may list, an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to), so a revision already stored past it still applies — and unset (or `0`) is 7, the trim's default `min_age`, so a deletion is undone from the same window the log can replay. Past it, the `code-retention` duty purges the repository in bounded steps and its name is free again; a longer retention set before then saves it, and a purge once begun is finished whatever the retention says (see [Deletion and purge](../concepts/code-host.md#deletion-and-purge)). Like `code.limits`, `code.repos` and `code.deleted_retention_days` are refused on a company that does not set `code.native`, and a node still serving the code host after a revision turned it off keeps the last hosting revision's retention until its restart.
 
 ---
 

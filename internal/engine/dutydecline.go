@@ -57,6 +57,9 @@ var (
 	collectorDecline = declinable{event: "object_collector", duty: "the object collector",
 		hazard: "its passes read the rows that name the files through a read the " +
 			"copy refuses, so it would hold the duty and collect nothing"}
+	codeRetentionDecline = declinable{event: "code_retention_duty", duty: "the code-retention duty",
+		hazard: "deciding from it would purge repositories by rows the node has stopped " +
+			"serving, and a purge has no undo"}
 )
 
 // dutyDecline is what one duty remembers of its declining: the domain it is

@@ -1,6 +1,17 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/org"
+)
 
 // The code host's limits that both tiers and the domain read: config VALIDATES
 // a document against them and internal/code DECIDES a push with them, and code
@@ -46,7 +57,37 @@ const (
 	// CodeMaxDescriptionBytes bounds a repository description: one
 	// paragraph, which rides every settings record and every listing row.
 	CodeMaxDescriptionBytes = 1_024
+
+	// CodeMaxRepos is the most repositories one document may declare: a
+	// typo guard on code.repos, two orders of magnitude past the reference
+	// company's sixty or so — a list longer than it is a generated document
+	// somebody should be told about rather than a company's repositories.
+	// AN ADMISSION RULE ([Code.validateAdmission]): the reconcile decides
+	// any number of declarations, so nothing about running depends on it.
+	// At this bound an activation that creates, deletes or restores every
+	// declared repository takes 16–19 s on one node before the last has
+	// its record (internal/code's doc.go), beside the apply rather than
+	// inside it, and one that changes nothing half a second.
+	CodeMaxRepos = 10_000
+
+	// CodeMaxDeletedRetentionDays is the longest code.deleted_retention_days:
+	// a year. A deleted repository keeps its rows on every data node and its
+	// packs in the object store until it is purged, and every backup carries
+	// them, so past a year a retention is an archive nobody restores rather
+	// than an undo of a removal — and an export is the archive's form. AN
+	// ADMISSION RULE ([Code.validateAdmission]): the retention duty purges by
+	// any retention a duration can hold ([codeMaxHeldRetentionDays], the
+	// runnable bound), so nothing about running depends on it.
+	CodeMaxDeletedRetentionDays = 365
 )
+
+// codeMaxHeldRetentionDays is the longest code.deleted_retention_days a
+// duration can hold — 106 751 days, about 292 years — and the RUNNABLE bound
+// on it: one day more and [Code.DeletedRetention] overflows to a negative
+// duration, a retention that has passed for every deleted repository, which
+// would purge them all at the next pass. A purge has no undo, so a revision
+// carrying one is refused to run however it was admitted.
+const codeMaxHeldRetentionDays = int(math.MaxInt64 / int64(24*time.Hour))
 
 // The bounds code.limits takes beside the ceiling above, named once so the
 // schema's js tags and the validator cannot drift
@@ -69,7 +110,8 @@ const (
 )
 
 // Code is the company's own git host: whether it hosts its repositories in
-// the engine, and the limits a push is held to.
+// the engine, the limits a push is held to, and the repositories it declares
+// (docs/concepts/code-host.md).
 //
 // NATIVE IS PART OF A NODE'S NATIVE RUNTIME, like tracker.backend: the
 // committer and the lifecycle store are built with it, once per process, from
@@ -83,9 +125,113 @@ const (
 // activation; a revision that turns the host off, which must drop them,
 // leaves a node still serving it the limits of the last revision that hosted
 // code until that restart.
+//
+// THE REPOSITORIES ARE THE EPOCH'S TOO: every data node reconciles code.repos
+// at every activation and every boot — a declared name is created, or its
+// settings settled; a configuration-managed repository no longer declared is
+// deleted, restorably for deleted_retention_days, and purged after it.
+// Nothing deletes a repository because the HOST was turned off: that revision
+// changes nothing on a running node until its restart, and after the restart
+// nothing reconciles at all.
 type Code struct {
-	Native bool       `yaml:"native,omitempty" json:"native,omitempty" desc:"Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node running no native backend yet starts the code host at the activation that sets it; on a node whose native runtime already runs, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart)."`
-	Limits CodeLimits `yaml:"limits,omitempty" json:"limits,omitzero"`
+	Native               bool       `yaml:"native,omitempty" json:"native,omitempty" desc:"Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node running no native backend yet starts the code host at the activation that sets it; on a node whose native runtime already runs, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart)."`
+	DeletedRetentionDays int        `yaml:"deleted_retention_days,omitempty" json:"deleted_retention_days,omitempty" js:"min=0;max=365" desc:"How long a repository removed from code.repos stays restorable by declaring it again under its name, before it is purged and its name is free: 1..365 days; unset (or 0) is 7."`
+	Limits               CodeLimits `yaml:"limits,omitempty" json:"limits,omitzero"`
+	Repos                []CodeRepo `yaml:"repos,omitempty" json:"repos,omitempty" desc:"The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again."`
+}
+
+// DeletedRetention is code.deleted_retention_days as a duration, its default
+// applied where it is unset — THE ONE PLACE the default is applied, read by the
+// engine's code-retention duty at every pass.
+func (c Code) DeletedRetention() time.Duration {
+	days := c.DeletedRetentionDays
+	if days <= 0 {
+		days = DefaultCodeDeletedRetentionDays
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
+
+// CodeRepo is one repository code.repos declares.
+type CodeRepo struct {
+	Name          string           `yaml:"name" json:"name" js:"pattern=^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" desc:"The repository's name: lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 63. It is the address a repository is cloned by, so renaming one deletes it and creates another."`
+	Owner         CodeOwner        `yaml:"owner" json:"owner"`
+	DefaultBranch string           `yaml:"default_branch,omitempty" json:"default_branch,omitempty" desc:"The branch a clone checks out; unset is main."`
+	Description   string           `yaml:"description,omitempty" json:"description,omitempty" desc:"One paragraph, at most 1024 bytes."`
+	Archived      bool             `yaml:"archived,omitempty" json:"archived,omitempty" desc:"Read-only: still fetched and cloned, and takes no push."`
+	Protect       []CodeProtection `yaml:"protect,omitempty" json:"protect,omitempty" desc:"The rules a push to the refs they match is held to, at most 64. A ref no rule matches may be force-pushed or deleted by anybody who may push."`
+}
+
+// ResolvedDefaultBranch is the repository's default branch with its default
+// applied — read by the unprotected-branch warning and by the engine's
+// reconcile alike, so the branch warned about is the branch recorded.
+func (r CodeRepo) ResolvedDefaultBranch() string {
+	if r.DefaultBranch == "" {
+		return DefaultCodeBranch
+	}
+	return r.DefaultBranch
+}
+
+// DefaultCodeBranch is a declared repository's default branch where it sets
+// none.
+const DefaultCodeBranch = "main"
+
+// CodeOwner is who owns a repository: exactly one of a unit or a seat.
+type CodeOwner struct {
+	Unit string `yaml:"unit,omitempty" json:"unit,omitempty" desc:"A unit of the chart: its id, or its name where it has none. Exactly one of unit and seat."`
+	Seat string `yaml:"seat,omitempty" json:"seat,omitempty" desc:"A seat, by its handle. Exactly one of unit and seat."`
+}
+
+// CodeProtection is one protection rule: the branches or the tags it matches,
+// and what a push to one of them may do.
+type CodeProtection struct {
+	Branch      string         `yaml:"branch,omitempty" json:"branch,omitempty" desc:"A branch name or glob: * matches one path component, ** any number, and a name with no * matches only itself. Exactly one of branch and tag."`
+	Tag         string         `yaml:"tag,omitempty" json:"tag,omitempty" desc:"A tag name or glob, as for branch. Exactly one of branch and tag."`
+	AllowForce  bool           `yaml:"allow_force,omitempty" json:"allow_force,omitempty" desc:"Let a push move a matching branch to a commit that does not descend from it. Not on a tag rule: a tag never moves."`
+	AllowDelete bool           `yaml:"allow_delete,omitempty" json:"allow_delete,omitempty" desc:"Let a push delete a matching ref."`
+	DirectPush  CodeDirectPush `yaml:"direct_push,omitempty" json:"direct_push,omitempty" js:"enum=persons|none" desc:"Who may push to a matching ref directly: persons (unset) or none, which freezes it — nothing pushes to it."`
+}
+
+// Pattern is the rule as the domain records it: the namespaced protection
+// pattern, refs/heads/<branch> or refs/tags/<tag>, or "" where the rule sets
+// neither or both. THE ONE SPELLING, read by the validator's uniqueness rule
+// and by the engine's reconcile alike, so `crewlet validate` cannot call two
+// rules distinct that the domain then refuses as one.
+func (rule CodeProtection) Pattern() string {
+	switch {
+	case rule.Branch != "" && rule.Tag == "":
+		return "refs/heads/" + rule.Branch
+	case rule.Tag != "" && rule.Branch == "":
+		return "refs/tags/" + rule.Tag
+	}
+	return ""
+}
+
+// CodeDirectPush is who may push to a protected ref directly.
+type CodeDirectPush string
+
+const (
+	// CodeDirectPersons lets a person push to it — what unset reads as.
+	CodeDirectPersons CodeDirectPush = "persons"
+	// CodeDirectNone lets nobody push to it: the ref is frozen.
+	CodeDirectNone CodeDirectPush = "none"
+)
+
+// CodeDirectPushes is the closed set: the one list the validator and the
+// schema read. The code domain's own set is held to it in both directions by
+// the engine's TestEveryDeclaredDirectPushIsOneTheDomainRecords, because
+// config cannot import the domain that imports it.
+var CodeDirectPushes = []CodeDirectPush{CodeDirectPersons, CodeDirectNone}
+
+// Valid reports a value this build knows. Unset is valid: it reads as
+// persons ([CodeDirectPush.Resolved]).
+func (d CodeDirectPush) Valid() bool { return d == "" || slices.Contains(CodeDirectPushes, d) }
+
+// Resolved is the value with its default applied: unset is persons.
+func (d CodeDirectPush) Resolved() CodeDirectPush {
+	if d == "" {
+		return CodeDirectPersons
+	}
+	return d
 }
 
 // CodeLimits are what one push and one repository may hold. An unset field
@@ -116,9 +262,85 @@ func (l CodeLimits) Resolved() CodeLimits {
 // zero is a block that sets no limit.
 func (l CodeLimits) zero() bool { return l == CodeLimits{} }
 
-// validate holds the code host's rules: code.limits only where something hosts
-// code, each limit inside its bounds, and the three in the order a push meets
-// them — a file inside a push, a push inside a repository.
+// validate holds the code host's RUNNABLE rules, against the chart o of the
+// same document: nothing of the block but native where nothing hosts code; a
+// retention a duration can hold; the limits ([CodeLimits.validate]); and every
+// declared repository ([CodeRepo.validate]), each name declared once.
+//
+// RUNNABLE because a revision that breaks one cannot run as written: the
+// reconcile cannot record a repository from it — an owner the chart does not
+// resolve has no owner to record, two rules on one pattern are one rule the
+// domain refuses — the limits are what every push is held to, and a retention
+// no duration holds purges every deleted repository at once. So a revision
+// that breaks one is refused before it is applied, like the tracker's and the
+// knowledge base's own rules. The two POLICY bounds — how many repositories
+// one document declares and how long a deletion may be kept — are admission
+// rules instead ([Code.validateAdmission]): nothing about running depends on
+// either.
+func (c Code) validate(path Path, o *org.Organization) error {
+	var p problems
+	if !c.Native {
+		// NOTHING HOSTS ANY OF IT, so each would read as live and do
+		// nothing: limits holding no push, a retention purging nothing,
+		// repositories nobody creates.
+		if !c.Limits.zero() {
+			p.add(at(path, "limits"), ErrConflict,
+				"nothing hosts code on this company: set code.native, or remove code.limits")
+		}
+		if c.DeletedRetentionDays != 0 {
+			p.add(at(path, "deleted_retention_days"), ErrConflict,
+				"nothing hosts code on this company: set code.native, or remove "+
+					"code.deleted_retention_days")
+		}
+		if len(c.Repos) > 0 {
+			p.add(at(path, "repos"), ErrConflict,
+				"nothing hosts code on this company, so none of these %d repositories "+
+					"would be created: set code.native, or remove code.repos", len(c.Repos))
+		}
+	}
+	if d := c.DeletedRetentionDays; d < 0 || d > codeMaxHeldRetentionDays {
+		p.add(at(path, "deleted_retention_days"), ErrOutOfRange,
+			"must be 1..%d days, or unset for the default %d, got %d",
+			CodeMaxDeletedRetentionDays, DefaultCodeDeletedRetentionDays, d)
+	}
+	p.wrap(c.Limits.validate(at(path, "limits")))
+	p.wrap(validateCodeRepos(at(path, "repos"), c.Repos, o))
+	return p.err()
+}
+
+// validateAdmission holds the code host's ADMISSION rules at path: at most
+// [CodeMaxRepos] repositories, and a retention of at most
+// [CodeMaxDeletedRetentionDays].
+//
+// POLICY, which a later build is free to change: the reconcile decides any
+// number of declarations and the retention duty purges by any retention a
+// duration holds, so a revision past either still runs — and held to them on
+// APPLY, a build that raised one would have its revisions refused by this one
+// during a rolling upgrade, splitting the fleet's epoch. A submitted document
+// is refused for them; an applied revision that breaks them is warned about.
+// A retention past what a duration holds is the runnable rule's, and is not
+// reported twice.
+func (c Code) validateAdmission(path Path) error {
+	var p problems
+	if d := c.DeletedRetentionDays; d > CodeMaxDeletedRetentionDays && d <= codeMaxHeldRetentionDays {
+		p.add(at(path, "deleted_retention_days"), ErrOutOfRange,
+			"must be 1..%d days, or unset for the default %d, got %d: past a year a "+
+				"deleted repository is an archive nobody restores, which every backup "+
+				"carries — export it instead", CodeMaxDeletedRetentionDays,
+			DefaultCodeDeletedRetentionDays, d)
+	}
+	if n := len(c.Repos); n > CodeMaxRepos {
+		p.add(at(path, "repos"), ErrOutOfRange,
+			"%d repositories, past the %d one document may declare — a typo guard: "+
+				"a list this long is a generated document, so check what wrote it",
+			n, CodeMaxRepos)
+	}
+	return p.err()
+}
+
+// validate holds code.limits' rules at path: each limit inside its bounds, and
+// the three in the order a push meets them — a file inside a push, a push
+// inside a repository.
 //
 // THE ORDER IS OF THE RESOLVED LIMITS, because that is what a push is held to:
 // a push limit set alone below the default file limit admits no push carrying
@@ -126,14 +348,8 @@ func (l CodeLimits) zero() bool { return l == CodeLimits{} }
 // DOCUMENT SETS — the line its author can find — naming the default it met.
 // And only once every limit is in range: a value outside its bounds is one
 // mistake, and an order problem beside it would be the same mistake twice.
-func (c Code) validate(path Path) error {
+func (l CodeLimits) validate(limits Path) error {
 	var p problems
-	limits := at(path, "limits")
-	if !c.Native && !c.Limits.zero() {
-		p.add(limits, ErrConflict,
-			"nothing hosts code on this company: set code.native, or remove code.limits")
-	}
-	l := c.Limits
 	before := len(p)
 	bytesInRange(&p, limits, "max_push_bytes", l.MaxPushBytes, CodeMinPushBytes, CodeMaxPushBytesCeiling)
 	bytesInRange(&p, limits, "max_blob_bytes", l.MaxBlobBytes, CodeMinBlobBytes, CodeMaxPushBytesCeiling)
@@ -175,4 +391,223 @@ func limitNamed(name string, set, resolved int64) string {
 		return fmt.Sprintf("%s (unset: its default, %d)", name, resolved)
 	}
 	return fmt.Sprintf("%s (%d)", name, resolved)
+}
+
+// validateCodeRepos holds code.repos at path: each entry valid, and each name
+// declared once. (How many entries is an admission rule:
+// [Code.validateAdmission].)
+//
+// A DUPLICATE IS REPORTED AT THE LATER ENTRY, which is the one an author
+// added: one name is one repository — the address it is cloned by, and the
+// subject a create arbitrates on — so a second declaration would settle the
+// first's settings to its own at every activation. Only among names that are
+// names: one that is not is already refused, and calling it a duplicate too
+// would report one mistake twice.
+func validateCodeRepos(path Path, repos []CodeRepo, o *org.Organization) error {
+	var p problems
+	owners := newCodeOwners(o)
+	first := make(map[string]int, len(repos))
+	for i, r := range repos {
+		entry := idx(path, i)
+		p.wrap(r.validate(entry, owners))
+		if !gitref.ValidRepoName(r.Name) {
+			continue
+		}
+		if was, dup := first[r.Name]; dup {
+			p.add(at(entry, "name"), ErrConflict,
+				"%q is declared twice (first at repos[%d]): a name is one repository, so "+
+					"each activation would settle one declaration's settings over the "+
+					"other's. Declare it once", r.Name, was)
+			continue
+		}
+		first[r.Name] = i
+	}
+	return p.err()
+}
+
+// validate holds one declared repository at path, against the document's
+// chart: its name, its one owner resolving on the chart, its default branch,
+// its description and its protection rules — at most [CodeMaxProtections],
+// each naming exactly one of a branch or a tag pattern in gitref's grammar,
+// each pattern protected once, and no force on a tag.
+func (r CodeRepo) validate(path Path, owners *codeOwners) error {
+	var p problems
+	switch {
+	case r.Name == "":
+		p.add(at(path, "name"), ErrMissing,
+			"a repository needs a name: it is the address the repository is cloned by")
+	case !gitref.ValidRepoName(r.Name):
+		p.add(at(path, "name"), ErrShape,
+			"%q is not a repository name: lowercase letters, digits and hyphens, "+
+				"starting and ending with a letter or a digit, at most %d",
+			r.Name, gitref.MaxRepoNameBytes)
+	}
+	r.Owner.validate(&p, at(path, "owner"), owners)
+	if r.DefaultBranch != "" && !gitref.ValidBranch(r.DefaultBranch) {
+		p.add(at(path, "default_branch"), ErrShape,
+			"%q is not a branch name git would take (git check-ref-format): unset it for %s, "+
+				"or name a branch", r.DefaultBranch, DefaultCodeBranch)
+	}
+	switch {
+	case len(r.Description) > CodeMaxDescriptionBytes:
+		p.add(at(path, "description"), ErrOutOfRange,
+			"%d bytes, past the %d a description may hold: it rides every settings "+
+				"record and every listing row, so keep it to one paragraph",
+			len(r.Description), CodeMaxDescriptionBytes)
+	case !utf8.ValidString(r.Description):
+		p.add(at(path, "description"), ErrShape, "is not valid UTF-8")
+	}
+	protect := at(path, "protect")
+	if len(r.Protect) > CodeMaxProtections {
+		p.add(protect, ErrOutOfRange,
+			"%d rules, past the %d one repository may carry: every rule that matches is "+
+				"asked about every ref a push moves, so fold rules into globs",
+			len(r.Protect), CodeMaxProtections)
+	}
+	first := make(map[string]int, len(r.Protect))
+	for k, rule := range r.Protect {
+		rulePath := idx(protect, k)
+		if !rule.validate(&p, rulePath) {
+			continue
+		}
+		pattern := rule.Pattern()
+		if was, dup := first[pattern]; dup {
+			p.add(rulePath, ErrConflict,
+				"%s is protected twice (first at protect[%d]): one pattern is one rule, "+
+					"so merge the two", pattern, was)
+			continue
+		}
+		first[pattern] = k
+	}
+	return p.err()
+}
+
+// codeOwners is the document's chart as code.repos' owners are resolved
+// against it: an [org.Index] built once for the whole list, and the two lists
+// a refusal names, each joined once at the first refusal that needs it.
+//
+// ONCE A DOCUMENT, because the list is up to [CodeMaxRepos] long: resolved
+// through the chart's one-off lookups, every owner walked every unit or every
+// seat, deriving each seat's handle, and every owner the chart did not have
+// walked it again to list it in its message — at every apply on every node,
+// since these are runnable rules. Ten thousand owners on a chart of 300 units
+// and 900 seats cost ValidateRunnable 1.92 s that way and 95–101 ms through
+// the index (BenchmarkValidatingTheMostRepositories).
+type codeOwners struct {
+	index        *org.Index
+	units, seats func() string
+}
+
+// newCodeOwners indexes the chart o for code.repos' owners.
+func newCodeOwners(o *org.Organization) *codeOwners {
+	x := o.Index()
+	return &codeOwners{
+		index: x,
+		units: sync.OnceValue(func() string { return listOrNone(x.UnitKeys()) }),
+		seats: sync.OnceValue(func() string { return listOrNone(x.Handles()) }),
+	}
+}
+
+// validate holds an owner at path into p: exactly one of a unit or a seat,
+// resolving on the document's chart.
+func (w CodeOwner) validate(p *problems, path Path, owners *codeOwners) {
+	switch unit, seat := strings.TrimSpace(w.Unit), strings.TrimSpace(w.Seat); {
+	case unit == "" && seat == "":
+		p.add(path, ErrMissing,
+			"a repository needs an owner: set unit to a unit's id or name, or seat to a "+
+				"seat's handle")
+	case unit != "" && seat != "":
+		p.add(path, ErrConflict,
+			"a repository has one owner: set unit or seat, not both")
+	case unit != "" && owners.index.UnitByRef(unit) == nil:
+		p.add(at(path, "unit"), ErrUnknownValue,
+			"%q is no unit of this company's chart, by id or by name; the units are: %s",
+			unit, owners.units())
+	case seat != "" && owners.index.SeatByHandle(seat) == nil:
+		p.add(at(path, "seat"), ErrUnknownValue,
+			"%q is no seat's handle in this company; the seats are: %s",
+			seat, owners.seats())
+	}
+}
+
+// listOrNone is names joined for a message, or "none" where there are none.
+func listOrNone(names []string) string {
+	if len(names) == 0 {
+		return "none"
+	}
+	return strings.Join(names, ", ")
+}
+
+// validate holds one protection rule at path into p, and reports whether it
+// names one valid pattern — the rules a caller's uniqueness check reads.
+func (rule CodeProtection) validate(p *problems, path Path) bool {
+	ok := true
+	switch {
+	case rule.Branch == "" && rule.Tag == "":
+		p.add(path, ErrMissing, "a rule names the refs it protects: set branch or tag")
+		return false
+	case rule.Branch != "" && rule.Tag != "":
+		p.add(path, ErrConflict,
+			"a rule protects branches or tags, not both: make it two rules")
+		return false
+	}
+	which, value := "branch", rule.Branch
+	if rule.Tag != "" {
+		which, value = "tag", rule.Tag
+	}
+	if !gitref.ValidPattern(rule.Pattern()) {
+		p.add(at(path, which), ErrShape,
+			"%q is not a %s pattern: a %s name git would take (git check-ref-format), in "+
+				"which * matches within one component and a component of ** matches any "+
+				"number of them — a glob at most %d components below refs/",
+			value, which, which, gitref.MaxPatternComponents-1)
+		ok = false
+	}
+	if rule.AllowForce && rule.Tag != "" {
+		p.add(at(path, "allow_force"), ErrConflict,
+			"a tag never moves: allow_force has nothing to allow on a tag rule")
+		ok = false
+	}
+	if !rule.DirectPush.Valid() {
+		p.add(at(path, "direct_push"), ErrUnknownValue, "%q (want %s, or unset for %s)",
+			rule.DirectPush, names(CodeDirectPushes), CodeDirectPersons)
+		ok = false
+	}
+	return ok
+}
+
+// codeWarnings is every declared repository whose default branch no rule
+// protects: valid, and a person who may push to it may force-push it or
+// delete it. Through gitref's own matcher — the one a push's decide asks — so
+// `release/*` warns about main and `**` does not. Located at the field to
+// ADD, the repository's protect.
+//
+// NOT AN ARCHIVED REPOSITORY: it takes no push at all — the decide refuses the
+// whole push — so nobody can force-push or delete its branch, and saying so
+// would be false. Unarchiving one that still has no rule brings the warning
+// back with the revision that does it.
+func (c *Company) codeWarnings() []Warning {
+	if !c.Code.Native {
+		return nil
+	}
+	var out []Warning
+	for i, r := range c.Code.Repos {
+		if r.Archived {
+			continue
+		}
+		branch := r.ResolvedDefaultBranch()
+		ref := "refs/heads/" + branch
+		if !gitref.ValidRef(ref) {
+			continue // refused by validation, which is the line to read first
+		}
+		if slices.ContainsFunc(r.Protect, func(rule CodeProtection) bool {
+			return gitref.MatchPattern(rule.Pattern(), ref)
+		}) {
+			continue
+		}
+		out = append(out, advisory(at(idx(field("code.repos"), i), "protect"), fmt.Sprintf(
+			"%s's default branch %s is unprotected: a person can force-push or delete it "+
+				"(add {branch: %s} to its protect list)", r.Name, branch, branch)))
+	}
+	return out
 }

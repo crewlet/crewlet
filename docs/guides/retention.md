@@ -1035,7 +1035,8 @@ surface, whether or not it holds data (a write a stateless node routes to a
 data node is still one it starts): the operator's tools — the dashboard's and
 an assistant's over MCP alike — offer no work-item or page write, the purge
 route and a project file's upload and removal are not served, the chart's
-projects and containers are applied at the next normal boot, and a data node
+projects, the containers and the repositories `code.repos` declares are
+applied at the next normal boot, and a data node
 in the mode answers "not here" to the writes a stateless node still in normal
 mode routes to it. What appends to no log is still offered: a parked coding
 run's answer (it waits on the seat's mailbox until a node holds the seat
@@ -1062,7 +1063,10 @@ a window claims none — and each pass first pins the estate with a
 `linearizable` read, which is exactly the barrier the mode refuses. They lose
 nothing they would have done: no write lands a file whose object a collection
 would free, and a pass that is due runs on the duty's next turn once a node is
-back in normal mode.
+back in normal mode. Nor does the `code-retention` duty purge a
+[repository](../concepts/code-host.md#deletion-and-purge): each step is a
+record on the code log, which a node in a window does not publish, so a purge
+that came due waits for the window to close.
 
 ### Who has to acknowledge
 
@@ -1560,6 +1564,32 @@ The report deliberately gives **no time guarantee**. An offline or evicted
 disk retains its copy until replay, adoption, replacement or destruction, and
 there is no duration to state. Saying "within 24 hours" would be a promise the
 architecture cannot keep.
+
+### A repository
+
+A repository the company [hosts](../concepts/code-host.md) is removed by the
+configuration rather than by a command, and its three stages are timed:
+
+- **Deleting** is removing it from `code.repos`. At that activation it takes
+  no push, and its refs and packs stay; declaring it again under its name
+  restores it as it was.
+- **Purging** follows `code.deleted_retention_days` after the deletion (unset,
+  7 days). The `code-retention` duty removes the repository's rows in bounded
+  steps, each one record every data node applies, paced to a third of each
+  node's write lane, and the last leaves only its deletion marker, which drops
+  every later record about the repository on every node, for ever. A purge
+  once begun is finished whatever the retention says, since it has no undo,
+  and the name is free again once it is.
+- **The bytes** go a day after that: once no row names a pack, the
+  [object collector](../concepts/object-store.md#collection-and-audit)
+  deletes it like any other object nothing names.
+
+Inside a repository that is not deleted, two horizons are kept by the records
+that apply to it, never by a sweep: a push row expires **181 days** after its
+push, the same half year as the [usage history](#old-data-is-not-cold-data),
+and a deleted ref's tombstone after **48 hours**. The code log itself is
+trimmed by the same six terms as every other log; a push record names its pack
+and never carries it, so trimming the log removes no repository's bytes.
 
 ## Old data is not cold data
 

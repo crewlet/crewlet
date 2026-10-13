@@ -259,6 +259,24 @@ A company can run **both** hosts: they are two hosts with different
 repositories on them, which is what a migration and an open-source presence
 both look like.
 
+### Option C: the engine's own host — `code.native`
+
+The engine can host the company's repositories itself, on its own state log,
+with each push's bytes in the [object store](../concepts/object-store.md):
+set `code.native` and declare the repositories in `code.repos`, and every
+activation creates, settles and retires them (see
+[Code Host](../concepts/code-host.md)). It is **not exclusive** — the GitLab
+and GitHub integrations keep working beside it, so a company may host some
+repositories natively and keep others on a vendor.
+
+Today it is the repositories and the decision of every push, not yet a place
+to work: this build serves no git transport, agents do not push to it, and
+there are no merge requests, reviews or checks — read
+[What it does not do yet](../concepts/code-host.md#what-it-does-not-do-yet)
+before choosing it as an engineering team's only host. A company that hosts
+code on it takes the [S3 object store](../concepts/object-store.md#an-s3-bucket--s3)
+in production, since its repositories grow for as long as it works in them.
+
 ---
 
 ## Chat
@@ -387,8 +405,9 @@ the same network.
 Two bundled **Nimbus examples** model the same seven-seat company at opposite
 ends of this page. `examples/nimbus.company.yaml` + `examples/nimbus.config.yaml`
 is the **reference**: a pick from every row — GitLab, Mattermost, a metered
-`openai-compatible` key, a sandbox its engineers push merge requests from, and
-the engine's own tracker and knowledge base rather than a vendor's. Read it to
+`openai-compatible` key, a sandbox its engineers push merge requests from, the
+engine's own tracker and knowledge base rather than a vendor's, and two
+repositories on the engine's own code host beside GitLab's. Read it to
 see what a full stack looks like written out, and
 [Jira](../integrations/jira.md) / [Confluence](../integrations/confluence.md)
 for the blocks that move those two halves to Atlassian.

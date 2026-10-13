@@ -16,7 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
@@ -93,14 +92,15 @@ type Company struct {
 	// it.
 	ActivatedAt time.Time
 
-	// codeLimits is the code host's limits IN FORCE at this epoch, stamped
-	// when it is installed ([Engine.installEpoch], [carriedCodeLimits]): its
-	// own `code.limits` where it sets `code.native`, and otherwise those of
-	// the newest earlier epoch that did — which a committer still running
-	// from it decides with until a restart. Nil on an epoch never installed,
-	// or one with no hosting epoch before it, which is held to its own
-	// configuration's ([Engine.codeLimits]).
-	codeLimits *code.Limits
+	// codeInForce is the code host's settings IN FORCE at this epoch — its
+	// limits and its deleted retention — stamped when it is installed
+	// ([Engine.installEpoch], [carriedCode]): its own `code` block where it
+	// sets `code.native`, and otherwise that of the newest earlier epoch
+	// that did, which a committer and a retention duty still running from
+	// it decide with until a restart. Nil on an epoch never installed, or
+	// one with no hosting epoch before it, which is held to its own
+	// configuration's ([Engine.codeInForce]).
+	codeInForce *config.Code
 }
 
 // NewCompany builds an epoch from a validated config.

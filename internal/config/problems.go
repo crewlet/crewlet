@@ -548,6 +548,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 		out = append(out, w)
 	}
 	out = append(out, c.budgetWarnings()...)
+	out = append(out, c.codeWarnings()...)
 	return append(out, c.Providers.llmWarnings()...)
 }
 

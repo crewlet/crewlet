@@ -471,14 +471,18 @@ name, is one message and one problem beside each of them, so `problems` can
 hold more entries than the prose output has lines. The prose output prints
 that message once, led by every path it applies to.
 
-Each warning is a reference that resolves to nothing (a unit `lead`, a root
-seat's `unit`, a `manages` entry, a GitLab access level): `{"kind":
-"dangling_reference", "ref": "lead" | "unit" | "manages" |
-"gitlab_access_level", "path", "segments", "seat", "unit", "from", "to",
-"message"}`. The engine runs a company with one, so a warning never fails
-validation; prose output prints each on its own `warning:` line. Warnings are
-reported for any company document that parses, valid or not. Both lists are
-always arrays.
+Each warning is `{"kind", "ref", "path", "segments", "seat", "unit", "from",
+"to", "message"}`, and `kind` says which it is: `dangling_reference`, a
+reference that resolves to nothing (a unit `lead`, a root seat's `unit`, a
+`manages` entry, a GitLab access level), with `ref` naming which — `lead`,
+`unit`, `manages` or `gitlab_access_level`; or `advisory`, a setting that is
+valid and carries a consequence worth hearing first — a repository whose
+default branch no protection rule covers, for one — located at the field to
+change, with `ref`, `from` and `to` empty. The engine runs a company with
+either, so a warning never fails validation; prose output prints each on its
+own `warning:` line. References are reported for any company document that
+parses, valid or not; advisories only for one that holds up, since they
+describe what a document that runs will do. Both lists are always arrays.
 
 Exit code is `0` when valid and `1` otherwise, **in both output modes**: a
 `-json` run that printed `{"valid": false}` and exited zero would pass every

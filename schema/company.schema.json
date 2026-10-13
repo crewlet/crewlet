@@ -179,6 +179,15 @@
     "Code": {
       "additionalProperties": false,
       "properties": {
+        "deleted_retention_days": {
+          "description": "How long a repository removed from code.repos stays restorable by declaring it again under its name, before it is purged and its name is free: 1..365 days; unset (or 0) is 7.",
+          "maximum": 365,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "limits": {
           "$ref": "#/$defs/CodeLimits"
         },
@@ -188,6 +197,16 @@
           "type": [
             "boolean",
             "string",
+            "null"
+          ]
+        },
+        "repos": {
+          "description": "The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again.",
+          "items": {
+            "$ref": "#/$defs/CodeRepo"
+          },
+          "type": [
+            "array",
             "null"
           ]
         }
@@ -224,6 +243,153 @@
           "minimum": 1048576,
           "type": [
             "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeOwner": {
+      "additionalProperties": false,
+      "properties": {
+        "seat": {
+          "description": "A seat, by its handle. Exactly one of unit and seat.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "unit": {
+          "description": "A unit of the chart: its id, or its name where it has none. Exactly one of unit and seat.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeProtection": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_delete": {
+          "description": "Let a push delete a matching ref.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "allow_force": {
+          "description": "Let a push move a matching branch to a commit that does not descend from it. Not on a tag rule: a tag never moves.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "description": "A branch name or glob: * matches one path component, ** any number, and a name with no * matches only itself. Exactly one of branch and tag.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "direct_push": {
+          "description": "Who may push to a matching ref directly: persons (unset) or none, which freezes it — nothing pushes to it.",
+          "enum": [
+            "persons",
+            "none",
+            "",
+            null
+          ]
+        },
+        "tag": {
+          "description": "A tag name or glob, as for branch. Exactly one of branch and tag.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeRepo": {
+      "additionalProperties": false,
+      "properties": {
+        "archived": {
+          "description": "Read-only: still fetched and cloned, and takes no push.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "default_branch": {
+          "description": "The branch a clone checks out; unset is main.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "One paragraph, at most 1024 bytes.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "name": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "The repository's name: lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 63. It is the address a repository is cloned by, so renaming one deletes it and creates another.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "owner": {
+          "$ref": "#/$defs/CodeOwner"
+        },
+        "protect": {
+          "description": "The rules a push to the refs they match is held to, at most 64. A ref no rule matches may be force-pushed or deleted by anybody who may push.",
+          "items": {
+            "$ref": "#/$defs/CodeProtection"
+          },
+          "type": [
+            "array",
             "null"
           ]
         }

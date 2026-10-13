@@ -103,3 +103,9 @@ func WidestRef(push, command int) string { return widestRef(push, command) }
 
 // WidestComponent is one component of WidestRef.
 const WidestComponent = widestComponent
+
+// ReconcileInFlight is how many repositories a reconcile decides at once.
+const ReconcileInFlight = reconcileInFlight
+
+// DecideEach is the reconcile's closed loop of decisions.
+var DecideEach = decideEach

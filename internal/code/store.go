@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -146,8 +147,8 @@ func (s *Store) Activate(ctx context.Context, activatedAt time.Time) (Activation
 		return Activation{}, fmt.Errorf("%w (activation %d)", ErrSuperseded, epoch)
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
-		return Activation{}, fmt.Errorf("code: whether the activation fence reached %d "+
-			"is unknown (operation %s); the next activation decides it again", epoch, opID)
+		return Activation{}, unknownOutcome(ctx, "code: whether the activation fence reached %d "+
+			"is unknown (operation %s); the next attempt decides it again", epoch, opID)
 	}
 	return Activation{epoch: epoch, at: result.Position}, nil
 }
@@ -254,15 +255,14 @@ type EnsureResult struct {
 // ten thousand repositories a configuration may declare, for an activation
 // whose log cost is one fence record. Read once, the ten thousand take
 // 0.47–0.59 s (doc.go's measured section). So the set is read ONCE
-// ([Store.unchanged]):
-// one publish on the fence's own subject, scoped to the whole domain, whose
-// decide reads every declared name's claim, its repository's row and its
-// rules in ONE transaction and decides nothing. A declaration whose
-// repository is live and declared as it is, or deleted at this activation or
-// a later one, is answered from that read; every other — a name nobody holds,
-// settings that differ, a restore, a purge, a repository the configuration
-// does not manage or a later activation wrote — goes through EnsureRepo and
-// is decided on its own subjects as before.
+// ([Store.unchanged]): one publish on the fence's own subject, scoped to the
+// whole domain, whose decide reads every declared name's claim, its
+// repository's row and its rules in ONE transaction and decides nothing. A
+// declaration whose repository is live and declared as it is, or deleted at
+// this activation or a later one, is answered from that read; every other — a
+// name nobody holds, settings that differ, a restore, a purge, a repository
+// the configuration does not manage or a later activation wrote — goes
+// through EnsureRepo and is decided on its own subjects as before.
 //
 // THE SAME VERDICT AN EMPTY DECISION GIVES, because it is one: the batch
 // publish passes the fences, the session wait and the deferred-scope probe
@@ -272,23 +272,42 @@ type EnsureResult struct {
 // declaration then goes through EnsureRepo, where each is refused or decided
 // on its own scope.
 //
+// # What changed is decided side by side
+//
+// The declarations EnsureRepo decides are decided [reconcileInFlight] at a
+// time ([decideEach]), because each is its own subjects — a name's claim and
+// its repository's — so no two contend, and because one at a time a changed
+// activation was bound by the round trip of one write: a create is a publish,
+// an append and a wait for this node to apply it, 6.7 ms each, so the last of
+// the ten thousand repositories a document may declare existed a minute and
+// more after the first activation that declared them. In flight together,
+// their records reach the applier together, which commits them as one batch
+// rather than one transaction a record: 16–19 s (doc.go's measured section).
+//
 // # One answer for what every declaration shares
 //
-// That refusal is the only one a narrower scope can answer differently. Any
-// other the batch meets — the node's own fences (its eviction, the log's
-// identity), the activation's session floor not reached in the budget, a
-// later activation's fence, the estate or the context failing — every
-// per-repository publish meets too, each after a wait of its own: on a node
-// whose applier stalled below the fence, ten thousand declarations would each
-// wait out the write budget ([statelog.DefaultResolveBudget], five seconds) —
-// fourteen hours — for the refusal the first publish already had. So that
-// failure IS every valid declaration's answer, from the one publish, and a
-// later activation's fence is [ErrSuperseded] for all of them the same way.
+// The deferred refusal is the only one a narrower scope can answer
+// differently. Any other the batch meets — the node's own fences (its
+// eviction, the log's identity), the activation's session floor not reached
+// in the budget, a later activation's fence, the estate or the context
+// failing — every per-repository publish meets too, each after a wait of its
+// own: on a node whose applier stalled below the fence, ten thousand
+// declarations would each wait out the write budget
+// ([statelog.DefaultResolveBudget], five seconds) — fourteen hours — for the
+// refusal the first publish already had. And a failure of that kind met while
+// the changed declarations are decided ([sharedFailure]: a later fence, this
+// node's own refusal, the context) is one every declaration after it would
+// meet: the decisions in flight are ended and no more are begun.
 //
-// The answers line up with declared. Only an activation that is none
-// ([ErrNoActivation]) fails the call: every other error is the declaration's
-// own, in its result — a declaration that is not one ([ErrInvalid]) by its
-// own refusal, whatever the batch met.
+// So such a failure is the CALL's error, and it is also the answer of every
+// declaration it left undecided or ENDED — one in flight that failed once the
+// run had ended, whatever its own error says, since an append its context
+// ended mid-flight is answered unknown and says nothing of the context
+// ([decideEach]) — the same error value, so a caller that reports the call's
+// failure once can pass over each of them. Each declaration decided before it
+// keeps its own answer, a declaration that is not one ([ErrInvalid]) its own
+// refusal; and the call never returns with a decision still in flight. An
+// activation that is none ([ErrNoActivation]) answers nothing.
 func (s *Store) EnsureRepos(ctx context.Context, a Activation, declared []Declared) ([]EnsureResult, error) {
 	if a.epoch == 0 {
 		return nil, ErrNoActivation
@@ -327,8 +346,9 @@ func (s *Store) EnsureRepos(ctx context.Context, a Activation, declared []Declar
 				out[i].Err = err
 			}
 		}
-		return out, nil
+		return out, err
 	}
+	var changed []int
 	for i, d := range declared {
 		if out[i].Err != nil {
 			continue
@@ -337,9 +357,240 @@ func (s *Store) EnsureRepos(ctx context.Context, a Activation, declared []Declar
 			out[i].Ensured = e
 			continue
 		}
-		out[i].Ensured, out[i].Err = s.EnsureRepo(ctx, a, d)
+		changed = append(changed, i)
 	}
-	return out, nil
+	ended, err := decideEach(ctx, len(changed), func(ctx context.Context, k int) error {
+		i := changed[k]
+		out[i].Ensured, out[i].Err = s.EnsureRepo(ctx, a, declared[i])
+		return out[i].Err
+	})
+	for k, i := range changed {
+		if ended[k] {
+			out[i] = EnsureResult{Err: err}
+		}
+	}
+	return out, err
+}
+
+// DeleteResult is one repository's answer from [Store.DeleteRepos]: what
+// [Store.DeleteRepo] answers for it.
+type DeleteResult struct {
+	// Deleted reports a record THIS CALL wrote.
+	Deleted bool
+	Err     error
+}
+
+// DeleteRepos is [Store.DeleteRepo] over every repository ids names, at the
+// activation a — the reconcile's form, for the configuration-managed
+// repositories a document no longer declares — and answers, in the order
+// given, what DeleteRepo answers for each.
+//
+// SIDE BY SIDE, [reconcileInFlight] at a time, for [Store.EnsureRepos]'
+// reason: each repository is its own subject, so no two contend, and one at
+// a time the removal of ten thousand repositories spent 7 ms a repository, a
+// minute and more before the last was deleted.
+//
+// A failure every repository after it would meet ([sharedFailure]) ends the
+// call as it ends EnsureRepos': it is the call's error and the answer of
+// every repository it left undecided or ended, the same value, and nothing is
+// in flight when the call returns.
+func (s *Store) DeleteRepos(ctx context.Context, a Activation, ids []string) ([]DeleteResult, error) {
+	if a.epoch == 0 {
+		return nil, ErrNoActivation
+	}
+	out := make([]DeleteResult, len(ids))
+	ended, err := decideEach(ctx, len(ids), func(ctx context.Context, k int) error {
+		out[k].Deleted, out[k].Err = s.DeleteRepo(ctx, a, ids[k])
+		return out[k].Err
+	})
+	for k := range out {
+		if ended[k] {
+			out[k] = DeleteResult{Err: err}
+		}
+	}
+	return out, err
+}
+
+// reconcileInFlight is how many repositories a reconcile decides at once
+// ([Store.EnsureRepos], [Store.DeleteRepos]).
+//
+// ENOUGH TO HIDE A DECISION'S ROUND TRIP, by Little's law: in flight = the
+// rate the node can apply them × how long each takes from its publish to its
+// apply. On one node (doc.go's measured section) the rate is about 550 a
+// second whatever the width — this node's applier and the snapshots of the
+// decisions themselves are the floor — and a decision's round trip alone is
+// 6.7 ms, so under four in flight reach it: 8 and 128 decide ten thousand in
+// the same 16–21 s, where 4 takes 23–25 s, 2 takes 34–35 s, 1 takes 67–70 s.
+// In a fleet each append also waits for its stream's quorum, so the round
+// trip grows by the members' round trips while the rate does not; THIRTY-TWO
+// keeps the floor's rate up to a round trip of about 58 ms.
+//
+// AND NO WIDER, because the decisions in flight append together and the
+// applier commits them as one batch: the widest record a reconcile writes — a
+// create of a repository with [MaxProtectionsPerRepo] rules, its claim, its
+// row and 64 rule rows — is 66 rows, so thirty-two of them are 2 112 rows,
+// inside the applier's row budget (statelog.ApplyTxRowBudget, 4 000), where
+// sixty-four would cross it and split the batch.
+const reconcileInFlight = 32
+
+// decideEach runs decide for every k in [0, n), up to [reconcileInFlight] at
+// once, as a CLOSED LOOP — a decision begins only when one in flight has
+// ended — and answers the run's ENDING: the failure that ended it, and for
+// each k whether that failure is decision k's answer.
+//
+// A run ends at the first [sharedFailure] a decision meets, or when ctx ends
+// — and then the failure is ctx's own error, whatever the decision that met
+// it said, so a reconcile ended on purpose answers as its context rather than
+// as one repository's message. The decisions in flight are cancelled, none is
+// begun after it, and decideEach returns only once every decision it began has
+// returned — so its caller never leaves one in flight. A run that ends with
+// nothing undecided and nothing failed has no ending: nil.
+//
+// The ending is the answer of every decision it ENDED: each one never begun,
+// each one that met it, and each one that FAILED once the run had ended,
+// whatever its error says. A failure met on a dead context is the context's
+// doing, and it does not always say so: statelog answers an append whose
+// context ended mid-flight OutcomeUnknown with NO error, because the probe
+// that would classify the cancelled append runs on that same context — so
+// read as the decision's own, every decision in flight when a newer
+// activation ended a reconcile was reported as a repository it could not
+// apply. A decision that SUCCEEDED once the run had ended keeps its answer —
+// it decided its repository — and so does a failure met before the end, which
+// is its own and ends nothing.
+func decideEach(ctx context.Context, n int, decide func(ctx context.Context, k int) error) (ended []bool, err error) {
+	ended = make([]bool, n)
+	if n == 0 {
+		return ended, nil
+	}
+	run, stop := context.WithCancel(ctx)
+	defer stop()
+	var (
+		mu     sync.Mutex
+		next   int
+		shared error
+		wg     sync.WaitGroup
+	)
+	// endWith records err as the run's ending, unless one already is — as
+	// ctx's own error where ctx has ended — and ends the decisions in flight.
+	// Called under mu.
+	endWith := func(err error) {
+		if shared != nil {
+			return
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+		}
+		shared = err
+		stop()
+	}
+	take := func() (int, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if shared != nil || next == n {
+			return 0, false
+		}
+		if err := ctx.Err(); err != nil {
+			endWith(err)
+			return 0, false
+		}
+		k := next
+		next++
+		return k, true
+	}
+	// settle files decision k's failure err: the ending's where it is one
+	// every decision shares, or where the run had already ended when the
+	// decision returned (afterEnd) — by an ending recorded, or by ctx before
+	// any decision noticed.
+	settle := func(k int, err error, afterEnd bool) {
+		if err == nil || (!afterEnd && !sharedFailure(err)) {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		endWith(err)
+		ended[k] = true
+	}
+	for range min(reconcileInFlight, n) {
+		wg.Go(func() {
+			for {
+				k, ok := take()
+				if !ok {
+					return
+				}
+				err := decide(run, k)
+				settle(k, err, run.Err() != nil)
+			}
+		})
+	}
+	wg.Wait()
+	if shared == nil {
+		return ended, nil
+	}
+	for k := next; k < n; k++ {
+		ended[k] = true
+	}
+	return ended, shared
+}
+
+// sharedFailure reports whether err, met deciding one repository of a
+// reconcile, is one every other repository of it meets too — which ends the
+// reconcile ([decideEach]) rather than being reported once a repository:
+//
+//   - the context ended;
+//   - a LATER activation's fence ([ErrSuperseded]), since a fence only rises
+//     and every decide reads it first;
+//   - a refusal of THIS NODE by the code log — its eviction, a floor it is
+//     below or cannot read, a log that is full, skewed, truncated or not the
+//     one its rows came from — since every publish this node makes meets it.
+//
+// Every other failure is the repository's own: a purge it waits for, a
+// manager that is not the configuration, a record this node cannot decode
+// covering its paths (a narrower scope than the next repository's), a marker
+// or a voided record on its subject, a lost race, an outcome the broker did
+// not answer for that one append while its context was live — one whose
+// context had ended says so ([unknownOutcome]), and is the first case.
+func sharedFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, ErrSuperseded) {
+		return true
+	}
+	var refused *statelog.Unavailable
+	if !errors.As(err, &refused) {
+		return false
+	}
+	switch refused.Reason {
+	case statelog.ReasonEvicted:
+		// THIS NODE'S, unless the record the refusal names is another
+		// node's copy of the operation, which says nothing about this
+		// node (statelog.Unavailable.CopyWriter).
+		return refused.CopyWriter == ""
+	case statelog.ReasonBelowFloor, statelog.ReasonFloorUnknown, statelog.ReasonLogFull,
+		statelog.ReasonSkew, statelog.ReasonLogTruncated, statelog.ReasonWrongStream:
+		return true
+	}
+	return false
+}
+
+// unknownOutcome is the error of a write whose outcome this node could not
+// establish — the next attempt decides it again — and it WRAPS ctx's end
+// where ctx has ended.
+//
+// statelog answers an append whose context ended while it was in flight
+// OutcomeUnknown with NO error: the cancelled append is classified by a probe
+// on that same context, which cannot answer either. The unknown is then the
+// ending's doing, and a caller that ended the write on purpose — a reconcile a
+// newer activation superseded or the engine stopped, a retention pass that
+// stopped — must read it as that ending ([sharedFailure], errors.Is) rather
+// than as a write of its own that failed.
+func unknownOutcome(ctx context.Context, format string, args ...any) error {
+	err := fmt.Errorf(format, args...)
+	if ended := ctx.Err(); ended != nil {
+		return fmt.Errorf("%w: %w", err, ended)
+	}
+	return err
 }
 
 // unchanged reads, in ONE publish whose decide writes nothing, which of the
@@ -564,8 +815,8 @@ func (s *Store) claim(ctx context.Context, a Activation, name string,
 	case !wrote:
 		return "", found, nil
 	case result.Outcome == statelog.OutcomeUnknown:
-		return "", "", fmt.Errorf("code: whether %q was created is unknown (operation %s); "+
-			"the next activation decides it again", name, opID)
+		return "", "", unknownOutcome(ctx, "code: whether %q was created is unknown "+
+			"(operation %s); the next attempt decides it again", name, opID)
 	case result.Outcome == statelog.OutcomeApplied:
 		// APPLIED HERE, so the rows say whether it made the repository: a
 		// fence a later activation raised between this decide and this
@@ -667,8 +918,8 @@ func (s *Store) settle(ctx context.Context, a Activation, id string,
 	case !out.Changed:
 		return out, nil
 	case result.Outcome == statelog.OutcomeUnknown:
-		return Ensured{}, fmt.Errorf("code: whether repository %s's settings landed is "+
-			"unknown (operation %s); the next activation decides them again", id, opID)
+		return Ensured{}, unknownOutcome(ctx, "code: whether repository %s's settings landed "+
+			"is unknown (operation %s); the next attempt decides them again", id, opID)
 	case result.Outcome == statelog.OutcomeApplied:
 		if err := s.readBack(ctx, id, a); err != nil {
 			return Ensured{}, err
@@ -722,8 +973,8 @@ func (s *Store) DeleteRepo(ctx context.Context, a Activation, repoID string) (bo
 	case !wrote:
 		return false, nil
 	case result.Outcome == statelog.OutcomeUnknown:
-		return false, fmt.Errorf("code: whether repository %s was deleted is unknown "+
-			"(operation %s); the next activation decides it again", repoID, opID)
+		return false, unknownOutcome(ctx, "code: whether repository %s was deleted is unknown "+
+			"(operation %s); the next attempt decides it again", repoID, opID)
 	case result.Outcome == statelog.OutcomeApplied:
 		if err := s.readBack(ctx, repoID, a); err != nil {
 			return false, err
