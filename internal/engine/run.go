@@ -1955,15 +1955,23 @@ func (e *Engine) teardown(ctx context.Context) {
 	// ([codeReconciler]): the one in flight is ended, and the next boot
 	// reconciles.
 	e.stopCodeRepos()
+	// AND THE OBJECT STORE'S COLLECTOR, whose every pass pins the estate
+	// with a barrier on the log of each domain a declared table names
+	// ([Engine.startNativeCollector]), for the code-retention duty's two
+	// reasons: an append once the admission is gone, and a loop that claims
+	// its duty afresh every turn and would take it straight back past the
+	// release. AND BEFORE the native runtime below, whose tracker reader it
+	// reads the references through.
+	e.stopObjectCollector()
 	// AFTER THE DRAIN AND AFTER EVERY STATE-LOG PUBLISHER, which is what the
 	// admission says: the key means "this process may be publishing", and
 	// it is the one thing that keeps a capacity coordinator from taking its
 	// exclusion while this node runs (statelog.AdmissionBlocks). So every
 	// loop above that appends to a log — the trim, the embedding duty, the
-	// usage publisher, the code-retention duty and the reconcile of
-	// code.repos — is stopped before it is withdrawn, and withdrawing it
-	// while a seat was still finishing a turn, or a duty was still
-	// publishing, would tell a coordinator the opposite of the truth.
+	// usage publisher, the code-retention duty, the reconcile of code.repos,
+	// the collector's barriers — is stopped before it is withdrawn, and
+	// withdrawing it while a seat was still finishing a turn, or a duty was
+	// still publishing, would tell a coordinator the opposite of the truth.
 	if err := e.withdraw(ctx); err != nil {
 		log.WarnContext(ctx, "admission_not_withdrawn", "err", err,
 			"detail", "a capacity operation will see this node as a possible "+
@@ -1989,12 +1997,6 @@ func (e *Engine) teardown(ctx context.Context) {
 	// paid summarisation against a closed database.
 	e.stopLearning()
 	e.stopScheduler()
-	// THE OBJECT STORE'S COLLECTOR with the other duty loops: the loop
-	// claims its duty afresh every turn, so one still running past the
-	// release below takes it straight back and the node exits holding it.
-	// AND BEFORE the native runtime below, whose tracker reader it reads
-	// the references through.
-	e.stopObjectCollector()
 	// AFTER every duty loop above has stopped and waited out its tick, so no
 	// tick of this node runs once a peer can take the duty, and no turn of
 	// this node can claim one again once it is given back.

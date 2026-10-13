@@ -89,6 +89,7 @@ func TestEveryStateLogPublisherStopsBeforeTheAdmissionIsWithdrawn(t *testing.T) 
 		{"stopUsage", "the usage log's records"},
 		{"stopCodeRetention", "the code log's purge steps and re-declarations"},
 		{"stopCodeRepos", "a code log record for every repository an activation changed"},
+		{"stopObjectCollector", "a barrier on every declaring domain's log at each pass"},
 	} {
 		stop, ok := at[c.stop]
 		switch {

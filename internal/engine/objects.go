@@ -419,8 +419,12 @@ func (e *Engine) recordCollection(ctx context.Context, duty *collectorDuty) {
 // stopObjectCollector ends the collector's duty for good, waiting out a pass
 // in flight. Nil-safe.
 //
-// BEFORE [Engine.releaseDuties], with every other loop that claims a duty: a
-// loop still running past the release takes the duty straight back.
+// BEFORE THE ADMISSION IS WITHDRAWN ([Engine.withdraw]), with every other
+// loop that appends to a log: every pass pins the estate with a barrier, and
+// one still running once the admission is gone appends where a capacity
+// coordinator may already be sealing. And so before [Engine.releaseDuties],
+// which follows the withdrawal, as every loop that claims a duty is: one
+// still running past the release takes the duty straight back.
 func (e *Engine) stopObjectCollector() {
 	o := e.objects
 	if o == nil {
