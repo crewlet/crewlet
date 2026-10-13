@@ -60,6 +60,20 @@ export function toolsOf(server: McpServerStatus): number | null {
   return server.started > 0 ? server.tools : null;
 }
 
+/**
+ * What the row says about the entry's `tool_annotations` keys no started
+ * instance lists, or null where every key names a tool. A count in the grid,
+ * the keys themselves on the server's page: a key is an identifier a reader
+ * matches against the configuration, and a row has no room for a list.
+ */
+export function unlistedLine(server: McpServerStatus): string | null {
+  const n = server.unlisted_annotations.length;
+  if (n === 0) return null;
+  return n === 1
+    ? "1 tool_annotations key matches no tool"
+    : `${n} tool_annotations keys match no tool`;
+}
+
 /** The launch as one line: the command and its arguments, or the address. */
 export function launchLine(server: McpServerStatus): string {
   if (server.transport === "http") return server.url;
@@ -113,6 +127,7 @@ export function McpServers({
                 <span className="col" style={{ gap: 2 }}>
                   <KeyCell value={s.name} />
                   {!s.configured && <span className="t-caption">not in this configuration</span>}
+                  {unlistedLine(s) && <span className="t-caption">{unlistedLine(s)}</span>}
                 </span>
               ),
             },
@@ -340,6 +355,27 @@ export function ServerHeader({
           <p className="t-body muted">Not in this configuration: only a node reports it.</p>
         )}
       </section>
+      {/* THE KEYS WHOLE, where the grid could only count them: each is a
+          name somebody wrote under tool_annotations that no started instance
+          lists — a typo, or a tool the server stopped serving — so it
+          overrides nothing. */}
+      {server.unlisted_annotations.length > 0 && (
+        <section className="col gap-1">
+          <div className="t-label">Annotation overrides that match no tool</div>
+          <p className="t-body muted">
+            No started instance lists a tool by these <span className="mono">tool_annotations</span>{" "}
+            keys, by its own name or with the entry’s prefix, so they override nothing. The server’s
+            tools are listed below.
+          </p>
+          <ul className="mcp-unlisted">
+            {server.unlisted_annotations.map((key) => (
+              <li key={key} className="t-body mono">
+                {key}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {failures.length > 0 && (
         <section className="col gap-2">
           <div className="t-label">Why it failed</div>

@@ -20,7 +20,8 @@ var nodeStatusCases = []testCase{
 			InFlight: 2, Posture: "serve",
 			MCP: []coord.MCPServerStatus{
 				{Server: "github", Shared: true, Started: 1, Tools: 12},
-				{Server: "jira", Started: 1, Failed: 1, Tools: 9, Error: "401", ErrorSeat: "pm"},
+				{Server: "jira", Started: 1, Failed: 1, Tools: 9, Error: "401", ErrorSeat: "pm",
+					Unlisted: []string{"jira_add_coment", "linear_get_issue"}},
 			},
 		}
 		h.present("n1", "n1:a", want.Meta())
