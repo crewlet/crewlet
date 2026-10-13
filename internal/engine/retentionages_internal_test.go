@@ -47,7 +47,7 @@ func TestTheDeferralAlarmAgesTheOldestHeldRecord(t *testing.T) {
 		healths := map[string]domainHealth{
 			trackerName: {health: statelog.Health{Deferred: 1}},
 		}
-		reading := r.reading(t.Context(), now, coord.BackupPoint{At: now}, true, healths)
+		reading := r.reading(t.Context(), now, coord.BackupPoint{At: now}, true, healths, nil)
 		if reading.DeferredAge != tc.held {
 			t.Fatalf("a record held %s is read as %s old", tc.held, reading.DeferredAge)
 		}
@@ -75,7 +75,7 @@ func TestTheFloorAlarmAgesTheUnreadFloor(t *testing.T) {
 	s := &stateLog{}
 	r := &retention{state: s, fleet: coordmem.NewFleet(), nodeID: "node-a"}
 	read := func(at time.Time) statelog.Reading {
-		return r.reading(t.Context(), at, coord.BackupPoint{At: at}, true, nil)
+		return r.reading(t.Context(), at, coord.BackupPoint{At: at}, true, nil, nil)
 	}
 	unreachable := errors.New("the coordination store is unreachable")
 

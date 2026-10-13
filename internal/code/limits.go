@@ -1,6 +1,7 @@
 package code
 
 import (
+	"math/bits"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -23,12 +24,84 @@ type Limits struct {
 }
 
 // DefaultLimits are the limits of a company that sets none.
-func DefaultLimits() Limits {
-	return Limits{
-		MaxPushBytes: config.DefaultCodeMaxPushBytes,
-		MaxBlobBytes: DefaultMaxBlobBytes,
-		RepoMaxBytes: DefaultRepoMaxBytes,
+func DefaultLimits() Limits { return LimitsOf(config.Code{}) }
+
+// LimitsOf is a company's code.limits with the defaults applied — what a push
+// is held to on the deciding node's epoch. A CONVERSION of config's own
+// reading ([config.CodeLimits.Resolved]), never a second resolution of the
+// defaults, so `crewlet validate`'s order rules and the committer's decide
+// read one document one way (TestLimitsOfIsConfigsReading).
+func LimitsOf(c config.Code) Limits {
+	r := c.Limits.Resolved()
+	return Limits{MaxPushBytes: r.MaxPushBytes, MaxBlobBytes: r.MaxBlobBytes, RepoMaxBytes: r.RepoMaxBytes}
+}
+
+// BarrierRecordBytes is what one code-log barrier costs its stream, as the
+// broker counts it against the log's ceiling: the encoded record
+// ([EncodeBarrier]), its subject and the broker's per-message overhead.
+//
+// 136 BYTES, MEASURED: a barrier at the first generation, whose envelope
+// carries no generation, costs 116; one at the last costs 133, since a
+// generation printed whole is up to ten digits and its key. So 136 bounds every
+// barrier the log can hold, and overstates the commonest by under a fifth —
+// noise beside census_drift's factor of two
+// (TestABarrierCostsTheCodeLogWhatTheCensusSays holds both arms between half
+// the figure and all of it). The 160 first proposed was an estimate from the
+// tracker's figure in docs/guides/retention.md and overstated a real barrier
+// by 38 %, which sized the git census that much smaller.
+const BarrierRecordBytes = 136
+
+// GitReadsShare is how much of the code log's byte ceiling its git clients'
+// barriers are sized to hold over the trim's min_age: one part in TEN. The rest
+// is what [CodeLogMaxBytes] was sized for — pushes, settings, purges — and a
+// tenth is room a company's git traffic grows into without crowding them. A
+// JUDGEMENT: smaller fires census_drift on a busy but healthy git host, larger
+// lets barriers crowd the records the ceiling was sized for before anybody is
+// told; the census is a share of the ceiling the log's stream HOLDS, so a
+// company that outgrows the tenth resizes the log (`crewlet retention
+// set-capacity`) and the census moves with it.
+const GitReadsShare = 10
+
+// GitReadsPerDay is the linearizable git reads a day the code log was sized
+// for: the census term of its git clients (statelog.Census.Clients) — the
+// barriers that fill 1/GitReadsShare of ceiling over the trim's min_age.
+//
+// EVERY linearizable read of the code log in this release is a person's or
+// their CI's — an advertisement, a push's sync, a fetch whose want a cache
+// lacks, a `/code/` read at that level — and none is a seat's, so the census's
+// 125 a day per agent seat says nothing about them: a five-seat company's code
+// log alarmed past 1 300 git reads a day, which one CI polling ten repositories
+// a minute exceeds tenfold. At the 1 GiB floor and the default seven days this
+// is 112 788 a day — about 78 a minute fleet-wide: that CI, thirty developers
+// fetching every three minutes, and every clone and push, several times over.
+//
+// IT FOLLOWS THE CEILING THE STREAM HOLDS, which the caller reads off the
+// broker: the one every node reads alike, and the one a resize moves. Never
+// the Tier A `stream.code_log_max_bytes`, which only sizes a log not yet
+// created — raised under a log that exists, it would raise the census over a
+// log that holds no more than it did, which is the alarm silenced rather than
+// the deployment resized.
+//
+// OVER THE WHOLE min_age, a fraction of a day included: a barrier stays on the
+// log for all of it, so 36 hours divided as one day would let the barriers
+// fill half again the tenth they were sized for. A min_age under a day counts
+// as one. The arithmetic is EXACT, in 128 bits (bits.Mul64, then bits.Div64):
+// a day is 8.64e13 nanoseconds, so the ceiling times a day overflows 64 bits
+// once the ceiling passes 2^64 ÷ 8.64e13 bytes, about 208 KiB — which every
+// ceiling a log can have does, the 1 GiB floor included — and a ceiling read
+// off the broker is whatever the stream declares.
+func GitReadsPerDay(ceiling int64, minAge time.Duration) int {
+	if ceiling <= 0 {
+		return 0
 	}
+	const day = uint64(24 * time.Hour)
+	span := uint64(max(minAge, 24*time.Hour))
+	// ceiling × day ÷ span. The product's high word is below 2^46 (a ceiling
+	// below 2^63 times a day below 2^47), and a span of a day or more is
+	// above 2^46, so the quotient fits in 64 bits and Div64 cannot panic.
+	hi, lo := bits.Mul64(uint64(ceiling), day)
+	scaled, _ := bits.Div64(hi, lo, span)
+	return int(scaled / GitReadsShare / BarrierRecordBytes)
 }
 
 const (

@@ -81,7 +81,33 @@ func TestABackendSwitchSaysItWaitsForARestart(t *testing.T) {
 			Running: "native", Activated: "none", Holds: true,
 		}},
 	}, {
+		// THE CODE HOST TURNED ON: its one field is already whether the
+		// half is native, so every change of it is a switch.
+		name: "the code host turned on", built: native,
+		activated: &config.Company{Code: config.Code{Native: true}},
+		want: []backendSwitch{{
+			Field: "code.native", Half: "code host",
+			Running: "false", Activated: "true", Holds: false,
+		}},
+	}, {
+		name: "the code host turned off, after the other halves",
+		built: builtWith{
+			tracker: config.TrackerNative, knowledge: config.KnowledgeConfluence, code: true,
+		},
+		activated: &config.Company{},
+		want: []backendSwitch{{
+			Field: "knowledge.backend", Half: "knowledge base",
+			Running: "confluence", Activated: "native", Holds: false,
+		}, {
+			Field: "code.native", Half: "code host",
+			Running: "true", Activated: "false", Holds: true,
+		}},
+	}, {
 		name: "built as activated", built: native, activated: &config.Company{},
+	}, {
+		name:      "built as activated, hosting code",
+		built:     builtWith{tracker: config.TrackerNative, knowledge: config.KnowledgeNative, code: true},
+		activated: &config.Company{Code: config.Code{Native: true}},
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

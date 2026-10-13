@@ -1966,6 +1966,15 @@ func (e *Engine) teardown(ctx context.Context) {
 	// BEFORE the native backends, whose page projection its walk reads, and
 	// before backends.Close, which closes the broker its nudge listens on.
 	e.stopSkillSync(ctx)
+	// THE COMMITTER BEFORE THE ESTATE SUBJECT IT IS ASKED ON. The
+	// withdrawal below cancels the answers in flight before it waits for
+	// them, so a proposal still queued would be answered with its own
+	// cancellation — a final failure its asker reports for a push its batch
+	// may yet land. Stopped first, the committer answers every queued
+	// proposal "not serving", which its asker takes to the repository's
+	// runner-up, and finishes the batch in flight with its real outcome
+	// ([Engine.stopCommitter]).
+	e.stopCommitter(ctx)
 	e.stopServingEstate(ctx)
 	e.stopServingFleetBroker(ctx)
 	// BEFORE backends.Close, for the same reason and with more at stake:

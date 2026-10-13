@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/org"
@@ -370,11 +371,12 @@ func (l *localEstate) refresh(ctx context.Context, n *native, done chan struct{}
 //
 // THE USAGE DOMAIN'S ROWS ARE THE ESTATE'S, read off the file a data node
 // holds open from boot whatever its company runs ([HoldsEstate]), never the
-// runtime's: a company on vendors for both its tracker and its knowledge base
-// runs no state log and so no runtime, and with the reads tied to one every
-// data node answered every spend, activity and readers screen "no native
-// backend here", so the router refused each as an estate nobody served — a
-// 503 asking the screen to retry what no retry could ever answer.
+// runtime's: a company on vendors for both its tracker and its knowledge base,
+// hosting no code, runs no state log and so no runtime, and with the reads
+// tied to one every data node answered every spend, activity and readers
+// screen "no native backend here", so the router refused each as an estate
+// nobody served — a 503 asking the screen to retry what no retry could ever
+// answer.
 //
 // WRITES ONLY WHILE THIS NODE PUBLISHES. A node restarted into a maintenance
 // mode is the evidence a capacity operation is established from, and a write
@@ -409,8 +411,8 @@ func (e *Engine) estateBackend(n *native) estate.Backend {
 	if n.indexer != nil {
 		b.Backlinks = n.indexer
 	}
-	writer, store := e.writeSide()
-	if writer != nil {
+	w := e.writeSide()
+	if writer := w.tracker; writer != nil {
 		b.Writer = func(a estate.Actor) estate.TrackerWriter {
 			// A NIL INTERFACE, never a typed nil: the server reads nil
 			// as "the tracker refused to act as this party".
@@ -420,8 +422,16 @@ func (e *Engine) estateBackend(n *native) estate.Backend {
 			return nil
 		}
 	}
-	if store != nil {
-		b.PageWriter = store
+	if w.pages != nil {
+		b.PageWriter = w.pages
+	}
+	// THE CODE HALF, where the runtime was built for it: the reader always,
+	// the committer only where this node publishes — w.committer is nil in a
+	// maintenance mode, and code.Served then refuses a proposal as a node
+	// that ran nothing, so the router asks the repository's runner-up with
+	// the same push id rather than this node appending it.
+	if n.built.runsCode() {
+		b.Code = code.Served{Committer: w.committer, Reader: n.codeReader}
 	}
 	return b
 }

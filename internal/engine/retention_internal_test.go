@@ -795,7 +795,7 @@ func TestTheSearchAlarmsReadWhatTheAnswersActuallyCovered(t *testing.T) {
 
 	r := &retention{metrics: recorder}
 	var reading statelog.Reading
-	r.observed(&reading)
+	r.observed(&reading, nil)
 
 	if got := reading.SearchScopedFraction; got != 0.25 {
 		t.Errorf("one of four answers was over part of the corpus and the "+
@@ -844,7 +844,7 @@ func TestASearchWithNoSemanticHalfAskedForIsNotDegraded(t *testing.T) {
 		e.reportSearch(search.Answer{BucketsAnswered: 64}, time.Millisecond)
 	}
 	var reading statelog.Reading
-	(&retention{metrics: recorder}).observed(&reading)
+	(&retention{metrics: recorder}).observed(&reading, nil)
 	if reading.SearchDegradedFraction != 0 {
 		t.Fatalf("a company running lexical search by choice reports %.2f of "+
 			"its answers degraded", reading.SearchDegradedFraction)
@@ -981,7 +981,7 @@ func TestAnAlarmClearsOnceItsHourRollsOutOfTheWindow(t *testing.T) {
 	}
 
 	var lit statelog.Reading
-	r.observed(&lit)
+	r.observed(&lit, nil)
 	if lit.SearchDegradedFraction <= 0 {
 		t.Fatal("a degraded search left the fraction at zero, so this case " +
 			"proves nothing about clearing")
@@ -993,7 +993,7 @@ func TestAnAlarmClearsOnceItsHourRollsOutOfTheWindow(t *testing.T) {
 	// A DAY LATER WITH NOTHING SINCE. The hour that held it has rolled out.
 	at = at.Add(metrics.Buckets*time.Hour + time.Hour)
 	var cleared statelog.Reading
-	r.observed(&cleared)
+	r.observed(&cleared, nil)
 	if cleared.SearchDegradedFraction != 0 {
 		t.Errorf("SearchDegradedFraction = %.3f a day after the last degraded "+
 			"search, so the alarm is reading a cumulative counter and can "+
@@ -1033,7 +1033,7 @@ func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
 	r := &retention{state: &stateLog{}, fleet: coordmem.NewFleet(), nodeID: "node-a"}
 	now := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
 
-	none := r.reading(t.Context(), now, coord.BackupPoint{}, false, nil)
+	none := r.reading(t.Context(), now, coord.BackupPoint{}, false, nil, nil)
 	if none.BackupAge != nil {
 		t.Errorf("a fleet with no backup reported an age of %v", *none.BackupAge)
 	}
@@ -1057,7 +1057,7 @@ func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
 	// AND A REAL BACKUP IS STILL MEASURED against the same clock, so the
 	// nil above is the absence rather than a field nothing fills.
 	taken := r.reading(t.Context(), now,
-		coord.BackupPoint{At: now.Add(-2 * time.Hour)}, true, nil)
+		coord.BackupPoint{At: now.Add(-2 * time.Hour)}, true, nil, nil)
 	if taken.BackupAge == nil || *taken.BackupAge != 2*time.Hour {
 		t.Fatalf("a two-hour-old backup reported %v", taken.BackupAge)
 	}

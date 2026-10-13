@@ -62,7 +62,7 @@ func (e *Engine) startRemote(c *Company) error {
 		tracker: built.runsTracker(), wiki: built.runsWiki(), built: built,
 	})
 	log.Info("native_backends_remote", "node", e.id,
-		"tracker", built.runsTracker(), "knowledge", built.runsWiki(),
+		"tracker", built.runsTracker(), "knowledge", built.runsWiki(), "code", built.runsCode(),
 		"detail", "this node holds no data: its seats read and write the "+
 			"company's tracker and knowledge base through a data node")
 	return nil

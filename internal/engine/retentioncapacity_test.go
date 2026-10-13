@@ -276,7 +276,7 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	r := &retention{metrics: recorder, state: censusLogs(trackerLog),
 		seats: func() int { return 100 }}
 	var reading statelog.Reading
-	r.observed(&reading)
+	r.observed(&reading, nil)
 
 	if reading.PoolWaitP95 <= 0 {
 		t.Error("a recorded connection wait left the p95 at zero, so " +
@@ -316,7 +316,7 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 		t.Fatalf("recorder: %v", err)
 	}
 	var empty statelog.Reading
-	(&retention{metrics: quiet}).observed(&empty)
+	(&retention{metrics: quiet}).observed(&empty, nil)
 	for _, alarm := range statelog.Evaluate(empty) {
 		switch alarm.Kind {
 		case statelog.KindPoolStarved, statelog.KindRecordsGated,
@@ -486,7 +486,7 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 				seats:      func() int { return tc.seats },
 				background: func(domain string) int { return tc.background[domain] }}
 			var reading statelog.Reading
-			r.observed(&reading)
+			r.observed(&reading, nil)
 			if reading.CensusLog != tc.log || reading.LinearizableReadsExpected != tc.expected {
 				t.Errorf("the census names %q expecting %d a day, want %q expecting %d",
 					reading.CensusLog, reading.LinearizableReadsExpected, tc.log, tc.expected)

@@ -96,6 +96,10 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	// trip apart could disagree about it.
 	held := r.state.running()
 	healths := make(map[string]domainHealth, len(held))
+	// ceilings is the byte ceiling each log's stream HOLDS, by domain, from
+	// the one stream read below — handed to the census, whose code-log term
+	// is sized by it, for the reason healths is.
+	ceilings := make(map[string]int64, len(held))
 	for _, running := range held {
 		name := running.domain.Name()
 		d := statelog.DomainInputs{
@@ -109,6 +113,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			d.FirstSeq, d.LastSeq = stats.FirstSeq, stats.LastSeq
 			d.Bytes, d.MaxBytes = stats.Bytes, stats.MaxBytes
 			d.StreamReadable = true
+			ceilings[name] = int64(stats.MaxBytes)
 		}
 		d.FloorState = statelog.TrimFloorNoneAtGeneration
 		if floorsErr != nil {
@@ -181,7 +186,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	}
 	in.Tombstones = fleetTombstones(perLog)
 
-	in.Reading = r.reading(ctx, now, newest, haveBackup, healths)
+	in.Reading = r.reading(ctx, now, newest, haveBackup, healths, ceilings)
 	in.Maintenance = r.openMaintenance(ctx)
 	return statelog.NewReport(in)
 }
@@ -374,9 +379,13 @@ func (r *retention) replica() statelog.ReplicaReport {
 // [statelog.Reading]. That is what lets a node with no recorder, no search
 // backend and no maintenance in flight evaluate the same table as one with all
 // three.
+//
+// ceilings is the byte ceiling each log's stream holds, by domain, as the
+// report's stream read found it ([retention.census]); a log missing from it
+// was not read.
 func (r *retention) reading(ctx context.Context, now time.Time,
 	newest coord.BackupPoint, haveBackup bool,
-	healths map[string]domainHealth) statelog.Reading {
+	healths map[string]domainHealth, ceilings map[string]int64) statelog.Reading {
 
 	out := statelog.Reading{BackupMaxAge: r.cfg.BackupMaxAge()}
 	if haveBackup {
@@ -438,7 +447,7 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	}
 	r.space(&out)
 	r.maintenance(ctx, now, &out)
-	r.observed(&out)
+	r.observed(&out, ceilings)
 	return out
 }
 
@@ -494,8 +503,8 @@ func applyLagOf(health statelog.Health, running *runningLog) time.Duration {
 //
 // GUARDED ON THE RECORDER because a nil one is a legal deployment: an embedded
 // engine and every test run without one, and every condition here reads a zero
-// as "nothing to report".
-func (r *retention) observed(out *statelog.Reading) {
+// as "nothing to report". ceilings is [retention.reading]'s.
+func (r *retention) observed(out *statelog.Reading, ceilings map[string]int64) {
 	if r.metrics == nil {
 		return
 	}
@@ -550,7 +559,7 @@ func (r *retention) observed(out *statelog.Reading) {
 	if reads > 0 {
 		out.HistoryPartialFraction = float64(partial) / float64(reads)
 	}
-	r.census(reading, out)
+	r.census(reading, ceilings, out)
 
 	for _, snapshot := range reading {
 		switch snapshot.Name {
@@ -601,8 +610,30 @@ func (r *retention) observed(out *statelog.Reading) {
 // an operator who could set it would be silencing the alarm rather than
 // resizing the deployment it is about — scaled by the company's own seats,
 // plus what the engine's own periodic reads put on the log whatever the seats
-// do ([statelog.Census]).
-func (r *retention) census(reading []metrics.Snapshot, out *statelog.Reading) {
+// do, plus the readers the log's own sizing declares that are neither — the
+// code log's git clients ([statelog.Census], [clientBarriers]), counted
+// whatever this node's runtime hosts, since the rate above is the fleet's.
+//
+// # Sized by the ceiling the stream HOLDS
+//
+// The git clients' term is a share of the log's ceiling, and the ceiling is
+// the one the broker enforces on the stream (ceilings, read off its
+// configuration in the report's own stream read) — never the Tier A figure
+// this node would CREATE the stream with ([stateLog.specOf]), which for a
+// stream that exists is applied by nothing: an operator who raised
+// `stream.code_log_max_bytes` and restarted grew that census and silenced the
+// alarm over a log that still held what it always had, and one who resized
+// the log with `crewlet retention set-capacity` left the census at the old
+// figure. Unset, that figure is also each node's own, derived from its free
+// disk, so two nodes judged one log against two censuses. The held ceiling is
+// one number for every node, and the resize is what moves it.
+//
+// A log whose ceiling this pass could not read is LEFT OUT, where its census
+// needs one: judged without the term, a healthy git host's reads read as the
+// seats' over-reading. The next pass that reads the stream judges it.
+func (r *retention) census(reading []metrics.Snapshot, ceilings map[string]int64,
+	out *statelog.Reading) {
+
 	received := map[string]int{}
 	for _, snapshot := range reading {
 		if snapshot.Name == metrics.StatelogBarriersApplied {
@@ -625,15 +656,25 @@ func (r *retention) census(reading []metrics.Snapshot, out *statelog.Reading) {
 			// linearizable read.
 			continue
 		}
+		name := running.domain.Name()
+		clients := 0
+		if term := clientBarriers(name); term != nil {
+			holds, read := ceilings[name]
+			if !read {
+				continue
+			}
+			clients = term(holds, r.cfg.MinAge())
+		}
 		expected := statelog.Census{
 			Seats:      seats,
-			Background: background(running.domain.Name()),
+			Background: background(name),
+			Clients:    clients,
 		}.Expected()
 		got := received[running.spec.Name]
 		if ratio := float64(got) / float64(expected); ratio > worst {
 			worst = ratio
 			out.LinearizableReads, out.LinearizableReadsExpected = got, expected
-			out.CensusLog = running.domain.Name()
+			out.CensusLog = name
 		}
 	}
 }

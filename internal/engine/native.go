@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
@@ -85,11 +86,12 @@ type native struct {
 	built builtWith
 
 	// log is this node's state-log runtime: every registered domain, each
-	// with its own apply loop and write authority. A native tracker or a
-	// native knowledge base starts it ([config.Company.RunsStateLog]) and
-	// it runs the whole register or none, so a company on Jira whose pages
-	// are the engine's own runs every domain. A company on vendors for both
-	// has no native at all.
+	// with its own apply loop and write authority. A native tracker, a
+	// native knowledge base or the code host starts it
+	// ([config.Company.RunsStateLog]) and it runs the whole register or none,
+	// so a company on Jira whose pages are the engine's own runs every
+	// domain. A company on vendors for both that hosts no code has no native
+	// at all.
 	log *stateLog
 
 	// gate is eviction and readmission over every identity-claiming log in
@@ -136,6 +138,17 @@ type native struct {
 	// register, whatever the company's tools are, so its pack rows are the
 	// object store's to keep from the first push.
 	codeReader *code.Reader
+
+	// codeStore and committer are the code host's WRITE side — the
+	// lifecycle store the repositories' reconcile and retention write
+	// through, and the committer a push is decided by — built only where
+	// the company that started this runtime set `code.native`
+	// ([builtWith.runsCode]) and nil otherwise: a log runs in every
+	// register, but a committer exists only where somebody asked for pushes
+	// to be decided. Handed out only through [Engine.writeSide], so a node
+	// in a maintenance mode decides nothing.
+	codeStore *code.Store
+	committer *code.Committer
 
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
@@ -351,11 +364,34 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				"have no reader — the domain is in the register and its stream " +
 				"failed to come up")
 		}
-		reader, err := code.NewReader(code.ReaderOptions{Log: running.reader})
+		// THE CURRENT EPOCH'S LIMITS, read per call: a repository's detail
+		// reports what a push to it is held to now, which is what an
+		// import chunks its pushes by.
+		reader, err := code.NewReader(code.ReaderOptions{Log: running.reader, Limits: e.codeLimits})
 		if err != nil {
 			return fmt.Errorf("engine: code reader: %w", err)
 		}
 		n.codeReader = reader
+		// THE CODE HOST'S WRITE SIDE, where the company hosts code. Its log
+		// runs in every register (above); its committer and its lifecycle
+		// store exist only where a push may be decided.
+		if built.runsCode() {
+			if n.codeStore, err = code.NewStore(code.StoreOptions{
+				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
+			}); err != nil {
+				return fmt.Errorf("engine: code store: %w", err)
+			}
+			if n.committer, err = code.NewCommitter(code.CommitterOptions{
+				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
+				// THE DECIDING NODE'S EPOCH, read per decision, so a
+				// limit an activation moves holds from that activation
+				// on — on every committer at once, since each reads its
+				// own node's current epoch.
+				Limits: e.codeLimits, Metrics: e.metrics, Logger: logging.Get("code"),
+			}); err != nil {
+				return fmt.Errorf("engine: code committer: %w", err)
+			}
+		}
 	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER
 	// backend rather than under the wiki's.
@@ -475,7 +511,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// built in a capacity window must not ([Engine.startNativeCollector]).
 	started = true
 	log.InfoContext(ctx, "native_backends_started",
-		"tracker", runTracker, "knowledge", wiki)
+		"tracker", runTracker, "knowledge", wiki, "code", built.runsCode())
 	return nil
 }
 
@@ -693,6 +729,10 @@ func (n *native) shutdown(ctx context.Context) {
 		// counts as answered.
 		_ = n.stopSlices(context.WithoutCancel(ctx))
 	}
+	// THE COMMITTER BEFORE THE LOG IT PUBLISHES ON. The teardown stopped it
+	// already, ahead of the estate subject ([Engine.stopCommitter]); this is
+	// the failure path's stop, and a second one is a no-op.
+	n.stopCommitter(ctx)
 	n.stop()
 	n.done.Wait()
 	// THE APPLY LOOPS LAST, after the feeds and the projector that read
@@ -764,6 +804,13 @@ type halves struct {
 	// company and has not applied one — and on one whose company runs both
 	// halves on vendors.
 	tracker, wiki bool
+	// code says the company hosts its repositories in the engine
+	// (`code.native`) and this node's runtime was built to serve them —
+	// through its own copy and committer on a data node, through a data node
+	// on a node without `data`. Counted by the choice the runtime was built
+	// with rather than by a reader, because the code log's reader exists in
+	// every register whatever the company hosts.
+	code bool
 	// own is this data node's own runtime, for a reader that needs more of
 	// it than which halves it runs (the ranked item search, [OperatorNative];
 	// whether a half is reached through this node's copy or a data node's,
@@ -778,8 +825,8 @@ type halves struct {
 // nativeHalves is [halves] for e at this instant: THE ONE DERIVATION of which
 // halves a node runs, read by seat admission ([Engine.NativeHydrated]), by
 // whether a node may keep its seats ([Engine.serviceable]), by every read seam
-// the operator's surfaces are handed ([OperatorNative]), by the seats' own
-// tracker and knowledge-base seams ([Engine.trackerHalves],
+// the operator's surfaces are handed ([OperatorNative], [OperatorCode]), by
+// the seats' own tracker and knowledge-base seams ([Engine.trackerHalves],
 // [Engine.pageHalves]), by the inbound parsers ([Engine.nativeParsers]), by the
 // knowledge searcher ([Engine.Knowledge]) and by where the skills are read
 // ([Engine.skillSource]) — so a change to what counts as running a half (a new
@@ -795,10 +842,11 @@ type halves struct {
 // one runtime or the other once per process.
 func (e *Engine) nativeHalves() halves {
 	if r := e.remote.Load(); r != nil {
-		return halves{tracker: r.tracker, wiki: r.wiki}
+		return halves{tracker: r.tracker, wiki: r.wiki, code: r.built.runsCode()}
 	}
 	if n := e.native.Load(); n != nil {
-		return halves{tracker: n.trackerReader != nil, wiki: n.pageReader != nil, own: n}
+		return halves{tracker: n.trackerReader != nil, wiki: n.pageReader != nil,
+			code: n.built.runsCode(), own: n}
 	}
 	return halves{}
 }
@@ -939,10 +987,7 @@ func (e *Engine) Tracker() *tracker.Reader {
 
 // TrackerWriter is this node's tracker write side, or nil — nil in a
 // maintenance mode too; see [Engine.writeSide].
-func (e *Engine) TrackerWriter() *tracker.Writer {
-	writer, _ := e.writeSide()
-	return writer
-}
+func (e *Engine) TrackerWriter() *tracker.Writer { return e.writeSide().tracker }
 
 // NodeGate is eviction and readmission over every identity-claiming log, or
 // nil on a node running no state log.
@@ -966,10 +1011,7 @@ func (e *Engine) Pages() *pages.Reader {
 
 // PagesStore is this node's knowledge write side, or nil — nil in a
 // maintenance mode too; see [Engine.writeSide].
-func (e *Engine) PagesStore() *pages.Store {
-	_, store := e.writeSide()
-	return store
-}
+func (e *Engine) PagesStore() *pages.Store { return e.writeSide().pages }
 
 // NativeSearcher is the native knowledge searcher, or nil.
 func (e *Engine) NativeSearcher() *pages.Searcher {
@@ -2023,8 +2065,8 @@ func (e *Engine) writers(run halves) (tracker, wiki bool) {
 	if run.own == nil {
 		return run.tracker, run.wiki
 	}
-	writer, store := e.writeSide()
-	return run.tracker && writer != nil, run.wiki && store != nil
+	w := e.writeSide()
+	return run.tracker && w.tracker != nil, run.wiki && w.pages != nil
 }
 
 // ---- what the operator's surfaces are given ------------------------------ //

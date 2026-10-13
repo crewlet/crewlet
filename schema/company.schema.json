@@ -176,6 +176,63 @@
         "null"
       ]
     },
+    "Code": {
+      "additionalProperties": false,
+      "properties": {
+        "limits": {
+          "$ref": "#/$defs/CodeLimits"
+        },
+        "native": {
+          "description": "Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node running no native backend yet starts the code host at the activation that sets it; on a node whose native runtime already runs, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart).",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_blob_bytes": {
+          "description": "The largest file (blob) a push may carry, at most max_push_bytes; unset is 50 MiB. A larger binary belongs in tracker files.",
+          "maximum": 1073741824,
+          "minimum": 1024,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_push_bytes": {
+          "description": "The largest pack one push may send; unset is 1 GiB, the most it may be.",
+          "maximum": 1073741824,
+          "minimum": 1048576,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "repo_max_bytes": {
+          "description": "The most packed bytes one repository may hold, at least max_push_bytes; unset is 20 GiB. Every git node serving a repository caches it whole.",
+          "maximum": 1099511627776,
+          "minimum": 1048576,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Confluence": {
       "additionalProperties": false,
       "properties": {
@@ -3806,6 +3863,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "code": {
+      "$ref": "#/$defs/Code"
+    },
     "integrations": {
       "$ref": "#/$defs/Integrations"
     },

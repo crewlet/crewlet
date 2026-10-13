@@ -3,6 +3,7 @@ package code_test
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -326,5 +327,83 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 		t.Errorf("CommitterInbox (%d) minimal pushes weigh %d bytes, past CommitterInboxBytes (%d), "+
 			"so small pushes meet the byte bound rather than the count", code.CommitterInbox, got,
 			code.CommitterInboxBytes)
+	}
+}
+
+// THE LIMITS A PUSH IS HELD TO ARE CONFIG'S OWN READING OF code.limits — one
+// resolution of the defaults, so `crewlet validate`'s order rules and the
+// committer's decide can never disagree about what an unset field means.
+func TestLimitsOfIsConfigsReading(t *testing.T) {
+	t.Parallel()
+	if got := code.LimitsOf(config.Code{}); got != code.DefaultLimits() {
+		t.Errorf("an unset code.limits is held to %+v, and the domain's defaults are %+v",
+			got, code.DefaultLimits())
+	}
+	resolved := config.CodeLimits{}.Resolved()
+	if got := code.LimitsOf(config.Code{}); got.MaxPushBytes != resolved.MaxPushBytes ||
+		got.MaxBlobBytes != resolved.MaxBlobBytes || got.RepoMaxBytes != resolved.RepoMaxBytes {
+		t.Errorf("an unset code.limits is held to %+v, and config resolves it to %+v",
+			got, resolved)
+	}
+	// EACH FIELD ON ITS OWN, so a default taken from the wrong field — the
+	// file limit defaulting to the push limit — is seen.
+	for name, tc := range map[string]struct {
+		set  config.CodeLimits
+		want code.Limits
+	}{
+		"a push limit alone": {
+			set: config.CodeLimits{MaxPushBytes: 512 << 20},
+			want: code.Limits{MaxPushBytes: 512 << 20,
+				MaxBlobBytes: config.DefaultCodeMaxBlobBytes, RepoMaxBytes: config.DefaultCodeRepoMaxBytes},
+		},
+		"a file limit alone": {
+			set: config.CodeLimits{MaxBlobBytes: 10 << 20},
+			want: code.Limits{MaxPushBytes: config.DefaultCodeMaxPushBytes,
+				MaxBlobBytes: 10 << 20, RepoMaxBytes: config.DefaultCodeRepoMaxBytes},
+		},
+		"a repository limit alone": {
+			set: config.CodeLimits{RepoMaxBytes: 4 << 30},
+			want: code.Limits{MaxPushBytes: config.DefaultCodeMaxPushBytes,
+				MaxBlobBytes: config.DefaultCodeMaxBlobBytes, RepoMaxBytes: 4 << 30},
+		},
+	} {
+		if got := code.LimitsOf(config.Code{Native: true, Limits: tc.set}); got != tc.want {
+			t.Errorf("%s: code.limits %+v is held to %+v, want %+v", name, tc.set, got, tc.want)
+		}
+	}
+}
+
+// THE CODE LOG'S GIT CENSUS FOLLOWS ITS CEILING: the barriers that fill a
+// tenth of it over the trim's min_age, so a resize of the log moves the census
+// with it — and a min_age under a day counts as one.
+//
+// OVER THE WHOLE min_age, a fraction of a day included: a barrier stays on the
+// log for all of it, so a min_age of 36 hours divided as one day would let the
+// git clients' barriers fill half again the tenth they were sized for, and one
+// of 47 hours nearly twice it — which census_drift's factor of two would then
+// not catch until four tenths. And EXACT at every ceiling, the largest a
+// stream can declare included, which a day's nanoseconds times the ceiling
+// overflows in 64 bits.
+func TestGitReadsFollowTheCodeLogsCeiling(t *testing.T) {
+	t.Parallel()
+	week := 7 * 24 * time.Hour
+	for _, tc := range []struct {
+		ceiling int64
+		minAge  time.Duration
+		want    int
+	}{
+		{1 << 30, week, 112_788},
+		{16 << 30, week, 1_804_608},
+		{1 << 30, time.Hour, 789_516},
+		{1 << 30, 24 * time.Hour, 789_516},
+		{1 << 30, 36 * time.Hour, 526_344},
+		{1 << 30, 47 * time.Hour, 403_157},
+		{math.MaxInt64, 24 * time.Hour, 6_781_891_203_569_688},
+		{math.MaxInt64, week, 968_841_600_509_955},
+		{0, week, 0},
+	} {
+		if got := code.GitReadsPerDay(tc.ceiling, tc.minAge); got != tc.want {
+			t.Errorf("GitReadsPerDay(%d, %v) = %d, want %d", tc.ceiling, tc.minAge, got, tc.want)
+		}
 	}
 }

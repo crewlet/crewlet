@@ -514,6 +514,29 @@ func TestALogsCensusIsPerSeat(t *testing.T) {
 	}
 }
 
+// A LOG'S CENSUS COUNTS THE READERS ITS OWN SIZING DECLARES, beside the seats
+// and the engine's passes: the code log's git clients — people and their CI,
+// whom no seat count predicts — are a term of their own, so a small company's
+// git traffic is held to what its code log was sized for rather than to 125 a
+// day per agent seat. A negative term adds nothing, like Background.
+func TestTheCensusCountsALogsClients(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		census statelog.Census
+		want   int
+	}{
+		{"five seats, the collector and a thousand git reads",
+			statelog.Census{Seats: 5, Background: 25, Clients: 1000}, 1650},
+		{"clients alone beside no seat", statelog.Census{Clients: 112_788}, 125 + 112_788},
+		{"a negative client term adds nothing", statelog.Census{Seats: 5, Clients: -40}, 625},
+	} {
+		if got := tc.census.Expected(); got != tc.want {
+			t.Errorf("%s: %+v expects %d a day, want %d", tc.name, tc.census, got, tc.want)
+		}
+	}
+}
+
 // THE HISTORY ALARM BORROWS THE READ BUDGET (ADR-0015).
 //
 // What makes a fleet history answer partial is a node that did not answer
