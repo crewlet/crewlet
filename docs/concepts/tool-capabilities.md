@@ -172,16 +172,23 @@ Most modern MCP servers (the official GitHub server, recent
 `mcp-atlassian`) advertise annotations. For a server that does not, an
 operator can supply them in config — without touching engine code — via
 `tool_annotations` on an `mcp_servers` entry, keyed by **bare tool
-name**:
+name**. `tavily-mcp` 0.2.22 is such a server: its five tools search and
+read the web and advertise no hints at all, so without these keys each
+counts as a possible delivery, and a turn that only searched can pass the
+delivery check as one that reached somebody:
 
 ```yaml
 mcp_servers:
-  - name: linear
-    command: uvx
-    args: ["mcp-linear"]
+  - name: tavily
+    command: npm
+    args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
+    env: { TAVILY_API_KEY: "${TAVILY_API_KEY}" }
     tool_annotations:
-      linear_create_comment: { read_only: false, open_world: true }
-      linear_get_issue:      { read_only: true }
+      tavily_search:   { read_only: true, open_world: true }
+      tavily_extract:  { read_only: true, open_world: true }
+      tavily_crawl:    { read_only: true, open_world: true }
+      tavily_map:      { read_only: true, open_world: true }
+      tavily_research: { read_only: true, open_world: true }
 ```
 
 Keys accept snake_case (`read_only`) or the MCP camelCase
