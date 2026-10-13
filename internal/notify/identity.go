@@ -11,15 +11,22 @@ import (
 )
 
 // botSuffix names the companion namespace an agent's own bot identity lives
-// in, alongside the namespace humans and tools address the same seat by.
+// in, beside the transport's own namespace.
 //
-// THE SPLIT IS REAL AND PER-BACKEND. The two halves of a chat integration
-// see different identifiers for one seat: an inbound payload names a poster
-// by bot/user id, while a human typing a mention and an MCP tool addressing
-// a colleague both use the member id or username. Registering under one
-// namespace only means a fellow agent's message resolves to nobody, and gets
-// annotated as a stranger while a human's identical message is annotated as
-// a colleague.
+// BOTH HOLD THE IDS AN EVENT NAMES ITS SENDER BY, and [Registry.ByExternalID]
+// consults both, so a fellow agent's message is annotated exactly as a
+// person's is. The companion holds what a surface gives an agent as a BOT —
+// a chat bot's user id, a GitHub App's bot login — and the transport's own
+// namespace everything else: the people's ids (a Slack member id, the user id
+// a Mattermost username resolves to), and an agent's own account where the
+// surface gives it no bot (a GitLab username, a Jira account id). Neither
+// holds an address a message is written with: a Mattermost username is
+// resolved to the id its posts carry before it is registered.
+//
+// Kept apart rather than in one map because the two are written by
+// different owners on different schedules — the human reconcile and the
+// people's transport, an integration's agents at connect or on an apply —
+// and each withdraws only what it wrote.
 //
 // DERIVED rather than a per-backend table. A table's failure mode is stated
 // plainly: it silently stops covering the third backend nobody remembered to
@@ -35,14 +42,15 @@ func BotNamespace(transport string) string { return transport + botSuffix }
 //
 // # It is BIDIRECTIONAL, and that is the whole point
 //
-// A seat's external id is not fixed for the life of a process: a config
-// apply can change a bot's username, and a transport routinely overwrites
-// its configured guess with the name the SERVER reports at connect. Writing
-// only the handle -> id direction would leave the OLD id still resolving to
-// this seat — a stale alias that outlives the seat's own decommission
-// (which removes only the current id) and then silently swallows a later
-// seat legitimately provisioned under the freed name. So a re-registration
-// withdraws the id this handle previously held in the same namespace.
+// A seat's external id is not fixed for the life of a process: an apply can
+// correct a person's member id, and a Mattermost person's username can come
+// to name another account, which the transport then registers in its
+// place. Writing only the handle -> id direction would leave the OLD id
+// still resolving to this seat — a stale alias that outlives the seat's own
+// decommission (which removes only the current id) and then silently
+// swallows a later seat legitimately registered under the freed id. So a
+// re-registration withdraws the id this handle previously held in the same
+// namespace.
 //
 // # A cross-seat steal is an ERROR, not a silent overwrite
 //
@@ -150,9 +158,11 @@ func (r *Registry) ByExternalID(transport, externalID string) (Party, bool) {
 	return r.ByHandle(handle)
 }
 
-// ExternalID is the id a seat is known by on a transport, for OUTBOUND
-// addressing: which bot to post as, which member to mention. Empty when the
-// seat has no identity there.
+// ExternalID is the id a seat is known by in a namespace: the reverse of
+// [Registry.ByExternalID], which is what a writer reads to withdraw the id it
+// registered for a seat. Empty when the seat has none there. It is the id an
+// event names the sender by, never an address: a Mattermost person's is a
+// 26-character user id, which no message can mention.
 func (r *Registry) ExternalID(namespace, handle string) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
