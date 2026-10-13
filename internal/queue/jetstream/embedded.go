@@ -99,19 +99,26 @@ const (
 // startTiming is the bound on an embedded server's listeners and the interval
 // between reports of a long start.
 //
-// THE ZERO VALUE IS PRODUCTION ([startTiming.resolved]). It is a value at all,
-// rather than the constants alone, for the reason [readiness] is: the branches
-// worth a case — a start that outlives the listener budget, a server that never
-// reports ready — are reached only by a budget running out, and at the
-// production numbers a case proving one waits half a minute.
+// AN UNSET FIELD IS PRODUCTION'S ([startTiming.resolved]). It is a value at
+// all, rather than the constants alone, for the reason [readiness] is: the
+// branches worth a case — a start that outlives the listener budget, a server
+// that never reports ready — are reached only by a budget running out, and at
+// the production numbers a case proving one waits half a minute.
 type startTiming struct {
 	listen, report time.Duration
 }
 
-// resolved is t, or production's when t is unset.
+// resolved is t with each unset field at production's value.
+//
+// FIELD BY FIELD, never the whole struct at once: a case that tightens only
+// the listener budget would otherwise keep a zero report interval, which
+// [time.NewTicker] refuses with a panic.
 func (t startTiming) resolved() startTiming {
-	if t == (startTiming{}) {
-		return startTiming{listen: listenTimeout, report: startReportEvery}
+	if t.listen <= 0 {
+		t.listen = listenTimeout
+	}
+	if t.report <= 0 {
+		t.report = startReportEvery
 	}
 	return t
 }

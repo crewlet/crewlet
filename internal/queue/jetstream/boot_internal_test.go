@@ -119,6 +119,32 @@ func seedAStream(t *testing.T, dir string) {
 	}
 }
 
+// EVERY UNSET START TIMING IS PRODUCTION'S, FIELD BY FIELD.
+//
+// Resolved as a whole struct, a case that set only the listener budget kept a
+// report interval of zero, and the boot's ticker panics on that rather than
+// failing the case.
+func TestAStartTimingFillsEachUnsetFieldOnItsOwn(t *testing.T) {
+	t.Parallel()
+	production := startTiming{listen: listenTimeout, report: startReportEvery}
+	for _, c := range []struct {
+		name     string
+		set, got startTiming
+	}{
+		{"nothing set", startTiming{}, production},
+		{"only the listener budget", startTiming{listen: time.Second},
+			startTiming{listen: time.Second, report: startReportEvery}},
+		{"only the report interval", startTiming{report: time.Second},
+			startTiming{listen: listenTimeout, report: time.Second}},
+		{"both", startTiming{listen: 2 * time.Second, report: time.Second},
+			startTiming{listen: 2 * time.Second, report: time.Second}},
+	} {
+		if got := c.set.resolved(); got != c.got {
+			t.Errorf("%s: %+v resolved to %+v, want %+v", c.name, c.set, got, c.got)
+		}
+	}
+}
+
 // startedAfter is a Start that returns after d.
 func startedAfter(d time.Duration) <-chan struct{} {
 	started := make(chan struct{})
