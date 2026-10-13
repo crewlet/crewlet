@@ -688,7 +688,7 @@ mcp_servers:
     # nobody can name afterwards.
     shared: false
     command: uvx
-    args: ["mcp-server-mattermost==0.5.1"]
+    args: ["mcp-server-mattermost==0.6.1"]
     tool_prefix: "mattermost_"
     env:
       MATTERMOST_URL: "${MATTERMOST_URL}"

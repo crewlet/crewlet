@@ -159,7 +159,7 @@ describe("routing", () => {
       expect(chip !== null, hash).toBe(drawn);
       view.unmount();
     }
-  }, 30_000);
+  });
 
   test("every destination renders a screen rather than a blank", async () => {
     const visited = DESTINATIONS.map((item) => buildHash(item.path));
@@ -184,11 +184,7 @@ describe("routing", () => {
       expect(view.container.textContent, hash).not.toMatch(/could not be (drawn|loaded)/);
       view.unmount();
     }
-    // A MOUNT OF THE WHOLE APPLICATION PER DESTINATION, some forty of them in
-    // one case: about 1.5 s alone and past vitest's 5 s default when the full
-    // suite shares the machine, which failed it on load rather than on a
-    // blank screen. The budget is the case's own, sized to its loop.
-  }, 30_000);
+  });
 
   // THE OTHER HALF OF `source.test.ts`'s link gate. That one proves every
   // link names a segment a workspace OWNS; this one proves the object routes

@@ -816,17 +816,10 @@ describe("every class the dashboard names", () => {
   // AND THE OTHER WAY. See the note at the top: this is the direction nothing
   // was checking while a rewrite left sixty-four recipes behind it.
   //
-  // IT DECLARES ITS OWN BUDGET, because vitest's default is five seconds and
-  // this case is the one in the suite that cannot fit in it. `writtenIn` walks
-  // every `.ts` and `.tsx` under `src` a character at a time — the collector
-  // has to track whether it is inside a `className=` brace, so there is no
-  // regex short cut — and it measures 5.5s on a machine with other work on it
-  // against 2-3s on an idle one. A timeout is not an assertion: when it fires
-  // the build goes red saying "Test timed out", which is a sentence about the
-  // runner and not about the tree, and a gate that goes red for a reason
-  // nobody can act on is a gate people learn to re-run rather than read. 30s
-  // is an order of magnitude over the measured cost, and the cost is bounded
-  // by the size of the source tree rather than by anything that can spike.
+  // The suite's slowest case, and what the case bound in `test/bounds.ts` is
+  // sized against: `writtenIn` walks every `.ts` and `.tsx` under `src` a
+  // character at a time — the collector has to track whether it is inside a
+  // `className=` brace, so there is no regex short cut.
   test("and every class a stylesheet declares is written by something", () => {
     expect(
       orphans(css, writtenIn(files), ALLOWED),
@@ -834,7 +827,7 @@ describe("every class the dashboard names", () => {
         "them, or, if one is written through something this scan cannot see, " +
         "add it to ALLOWED with the reason",
     ).toEqual([]);
-  }, 30_000);
+  });
 
   test("the inverse can tell — a recipe nothing writes is caught", () => {
     // THE MUTATION, run against the functions the test above calls rather

@@ -77,7 +77,9 @@ type Spec struct {
 	//
 	// Keyed by EITHER the server's raw tool name or the prefixed catalogue
 	// name. An operator keying it by the name they see in the dashboard must
-	// not have it silently do nothing.
+	// not have it silently do nothing, and a key that is neither on every
+	// instance of the server is named on its status row for the same reason
+	// ([Bridge.UnlistedOverrides] has why one instance cannot judge it).
 	AnnotationOverrides map[string]Annotations
 
 	// StartupTimeout bounds connect + handshake, and separately the first

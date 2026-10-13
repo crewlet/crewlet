@@ -559,7 +559,7 @@ knowledge:
 # THERE IS NO TRACKER OR WIKI SERVER HERE, and nothing is missing: the
 # engine's own tracker and knowledge base are BUILTIN tools, granted to
 # every seat without a server to run, a process to supervise or a token to
-# mint.  A company on Jira and Confluence adds the official
+# mint.  A company on Jira and Confluence adds the community
 # ``mcp-atlassian`` server here and a per-seat credential in each role's
 # ``mcp_env``; see docs/integrations/jira.md.
 mcp_servers:
@@ -572,7 +572,7 @@ mcp_servers:
     # MATTERMOST_TOKEN comes from each role's ``mcp_env.mattermost`` below.
     shared: false
     command: uvx
-    args: ["mcp-server-mattermost==0.5.1"]
+    args: ["mcp-server-mattermost==0.6.1"]
     tool_prefix: "mattermost_"
     env:
       MATTERMOST_URL: "${MATTERMOST_URL}"
@@ -590,11 +590,24 @@ mcp_servers:
     command: glab
     args: ["mcp", "serve"]
   - name: tavily
+    # Pinned like the Mattermost server above, for the same reason: a
+    # floating tag makes a working run a claim about a build nobody can
+    # name afterwards.
     command: npm
-    args: ["exec", "--yes", "--", "tavily-mcp@latest"]
+    args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"
     shared: true
+    # 0.2.22 advertises no annotation on any of its five tools, and each
+    # only reads the web.  Unannotated, every one counts as a possible
+    # delivery, so a turn that only searched could pass the delivery
+    # check; these say what the server does not.
+    tool_annotations:
+      tavily_search:   { read_only: true, open_world: true }
+      tavily_extract:  { read_only: true, open_world: true }
+      tavily_crawl:    { read_only: true, open_world: true }
+      tavily_map:      { read_only: true, open_world: true }
+      tavily_research: { read_only: true, open_world: true }
 
 # Root-level seats — above all units.  The founder is a HUMAN seat at
 # the top of the chart: agents know who she is (identity prompts say
@@ -1162,7 +1175,7 @@ units:
                   # coding agent fast env + dependency management without
                   # touching the box's system Python.
                   commands:
-                    - "command -v uv >/dev/null 2>&1 || pip install --quiet uv"
+                    - "command -v uv >/dev/null 2>&1 || pip install --quiet uv==0.13.0"
                   brief: >-
                     Python workspace: you own the Phase-2 framework repo
                     (gitlab.com/nimbus-hq/nimbusflow once created). uv is

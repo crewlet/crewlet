@@ -177,7 +177,16 @@ type mcpOutcome struct {
 	server string // the config's own name, never an instance name
 	seat   string // the seat handle, empty for a shared server
 	tools  int
-	err    error
+	// unlisted are the entry's tool_annotations keys this instance's
+	// listing names no tool for ([mcp.Bridge.UnlistedOverrides]).
+	unlisted []string
+	err      error
+}
+
+// observe records what a started instance serves, off the bridge it runs on.
+func (o *mcpOutcome) observe(bridge *mcp.Bridge, instance string) {
+	o.tools = len(bridge.ServerTools(instance))
+	o.unlisted = bridge.UnlistedOverrides(instance)
 }
 
 // mcpStatus is this node's MCP servers as the heartbeat publishes them: one
@@ -196,9 +205,30 @@ func (e *Engine) mcpStatus() []coord.MCPServerStatus {
 		return cmp.Or(cmp.Compare(a.server, b.server), cmp.Compare(a.seat, b.seat))
 	})
 	var out []coord.MCPServerStatus
+	// unlisted counts, per key, the started instances of the current row
+	// that do not list it.
+	var unlisted map[string]int
+	settle := func() {
+		if len(out) == 0 {
+			return
+		}
+		row := &out[len(out)-1]
+		// A KEY IS UNLISTED BY THE SERVER only where NO started instance
+		// lists it. One instance's listing is not the server's: a child
+		// serves what its seat's credentials reach, so a key one seat's
+		// child does not list may be exactly right for the next.
+		for key, n := range unlisted {
+			if n == row.Started {
+				row.Unlisted = append(row.Unlisted, key)
+			}
+		}
+		slices.Sort(row.Unlisted)
+	}
 	for _, o := range all {
 		if n := len(out); n == 0 || out[n-1].Server != o.server {
+			settle()
 			out = append(out, coord.MCPServerStatus{Server: o.server, Shared: o.seat == ""})
+			unlisted = map[string]int{}
 		}
 		row := &out[len(out)-1]
 		if o.err != nil {
@@ -210,7 +240,11 @@ func (e *Engine) mcpStatus() []coord.MCPServerStatus {
 		}
 		row.Started++
 		row.Tools = max(row.Tools, o.tools)
+		for _, key := range o.unlisted {
+			unlisted[key]++
+		}
 	}
+	settle()
 	return out
 }
 
@@ -298,7 +332,7 @@ func startAll(ctx context.Context, reg *tools.Registry, specs []mcp.Spec, bridge
 		file(ctx, reg, spec.Name, out[i].change, out[i].err)
 		outcomes[i] = mcpOutcome{server: mcp.ServerName(spec.Name), err: out[i].err}
 		if out[i].err == nil {
-			outcomes[i].tools = len(bridge.ServerTools(spec.Name))
+			outcomes[i].observe(bridge, spec.Name)
 		}
 	}
 	return outcomes

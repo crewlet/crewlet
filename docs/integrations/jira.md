@@ -73,12 +73,12 @@ mcp_servers:
   - name: atlassian                     # shared by Jira + Confluence (one mcp-atlassian)
     shared: false                       # per-agent: each role supplies its own token
     command: uvx
-    args: ["mcp-atlassian"]
+    args: ["mcp-atlassian==0.23.1"]
     env:
       JIRA_URL: "${JIRA_URL}"           # declare explicitly — the engine does not inject it
 ```
 
-> **Human-clickable links agents share:** with `cloud_id`, the `mcp-atlassian` tools return `api.atlassian.com/ex/jira/{cloud_id}/...` gateway URLs, which colleagues can't open. To have agents share a clickable `…atlassian.net/browse/{ISSUE-KEY}` link, set a [skill variable](../concepts/tool-skills.md#skill-variables) — `skill_variables.jira_base_url: "https://mycompany.atlassian.net"` — for your mention/link Tool Skill to reference. (The bundled `examples/tool-skills/platform-mentions.md` already references this variable.) Note Jira `browse` links are always *composed* by the agent (Jira tool results carry only REST self-links), so this prompt-layer variable is the primary fix here, not a fallback.
+> **Human-clickable links agents share:** with `cloud_id`, the `mcp-atlassian` tools return `api.atlassian.com/ex/jira/{cloud_id}/...` gateway URLs, which colleagues can't open. To have agents share a clickable `…atlassian.net/browse/{ISSUE-KEY}` link, set a [skill variable](../concepts/tool-skills.md#skill-variables) — `skill_variables.jira_base_url: "https://mycompany.atlassian.net"` — for your mention/link Tool Skill to reference. (The bundled `examples/tool-skills/platform-mentions.md` does not: it links to the engine's own tracker and pages through `${crewlet_base_url}`, so a company on Jira gives its link rule a skill of its own.) Note what the server hands back itself: every issue `mcp-atlassian` 0.23.1 returns carries a `browse_url` built from the server's own `JIRA_URL`, so it opens in a browser when that is the site and sits under the gateway when it is the gateway, and on a gateway this prompt-layer variable is the only clickable base an agent has.
 
 `url` and `cloud_id` are two ways to name one instance, so config validation refuses both together rather than resolving the ambiguity silently — the engine reads through the Cloud gateway when both are set, so the `url` would end up used for links only.
 
@@ -98,7 +98,26 @@ On **Cloud**, `webhook_secret` is used exactly as it is on Data Center: the engi
 
 ## MCP Server (Agents Control Jira)
 
-The `atlassian` MCP server gives agents full Jira capabilities — creating issues, transitioning statuses, adding comments, managing assignees. Set `JIRA_URL` in the server's `env` — the engine does not derive it from `integrations.jira.url`. Naming the server `atlassian` also lets the engine enable the required `jira_users` toolset and scope the [Confluence knowledge search](confluence.md).
+The `atlassian` MCP server gives agents full Jira capabilities — creating issues, transitioning statuses, adding comments, managing assignees. Set `JIRA_URL` in the server's `env` — the engine does not derive it from `integrations.jira.url`. Naming the server `atlassian` is also what lets the engine find each seat's credential: it reads `mcp_env.atlassian` to learn [which account each seat is](#seat-identity) and to run the [Confluence knowledge search](confluence.md) as that seat.
+
+**The server is pinned, and five of its tools read the engine host's files.**
+The entry names `mcp-atlassian==0.23.1`, the newest release, because what
+these pages say about it — the tools agents call, the variables a seat sets —
+was read from that release, and `uvx` with no version runs whatever was
+published last. One change is already announced: with `TOOLSETS` unset, 0.23.1
+serves every toolset and warns at each start that a later release will serve
+only its six core ones, which leave out `jira_get_user_profile` among others.
+Five tools post a file from the node the seat runs on: `jira_update_issue`
+attaches the paths its `attachments` names, `confluence_upload_attachment` and
+`confluence_upload_attachments` upload a `file_path`, and
+`confluence_create_page` and `confluence_update_page` read a page body from a
+`content_file`. The server refuses a path outside its working directory, and
+it inherits that from the engine: the directory the engine was started in,
+which is where the default `store.path` puts `crewlet.db`, and in the published
+image the engine user's home, where CLI agents keep their sign-ins
+(`~/.crewlet/llm-cli`). Start the engine in a directory that holds none of its
+own files, with `store.path` outside it, or every seat that runs this server
+can attach the engine's database to an issue.
 
 ### Per-Unit Jira Projects
 
@@ -202,7 +221,7 @@ The "if you have decided not to act, do not go quiet" rule is rendered only for 
 
 A Jira webhook names people by account id, and nothing in the org chart declares which account a seat holds. Without that mapping every event names a stranger, every routing target is dropped, and the integration is silently inert.
 
-So the engine **asks**: at boot and on every config apply it calls `/myself` with each seat's OWN credential and registers whatever account answers. The credential is read from `mcp_env.atlassian` or `mcp_env.jira` — Atlassian's own MCP server covers both products, so the documented entry is named `atlassian`; a Jira-only server is named `jira` — under `JIRA_API_TOKEN`, `JIRA_PERSONAL_TOKEN`, `JIRA_TOKEN`, `ATLASSIAN_API_TOKEN` or `Authorization`, with the account address under `JIRA_USERNAME`, `JIRA_EMAIL` or `ATLASSIAN_EMAIL`. The engine names no variable of its own: it reads the ones the seat's tools already use. Declaring the account id beside the token would be cheaper and is the wrong shape: a declaration that disagrees with the credential is a misroute nothing can detect.
+So the engine **asks**: at boot and on every config apply it calls `/myself` with each seat's OWN credential and registers whatever account answers. The credential is read from `mcp_env.atlassian` or `mcp_env.jira` — [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian), the community server these pages run, covers both products, so the documented entry is named `atlassian`; a Jira-only server is named `jira`. Write it as that server reads it: `JIRA_USERNAME` and `JIRA_API_TOKEN` on Cloud, or `JIRA_PERSONAL_TOKEN` alone on Data Center. `mcp-atlassian` reads no other spelling, and given a token without its username it starts with no Jira tool at all. The engine names no variable of its own — it reads the ones the seat's tools use — so for a server that spells them differently it also takes the token under `JIRA_TOKEN`, `ATLASSIAN_API_TOKEN` or `Authorization`, and the address under `JIRA_EMAIL` or `ATLASSIAN_EMAIL`. Declaring the account id beside the token would be cheaper and is the wrong shape: a declaration that disagrees with the credential is a misroute nothing can detect.
 
 Lookups are cached on the credential, so a config apply that changed something else costs nothing; a rotated token is a cache miss and costs exactly one request. A seat whose lookup fails is left unresolved rather than failing the boot, and logs `jira_seat_identity_unresolved` — it receives no Jira events until the next apply re-resolves it. A company where no seat resolved logs `jira_has_no_seat_identities`.
 

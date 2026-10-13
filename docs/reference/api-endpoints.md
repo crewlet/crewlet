@@ -4208,13 +4208,27 @@ so no screen re-derives it:
 and `error_seat` the seat it was launched for; the whole text is the node's
 `mcp_server_failed` log line.
 
+`unlisted_annotations` are the entry's `tool_annotations` keys that no
+instance started on a reporting node lists a tool for — by the server's own
+name or with the entry's `tool_prefix` — sorted: each overrides nothing
+anywhere it runs, which is a misspelling or a tool the server no longer
+serves. A key only SOME instances lack is not here, because a per-seat child
+serves what its seat's credentials reach (an `mcp-atlassian` child for a seat
+holding only a Jira credential lists no Confluence tool), and that key is
+right for the others. Each node publishes the keys none of its own started
+instances lists and the answer keeps the ones every such node names; with no
+instance started there is nothing to judge, and the list is empty. Each
+instance's own keys are on its `tools_discovered` log line
+(`annotation_keys_unlisted`).
+
 ```json
 {
   "nodes": [{"id": "node-1", "reported": true}, {"id": "node-2", "reported": true}],
   "servers": [
-    {"name": "github", "configured": true, "shared": false, "transport": "stdio",
-     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "url": "",
+    {"name": "github", "configured": true, "shared": false, "transport": "http",
+     "command": "", "args": [], "url": "https://api.githubcopilot.com/mcp/",
      "state": "partial", "started": 3, "failed": 1, "tools": 26,
+     "unlisted_annotations": [],
      "nodes": [
        {"node": "node-1", "reported": true, "started": 2, "failed": 0, "tools": 26, "error": "", "error_seat": ""},
        {"node": "node-2", "reported": true, "started": 1, "failed": 1, "tools": 26,

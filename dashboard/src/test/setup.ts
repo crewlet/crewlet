@@ -1,10 +1,20 @@
 /**
- * What jsdom does not provide, and the component suites need.
+ * What jsdom does not provide, and the component suites need — and how long
+ * a wait in one may take before it is called hung.
  *
  * Kept to the genuine gaps. A polyfill that changes behaviour rather than
  * supplying a missing API would make the suite agree with a browser nobody
  * runs.
  */
+
+import { configure } from "@testing-library/react";
+import { WAIT_BOUND_MS } from "./bounds.ts";
+
+// Every `findBy…` and `waitFor` in the suite, rather than a figure per call:
+// the one-second default is a wall-clock budget on rendering work, and the
+// cases that had already outgrown it each carried an override of their own.
+// `bounds.ts` says what the figure is anchored to.
+configure({ asyncUtilTimeout: WAIT_BOUND_MS });
 
 // jsdom implements neither. Both are read at module scope by layout-aware
 // components, so their absence is a throw rather than a wrong answer.

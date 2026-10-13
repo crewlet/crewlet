@@ -769,6 +769,14 @@ func TestAPageOfLongAsksIsAnsweredByItsHolder(t *testing.T) {
 	f.hold(t, "swe", a.owner)
 	f.reader(t, a, "swe")
 	readB := f.reader(t, b)
+	// Judged by the budget a screen's read is given, not the fixture's
+	// shorter one. The fixture's 500ms is sized for a holder answering from a
+	// handful of short rows; this holder reads fifty asks of 160 KB out of its
+	// store and cuts each to its opening, under the race detector, and on a
+	// loaded runner that alone took longer than 500ms. What this case claims
+	// is that the page fits the transport, and a read that timed out says
+	// nothing about that either way.
+	readB.Budget = memread.DefaultBudget
 	got, err := readB.Memory(t.Context(), "swe", 0)
 	if err != nil {
 		t.Fatalf("a page of %d asks of %d bytes each was refused: %v", memread.PageLimit,
