@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -18,13 +19,74 @@ import (
 // SubjectPrefix prefixes every serving node's subject.
 const SubjectPrefix = "crewlet.estate"
 
-// Subject is the one subject a serving node answers on.
+// Subject is the subject a serving node answers every operation on but a
+// push's proposal, which it answers on [ProposalSubject].
 //
 // THE NODE ID IS ESCAPED as a subject token, because a node id may carry a dot
 // (`node.id` admits one), and a raw dot would split it into two tokens — a
 // subject some other node's escaped id could collide with.
 func Subject(nodeID string) string {
 	return SubjectPrefix + "." + coord.DocumentKey(nodeID)
+}
+
+// ProposalSubject is the subject a serving node answers push proposals on —
+// its node's subject with one more token, so no node's [Subject] is ever
+// another's: an escaped id is always exactly one token.
+func ProposalSubject(nodeID string) string { return laneProposals.subject(nodeID) }
+
+// lane is one of a serving node's registrations ([Serve]): the subject it
+// answers on, and how many of its requests it answers at once.
+//
+// TWO, because an answer that WAITS must never hold a slot an answer that does
+// not is waiting for — a registration's slots are its own, and a request past
+// them waits behind every answer holding one ([queue.EventQueue.Serve]). A
+// push's proposal waits: queued behind its repository's earlier pushes, then
+// for its batch, for as long as its asker's whole attempt. Every other
+// operation is a read or a write done now. On one registration, sixty-four
+// queued pushes held every slot the node had — it answered no tracker read,
+// no page write and no git fetch's code.resolve until a batch ended; a reader
+// gave up after [ReadAttempt] and marked it suspect for every domain; and an
+// election stalling the code log stalled every committer with sixty-four
+// pushes in flight, spreading the suspicion across the fleet — while the
+// committer's queue, sized to take a burst whole, could never fill. So
+// proposals have a lane of their own, as wide as the committer's queue
+// ([proposalAnswers]), and a lane answers only the operations declared on it
+// ([op.answeredOn]).
+type lane string
+
+const (
+	// laneShared answers every operation but a proposal, on [Subject].
+	laneShared lane = ""
+
+	// laneProposals answers push proposals alone, on [ProposalSubject].
+	laneProposals lane = "proposals"
+)
+
+// lanes is every registration a serving node makes, the shared one first.
+var lanes = []lane{laneShared, laneProposals}
+
+// subject is the subject node answers this lane on.
+func (l lane) subject(node string) string {
+	if l == laneShared {
+		return Subject(node)
+	}
+	return Subject(node) + "." + string(l)
+}
+
+// answers is how many of this lane's requests a node answers at once.
+func (l lane) answers() int {
+	if l == laneProposals {
+		return proposalAnswers
+	}
+	return queue.ConcurrentAnswers
+}
+
+// String names the lane in a refusal.
+func (l lane) String() string {
+	if l == laneShared {
+		return "the shared lane"
+	}
+	return "the " + string(l) + " lane"
 }
 
 // Actor is who a write is attributed to, as it crosses the wire.
@@ -104,7 +166,14 @@ type unservedReason string
 
 const (
 	// unservedNoBackend: this node runs no native backend for the op's
-	// half — the company is on a vendor for it, or the runtime is not up.
+	// half — the company is on a vendor for it, or the runtime is not up —
+	// OR a half it does run DECLINED before it ran anything ([declined],
+	// [ranNothing]): today a code half refusing code.ErrNotServing — a
+	// committer stopping, a node in a maintenance mode that publishes
+	// nothing, a refusal about this node, a half with no reader. Either way
+	// nothing ran, so every class moves on; the reply's Detail then carries
+	// the half's own cause ([ranNothingDetail]), so a node that has the
+	// backend and answered no_backend says why.
 	unservedNoBackend unservedReason = "no_backend"
 
 	// unservedNotEstablished: this node's copy admits no seat yet — the
@@ -210,6 +279,11 @@ type opSpec struct {
 	// the copy's own gate themselves ([opPing]).
 	ungated bool
 
+	// lane is the registration a serving node answers the operation on —
+	// the shared one, the zero lane, unless it is declared on another
+	// ([op.answeredOn]) — and the one subject the router asks it on.
+	lane lane
+
 	// serve is the server half: the request's arguments, decoded, run on
 	// this node's backend.
 	serve func(ctx context.Context, b Backend, actor *Actor, raw json.RawMessage) (any, error)
@@ -227,6 +301,13 @@ type op[A, R any] struct {
 	// idempotency key, and so may be asked again under it — see
 	// [op.repeatableWhen]. Nil for every other operation.
 	repeatable func(A) bool
+
+	// key names the node an operation PREFERS: the arguments' routing key —
+	// a push's repository — over which the router orders every data node by
+	// [rendezvous.Order], this one included ([Router.keyedOrder]). Nil for
+	// every operation any data node answers equally, which is asked of this
+	// node first and of the node that answered last. See [op.keyedBy].
+	key func(A) string
 }
 
 // registry is every operation this build serves, keyed by name.
@@ -336,6 +417,18 @@ func unservedCopy(ctx context.Context, local LocalBackends, spec *opSpec) (Backe
 	return b, "", false
 }
 
+// answeredOn declares the lane a serving node answers this operation on, and
+// the one the router asks it on — see [lane]. An operation whose answer waits
+// on a queue of its own is answered on a lane of its own, so its slots are
+// never the ones every other operation waits for. Package-level, at init.
+func (o op[A, R]) answeredOn(l lane) op[A, R] {
+	if !slices.Contains(lanes, l) {
+		panic(fmt.Sprintf("estate: %s is answered on %s, which no node serves", o.spec.name, l))
+	}
+	o.spec.lane = l
+	return o
+}
+
 // ungated declares that the serving gate does not hold this operation back —
 // see [opSpec.ungated].
 func (o op[A, R]) ungated() op[A, R] {
@@ -358,5 +451,19 @@ func (o op[A, R]) repeatableWhen(keyed func(A) bool) op[A, R] {
 			"arguments can make it repeatable", o.spec.name))
 	}
 	o.repeatable = keyed
+	return o
+}
+
+// keyedBy declares that the operation is asked of the data nodes in the
+// rendezvous order of key(args) rather than this node first — see
+// [Router.route]'s keyed walk and the package doc's "A push is asked of its
+// repository's committer". The key travels with the call, never on the wire:
+// it is a property of the ASKING side, like [op.repeatableWhen], since only
+// the asker chooses whom to ask, and a serving node runs the operation the
+// same way whoever chose it. Arguments that name no key are refused before
+// any node is asked, because "no node preferred" would put one repository's
+// pushes on as many committers as there are askers.
+func (o op[A, R]) keyedBy(key func(A) string) op[A, R] {
+	o.key = key
 	return o
 }

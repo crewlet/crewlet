@@ -35,12 +35,18 @@ var ErrNilHandler = errors.New("jetstream: answerer is nil")
 // [Queue.Subscribe]: every server of a subject must see every request, because
 // a scatter divides work by what the request NAMES rather than by who happens
 // to receive it.
-func (q *Queue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
+func (q *Queue) Serve(ctx context.Context, subject string, answers int,
+	h queue.AnswerFunc) (queue.Unsubscribe, error) {
+
 	if h == nil {
 		return nil, ErrNilHandler
 	}
 	if subject == "" {
 		return nil, fmt.Errorf("%w: empty subject", ErrSubject)
+	}
+	gate, gateErr := queue.NewAnswerGate(answers)
+	if gateErr != nil {
+		return nil, fmt.Errorf("serve %s: %w", subject, gateErr)
 	}
 	if q.isClosed() {
 		return nil, ErrClosed
@@ -66,10 +72,11 @@ func (q *Queue) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (
 	// an answer run inside the callback held every later request behind it
 	// — every asker in the fleet waited for the sum of the answers ahead of
 	// it — while the in-memory twin answered them in parallel and certified
-	// the contract clean. The slots bound it ([queue.MaxConcurrentAnswers]),
+	// the contract clean. The registration's own slots bound it (answers),
 	// and a request past them waits in the callback, which is backpressure
-	// on this one subscription rather than a dropped request.
-	gate := queue.NewAnswerGate()
+	// on this one subscription rather than a dropped request — and on no
+	// other: every subscription is delivered on a goroutine of its own, so
+	// a registration whose slots are full holds nothing of another's.
 	sub, err := q.nc.Subscribe(subject, func(msg *nats.Msg) {
 		if stopped.Load() || msg.Reply == "" {
 			return

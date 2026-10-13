@@ -32,6 +32,19 @@ func SetCommitterIdle(c *Committer, d time.Duration) { c.idle = d }
 // clock rather than the wall clock — set before c's first proposal.
 func SetCommitterClock(c *Committer, clock func() time.Time) { c.clock = clock }
 
+// SetCommitterNodeBytes has c hold at most n bytes of proposals across its
+// repositories, rather than CommitterNodeBytes — the case that fills a node
+// across two repositories without four repositories' queues of maximal
+// pushes. Set before c's first proposal.
+func SetCommitterNodeBytes(c *Committer, n int) { c.nodeBytes = n }
+
+// CommitterHeld is the bytes of proposals c holds across its repositories.
+func CommitterHeld(c *Committer) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.held
+}
+
 // CommitterRepos is how many repositories c holds a goroutine for.
 func CommitterRepos(c *Committer) int {
 	c.mu.Lock()

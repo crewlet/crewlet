@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -54,18 +55,47 @@ import (
 //
 // # Answered inside the one attempt its asker gives it
 //
-// The estate router gives the node it asks ONE write attempt, two
-// CommitBudgets long, and past it hands the same push id to the runner-up —
-// whose committer then contends with this one on the repository's subject.
-// So a push is decided here only while both halves of its answer fit that
-// attempt: it may WAIT in the queue for less than one CommitBudget, and its
-// batch is bounded by another. A push still queued a whole budget after it
-// arrived — behind however many batches its repository's queue holds — is
-// answered busy as its batch would start, decided by nobody and appended by
-// nobody; and one whose caller has already gone is dropped there, because its
-// asker may have handed it on and nobody here is waiting for it. A push
-// already in a batch keeps the rule above: the batch goes on without its
-// caller.
+// The estate router gives the node it asks ONE write attempt and carries its
+// end to the serving node as the proposal's deadline; past it the asker hands
+// the same push id to the runner-up — whose committer then contends with this
+// one on the repository's subject. So a push is decided here only while its
+// answer fits that attempt: a batch takes at most a CommitBudget and its
+// answer ReplyMargin more, and a push starts a batch only while both are left
+// before its deadline. It is judged against the DEADLINE ITSELF, never a wait
+// counted from when it arrived, because what the asker spent before the push
+// reached this queue — the request's trip, a wait for an answerer, the
+// serving node's wait for the asker's floor — is the asker's attempt too, and
+// a rule counted from arrival answered up to that much after the asker had
+// stopped waiting. And it is judged WHILE THE PUSH WAITS, not only as a batch
+// forms: the caller's own goroutine withdraws its push the moment too little
+// is left, so a push behind however many slow batches is answered busy inside
+// the attempt rather than left for an asker that has given up. A push is
+// either TAKEN into a batch or WITHDRAWN from the queue, never both
+// ([queued.state]): one taken is answered within its batch's budget, which it
+// had in hand when it was taken; one withdrawn is decided by nobody and
+// appended by nobody. A caller with NO deadline — the in-process path, where
+// nobody asks a runner-up while it runs — may wait in the queue for less than
+// one CommitBudget. One whose caller has already gone is dropped as its batch
+// would start, because its asker may have handed it on and nobody here is
+// waiting for it; a push already in a batch keeps the rule above: the batch
+// goes on without its caller.
+//
+// # Decided at or past what its pushes were checked against
+//
+// A push's commands were formed against the state its receiving node read — a
+// linearizable sync before receive-pack ran — and the committer is usually
+// another node, which may be behind it: one that has just become the
+// repository's committer, or one a few records short of a repository an
+// activation has just created. Decided from below it, the push would be told
+// a definite refusal that is false — a command whose old value the client was
+// shown refused stale, the repository refused deleted — and told it again
+// after the client fetched, until this node caught up; and a decision that
+// moves nothing is never put to the broker, so no compare-and-set would catch
+// it. So a batch is published with the highest of its pushes' [Proposal.Seen]
+// positions as its session: decided from a snapshot that holds them, or —
+// when this node cannot reach them within the publisher's budget — refused
+// behind, which is a refusal about this node, so the runner-up decides it. A
+// per-batch floor, never one this node keeps: it is somebody else's writes.
 //
 // # A refusal before the append moves the push to another node
 //
@@ -92,7 +122,12 @@ import (
 // A repository's queue holds at most CommitterInbox proposals and
 // CommitterInboxBytes of entries; past either a push is refused busy AT
 // ONCE, never blocked — sixteen full records waiting behind one in flight is
-// a repository taking pushes faster than one node commits them.
+// a repository taking pushes faster than one node commits them. And the node
+// holds at most CommitterNodeBytes of proposals across every repository, from
+// each one's queueing to its caller's answer: a node commits for every
+// repository rendezvous ranks it first for, and per-repository bounds alone
+// let a thousand of the largest pushes from as many repositories hold over
+// 400 MiB of entries, and as much again decoded.
 
 // CommitterOptions configure a committer.
 type CommitterOptions struct {
@@ -132,6 +167,9 @@ type Committer struct {
 	// wall clock's monotonic reading, never Now (the decide's clock, which a
 	// caller may pin), and a test's own (export_test.go).
 	clock func() time.Time
+	// nodeBytes is CommitterNodeBytes, and a test's smaller value
+	// (export_test.go).
+	nodeBytes int
 
 	// life is the batches' context: the committer's own lifetime, never a
 	// caller's — THE ONE CONTEXT STORED IN A STRUCT, because a batch is
@@ -140,8 +178,14 @@ type Committer struct {
 	life context.Context
 	end  context.CancelFunc
 
-	mu       sync.Mutex
-	repos    map[string]*repoCommitter
+	mu    sync.Mutex
+	repos map[string]*repoCommitter
+	// held is the entryBound of every proposal this node holds, across its
+	// repositories, from its queueing until its caller has its answer —
+	// queued or in a batch. A caller that leaves before its answer releases
+	// its push while a batch that took it still runs, which is at most one
+	// batch a repository for at most a CommitBudget.
+	held     int
 	stopped  bool
 	stopping chan struct{}
 	wg       sync.WaitGroup
@@ -162,13 +206,67 @@ type queued struct {
 	bytes int // entryBound(p)
 	rows  int // rowBound(p)
 	// arrived is when the proposal was queued, by the committer's clock;
-	// gone is its caller's context ending — nil for a caller whose context
-	// never ends.
-	arrived time.Time
-	gone    <-chan struct{}
-	// answer receives exactly one value; capacity 1, so the goroutine never
+	// deadline is its caller's — the end of its asker's attempt, zero for a
+	// caller with none; gone is its caller's context ending — nil for a
+	// caller whose context never ends.
+	arrived  time.Time
+	deadline time.Time
+	gone     <-chan struct{}
+	// state is who holds the push: the queue, a batch that took it, or
+	// nobody — withdrawn undecided. It leaves pushWaiting by compare-and-swap
+	// alone, so the repository's goroutine taking it and its caller
+	// withdrawing it never both win.
+	state atomic.Int32
+	// answer receives at most one value; capacity 1, so the goroutine never
 	// blocks on a caller that hung up.
 	answer chan answered
+}
+
+// A queued push's states ([queued.state]).
+const (
+	pushWaiting int32 = iota
+	pushTaken
+	pushWithdrawn
+)
+
+// take hands q to the batch about to start, reporting false for a push its
+// caller withdrew. A push already taken is the batch's still: a carry that
+// did not fit the last record, leading the next.
+func (q *queued) take() bool {
+	return q.state.CompareAndSwap(pushWaiting, pushTaken) || q.state.Load() == pushTaken
+}
+
+// withdraw takes q out of the queue undecided, reporting false for a push a
+// batch has already taken — which that batch answers.
+func (q *queued) withdraw() bool { return q.state.CompareAndSwap(pushWaiting, pushWithdrawn) }
+
+// late is why q may not start a batch at now, or "" while it may: no more of
+// its asker's attempt left than a batch and its answer may take — or, for a
+// caller with no deadline, a whole CommitBudget already waited.
+func (q *queued) late(now time.Time) string {
+	if !q.deadline.IsZero() {
+		if left := q.deadline.Sub(now); left <= CommitBudget+ReplyMargin {
+			return shortOfTime(left)
+		}
+		return ""
+	}
+	waited := now.Sub(q.arrived)
+	if waited < CommitBudget {
+		return ""
+	}
+	return fmt.Sprintf("the push waited %s behind this repository's earlier pushes on this node, "+
+		"and a push waits at most %s before its own record is written; run git push again",
+		waited.Round(time.Millisecond), CommitBudget)
+}
+
+// shortOfTime is the refusal of a push whose asker stops waiting in left —
+// no more than a batch and its answer may take, which is the only time it is
+// formed.
+func shortOfTime(left time.Duration) string {
+	left = min(max(left, 0), CommitBudget+ReplyMargin)
+	return fmt.Sprintf("the push's asker stops waiting in %s, and a batch started now may take %s "+
+		"and its answer %s more; run git push again", left.Round(time.Millisecond), CommitBudget,
+		ReplyMargin)
 }
 
 // answered is one proposal's answer.
@@ -195,7 +293,7 @@ func NewCommitter(o CommitterOptions) (*Committer, error) {
 	}
 	c := &Committer{
 		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, limits: o.Limits, now: o.Now,
-		metrics: o.Metrics, log: o.Logger, idle: CommitterIdle,
+		metrics: o.Metrics, log: o.Logger, idle: CommitterIdle, nodeBytes: CommitterNodeBytes,
 		clock: time.Now, repos: map[string]*repoCommitter{}, stopping: make(chan struct{}),
 	}
 	if c.now == nil {
@@ -209,39 +307,78 @@ func NewCommitter(o CommitterOptions) (*Committer, error) {
 }
 
 // Propose decides one push in the next batch of its repository and answers
-// what became of it. A full queue answers busy at once, and a push still
-// queued a whole [CommitBudget] after it arrived answers busy undecided; a
-// stopping committer answers [ErrNotServing]; a proposal that is not one
-// answers [ErrInvalidProposal]. ctx bounds only this caller's wait: a push
-// whose caller has gone before its batch starts is never decided, and the
-// batch it joined goes on without it.
+// what became of it. A full queue, or a node holding its bytes
+// ([CommitterNodeBytes]), answers busy at once; a push whose caller's
+// DEADLINE leaves too little for a batch and its answer ([CommitBudget] and
+// [ReplyMargin]) answers busy undecided — at once, or the moment that is so
+// while it waits — and one whose caller has no deadline answers busy once it
+// has waited a whole CommitBudget; a stopping committer answers
+// [ErrNotServing]; a proposal that is not one answers [ErrInvalidProposal].
+// ctx bounds only this caller's wait: a push whose caller has gone before its
+// batch starts is never decided, and the batch it joined goes on without it.
 func (c *Committer) Propose(ctx context.Context, p Proposal) (ProposeResult, error) {
 	bytes, err := p.measure()
 	if err != nil {
 		return ProposeResult{}, err
 	}
-	q := &queued{p: p, bytes: bytes, rows: rowBound(p), arrived: c.clock(), gone: ctx.Done(),
-		answer: make(chan answered, 1)}
+	deadline, _ := ctx.Deadline()
+	q := &queued{p: p, bytes: bytes, rows: rowBound(p), arrived: c.clock(), deadline: deadline,
+		gone: ctx.Done(), answer: make(chan answered, 1)}
+	if refusal := q.late(q.arrived); refusal != "" {
+		// TOO LATE BEFORE IT IS QUEUED: answered without taking the place
+		// in the queue a push that can still be decided needs.
+		return c.busy(q, refusal), nil
+	}
 	//nolint:contextcheck // The batch is the committer's, not this caller's: it runs under the committer's own lifetime so a caller that hangs up never cancels the batch other callers are in.
 	if refused, full := c.enqueue(q); full {
-		if c.metrics != nil {
-			c.metrics.Add(metrics.CodeCommitBusy, 1, nil)
-		}
-		return ProposeResult{Answer: refuseAll(p, RefusalBusy, refused)}, nil
+		return c.busy(q, refused), nil
 	} else if refused != "" {
 		return ProposeResult{}, fmt.Errorf("%w: %s", ErrNotServing, refused)
 	}
-	select {
-	case a := <-q.answer:
-		return a.res, a.err
-	case <-ctx.Done():
-		return ProposeResult{}, ctx.Err()
+	// HELD UNTIL THIS CALLER HAS ITS ANSWER, whichever way it leaves — the
+	// one place every queued push's caller passes through.
+	defer c.release(q)
+	// THE DEADLINE IS WATCHED WHILE THE PUSH WAITS, here, on the caller's
+	// own goroutine: the repository's goroutine sees its queue only between
+	// batches, so a push queued behind batches that ran long reached the
+	// head after its asker had stopped waiting — silence, which the asker
+	// reads as a dead committer and answers by asking the runner-up.
+	var expire <-chan time.Time
+	if !deadline.IsZero() {
+		timer := time.NewTimer(deadline.Sub(q.arrived) - CommitBudget - ReplyMargin)
+		defer timer.Stop()
+		expire = timer.C
+	}
+	for {
+		select {
+		case a := <-q.answer:
+			return a.res, a.err
+		case <-expire:
+			expire = nil
+			if q.withdraw() {
+				return c.busy(q, shortOfTime(deadline.Sub(c.clock()))), nil
+			}
+			// A BATCH TOOK IT FIRST, with a whole budget and the margin
+			// still in hand: its answer comes inside the attempt.
+		case <-ctx.Done():
+			q.withdraw()
+			return ProposeResult{}, ctx.Err()
+		}
 	}
 }
 
+// busy counts q refused busy and answers it so, undecided.
+func (c *Committer) busy(q *queued, refusal string) ProposeResult {
+	if c.metrics != nil {
+		c.metrics.Add(metrics.CodeCommitBusy, 1, nil)
+	}
+	return ProposeResult{Answer: refuseAll(q.p, RefusalBusy, refusal)}
+}
+
 // enqueue puts q on its repository's queue, starting the repository's
-// goroutine when it has none. It answers why it did not: full for a queue at
-// its count or its bytes, and a sentence either way.
+// goroutine when it has none, and counts it held until [Committer.release].
+// It answers why it did not: full for a queue at its count or its bytes, or a
+// node holding its bytes, and a sentence either way.
 //
 // THE SEND IS UNDER mu, which is what makes the idle exit race-free: a
 // goroutine leaves the map only under mu and only with an empty queue, so a
@@ -251,6 +388,12 @@ func (c *Committer) enqueue(q *queued) (string, bool) {
 	defer c.mu.Unlock()
 	if c.stopped {
 		return "the committer is stopping", false
+	}
+	if c.held+q.bytes > c.nodeBytes {
+		// BEFORE A GOROUTINE IS STARTED for a repository this node may
+		// hold nothing of.
+		return fmt.Sprintf("%d bytes of pushes are held across this node's repositories, and %d "+
+			"more would pass the %d it holds", c.held, q.bytes, c.nodeBytes), true
 	}
 	rc := c.repos[q.p.RepoID]
 	if rc == nil {
@@ -266,6 +409,7 @@ func (c *Committer) enqueue(q *queued) (string, bool) {
 	select {
 	case rc.inbox <- q:
 		rc.queued += q.bytes
+		c.held += q.bytes
 		return "", false
 	default:
 		return fmt.Sprintf("%d pushes are queued for this repository on this node, the most "+
@@ -381,33 +525,39 @@ func (c *Committer) gather(rc *repoCommitter, first *queued) ([]*queued, *queued
 
 // admit reports whether q may be decided in the batch about to start, and
 // answers it when it may not — judged as the batch forms, because that is
-// when deciding it would begin.
+// when deciding it would begin. A push it judges is TAKEN first, so its
+// caller can no longer withdraw it and nobody else answers it
+// ([queued.take]).
 //
-// A CALLER THAT HAS GONE is answered to nobody: its asker abandoned the
-// attempt, and may already have handed the same push id to the runner-up, so
-// deciding it here would contend with that node on the repository's subject
-// for a push nobody here is waiting for. A push that has WAITED A WHOLE
-// BUDGET is answered busy: its batch may take another, and an answer past
-// both comes after its asker's attempt has ended. Neither is decided, and
-// neither appends anything; the client runs git push again.
+// A push its caller WITHDREW was answered by its caller. A CALLER THAT HAS
+// GONE is answered to nobody: its asker abandoned the attempt, and may
+// already have handed the same push id to the runner-up, so deciding it here
+// would contend with that node on the repository's subject for a push nobody
+// here is waiting for. A push that is LATE ([queued.late]) is answered busy:
+// a batch started now could answer it only after its asker stopped waiting.
+// None is decided, and none appends anything; the client runs git push again.
 func (c *Committer) admit(q *queued) bool {
+	if !q.take() {
+		return false
+	}
 	select {
 	case <-q.gone:
 		return false
 	default:
 	}
-	waited := c.clock().Sub(q.arrived)
-	if waited < CommitBudget {
-		return true
+	if refusal := q.late(c.clock()); refusal != "" {
+		q.answer <- answered{res: c.busy(q, refusal)}
+		return false
 	}
-	if c.metrics != nil {
-		c.metrics.Add(metrics.CodeCommitBusy, 1, nil)
-	}
-	q.answer <- answered{res: ProposeResult{Answer: refuseAll(q.p, RefusalBusy, fmt.Sprintf(
-		"the push waited %s behind this repository's earlier pushes on this node, and a push "+
-			"waits at most %s before its own record is written; run git push again",
-		waited.Round(time.Millisecond), CommitBudget))}}
-	return false
+	return true
+}
+
+// release takes q's bytes off what the node holds, once its caller has left
+// [Committer.Propose].
+func (c *Committer) release(q *queued) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.held -= q.bytes
 }
 
 // dequeued takes q's bytes off rc's queue.
@@ -451,8 +601,18 @@ func (c *Committer) commit(repoID string, batch []*queued) {
 	ctx, cancel := context.WithTimeout(c.life, CommitBudget)
 	defer cancel()
 	proposals := make([]Proposal, len(batch))
+	// THE BATCH IS DECIDED AT OR PAST WHAT EVERY PUSH IN IT WAS CHECKED
+	// AGAINST ([Proposal.Seen]): the publisher waits for this node's applier
+	// to reach the highest of them before it takes the snapshot, and a node
+	// that cannot within its budget refuses `behind` — a refusal about this
+	// node, so every push is answered ErrNotServing and the router asks the
+	// runner-up. Validate held every Seen to the code log, so they compare.
+	var seen statelog.Position
 	for i, q := range batch {
 		proposals[i] = q.p
+		if q.p.Seen.Packed() > seen.Packed() {
+			seen = q.p.Seen
+		}
 	}
 	// THE OPERATION ID IS MINTED ONCE A BATCH, stable across its rounds, by
 	// the wall clock: the ledger judges what an id's mint instant vouches for
@@ -464,7 +624,7 @@ func (c *Committer) commit(repoID string, batch []*queued) {
 	var last round
 	res, err := c.pub.Publish(ctx, statelog.Request{
 		Subject: subject.statelog(), Scope: statelog.ScopeSet{Paths: scope},
-		OpID: opID, Pattern: statelog.PatternArbitrated,
+		OpID: opID, Pattern: statelog.PatternArbitrated, Session: seen,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			// RESET AT THE TOP OF EVERY ROUND: only the last round says
 			// what the publish decided.

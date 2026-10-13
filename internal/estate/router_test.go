@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -26,11 +27,12 @@ import (
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
-// The streams of the tracker's and the knowledge base's logs, as a floor names
-// them.
+// The streams of the tracker's, the knowledge base's and the code host's logs,
+// as a floor names them.
 var (
 	trackerStream = floorStreams[trackerDomain]
 	pagesStream   = floorStreams[pagesDomain]
+	codeStream    = floorStreams[codeDomain]
 )
 
 // fakeNode is one data node's backend, recording what it was asked.
@@ -104,6 +106,21 @@ type fakeNode struct {
 
 	// indexBuilding is a node whose index has not finished its first lap.
 	indexBuilding bool
+
+	// proposals is every push proposed to this node's committer, codeSeq
+	// the code log's last position it committed at, and codeErr what its
+	// code half refuses every operation with — a proposal and every read —
+	// where it is set (codeops_test.go).
+	proposals []code.Proposal
+	codeSeq   uint64
+	codeErr   error
+
+	// holdProposals, when set, is a committer whose batch is held: every
+	// proposal waits inside it until the channel is closed, counted in
+	// proposing as it arrives — a push queued behind its repository's
+	// earlier ones, holding whatever slot it was answered through.
+	holdProposals chan struct{}
+	proposing     atomic.Int32
 }
 
 func (f *fakeNode) note(op string) {
@@ -280,7 +297,7 @@ func (f fakeUsage) ReadsElided(context.Context, string, string) (int64, error) {
 // backend is this node as a [Backend] over its copy of the estate.
 func (f *fakeNode) backend() Backend {
 	return Backend{
-		Tracker: f, PageWriter: f, Knowledge: f, Backlinks: f, Usage: fakeUsage{f},
+		Tracker: f, PageWriter: f, Knowledge: f, Backlinks: f, Usage: fakeUsage{f}, Code: f,
 		Writer: func(a Actor) TrackerWriter {
 			f.mu.Lock()
 			f.actors = append(f.actors, a)
@@ -447,8 +464,10 @@ type silencer struct {
 	node *fakeNode
 }
 
-func (s silencer) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
-	return s.q.Serve(ctx, subject, func(ctx context.Context, raw []byte) ([]byte, error) {
+func (s silencer) Serve(ctx context.Context, subject string, answers int,
+	h queue.AnswerFunc) (queue.Unsubscribe, error) {
+
+	return s.q.Serve(ctx, subject, answers, func(ctx context.Context, raw []byte) ([]byte, error) {
 		s.node.mu.Lock()
 		s.node.requests++
 		silent, hang, refusesLagging := s.node.silent, s.node.hang, s.node.refusesLagging
@@ -1965,5 +1984,345 @@ func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("admission waited on every wedged data node in turn, past its bound")
+	}
+}
+
+// A PUSH IS ASKED OF ITS REPOSITORY'S COMMITTER — the first node in the
+// rendezvous order of the repository over every data node — whichever node
+// asks and whichever node answered last, so a repository's pushes meet at one
+// committer and its group commit holds them, while the repositories spread
+// over the data nodes. A node that went silent is asked last for its keys and
+// one that said its copy of the code log is out of service after the rest; a
+// data node asks its OWN copy at its place in the order, in-process, and never
+// ahead of the node the key prefers.
+func TestAKeyedOpAsksTheKeysRendezvousOrder(t *testing.T) {
+	t.Parallel()
+	holders := []string{"data-a", "data-b", "data-c", "data-d"}
+	f := newFleet(t, holders...)
+	r := f.router(t, "agent-2", nil)
+	committers := map[string]bool{}
+	for i := range 32 {
+		repo := fmt.Sprintf("repo-%02d", i)
+		want := rendezvous.Order(repo, holders)[0]
+		if _, err := r.Code().Propose(t.Context(), proposalTo(repo, "push-"+repo)); err != nil {
+			t.Fatalf("propose to %s: %v", repo, err)
+		}
+		if got := f.proposedOn(repo); !slices.Equal(got, []string{want}) {
+			t.Fatalf("a push to %s was proposed on %v, want its committer %s alone", repo, got, want)
+		}
+		committers[want] = true
+	}
+	if len(committers) < 3 {
+		t.Fatalf("32 repositories met at %d committers %v, want them spread over the data nodes",
+			len(committers), committers)
+	}
+
+	// NO STICKY NODE: a code read answered by one node leaves it the node
+	// asked first for READS, and a push to a repository it is not the
+	// committer of still goes to that repository's committer.
+	if _, err := r.Code().Read(t.Context(), code.ReadQuery{Kind: code.ReadRepos}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	sticky := r.order(codeDomain, holders)[0]
+	var repo string
+	for i := 0; repo == ""; i++ {
+		if candidate := fmt.Sprintf("repo-sticky-%d", i); rendezvous.Order(candidate, holders)[0] != sticky {
+			repo = candidate
+		}
+	}
+	o := rendezvous.Order(repo, holders)
+	if _, err := r.Code().Propose(t.Context(), proposalTo(repo, "push-after-read")); err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	if got := f.proposedOn(repo); !slices.Equal(got, []string{o[0]}) {
+		t.Fatalf("after %s answered a read, a push to %s was proposed on %v, want its committer %s",
+			sticky, repo, got, o[0])
+	}
+
+	// A NODE THAT WENT SILENT IS ASKED LAST for its keys, and one that said
+	// its copy of the code log is out of service after the rest — the order
+	// between them still the key's.
+	r.markSuspect(o[0])
+	r.markOutOfService(o[1], codeDomain)
+	if got, want := r.orderFor(opCodePropose.spec, repo, holders),
+		[]string{o[2], o[3], o[1], o[0]}; !slices.Equal(got, want) {
+		t.Fatalf("with %s silent and %s's code copy out of service, %s is asked of %v, want %v",
+			o[0], o[1], repo, got, want)
+	}
+
+	// A DATA NODE'S OWN COPY at its place in the order: run in-process where
+	// the key prefers it, and asked only after the node the key prefers
+	// otherwise — never over the wire.
+	local := &fakeNode{name: "data-b", units: chartOf("data-b")}
+	own := f.router(t, "data-b", local)
+	first, second := "", ""
+	for i := 0; first == "" || second == ""; i++ {
+		candidate := fmt.Sprintf("repo-own-%d", i)
+		order := rendezvous.Order(candidate, holders)
+		switch {
+		case order[0] == "data-b" && first == "":
+			first = candidate
+		case order[1] == "data-b" && second == "":
+			second = candidate
+		}
+	}
+	if _, err := own.Code().Propose(t.Context(), proposalTo(first, "push-own-first")); err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	if got := f.proposedOn(first); len(got) != 0 || len(local.proposalsTo(first)) != 1 {
+		t.Fatalf("a push to %s, whose committer is this node, was proposed over the wire on %v "+
+			"and %d times in-process, want once in-process", first, got, len(local.proposalsTo(first)))
+	}
+	if _, err := own.Code().Propose(t.Context(), proposalTo(second, "push-own-second")); err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	if got, want := f.proposedOn(second), rendezvous.Order(second, holders)[0]; !slices.Equal(got,
+		[]string{want}) || len(local.proposalsTo(second)) != 0 {
+		t.Fatalf("a push to %s was proposed on %v and %d times in-process, want its committer %s alone",
+			second, got, len(local.proposalsTo(second)), want)
+	}
+}
+
+// A KEYED WRITE THAT WENT UNANSWERED MOVES ON WITH THE SAME ARGUMENTS: the
+// repository's runner-up is handed the very proposal its committer was — the
+// same push id, which is what collapses the push should the first node have
+// decided it after all — and its answer is the answer.
+func TestAKeyedWriteMovesOnWithTheSameArguments(t *testing.T) {
+	t.Parallel()
+	holders := []string{"data-a", "data-b", "data-c"}
+	f := newFleet(t, holders...)
+	const repo = "repo-moves"
+	o := rendezvous.Order(repo, holders)
+	f.nodes[o[0]].set(func(n *fakeNode) { n.silent = true })
+	sent := richProposal(repo)
+	got, err := f.client.Code().Propose(t.Context(), sent)
+	if err != nil {
+		t.Fatalf("propose with the committer silent: %v", err)
+	}
+	if got.OpID != o[1] {
+		t.Fatalf("the push was answered by %q, want the runner-up %s", got.OpID, o[1])
+	}
+	runnerUp := f.nodes[o[1]]
+	runnerUp.mu.Lock()
+	arrived := slices.Clone(runnerUp.proposals)
+	runnerUp.mu.Unlock()
+	if len(arrived) != 1 || !reflect.DeepEqual(arrived[0], sent) {
+		t.Fatalf("the runner-up was proposed %+v, want exactly what was sent: %+v", arrived, sent)
+	}
+	silent := f.nodes[o[0]]
+	silent.mu.Lock()
+	asked, decided := silent.requests, len(silent.proposals)
+	silent.mu.Unlock()
+	if asked == 0 || decided != 0 {
+		t.Fatalf("the committer was asked %d times and decided %d pushes, want it asked first "+
+			"and silent", asked, decided)
+	}
+}
+
+// A COMMITTER THAT RAN NOTHING HANDS THE REPOSITORY ON: a committer that
+// refuses before it appends anything — stopping, a node that does not publish,
+// a refusal about this node — is a node that ran nothing, so the runner-up is
+// asked with the same push id, from a remote committer and from this node's
+// own alike; and when every committer refuses, the refusal says why each did.
+func TestACommitterThatRanNothingHandsTheRepositoryOn(t *testing.T) {
+	t.Parallel()
+	holders := []string{"data-a", "data-b"}
+	f := newFleet(t, holders...)
+	const repo = "repo-handed-on"
+	o := rendezvous.Order(repo, holders)
+	stopping := fmt.Errorf("%w: stopping", code.ErrNotServing)
+	f.nodes[o[0]].set(func(n *fakeNode) { n.codeErr = stopping })
+	got, err := f.client.Code().Propose(t.Context(), proposalTo(repo, "push-1"))
+	if err != nil || got.OpID != o[1] {
+		t.Fatalf("propose with the committer stopping = (%+v, %v), want the runner-up %s's answer",
+			got, err, o[1])
+	}
+	if refused := len(f.nodes[o[0]].proposalsTo(repo)); refused != 1 {
+		t.Fatalf("the stopping committer was proposed %d pushes, want it asked first", refused)
+	}
+
+	f.nodes[o[1]].set(func(n *fakeNode) { n.codeErr = stopping })
+	_, err = f.client.Code().Propose(t.Context(), proposalTo(repo, "push-2"))
+	var unserved *ErrUnserved
+	if !errors.As(err, &unserved) || strings.Count(unserved.Detail, "stopping") != 2 {
+		t.Fatalf("every committer refusing = %v, want an unserved push naming each one's reason", err)
+	}
+
+	// THIS NODE'S OWN COMMITTER, refusing in-process, hands on alike.
+	f.nodes[o[1]].set(func(n *fakeNode) { n.codeErr = nil })
+	local := &fakeNode{name: o[0], units: chartOf(o[0]), codeErr: stopping}
+	own := f.router(t, o[0], local)
+	got, err = own.Code().Propose(t.Context(), proposalTo(repo, "push-3"))
+	if err != nil || got.OpID != o[1] || len(local.proposalsTo(repo)) != 1 {
+		t.Fatalf("propose with this node's own committer stopping = (%+v, %v), in-process %d, "+
+			"want it asked first and the runner-up %s's answer", got, err,
+			len(local.proposalsTo(repo)), o[1])
+	}
+}
+
+// A CODE HALF THAT DECLINES A READ HANDS IT ON: a data node whose code half
+// refuses a read code.ErrNotServing — a Served holding no reader of the code
+// log, a half that is stopping — ran nothing, so every read the code host
+// makes moves on to the next data node and is answered there, rather than
+// failing the admission, the sync or the listing on the first node that
+// asked; and when every data node declines, the unserved answer names each
+// one's cause, so "nobody serves the code host" says why.
+func TestACodeHalfThatDeclinesAReadHandsItOn(t *testing.T) {
+	t.Parallel()
+	holders := []string{"data-a", "data-b", "data-c"}
+	// The client asks an unkeyed read in the rendezvous order of its own id;
+	// every node but the LAST declines, so each declining node is asked
+	// before the one that serves.
+	o := rendezvous.Order("agent-1", holders)
+	declined := fmt.Errorf("%w: this node holds no reader of the code log", code.ErrNotServing)
+	covered := map[string]bool{}
+	for _, r := range codeReads(t.Context(), CodeSeam{}) {
+		covered[r.op] = true
+	}
+	requireEveryCodeRead(t, covered)
+	for name := range covered {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t, holders...)
+			read := func() error {
+				for _, r := range codeReads(t.Context(), f.client.Code()) {
+					if r.op == name {
+						return r.read()
+					}
+				}
+				t.Fatalf("no read named %s", name)
+				return nil
+			}
+			for _, n := range o[:2] {
+				f.nodes[n].set(func(n *fakeNode) { n.codeErr = declined })
+			}
+			if err := read(); err != nil {
+				t.Fatalf("%s with %v declining = %v, want %s's answer", name, o[:2], err, o[2])
+			}
+			for _, n := range o {
+				if !f.nodes[n].askedFor(name) {
+					t.Fatalf("%s was never asked %s; want %v asked in turn", n, name, o)
+				}
+			}
+
+			f.nodes[o[2]].set(func(n *fakeNode) { n.codeErr = declined })
+			err := read()
+			var unserved *ErrUnserved
+			if !errors.As(err, &unserved) || strings.Count(unserved.Detail, "holds no reader") != len(o) {
+				t.Fatalf("%s with every code half declining = %v, want an unserved read naming "+
+					"each node's cause", name, err)
+			}
+		})
+	}
+}
+
+// A KEYED OPERATION'S LAST RESORT KEEPS THE KEY'S ORDER: when every copy lags
+// its log, the copies are asked again — told to take the request anyway — in
+// the order the walk met them, so a data node whose own copy lags does not
+// commit a push ahead of the repository's committer, which lags too. Asked
+// first, this node's copy would split a burst between two committers exactly
+// when the fleet is busiest.
+func TestAKeyedLastResortKeepsTheKeysOrder(t *testing.T) {
+	t.Parallel()
+	holders := []string{"data-a", "data-b"}
+	f := newFleet(t, holders...)
+	const repo = "repo-lagging"
+	o := rendezvous.Order(repo, holders)
+	f.nodes[o[0]].set(func(n *fakeNode) { n.notReady = true })
+	local := &fakeNode{name: o[1], units: chartOf(o[1]), notReady: true}
+	own := f.router(t, o[1], local)
+	got, err := own.Code().Propose(t.Context(), proposalTo(repo, "push-lagging"))
+	if err != nil || got.OpID != o[0] {
+		t.Fatalf("propose with every copy lagging = (%+v, %v), want the committer %s's answer",
+			got, err, o[0])
+	}
+	if ran := len(local.proposalsTo(repo)); ran != 0 {
+		t.Fatalf("this node's lagging copy decided %d pushes ahead of the committer %s", ran, o[0])
+	}
+}
+
+// A KEYED OPERATION WHOSE ARGUMENTS NAME NO KEY IS REFUSED before anybody is
+// asked: there is no node it prefers, and asking an arbitrary one would put a
+// repository's pushes on as many committers as there are askers.
+func TestAKeyedOpWithNoKeyIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	_, err := f.client.Code().Propose(t.Context(), proposalTo("", "push-nowhere"))
+	if err == nil || !strings.Contains(err.Error(), "code.propose") {
+		t.Fatalf("a push naming no repository = %v, want a refusal naming the operation", err)
+	}
+	for name, n := range f.nodes {
+		n.mu.Lock()
+		asked := n.requests
+		n.mu.Unlock()
+		if asked != 0 {
+			t.Errorf("%s was asked %d times for a push naming no repository", name, asked)
+		}
+	}
+}
+
+// THE CODE HOST'S OPERATIONS CARRY THE CODE LOG'S FLOOR — and only it: each
+// names the code domain, so the code copy's own verdict decides whether a
+// node answers it (ADR-0031), and a request carries this node's floor on the
+// code log and never its floor on another domain's.
+func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
+	t.Parallel()
+	ops := []*opSpec{opCodePropose.spec, opCodeResolve.spec, opCodeRepoState.spec,
+		opCodePushOutcome.spec, opCodeRead.spec}
+	for _, spec := range ops {
+		if spec.domain != "code" || spec.floorStream != (code.Domain{}).Stream().Name ||
+			spec.copies != "code" {
+			t.Errorf("%s reads the %q copy with its floor on %q, want the code copy and %q",
+				spec.name, spec.domain, spec.floorStream, (code.Domain{}).Stream().Name)
+		}
+	}
+	f := newFleet(t, "data-a")
+	node := f.nodes["data-a"]
+	codeFloor := statelog.Position{Stream: codeStream, Generation: 1, Seq: 77}
+	f.client.Observe(codeFloor)
+	f.client.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 12})
+	ctx, seam := t.Context(), f.client.Code()
+	if _, err := seam.Resolve(ctx, code.ResolveQuery{Name: "app"}); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if _, err := seam.RepoState(ctx, code.StateQuery{RepoID: "repo-1"}); err != nil {
+		t.Fatalf("repo state: %v", err)
+	}
+	if _, err := seam.PushOutcome(ctx, code.OutcomeQuery{RepoID: "repo-1", PushID: "p"}); err != nil {
+		t.Fatalf("push outcome: %v", err)
+	}
+	if _, err := seam.Read(ctx, code.ReadQuery{Kind: code.ReadRepos}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if _, err := seam.Propose(ctx, proposalTo("repo-1", "push-floor")); err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	node.mu.Lock()
+	floors := slices.Clone(node.floors)
+	node.mu.Unlock()
+	if len(floors) != len(ops) {
+		t.Fatalf("the code operations waited for %v, want one floor each", floors)
+	}
+	for _, at := range floors {
+		if at != codeFloor {
+			t.Errorf("a code operation waited for %v, want only this node's code floor %v", at, codeFloor)
+		}
+	}
+}
+
+// A KEYED OPERATION STILL ASKS ITS OWN COPY WHEN THE PLACEMENT CANNOT SAY WHO
+// HOLDS THE ESTATE: the key orders the data nodes, and with none named this
+// node's own copy is the one node left to ask — exactly the unknown-placement
+// rule every other operation keeps.
+func TestAKeyedOpAsksItsOwnCopyWhenThePlacementCannotSay(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	f.placement.set(func(p *fakePlacement) { p.err = errors.New("the presence view answers unknown") })
+	local := &fakeNode{name: "data-self", units: chartOf("data-self")}
+	r := f.router(t, "data-self", local)
+	got, err := r.Code().Propose(t.Context(), proposalTo("repo-blind", "push-blind"))
+	if err != nil || got.OpID != "data-self" || len(local.proposalsTo("repo-blind")) != 1 {
+		t.Fatalf("propose with the placement unknown = (%+v, %v), want this node's own committer's "+
+			"answer", got, err)
 	}
 }

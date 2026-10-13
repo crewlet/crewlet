@@ -2,19 +2,37 @@ package queue
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 )
+
+// ErrAnswerBound refuses an [EventQueue.Serve] registration bounded below one
+// answer at a time, which would hold every request it is sent until its
+// askers gave up.
+//
+// A MISTAKE IN THE CALLER, never a condition: no layer branches on it. It is a
+// sentinel so that both backends refuse alike — through [NewAnswerGate], the
+// one place the bound is read — and the suite can say they do.
+var ErrAnswerBound = errors.New("queue: a registration answers at least one request at a time")
 
 // AnswerGate is one [EventQueue.Serve] registration's admission: the slots
 // that bound how many of its answers run at once, and the count a withdrawal
 // waits on.
 //
 // SHARED BY BOTH BACKENDS, because the rule is the contract's rather than
-// either broker's — at most [MaxConcurrentAnswers] at once, a request past
-// them waits rather than drops, and a withdrawal waits for what is in flight
-// — and two copies of a concurrency rule are how the twin comes to certify a
-// shape the real backend does not have. That is exactly how answering one
-// request at a time went unnoticed: the twin answered in parallel.
+// either broker's — at most the registration's own bound at once, a request
+// past them waits rather than drops, and a withdrawal waits for what is in
+// flight — and two copies of a concurrency rule are how the twin comes to
+// certify a shape the real backend does not have. That is exactly how
+// answering one request at a time went unnoticed: the twin answered in
+// parallel.
+//
+// ONE PER REGISTRATION, never one per process or per subject family: a
+// request waiting for a slot waits only behind its own registration's
+// answers, which is what lets a registration whose answers wait on a queue of
+// their own sit beside one whose answers do not without either holding the
+// other's requests.
 //
 // NOT a [sync.WaitGroup]: an answer can be admitted while a withdrawal is
 // starting its wait, and a WaitGroup's Add racing its Wait at zero is a
@@ -29,9 +47,13 @@ type AnswerGate struct {
 	idle   chan struct{}
 }
 
-// NewAnswerGate builds a gate with [MaxConcurrentAnswers] slots.
-func NewAnswerGate() *AnswerGate {
-	return &AnswerGate{slots: make(chan struct{}, MaxConcurrentAnswers)}
+// NewAnswerGate builds a gate with answers slots, refusing a bound below one
+// ([ErrAnswerBound]).
+func NewAnswerGate(answers int) (*AnswerGate, error) {
+	if answers < 1 {
+		return nil, fmt.Errorf("%w: %d", ErrAnswerBound, answers)
+	}
+	return &AnswerGate{slots: make(chan struct{}, answers)}, nil
 }
 
 // Enter admits one answer, waiting for a slot. It reports false — and holds

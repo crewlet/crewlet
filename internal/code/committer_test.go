@@ -584,6 +584,101 @@ func TestAnInboxFullOfBytesIsBusy(t *testing.T) {
 	}
 }
 
+// A NODE FULL OF BYTES IS BUSY, whichever repository the next push is for:
+// each repository's queue is bounded on its own, and the node bounds them
+// together — from each push's queueing to its caller's answer, its batch
+// included — because a node commits for every repository rendezvous ranks it
+// first for, and a thousand of the largest pushes from as many
+// repositories, each under its own repository's bound, held over 400 MiB of
+// entries. Every push it held is released once its caller has its answer.
+func TestANodeFullOfBytesIsBusy(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	web, api := repoOn(t, n, "web"), repoOn(t, n, "api")
+	gate := newGate(n.pub)
+	c, rec := committerOn(t, n, gate)
+	// ONE REPOSITORY'S BYTES AND HALF ANOTHER'S: the first repository
+	// fills its own queue, and the second meets the node's bound well
+	// before its own.
+	nodeBytes := code.CommitterInboxBytes + code.CommitterInboxBytes/2
+	code.SetCommitterNodeBytes(c, nodeBytes)
+
+	maximal := func(repo string) func(i int) code.Proposal {
+		return func(i int) code.Proposal {
+			cmds := make([]code.Command, 0, code.MaxCommandsPerPush)
+			for k := range code.MaxCommandsPerPush {
+				ref := fmt.Sprintf("refs/heads/%04d-%04d-", i, k)
+				cmds = append(cmds, update(ref+strings.Repeat("x", code.MaxRefNameBytes-len(ref)),
+					oidOf("X"), oidOf("Y")))
+			}
+			return proposal(repo, cmds...)
+		}
+	}
+	bound, err := code.EntryBound(maximal(web)(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A BATCH HELD ON EACH, so every push after them queues — and each
+	// lead is held too, in its batch.
+	var held int
+	var leads []<-chan answer
+	for i, repo := range []string{web, api} {
+		lead := proposal(repo, update("refs/heads/lead", code.ZeroOID, oidOf("L")))
+		leadBound, err := code.EntryBound(lead)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held += leadBound
+		leads = append(leads, proposeAsync(t.Context(), c, lead))
+		eventually(t, "a lead's publish reaching the gate", func() bool { return gate.calls.Load() == int32(i+1) })
+	}
+
+	acceptedWeb, busyWeb, queuedWeb := fill(t, c, web, maximal(web))
+	if !strings.Contains(busyWeb.Answer.Detail, "for this repository") {
+		t.Fatalf("the first repository's queue was refused %q — it was to meet its own bound, "+
+			"under the node's", busyWeb.Answer.Detail)
+	}
+	held += acceptedWeb * bound
+	if got := code.CommitterHeld(c); got != held {
+		t.Fatalf("the node holds %d bytes, want %d: both leads and every queued push", got, held)
+	}
+
+	acceptedAPI, busyAPI, queuedAPI := fill(t, c, api, maximal(api))
+	switch {
+	case held+acceptedAPI*bound > nodeBytes:
+		t.Fatalf("%d more proposals of %d bytes queued on top of %d held, past the node's %d",
+			acceptedAPI, bound, held, nodeBytes)
+	case held+(acceptedAPI+1)*bound <= nodeBytes:
+		t.Fatalf("busy after %d more proposals of %d bytes on top of %d held, with room for "+
+			"another under the node's %d", acceptedAPI, bound, held, nodeBytes)
+	case (acceptedAPI+1)*bound > code.CommitterInboxBytes:
+		t.Fatalf("the second repository's own bound (%d) was within reach at %d proposals, so "+
+			"this case cannot tell the node's bound from it", code.CommitterInboxBytes, acceptedAPI)
+	case busyAPI.Answer.Refused != code.RefusalBusy:
+		t.Fatalf("the proposal past the node's bytes answered %+v, want busy", busyAPI.Answer)
+	case !strings.Contains(busyAPI.Answer.Detail, "across this node's repositories"):
+		t.Fatalf("the proposal past the node's bytes was refused %q, which does not say the "+
+			"node was full rather than the repository", busyAPI.Answer.Detail)
+	}
+	requireOnePlacement(t, busyAPI.Answer)
+	if got := reading(rec, metrics.CodeCommitBusy).Total; got != 2 {
+		t.Fatalf("the busy counter reads %d, want 2: one per repository refused", got)
+	}
+
+	gate.open()
+	for _, lead := range leads {
+		requireOK(t, await(t, lead))
+	}
+	for _, ch := range append(queuedWeb, queuedAPI...) {
+		if a := await(t, ch); a.err != nil {
+			t.Fatalf("a queued proposal: %v", a.err)
+		}
+	}
+	// RELEASED AS EACH CALLER LEFT, or the node would refuse every push
+	// after its first full burst for as long as it ran.
+	eventually(t, "every answered push released", func() bool { return code.CommitterHeld(c) == 0 })
+}
+
 // fakeClock is a clock a case moves by hand.
 type fakeClock struct {
 	mu sync.Mutex
@@ -602,12 +697,13 @@ func (f *fakeClock) advance(d time.Duration) {
 	f.at = f.at.Add(d)
 }
 
-// A QUEUED PUSH IS NEVER DECIDED PAST ONE BUDGET: a deep queue's tail —
-// pushes still waiting a whole CommitBudget after they arrived, behind a batch
-// in flight and a full one after it — is answered busy, decided by nobody and
-// appended by nobody, because its batch could take another budget and the
-// answer would come after its asker had handed the push to the runner-up.
-// The full batch ahead of it, which waited half a budget, is committed.
+// A QUEUED PUSH IS NEVER DECIDED PAST ONE BUDGET: a deep queue's tail, asked
+// with no deadline — the in-process path — and still waiting a whole
+// CommitBudget after it arrived, behind a batch in flight and a full one after
+// it, is answered busy, decided by nobody and appended by nobody: a push waits
+// at most a budget before its own record is written. The full batch ahead of
+// it, which waited half a budget, is committed. (A caller WITH a deadline is
+// judged by it instead: TestAPushIsJudgedByItsCallersDeadline.)
 func TestAQueuedPushIsNeverDecidedPastOneBudget(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -703,6 +799,234 @@ func TestAPushWhoseCallerWentBeforeItsBatchIsNeverDecided(t *testing.T) {
 	}
 	if got := n.end() - before; got != 2 {
 		t.Fatalf("%d records appended, want 2: the lead and the push that was waited for", got)
+	}
+}
+
+// requireBusyUndecided fails t unless a is a push answered busy with no
+// record, saying why in a sentence that contains says, and its push has no
+// row on n.
+func requireBusyUndecided(t *testing.T, n *node, a answer, pushID, says string) {
+	t.Helper()
+	if a.err != nil || a.res.Outcome != "" || !a.res.Position.IsZero() ||
+		a.res.Answer.Refused != code.RefusalBusy || a.res.Answer.Commands[0].Reason != code.RefusalBusy ||
+		!strings.Contains(a.res.Answer.Detail, says) {
+		t.Fatalf("answered %+v, %v; want busy, undecided, saying %q", a.res, a.err, says)
+	}
+	requireOnePlacement(t, a.res.Answer)
+	if got := n.count(`SELECT COUNT(*) FROM code_pushes WHERE push_id = ?`, pushID); got != 0 {
+		t.Fatalf("a push answered busy has %d rows", got)
+	}
+}
+
+// A PUSH ITS ASKER CANNOT WAIT FOR IS BUSY AT ONCE: a caller whose deadline is
+// nearer than a batch and its answer may take — a routed proposal whose
+// asker's attempt was mostly spent before it arrived — is answered busy
+// without taking a place in the queue, decided by nobody and appended by
+// nobody, because any answer a batch gave it would come after the asker had
+// handed the push to the runner-up.
+func TestAPushItsAskerCannotWaitForIsBusyAtOnce(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo := repoOn(t, n, "web")
+	gate := newGate(n.pub)
+	c, rec := committerOn(t, n, gate)
+	before := n.end()
+
+	// A BATCH IN FLIGHT holds the repository's goroutine, so a push that
+	// took a place in the queue would still hold it when its answer came.
+	lead := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/lead", code.ZeroOID, oidOf("L"))))
+	eventually(t, "the first publish reaching the gate", func() bool { return gate.calls.Load() == 1 })
+	ctx, cancel := context.WithTimeout(t.Context(), code.CommitBudget)
+	defer cancel()
+	p := proposal(repo, update("refs/heads/late", code.ZeroOID, oidOf("T")))
+	res, err := c.Propose(ctx, p)
+	requireBusyUndecided(t, n, answer{res, err}, p.PushID, "stops waiting")
+	if got := code.CommitterQueued(c, repo); got != 0 {
+		t.Fatalf("%d proposals queued, want none: a push nobody can wait for takes no place", got)
+	}
+	gate.open()
+	requireOK(t, await(t, lead))
+	if got := gate.calls.Load(); got != 1 {
+		t.Fatalf("%d publishes, want the lead's alone", got)
+	}
+	if got := n.end() - before; got != 1 {
+		t.Fatalf("%d records appended, want the lead's alone", got)
+	}
+	if got := reading(rec, metrics.CodeCommitBusy).Total; got != 1 {
+		t.Fatalf("the busy counter reads %d, want 1", got)
+	}
+}
+
+// A QUEUED PUSH IS ANSWERED BEFORE ITS ASKER GIVES UP: a push waiting behind a
+// batch that runs long — a broker election holding the record ahead of it —
+// is answered busy WHILE IT WAITS, the moment its caller's deadline leaves no
+// more than a batch and its answer, rather than reaching the head of the queue
+// after its asker had stopped waiting and taken the silence for a dead
+// committer. It is withdrawn undecided: when the batch ahead of it ends, it is
+// neither decided nor appended.
+func TestAQueuedPushIsAnsweredBeforeItsAskerGivesUp(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo := repoOn(t, n, "web")
+	gate := newGate(n.pub)
+	c, rec := committerOn(t, n, gate)
+	before := n.end()
+
+	lead := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/lead", code.ZeroOID, oidOf("L"))))
+	eventually(t, "the first publish reaching the gate", func() bool { return gate.calls.Load() == 1 })
+	ctx, cancel := context.WithTimeout(t.Context(), code.CommitBudget+code.ReplyMargin+200*time.Millisecond)
+	defer cancel()
+	waiting := proposal(repo, update("refs/heads/waiting", code.ZeroOID, oidOf("W")))
+	ch := proposeAsync(ctx, c, waiting)
+	var got answer
+	select {
+	case got = <-ch:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the queued push was not answered while the batch ahead of it held the gate")
+	}
+	requireBusyUndecided(t, n, got, waiting.PushID, "stops waiting")
+	if calls := gate.calls.Load(); calls != 1 {
+		t.Fatalf("%d publishes when the queued push was answered, want the lead's alone", calls)
+	}
+
+	gate.open()
+	requireOK(t, await(t, lead))
+	eventually(t, "the queue drained", func() bool { return code.CommitterQueued(c, repo) == 0 })
+	if got := gate.calls.Load(); got != 1 {
+		t.Fatalf("%d publishes, want the lead's alone: the withdrawn push started no batch", got)
+	}
+	if got := n.end() - before; got != 1 {
+		t.Fatalf("%d records appended, want the lead's alone", got)
+	}
+	if got := n.count(`SELECT COUNT(*) FROM code_pushes WHERE push_id = ?`, waiting.PushID); got != 0 {
+		t.Fatalf("the withdrawn push has %d rows, want none", got)
+	}
+	if got := n.target(repo, "refs/heads/waiting"); got != "" {
+		t.Fatalf("refs/heads/waiting is at %s, want no ref", got)
+	}
+	if got := reading(rec, metrics.CodeCommitBusy).Total; got != 1 {
+		t.Fatalf("the busy counter reads %d, want 1", got)
+	}
+}
+
+// A PUSH IS JUDGED BY ITS CALLER'S DEADLINE, NEVER BY ITS WAIT: one that
+// reaches its batch with too little of its asker's attempt left is answered
+// busy undecided whatever it waited, and one whose asker gave it more than a
+// whole budget's wait is decided — the asker's attempt is the bound, and a
+// wait counted from arrival forgot whatever the asker spent before the push
+// arrived.
+func TestAPushIsJudgedByItsCallersDeadline(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo := repoOn(t, n, "web")
+	gate := newGate(n.pub)
+	c, rec := committerOn(t, n, gate)
+	clock := &fakeClock{at: time.Unix(1_900_000_000, 0)}
+	code.SetCommitterClock(c, clock.now)
+	before := n.end()
+
+	lead := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/lead", code.ZeroOID, oidOf("L"))))
+	eventually(t, "the first publish reaching the gate", func() bool { return gate.calls.Load() == 1 })
+	// Deadlines on the committer's clock: an hour more than a batch and its
+	// answer, and ten hours — so no real timer fires while the case runs.
+	shortCtx, cancelShort := context.WithDeadline(t.Context(),
+		clock.now().Add(code.CommitBudget+code.ReplyMargin+time.Hour))
+	defer cancelShort()
+	longCtx, cancelLong := context.WithDeadline(t.Context(), clock.now().Add(10*time.Hour))
+	defer cancelLong()
+	short := proposal(repo, update("refs/heads/short", code.ZeroOID, oidOf("S")))
+	shortCh := proposeAsync(shortCtx, c, short)
+	eventually(t, "the push queued", func() bool { return code.CommitterQueued(c, repo) == 1 })
+	long := proposeAsync(longCtx, c, proposal(repo, update("refs/heads/long", code.ZeroOID, oidOf("G"))))
+	eventually(t, "the next push queued", func() bool { return code.CommitterQueued(c, repo) == 2 })
+
+	// AN HOUR AND A SECOND behind the lead: the first push's asker stops
+	// waiting inside a batch and its answer; the second's has hours left,
+	// though it waited far past one budget.
+	clock.advance(time.Hour + time.Second)
+	gate.open()
+	requireOK(t, await(t, lead))
+	requireBusyUndecided(t, n, await(t, shortCh), short.PushID, "stops waiting")
+	requireOK(t, await(t, long))
+	if got := n.end() - before; got != 2 {
+		t.Fatalf("%d records appended, want 2: the lead, and the push its asker still waits for", got)
+	}
+	if got := reading(rec, metrics.CodeCommitBusy).Total; got != 1 {
+		t.Fatalf("the busy counter reads %d, want 1", got)
+	}
+}
+
+// A BATCH IS DECIDED PAST WHAT ITS PUSHES WERE CHECKED AGAINST: the receiving
+// node formed a push's commands against the state its own sync read, and the
+// repository's committer — another node — may be behind it. Decided from below
+// it, a command whose old value the client was shown is refused stale and a
+// repository it was shown is refused deleted: definite refusals that are
+// false, and an empty decision the broker never arbitrates. So the committer
+// reaches the push's Seen position before it decides — and, where it cannot
+// within its budget, runs nothing (ErrNotServing), so the router asks the
+// runner-up.
+func TestABatchIsDecidedPastWhatItsPushesWereCheckedAgainst(t *testing.T) {
+	t.Parallel()
+	t.Run("a ref the receiver saw move", func(t *testing.T) {
+		t.Parallel()
+		a, b := newTwoNodes(t)
+		repo := repoOn(t, a, "web")
+		b.drain()
+		a.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/main", oidOf("A"), oidOf("B"))))
+		c, _ := committerOn(t, b, b.pub)
+		p := proposal(repo, update("refs/heads/main", oidOf("B"), oidOf("C")))
+		p.Seen = a.waiter.Committed()
+		res, err := c.Propose(t.Context(), p)
+		requireOK(t, answer{res, err})
+		if got := b.target(repo, "refs/heads/main"); got != oidOf("C") {
+			t.Fatalf("refs/heads/main is at %s on the committer, want %s", got, oidOf("C"))
+		}
+	})
+	t.Run("a repository the receiver saw created", func(t *testing.T) {
+		t.Parallel()
+		a, b := newTwoNodes(t)
+		repo := repoOn(t, a, "web")
+		c, _ := committerOn(t, b, b.pub)
+		p := proposal(repo, update("refs/heads/feature", code.ZeroOID, oidOf("F")))
+		p.Seen = a.waiter.Committed()
+		res, err := c.Propose(t.Context(), p)
+		requireOK(t, answer{res, err})
+	})
+	t.Run("past what the committer reaches in its budget", func(t *testing.T) {
+		t.Parallel()
+		a, b := newTwoNodes(t)
+		repo := repoOn(t, a, "web")
+		b.drain()
+		a.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/main", oidOf("A"), oidOf("B"))))
+		b.hold()
+		c, _ := committerOn(t, b, b.pub)
+		before := b.end()
+		p := proposal(repo, update("refs/heads/main", oidOf("B"), oidOf("C")))
+		p.Seen = a.waiter.Committed()
+		res, err := c.Propose(t.Context(), p)
+		if !errors.Is(err, code.ErrNotServing) {
+			t.Fatalf("a committer behind the push's Seen answered %+v, %v; want ErrNotServing",
+				res, err)
+		}
+		if got := b.end() - before; got != 0 {
+			t.Fatalf("%d records appended, want none", got)
+		}
+	})
+}
+
+// A PROPOSAL'S SEEN IS ON THE CODE LOG: a position on another log names no
+// state of the code host the decide could wait for, so a receiver that formed
+// one is refused by name rather than waited on.
+func TestAProposalSeenOnAnotherLogIsRefused(t *testing.T) {
+	t.Parallel()
+	p := proposal("0190f3c4-0000-7000-8000-00000000c0de", update("refs/heads/main", code.ZeroOID, oidOf("B")))
+	p.Seen = statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 3}
+	if err := p.Validate(); !errors.Is(err, code.ErrInvalidProposal) || !strings.Contains(err.Error(), "seen") {
+		t.Fatalf("Validate: %v; want ErrInvalidProposal naming seen", err)
+	}
+	p.Seen.Stream = code.Domain{}.Stream().Name
+	if err := p.Validate(); err != nil {
+		t.Fatalf("a Seen on the code log: %v", err)
 	}
 }
 

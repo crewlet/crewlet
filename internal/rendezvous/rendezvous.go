@@ -57,12 +57,25 @@
 //
 // # Callers
 //
-// [internal/estate]'s router orders the data nodes it asks by its own node id.
-// The order picks each asker's FIRST data node and every node it fails over
-// to, spread evenly across the data nodes; it does not decide where an asker
-// stays, because the router keeps asking the node that last answered until
-// that node goes silent — so a data node that joins is asked only by askers
-// with no such node yet, or whose node went silent.
+// [internal/estate]'s router, in two walks keyed on two different things.
+//
+// Every operation any data node answers equally is ordered by the ASKER'S OWN
+// node id. The order picks each asker's FIRST data node and every node it
+// fails over to, spread evenly across the data nodes; it does not decide
+// where an asker stays, because the router keeps asking the node that last
+// answered until that node goes silent — so a data node that joins is asked
+// only by askers with no such node yet, or whose node went silent.
+//
+// A push — the one KEYED operation — is ordered by its REPOSITORY'S id over
+// every live data node, the asking node included where it holds the estate,
+// and there the order is the whole decision: no node is stayed on, and the
+// FIRST node is the repository's committer, the one place every asker's
+// pushes to that repository meet, so its group commit holds a burst whole
+// rather than two nodes contending on the repository's one subject. That is
+// what the property above buys this walk: every node computes the same
+// committer from the same set, and a committer that leaves hands each of its
+// repositories to that repository's own runner-up — spread over the
+// survivors, never all of them onto one neighbour.
 //
 // # One implementation, held by a gate
 //

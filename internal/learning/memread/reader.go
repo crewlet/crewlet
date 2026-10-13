@@ -82,7 +82,7 @@ type Asker interface {
 
 // Server makes a process one of a subject's answerers.
 type Server interface {
-	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
+	Serve(ctx context.Context, subject string, answers int, h queue.AnswerFunc) (queue.Unsubscribe, error)
 }
 
 // Reader answers a seat's memory from the node that holds the seat.
@@ -309,7 +309,7 @@ var errNotAddressed = errors.New("memread: the read is addressed to another inca
 func Serve(ctx context.Context, q Server, owner string, attached func() []string,
 	local *Stores,
 ) (queue.Unsubscribe, error) {
-	return q.Serve(ctx, topics.HeldRead, func(ctx context.Context, raw []byte) ([]byte, error) {
+	return q.Serve(ctx, topics.HeldRead, queue.ConcurrentAnswers, func(ctx context.Context, raw []byte) ([]byte, error) {
 		var req request
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, fmt.Errorf("memread: a request this build cannot read: %w", err)

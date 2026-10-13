@@ -20,10 +20,11 @@
 // node's copy, a node whose copy of a domain was out of service answered its
 // operator from the very copy it had stopped serving its seats from.
 //
-// # One subject per serving node, never a scatter
+// # One node per request, never a scatter
 //
-// The request goes to exactly one node — `crewlet.estate.<node>` — over the
-// queue's ephemeral request/reply verbs. A scatter would run a write on every
+// The request goes to exactly one node — `crewlet.estate.<node>`, or for a
+// push's proposal that node's proposal subject (below) — over the queue's
+// ephemeral request/reply verbs. A scatter would run a write on every
 // data node, and a queue group would let the BROKER pick which node answers,
 // which leaves the router unable to say which node it asked when the answer
 // does not come: a failover that retries a write on "whoever answers next" is
@@ -31,8 +32,9 @@
 // this node first where its copy serves, then the node that answered the
 // operation's domain last, then the order [internal/rendezvous] gives this
 // node's own id, with a node whose copy of that domain said it is out of
-// service after the rest and a node that went silent last — and the failover
-// rule is stated per operation (see [opClass]).
+// service after the rest and a node that went silent last; a push alone is
+// asked in its repository's order instead (below) — and the failover rule is
+// stated per operation (see [opClass]).
 //
 // # What makes a retry safe, per operation
 //
@@ -47,7 +49,59 @@
 // copy (a create whose title is now taken). An unanswered page write is
 // therefore NEVER repeated, and is reported as [ErrOutcomeUnknown] — which is
 // the honest answer, and the one a tool turns into "read the page before
-// writing again".
+// writing again". A PUSH carries its push id, a UUIDv7 the receiving node
+// minted once, which the committer's decide collapses onto the push's row — so
+// it moves on as a tracker write does.
+//
+// # A push is asked of its repository's committer
+//
+// Every other operation is asked of THIS node first and then of the node that
+// answered last: any data node's copy answers it equally, and the sticky node
+// is the one most likely to hold this node's writes. A push is different. Its
+// decide is a compare-and-set on the repository's ONE subject, and every node
+// that decides pushes to one repository contends on it: two committers each
+// holding part of a burst lose rounds to each other, and every round one
+// loses costs it a re-decide and a re-append of its WHOLE batch, where one
+// committer holding the whole burst loses none and commits it in a few
+// records (the code domain's group commit). So `code.propose` is asked of the
+// repository's COMMITTER — the first node in [rendezvous.Order] of the
+// repository's id over every live data node, which every node computes alike
+// from the same set — and of that repository's own runner-up when it runs
+// nothing. No sticky node: the key decides, not the last answerer. A committer
+// that dies hands each of its repositories to that repository's runner-up,
+// spread across the survivors. Two nodes with different views of the fleet
+// both commit SAFELY — the subject's compare-and-set lets one record land per
+// round and push ids collapse duplicates — only less efficiently, until their
+// views agree.
+//
+// This is the one KEYED operation today; [op.keyedBy] is the declaration, and
+// the walk is the ordinary one in every other respect — the floors, the
+// verdict of the operation's own domain, the lagging last resort, and the
+// class rule for a node that may have run it. A data node asks its own copy at
+// its place in the key's order, in-process, never ahead of the node the key
+// prefers; and a committer that refuses before it appends anything — stopping,
+// a node in a maintenance mode, a refusal about this node — ran nothing, so
+// the runner-up is asked with the same push id. A committer answers INSIDE THE
+// ATTEMPT that asked it, whose end the request carries: it starts a push's
+// batch only while a whole batch and its answer still fit before that end, and
+// answers it busy, undecided, the moment they do not — so an asker never hands
+// a push to the runner-up while the first committer is still deciding it.
+//
+// And a data node answers proposals on a LANE OF THEIR OWN — its own subject,
+// `crewlet.estate.<node>.proposals`, and its own answer slots — because a
+// proposal WAITS: queued behind its repository's earlier pushes, then for its
+// batch, it holds the slot it was answered through for as long as its asker's
+// attempt, and a registration's requests wait behind every answer holding one
+// of its slots. On the one registration every other operation is answered
+// through, sixty-four queued pushes held every slot the node had: it answered
+// no read, no other write and no git fetch's resolve until a batch ended, its
+// readers marked it suspect for every domain, and an election that stalled
+// the code log spread that across every committer with pushes in flight. The
+// lane is as wide as one repository's committer holds (its queue and the batch
+// ahead of it), so a burst meets the committer's own bounds — busy at once —
+// never the lane's. A lane answers only the operations declared on it
+// ([op.answeredOn]) and says so to any other, so the separation does not
+// depend on every asker keeping it.
 //
 // A node that answers "I did not run it" — its copy of the operation's domain
 // is out of service, it runs no native backend, that copy lags its log, or it

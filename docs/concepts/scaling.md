@@ -153,6 +153,38 @@ flowchart TD
   by askers with no such node yet or whose node went silent, and after a
   rolling restart each restarted node's askers stay on the node they failed
   over to.
+- **A push to a repository the engine hosts is the one exception**: it is
+  asked of that repository's **committer** — the first live data node in a
+  rendezvous order keyed on the repository rather than on the asking node,
+  which every node computes alike — whichever node received it, and a data
+  node's own copy is asked only at its place in that order. A repository's
+  pushes are decided against its one record of refs, so they all meet at one
+  committer, which puts a burst of them into a few records instead of two
+  committers each losing rounds to the other; the repositories spread across
+  the data nodes. A committer that is silent, stopping or otherwise runs
+  nothing hands the push, with the same push id, to that repository's
+  runner-up, and a node that said in the last thirty seconds that its copy is
+  out of service, or went silent, is asked after the rest as for any other
+  operation. Nobody's last answer moves a push anywhere else. A committer
+  answers inside the minute the asking node gives it: a push still queued
+  when a whole batch and its answer would no longer fit — or one that reaches
+  the committer with too little of that minute left, spent waiting for the
+  node to take it, for the node to catch up with the asking node's own writes,
+  or under a caller's shorter deadline — is answered `busy` rather than
+  decided late — the client runs `git push` again — so an asker never hands a
+  push to the runner-up while the first committer is still deciding it, and a
+  committer behind what the receiving node showed the client catches up
+  before it decides rather than refusing the push as stale. A data node takes
+  pushes on a channel of their own, as wide as one repository's whole queue
+  (1 024 pushes and the batch ahead of them), because a push holds its place
+  there until its batch is decided: pushes waiting out a slow batch never hold
+  up the node's reads, its other writes or a git fetch's lookup of a
+  repository, and a burst to one repository is answered `busy` by the
+  committer past its queue rather than left waiting unseen for a place. The
+  node also refuses a push `busy` once the pushes it holds across all its
+  repositories weigh sixty-four records — about 64 MiB — so a burst of very
+  large pushes (an import's thousand-ref chunks) to many repositories at once
+  is bounded on every committer.
 - **A node that ran nothing is passed over, whatever the operation**: one whose
   copy of the operation's log is out of service (`out_of_service`), whose copy
   of it lags that log (asked again last), or that is behind the caller's floor.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/search"
@@ -78,6 +79,26 @@ var sentinels = []sentinel{
 	{"search.ErrIndexBuilding", search.ErrIndexBuilding},
 	{"search.ErrNoMethods", search.ErrNoMethods},
 
+	// THE CODE HOST'S, every one of them — ErrBadBundle and ErrSuperseded
+	// included, though neither is answered across the wire today (a bad
+	// bundle never leaves the receiving node; a superseded reconcile is the
+	// deciding node's own) — for the reason the list is complete at all.
+	{"code.ErrBadBundle", code.ErrBadBundle},
+	{"code.ErrBadCursor", code.ErrBadCursor},
+	{"code.ErrBadLevel", code.ErrBadLevel},
+	{"code.ErrInvalid", code.ErrInvalid},
+	{"code.ErrInvalidProposal", code.ErrInvalidProposal},
+	{"code.ErrNoActivation", code.ErrNoActivation},
+	{"code.ErrNotConfigManaged", code.ErrNotConfigManaged},
+	{"code.ErrNotDeleted", code.ErrNotDeleted},
+	{"code.ErrNotServing", code.ErrNotServing},
+	{"code.ErrNotYet", code.ErrNotYet},
+	{"code.ErrPurging", code.ErrPurging},
+	{"code.ErrRecordCap", code.ErrRecordCap},
+	{"code.ErrRepoNotFound", code.ErrRepoNotFound},
+	{"code.ErrSnapshotMoved", code.ErrSnapshotMoved},
+	{"code.ErrSuperseded", code.ErrSuperseded},
+
 	{"statelog.ErrAheadOfLog", statelog.ErrAheadOfLog},
 	{"statelog.ErrConflict", statelog.ErrConflict},
 	{"statelog.ErrEstateNotRestored", statelog.ErrEstateNotRestored},
@@ -126,6 +147,8 @@ var typedKinds = []typedKind{
 	{"search.ErrFutureVersion", reflect.TypeFor[*search.ErrFutureVersion]()},
 
 	{"usage.ErrFutureVersion", reflect.TypeFor[*usage.ErrFutureVersion]()},
+
+	{"code.ErrFutureVersion", reflect.TypeFor[*code.ErrFutureVersion]()},
 
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},
 	{"statelog.EvictionRefusal", reflect.TypeFor[*statelog.EvictionRefusal]()},

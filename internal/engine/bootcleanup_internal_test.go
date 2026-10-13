@@ -93,10 +93,10 @@ type servedQueue struct {
 // subject: a search answerer and the estate server are different claims on
 // the fleet, and a count of both together would let one leak while the other
 // was withdrawn twice.
-func (q *servedQueue) Serve(ctx context.Context, subject string,
+func (q *servedQueue) Serve(ctx context.Context, subject string, answers int,
 	fn queue.AnswerFunc) (queue.Unsubscribe, error) {
 
-	stop, err := q.Queue.Serve(ctx, subject, fn)
+	stop, err := q.Queue.Serve(ctx, subject, answers, fn)
 	if err != nil {
 		return nil, err
 	}
@@ -177,10 +177,14 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve the node id: %v", err)
 	}
-	served, withdrawn = watched.counts(estate.Subject(nodeID))
-	if served != 1 || withdrawn != 1 {
-		t.Errorf("the estate server was registered %d time(s) and withdrawn %d, "+
-			"want once each", served, withdrawn)
+	// BOTH OF ITS LANES: a node left answering proposals for repositories
+	// it commits for would decide pushes from a runtime being torn down.
+	for _, subject := range []string{estate.Subject(nodeID), estate.ProposalSubject(nodeID)} {
+		served, withdrawn = watched.counts(subject)
+		if served != 1 || withdrawn != 1 {
+			t.Errorf("the estate server's %s was registered %d time(s) and withdrawn %d, "+
+				"want once each", subject, served, withdrawn)
+		}
 	}
 	served, withdrawn = watched.counts(topics.ObserveRead)
 	if served != 1 {

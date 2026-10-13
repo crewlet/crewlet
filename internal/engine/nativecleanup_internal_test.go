@@ -70,9 +70,11 @@ type deafQueue struct{ *dialQueue }
 
 // Serve refuses the slice subject, which is where startNative's registration
 // fails, and registers every other answerer for real.
-func (q *deafQueue) Serve(ctx context.Context, subject string, fn queue.AnswerFunc) (queue.Unsubscribe, error) {
+func (q *deafQueue) Serve(ctx context.Context, subject string, answers int,
+	fn queue.AnswerFunc) (queue.Unsubscribe, error) {
+
 	if subject != search.SliceSubject {
-		return q.dialQueue.Serve(ctx, subject, fn)
+		return q.dialQueue.Serve(ctx, subject, answers, fn)
 	}
 	return nil, errors.New("jetstream: this broker registers no answerer")
 }

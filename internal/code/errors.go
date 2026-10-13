@@ -44,12 +44,15 @@ var (
 	// the push — the receiver formed it, so it is the receiver's bug.
 	ErrInvalidProposal = errors.New("code: not a push this domain can decide")
 
-	// ErrNotServing is a committer that decided nothing for this proposal
-	// and appended nothing: it is stopping, or the code log refused this
-	// NODE before anything was appended (an eviction, a record it cannot
-	// decode, a floor it is below). Another data node can commit the same
-	// push under the same push id, which collapses a repeat.
-	ErrNotServing = errors.New("code: this node's committer is not serving")
+	// ErrNotServing is a node's code half that RAN NOTHING: a committer that
+	// decided nothing for this proposal and appended nothing — it is
+	// stopping, its node publishes nothing (a maintenance mode, [Served]),
+	// or the code log refused this NODE before anything was appended (an
+	// eviction, a record it cannot decode, a floor it is below) — or a half
+	// holding no reader to answer from. Another data node can commit the
+	// same push under the same push id, which collapses a repeat, and can
+	// answer the same read; the estate router asks it.
+	ErrNotServing = errors.New("code: this node is not serving the code host")
 
 	// ErrRecordCap is a decision past a record's byte or row budget — which
 	// the committer's batching keeps from ever forming; the check makes the

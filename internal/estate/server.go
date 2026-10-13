@@ -19,12 +19,13 @@ var log = logging.Get("estate")
 
 // Server is what a queue answerer needs to register.
 type Server interface {
-	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
+	Serve(ctx context.Context, subject string, answers int, h queue.AnswerFunc) (queue.Unsubscribe, error)
 }
 
-// Serve makes this node answer the fleet on its own subject, from its own copy
-// of the estate — and `out_of_service` for the operations of a domain whose
-// copy is wrong (ADR-0031).
+// Serve makes this node answer the fleet on its own subjects, one a [lane],
+// from its own copy of the estate — and `out_of_service` for the operations of
+// a domain whose copy is wrong (ADR-0031). The returned withdrawal ends every
+// lane.
 //
 // EVERY DATA NODE SERVES, whether or not any other node asks yet, and from
 // BEFORE its runtime is up: a node joins without anybody reconfiguring the
@@ -32,6 +33,11 @@ type Server interface {
 // asked failing for however long that took. The backend is resolved per
 // request, so one that arrives before the runtime is answered "not here"
 // rather than refused for ever.
+//
+// EVERY LANE OR NONE: a lane that cannot be registered withdraws the ones
+// before it, because a node that answered its reads and no proposal would be
+// asked first for every push to the repositories it commits for, and cost
+// each one a whole write attempt before the runner-up.
 func Serve(ctx context.Context, q Server, self string, local LocalBackends,
 	seams ServerSeams) (queue.Unsubscribe, error) {
 
@@ -42,9 +48,31 @@ func Serve(ctx context.Context, q Server, self string, local LocalBackends,
 		return nil, errors.New("estate: serve needs this node's id — it is the subject other nodes ask")
 	}
 	srv := server{self: self, local: local, seams: seams}
-	return q.Serve(ctx, Subject(self), func(ctx context.Context, raw []byte) ([]byte, error) {
-		return srv.answer(ctx, raw), nil
-	})
+	stops := make([]queue.Unsubscribe, 0, len(lanes))
+	withdraw := func(ctx context.Context) error {
+		var errs []error
+		for _, stop := range slices.Backward(stops) {
+			errs = append(errs, stop(ctx))
+		}
+		return errors.Join(errs...)
+	}
+	for _, l := range lanes {
+		stop, err := q.Serve(ctx, l.subject(self), l.answers(),
+			func(ctx context.Context, raw []byte) ([]byte, error) {
+				return srv.answer(ctx, l, raw), nil
+			})
+		if err != nil {
+			// A ROLLBACK, so it takes a context the failure cannot
+			// have ended: each answer it waits for is bounded by its
+			// own request's deadline.
+			if undo := withdraw(context.WithoutCancel(ctx)); undo != nil {
+				err = errors.Join(err, undo)
+			}
+			return nil, fmt.Errorf("estate: serve %s on %s: %w", l, l.subject(self), err)
+		}
+		stops = append(stops, stop)
+	}
+	return withdraw, nil
 }
 
 // server is one node's serving half.
@@ -54,11 +82,11 @@ type server struct {
 	seams ServerSeams
 }
 
-// answer runs one request and ALWAYS answers: a node that stayed silent
-// would be indistinguishable from one that is down, and the asker would wait
-// out its budget before trying the next — so every failure here, down to a
-// request this build cannot decode, is an answer that says so.
-func (s server) answer(ctx context.Context, raw []byte) []byte {
+// answer runs one request that arrived on lane l and ALWAYS answers: a node
+// that stayed silent would be indistinguishable from one that is down, and the
+// asker would wait out its budget before trying the next — so every failure
+// here, down to a request this build cannot decode, is an answer that says so.
+func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	out := reply{Node: s.self}
 	var req request
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -73,6 +101,19 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 		// can.
 		out.Unserved, out.Detail = unservedNoBackend,
 			fmt.Sprintf("%s does not know the operation %q", s.self, req.Op)
+		return encodeReply(out)
+	}
+	if spec.lane != l {
+		// ANSWERED ONLY ON ITS OWN LANE, whatever the asker sent: run
+		// here, a proposal would hold a slot every read waits for, or a
+		// read one a proposal does — the separation is the server's to
+		// keep, so it does not depend on every asker keeping it.
+		// Unserved, like an operation this build does not know, so an
+		// asker whose build declares the lane differently moves on to a
+		// node that agrees with it.
+		out.Unserved, out.Detail = unservedNoBackend, fmt.Sprintf(
+			"%s answers %s on %s (%s), and it was asked on %s", s.self, req.Op, spec.lane,
+			spec.lane.subject(s.self), l)
 		return encodeReply(out)
 	}
 	if !req.Deadline.IsZero() {
@@ -111,8 +152,7 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 	out.Written = written.list()
 	switch {
 	case errors.Is(err, errNoHalf):
-		out.Unserved, out.Detail = unservedNoBackend, fmt.Sprintf(
-			"%s runs no native backend for %s", s.self, req.Op)
+		out.Unserved, out.Detail = unservedNoBackend, ranNothingDetail(s.self, req.Op, err)
 		return encodeReply(out)
 	case errors.Is(err, errNotAdmitting):
 		out.Unserved, out.Detail = unservedNotEstablished, fmt.Sprintf(

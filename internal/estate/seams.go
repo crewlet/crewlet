@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -636,4 +637,56 @@ func allPages[R any](ctx context.Context,
 // of company days, on every node.
 func (u Usage) ReadsElided(ctx context.Context, from, to string) (int64, error) {
 	return call(ctx, u.r, opUsageReadsElided, nil, readsElidedArgs{From: from, To: to})
+}
+
+// CodeSeam is the code host's reach into the estate, from every node: a push's
+// proposal to its repository's committer, and the reads the host's admission,
+// a cache's sync and the REST routes make — each answered by a data node whose
+// copy of the code log serves, this one where it does. Its consumers declare
+// what they call of it.
+//
+// ONLY THIS NODE'S OWN WRITES RAISE ITS FLOOR: a proposal that landed, and a
+// push this node proposed found landed. A read's position is somebody else's
+// writes, and observing it would hold every later read this node routes — a
+// `stale` one included — behind the newest linearizable read anybody on the
+// node made, which is the tracker's and the knowledge base's rule too.
+type CodeSeam struct{ r *Router }
+
+// Code answers the code host.
+func (r *Router) Code() CodeSeam { return CodeSeam{r: r} }
+
+// Propose asks the repository's committer to decide a push, and raises this
+// node's session floor past the record it landed in — this node's own write,
+// which its next read of the repository must see on whichever node answers.
+func (c CodeSeam) Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error) {
+	out, err := call(ctx, c.r, opCodePropose, nil, p)
+	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
+		c.r.Observe(out.Position)
+	}
+	return out, err
+}
+
+// Resolve answers a repository by its name.
+func (c CodeSeam) Resolve(ctx context.Context, q code.ResolveQuery) (code.RepoRef, error) {
+	return call(ctx, c.r, opCodeResolve, nil, q)
+}
+
+// RepoState answers one page of a repository's snapshot.
+func (c CodeSeam) RepoState(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error) {
+	return call(ctx, c.r, opCodeRepoState, nil, q)
+}
+
+// PushOutcome answers whether a push this node proposed landed — and, where it
+// did, raises this node's floor past it, for [CodeSeam.Propose]'s reason.
+func (c CodeSeam) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error) {
+	out, err := call(ctx, c.r, opCodePushOutcome, nil, q)
+	if out.Found {
+		c.r.Observe(out.Push.Position)
+	}
+	return out, err
+}
+
+// Read answers a person's or a surface's read of the code host.
+func (c CodeSeam) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	return call(ctx, c.r, opCodeRead, nil, q)
 }

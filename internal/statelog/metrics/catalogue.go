@@ -586,14 +586,23 @@ func Catalogue() []Instrument {
 		},
 		{
 			Name: CodeCommitBusy, Kind: KindCounter, Unit: UnitCount,
-			Shows: "Pushes refused `busy`: a repository taking pushes faster " +
-				"than one node's committer commits them (its queue of 1 024 " +
-				"pushes, or sixteen records' bytes, is full, or a push waited " +
-				"the whole 30-second commit budget behind earlier ones), or a " +
-				"record that lost every compare-and-set round it may take. The " +
-				"client runs `git push` again. No repository is an attribute — " +
-				"which one is hot is a question for its rows, not a time series " +
-				"a repository.",
+			Shows: "Pushes refused `busy`, undecided — the client runs `git " +
+				"push` again — for one of three causes that point at different " +
+				"remedies. A BACKLOG: a repository taking pushes faster than one " +
+				"node's committer commits them (its queue of 1 024 pushes, or " +
+				"sixteen records' bytes, is full), or the node holding sixty-four " +
+				"records' bytes of pushes across its repositories. A DEADLINE, " +
+				"either way round: a push that waited behind earlier ones until " +
+				"its asker's attempt had no more left than the 30-second commit " +
+				"budget and a second for the answer, or one that ARRIVED with no " +
+				"more than that left — the attempt spent before it reached the " +
+				"committer, waiting for the node to take it (its proposal slots " +
+				"full), for the node to reach the asker's own writes, or under a " +
+				"caller deadline shorter than 31 seconds; asked with no deadline, " +
+				"a push that waited that budget whole. Or a record that lost " +
+				"every compare-and-set round it may take. No repository is an " +
+				"attribute — which one is hot is a question for its rows, not a " +
+				"time series a repository.",
 		},
 		// ---- git ------------------------------------------------------
 		{
