@@ -35,7 +35,10 @@
 //     ([llm.Message.Binding]), because a field one host emits is one another
 //     may refuse. Once a turn going back carries reasoning_content, every
 //     other turn carries an empty one, because a missing one is what Moonshot
-//     refuses. replay.go has the vendors' rules and the stream's merge.
+//     refuses; and a step Gemini 3 did not write goes to Google with the
+//     value Google documents in place of a thought signature, because a
+//     missing one is a 400 (foreign.go). replay.go has the vendors' rules and
+//     the stream's merge.
 package openai
 
 import (
@@ -146,6 +149,9 @@ type Provider struct {
 	// binding is this endpoint's identity, which a turn's kept reasoning is
 	// bound to and replayed only under — see [endpointBinding].
 	binding string
+	// google is whether the endpoint is one of Google's own, which holds a
+	// turn it did not write to a thought signature — see foreign.go.
+	google bool
 
 	// noStream latches once this endpoint has answered a streaming request
 	// without streaming. Atomic: one Provider serves every seat
@@ -205,6 +211,7 @@ func New(cfg Config) (*Provider, error) {
 		effort:    shared.ReasoningEffort(cfg.ReasoningEffort),
 		timeout:   timeout,
 		binding:   endpointBinding(baseURL),
+		google:    googleEndpoint(baseURL),
 	}, nil
 }
 
@@ -593,7 +600,7 @@ func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) 
 		return sdk.ChatCompletionNewParams{}, fmt.Errorf("request effort %q is not a level (want one of low, "+
 			"medium, high, xhigh, max, or empty)", req.Effort)
 	}
-	messages, err := formatMessages(req.Messages, p.binding)
+	messages, err := p.formatMessages(req.Messages)
 	if err != nil {
 		return sdk.ChatCompletionNewParams{}, err
 	}
@@ -655,19 +662,22 @@ func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) 
 	return params, nil
 }
 
-// formatMessages renders the conversation for the endpoint whose identity is
-// binding. Every turn is built from the neutral view; an assistant turn this
-// endpoint wrote also carries back, in the host's own fields, the reasoning it
-// came with ([replay]) — and a turn any other endpoint or backend wrote
-// carries none, because its fields are not this host's to read. Once a turn
-// going back carries reasoning_content, every assistant turn does, the empty
-// string where it has none ([speaksReasoningContent]).
-func formatMessages(messages []llm.Message, binding string) ([]sdk.ChatCompletionMessageParamUnion, error) {
-	records, err := replays(messages, binding)
+// formatMessages renders the conversation for this endpoint. Every turn is
+// built from the neutral view; an assistant turn this endpoint wrote also
+// carries back, in the host's own fields, the reasoning it came with
+// ([replay]) — and a turn any other endpoint or backend wrote carries none,
+// because its fields are not this host's to read. Once a turn going back
+// carries reasoning_content, every assistant turn does, the empty string where
+// it has none ([speaksReasoningContent]); and where the host holds every step
+// to a thought signature, a step that has none carries the value Google
+// documents for one it did not write ([Provider.signsSteps], foreign.go).
+func (p *Provider) formatMessages(messages []llm.Message) ([]sdk.ChatCompletionMessageParamUnion, error) {
+	records, err := replays(messages, p.binding)
 	if err != nil {
 		return nil, err
 	}
 	emptyReasoning := speaksReasoningContent(records)
+	signing := p.signsSteps(records)
 	out := make([]sdk.ChatCompletionMessageParamUnion, 0, len(messages))
 	for i, m := range messages {
 		switch m.Role {
@@ -732,6 +742,11 @@ func formatMessages(messages []llm.Message, binding string) ([]sdk.ChatCompletio
 			}
 			if _, carried := extra[reasoningContentField]; emptyReasoning && !carried {
 				extra[reasoningContentField] = ""
+			}
+			if signing {
+				if err := signStep(&msg); err != nil {
+					return nil, err
+				}
 			}
 			if len(extra) > 0 {
 				msg.SetExtraFields(extra)

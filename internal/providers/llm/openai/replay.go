@@ -85,7 +85,9 @@ import (
 // reasoning into a conversation that has moved to another. A turn another
 // endpoint wrote is rebuilt from the neutral view without its reasoning, as a
 // turn another backend wrote always was (with the empty reasoning_content of
-// the paragraph above, where the host speaks it).
+// the paragraph above, where the host speaks it, and the thought signature
+// Google documents for a call it did not generate, where the host holds every
+// step to one — foreign.go).
 //
 // THE SCOPE IS THE CONVERSATION, and a conversation here is one phase's tool
 // loop: nothing in this engine replays an assistant turn into a later turn's
