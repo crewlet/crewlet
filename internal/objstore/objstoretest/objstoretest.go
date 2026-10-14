@@ -859,6 +859,12 @@ func aBatchDeletionRemovesExactlyItsNames(t *testing.T, b objstore.Backend, opts
 	if err := d.DeleteBatch(t.Context(), nil); err != nil {
 		t.Fatalf("DeleteBatch of no names: %v", err)
 	}
+	// A LISTING BEFORE THE DELETION, as the collector's comes before its
+	// batches: a backend that answers a listing from an index it built
+	// must forget what a batch deletes, or the next listing names objects
+	// that are gone — the collector's second pass, an audit — while every
+	// read of them answers not found.
+	listed(t, b)
 	if err := d.DeleteBatch(t.Context(), doomed); err != nil {
 		t.Fatalf("DeleteBatch of %d names: %v", len(doomed), err)
 	}

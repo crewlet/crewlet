@@ -825,7 +825,13 @@ func (s *Server) deleteObjects(w http.ResponseWriter, r *http.Request) {
 			out.Errors = append(out.Errors, deleteError{Key: o.Key, Code: code, Message: code})
 			continue
 		}
-		delete(s.objects, o.Key)
+		if _, ok := s.objects[o.Key]; ok {
+			// THE LISTING'S INDEX FORGETS IT TOO, as every other write
+			// that changes the keys makes it: built before this request,
+			// it would go on naming a key no read can find.
+			delete(s.objects, o.Key)
+			s.sorted = nil
+		}
 		if !req.Quiet {
 			out.Deleted = append(out.Deleted, deletedKey{Key: o.Key})
 		}
