@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/configplane"
 )
 
 // A COMPANY APPLIED AFTER BOOT IS SERVED WHOLE: every native surface the API
@@ -274,7 +275,20 @@ code:
 		status int
 		body   string
 		after  string
+		// read is whether this node has answered anything but "not
+		// hosted" since the activation — evidence its reconcile tick has
+		// read it.
+		read bool
 	)
+	// THE WINDOW THE CONTRACT ALLOWS (engine.CodeUnserved): until this
+	// node's reconcile tick reads the activation — milliseconds on the nudge
+	// it broadcasts, a reconcile interval at most — the node answers by the
+	// activation it last read, which hosted no code. So a 404 is the node's
+	// honest answer until then, and the walk-back this case exists to catch
+	// only after it: once the node has answered anything else, or once a
+	// tick must have read it — one interval for the tick to come round and
+	// one more for a tick already in flight to finish.
+	activated := time.Now()
 	for deadline := time.Now().Add(60 * time.Second); ; time.Sleep(20 * time.Millisecond) {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, n.base+"/code/repos", nil)
 		if err != nil {
@@ -296,7 +310,10 @@ code:
 		if refusal.Reason == "config_apply_failed" {
 			break
 		}
-		if status == http.StatusNotFound || time.Now().After(deadline) {
+		unread := status == http.StatusNotFound && !read &&
+			time.Since(activated) < 2*configplane.ReconcileInterval
+		read = read || status != http.StatusNotFound
+		if status == http.StatusNotFound && !unread || time.Now().After(deadline) {
 			t.Fatalf("GET /code/repos on a node whose code host could not start = %d %s, want 503 "+
 				"naming config_apply_failed", status, body)
 		}
