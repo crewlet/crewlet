@@ -117,6 +117,17 @@ type knobs struct {
 	// adoptSync, when set, is the directory sync an adoption's links are
 	// made durable by, in place of the real one: a case makes it fail.
 	adoptSync func(dir string) error
+	// fileSync, when set, makes a downloaded file durable in place of
+	// (*os.File).Sync: a case watches which syncs are in flight together,
+	// and what is already in objects/pack while they are.
+	fileSync func(f *os.File) error
+	// staged runs once a round has made a bundle's three files, as it hands
+	// the pack to its worker: a case reads the order the round made them in.
+	staged func(object objstore.Key)
+	// asking runs as a round's worker is about to ask for its GET, its
+	// bundle's files made: a case holds one pack there while the round's
+	// others are free to ask before it.
+	asking func(object objstore.Key)
 }
 
 // validate refuses an Options value naming the field and what to set,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/objstore"
 )
 
 // The suite's knobs into the cache: the background loops' steps run
@@ -231,6 +232,46 @@ func BuffersOut(c *Cache) (now, most int64) { return c.fetches.out.Load(), c.fet
 
 // SlotWaiters is how many downloads wait for one of the node's slots.
 func SlotWaiters(c *Cache) int64 { return c.fetches.waiting.Load() }
+
+// InHand is how many packs the node holds in hand now, and the most it has
+// held at once.
+func InHand(c *Cache) (now, most int64) { return c.fetches.held.Load(), c.fetches.mostHeld.Load() }
+
+// HandWaiters is how many of the node's downloads wait for a pack in hand.
+func HandWaiters(c *Cache) int64 { return c.fetches.handWaiting.Load() }
+
+// FileSyncWith makes the cache Open builds make every downloaded file
+// durable through fn in place of (*os.File).Sync.
+func FileSyncWith(fn func(f *os.File) error) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.fileSync = fn
+	}
+}
+
+// StagedWith makes the cache Open builds call fn with a bundle's object once
+// its round has made the bundle's files, as it hands the pack to its worker.
+func StagedWith(fn func(object objstore.Key)) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.staged = fn
+	}
+}
+
+// AskingWith makes the cache Open builds call fn with a bundle's object as
+// its worker is about to ask for its GET, the bundle's files made.
+func AskingWith(fn func(object objstore.Key)) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.asking = fn
+	}
+}
 
 // Repos is every repository the cache holds, with its current incarnation's
 // number.

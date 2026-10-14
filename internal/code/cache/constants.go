@@ -47,10 +47,11 @@ const EvictInterval = time.Minute
 // no second limiter: the allowance already bounds what a large read takes.
 //
 // A SLOT IS ONE GET AND ITS COPY BUFFER, and nothing more: the buffer is
-// handed out with the slot and back with it, and the slot goes back the
-// moment the store's reader closes, before the install's checks and fsyncs.
-// So the node's download memory is NodeFetches copy buffers — 8 MiB — however
-// many syncs wait for one, and its GET rate is never spent on its disk.
+// handed out with the slot and back with it, the slot is taken only once the
+// bundle's files exist, and it goes back the moment the store's reader
+// closes, before the install's checks, syncs and renames. So the node's
+// download memory is NodeFetches copy buffers — 8 MiB — however many syncs
+// wait for one, and its GET rate is never spent on its disk.
 const NodeFetches = httpx.MaxIdleConnsPerHost
 
 // FetchConcurrency is how many of NodeFetches one repository's sync takes:

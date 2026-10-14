@@ -19,9 +19,11 @@ import (
 // a round installing a thousand packs into objects/pack — pays ONE directory
 // sync, not one a file: each sync is a journal commit, and paid a rename it
 // made every rename about nine times dearer (the package doc's Measured
-// section). A reader — a git process that already opened the old file —
-// keeps its descriptor; a new one opens the whole new file or the whole old
-// one, never a half.
+// section). A downloaded pack's three files are synced AT ONCE, beside every
+// other pack its round is placing meanwhile (install.go's placePack), so their
+// syncs share journal commits rather than each paying one. A reader — a git
+// process that already opened the old file — keeps its descriptor; a new one
+// opens the whole new file or the whole old one, never a half.
 //
 // The one file written otherwise is CACHEDIR.TAG, in place and first, before
 // tmp/ exists (writeTag says why).

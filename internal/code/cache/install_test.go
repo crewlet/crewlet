@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -77,7 +78,8 @@ func TestEveryCacheOnANodeSharesItsFetches(t *testing.T) {
 // a node slot and taken back with it, so however many repositories' rounds
 // wait for one — a node that just joined a fleet, asked for every repository
 // at once — the node holds NodeFetches buffers, never one for every round's
-// every worker. A round waiting for a slot holds no buffer at all.
+// every worker. A round waiting for a slot, or for a pack in hand before it,
+// holds no buffer at all.
 func TestTheNodesDownloadBuffersAreItsSlots(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -94,10 +96,12 @@ func TestTheNodesDownloadBuffersAreItsSlots(t *testing.T) {
 	// other four each wait for one.
 	cache.SetNodeFetches(c, 2)
 	cache.SetFetchConcurrency(c, 1)
-	release := make(chan struct{})
-	w.objects.hold = func(objstore.Key) <-chan struct{} { return release }
+	held := make(chan struct{})
+	release := sync.OnceFunc(func() { close(held) })
+	t.Cleanup(release) // before the cache's Stop, which waits for the rounds
+	w.objects.hold = func(objstore.Key) <-chan struct{} { return held }
 	var wg sync.WaitGroup
-	for _, repo := range repos {
+	start := func(repo string) {
 		wg.Go(func() {
 			s, err := c.Sync(t.Context(), repo, linearizable)
 			if err != nil {
@@ -107,15 +111,30 @@ func TestTheNodesDownloadBuffersAreItsSlots(t *testing.T) {
 			s.Release()
 		})
 	}
-	// Two rounds' downloads hold the node's two slots, and every other round
-	// waits for one.
-	eventually(t, "two downloads held and four rounds waiting for a slot", func() bool {
-		return w.objects.open() == 2 && cache.SlotWaiters(c) == 4
+	// Two rounds' downloads hold the node's two slots, and each of those
+	// rounds holds a second pack in hand waiting on its own share — the
+	// node's four — so every other round waits for a pack in hand, holding
+	// no files, no slot and no buffer. The two are started one after the
+	// other, each once the one before holds its two packs: rounds started
+	// together share the node's four packs in hand however they reach
+	// them, and a round holding one waits for its next as the others do.
+	for i, repo := range repos[:2] {
+		start(repo)
+		eventually(t, fmt.Sprintf("round %d's download held and its second pack in hand", i+1), func() bool {
+			now, _ := cache.InHand(c)
+			return w.objects.open() == i+1 && now == int64(2*(i+1))
+		})
+	}
+	for _, repo := range repos[2:] {
+		start(repo)
+	}
+	eventually(t, "two downloads held and four rounds waiting for a pack in hand", func() bool {
+		return w.objects.open() == 2 && cache.HandWaiters(c) == 4 && cache.SlotWaiters(c) == 0
 	})
 	if now, most := cache.BuffersOut(c); now != 2 || most != 2 {
 		t.Errorf("with six rounds at the node's two slots, %d copy buffers are out (at most %d), want 2", now, most)
 	}
-	close(release)
+	release()
 	wg.Wait()
 	if now, most := cache.BuffersOut(c); now != 0 || most != 2 {
 		t.Errorf("after every round, %d copy buffers are out and at most %d were, want none and 2", now, most)
@@ -125,7 +144,9 @@ func TestTheNodesDownloadBuffersAreItsSlots(t *testing.T) {
 // A NODE SLOT GOES BACK WHEN THE GET ENDS: what follows a download — the
 // seal's check, the files made durable, the renames — is this node's disk, and
 // a slot held through it is a GET the node does not make. With every install
-// held at its first stage, the node's one slot is free for the next download.
+// held at its first stage, the node's one slot is free for the next download,
+// up to the packs the node holds in hand for it (installsPerFetch, two) and
+// no further.
 func TestANodeSlotGoesBackWhenTheGetEnds(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -154,10 +175,55 @@ func TestANodeSlotGoesBackWhenTheGetEnds(t *testing.T) {
 		}
 		done <- err
 	}()
-	// Three downloads through one slot, each install held after its GET:
-	// only a slot given back before the install lets the next GET start.
-	eventually(t, "every download fetched while every install waits", func() bool {
-		return installing.Load() == 3
+	// Downloads through one slot, each install held after its GET: only a
+	// slot given back before the install lets the next GET start — and the
+	// node's two packs in hand stop the third.
+	eventually(t, "two downloads fetched through one slot while their installs wait", func() bool {
+		return installing.Load() == 2
+	})
+	if now, most := cache.InHand(c); now != 2 || most != 2 {
+		t.Errorf("with two installs held, the node holds %d packs in hand (at most %d), want its two", now, most)
+	}
+	if got := installing.Load(); got != 2 {
+		t.Errorf("%d downloads fetched past the node's two packs in hand", got)
+	}
+	release()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A PACK IN HAND WAITS FOR ITS GET WITH ITS FILES MADE: creating a bundle's
+// three files is the dearest step of its disk work on the measured machine —
+// a third of a millisecond a file, made one at a time in tmp/ — and made
+// while the GET's share and slot are held it is time no GET runs in. So the
+// round makes a pack's files as it hands the pack out, and its worker only
+// then waits for its turn and the round's share: with a round of one GET at
+// a time and that GET held open, the round's second pack in hand already has
+// its three files in tmp/.
+func TestAPackInHandWaitsForItsGetWithItsFilesMade(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	for range 3 {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	c := w.open(t)
+	cache.SetFetchConcurrency(c, 1)
+	held := make(chan struct{})
+	release := sync.OnceFunc(func() { close(held) })
+	t.Cleanup(release) // before the cache's Stop, which waits for the round
+	w.objects.hold = func(objstore.Key) <-chan struct{} { return held }
+	done := make(chan error, 1)
+	go func() {
+		s, err := c.Sync(context.Background(), repo, linearizable)
+		if err == nil {
+			s.Release()
+		}
+		done <- err
+	}()
+	eventually(t, "the held GET's files and the next pack's in tmp/", func() bool {
+		return w.objects.open() == 1 && len(names(t, w.path("tmp"))) == 6
 	})
 	release()
 	if err := <-done; err != nil {
@@ -186,6 +252,314 @@ func TestTheLargestPackIsFetchedFirst(t *testing.T) {
 	}
 	if !slices.IsSortedFunc(got, func(a, b int64) int { return int(b - a) }) || len(got) != 3 {
 		t.Errorf("downloaded bundles of %v bytes in that order, want the largest first", got)
+	}
+}
+
+// A ROUND GRANTS ITS GETS IN ITS ORDER, LARGEST FIRST, and makes its bundles'
+// files in that order too. Its workers run in whatever order the scheduler
+// picks — usually the one started last first — so a round whose workers each
+// asked for a GET as soon as they could gave its first shares to the packs it
+// handed out last, and a round whose workers made their own files held its
+// first GET behind whichever pack's files were made last. Here the order the
+// round made the files in is read, and the largest pack's worker is held, its
+// files made, until the round's whole share is in GETs or grantQuiet passes: a
+// round that grants in its order starts none meanwhile. Eight packs at a share
+// of two, more than the four a round holds in hand, every GET held until the
+// case lets it go, one at a time — so the order is checked at every grant,
+// across every window the hand moves through, and never at the instant two
+// GETs start together.
+func TestARoundGrantsItsGetsInItsOrder(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	// Sizes in an order that is neither the pushes' nor their pack ids'.
+	sizes := map[objstore.Key]int64{}
+	var largest []objstore.Key
+	for i, n := range []int{3, 7, 1, 5, 0, 6, 2, 4} {
+		_, row := w.push(t, repo, "refs/heads/main", map[string]string{fmt.Sprintf("blob%d", i): noise(i, (n+1)<<13)})
+		sizes[row.Object] = row.Size
+		largest = append(largest, row.Object)
+	}
+	slices.SortFunc(largest, func(a, b objstore.Key) int { return cmp.Compare(sizes[b], sizes[a]) })
+
+	const share = 2
+	// full is closed once the round's whole share is in GETs: a round that
+	// granted out of its order has given every share away by then, before
+	// the largest pack has asked for one.
+	full := make(chan struct{})
+	var opens atomic.Int64
+	gets := map[objstore.Key]chan struct{}{}
+	for k := range sizes {
+		gets[k] = make(chan struct{})
+	}
+	w.objects.hold = func(k objstore.Key) <-chan struct{} {
+		if opens.Add(1) == share {
+			close(full)
+		}
+		return gets[k]
+	}
+	var stagedMu sync.Mutex
+	var staged []objstore.Key
+	c := w.open(t, cache.StagedWith(func(k objstore.Key) {
+		stagedMu.Lock()
+		defer stagedMu.Unlock()
+		staged = append(staged, k)
+	}), cache.AskingWith(func(k objstore.Key) {
+		if k == largest[0] {
+			select {
+			case <-full:
+			case <-time.After(grantQuiet):
+			}
+		}
+	}))
+	var letMu sync.Mutex
+	let := func(k objstore.Key) {
+		letMu.Lock()
+		defer letMu.Unlock()
+		select {
+		case <-gets[k]:
+		default:
+			close(gets[k])
+		}
+	}
+	t.Cleanup(func() { // before the cache's Stop, which waits for the round
+		for k := range gets {
+			let(k)
+		}
+	})
+	cache.SetFetchConcurrency(c, share)
+	done := make(chan error, 1)
+	go func() {
+		s, err := c.Sync(context.Background(), repo, linearizable)
+		if err == nil {
+			s.Release()
+		}
+		done <- err
+	}()
+	opened := func(n int) []objstore.Key {
+		t.Helper()
+		eventually(t, fmt.Sprintf("GET %d of the round", n), func() bool { return w.objects.total() >= n })
+		_, order, _ := w.objects.counts()
+		return order
+	}
+	describe := func(keys []objstore.Key) []int64 {
+		var out []int64
+		for _, k := range keys {
+			out = append(out, sizes[k])
+		}
+		return out
+	}
+	got := opened(share)
+	if len(got) != share || !slices.Contains(got, largest[0]) || !slices.Contains(got, largest[1]) {
+		t.Fatalf("a round of two GETs at once started bundles of %v bytes first, want the two largest %v",
+			describe(got), describe(largest[:share]))
+	}
+	for i := share; i < len(largest); i++ {
+		// The earliest GET still held ends, and its share is the round's one
+		// grant: exactly one more GET starts, and it is the next largest.
+		let(got[i-share])
+		got = opened(i + 1)
+		if len(got) != i+1 || got[i] != largest[i] {
+			t.Fatalf("a round's GETs started on bundles of %v bytes, want %v",
+				describe(got), describe(largest[:i+1]))
+		}
+	}
+	for k := range gets {
+		let(k)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	stagedMu.Lock()
+	defer stagedMu.Unlock()
+	if !slices.Equal(staged, largest) {
+		t.Errorf("the round made the files of bundles of %v bytes in that order, want %v",
+			describe(staged), describe(largest))
+	}
+}
+
+// grantQuiet is how long TestARoundGrantsItsGetsInItsOrder holds the largest
+// pack's worker while the round's share is not all in GETs: room for the
+// round's other workers to make their files and ask, a few milliseconds each.
+// Never a performance claim — a round that grants in its order passes however
+// long it is.
+const grantQuiet = 250 * time.Millisecond
+
+// A ROUND'S GETS NEVER WAIT ON ITS DISK: the round's share goes back when a GET
+// ends, so with every file's sync held, a round of one GET at a time still
+// downloads its next bundle — and stops at the packs it may hold in hand
+// (installsPerFetch, two), so the disk it does wait on holds its GETs back
+// rather than a growing backlog of downloads.
+func TestARoundsGetsNeverWaitOnItsDisk(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	for range 4 {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	held := make(chan struct{})
+	release := sync.OnceFunc(func() { close(held) })
+	c := w.open(t, cache.FileSyncWith(func(f *os.File) error {
+		<-held
+		return f.Sync()
+	}))
+	t.Cleanup(release) // before the cache's Stop, which waits for the round
+	cache.SetFetchConcurrency(c, 1)
+	done := make(chan error, 1)
+	go func() {
+		s, err := c.Sync(context.Background(), repo, linearizable)
+		if err == nil {
+			s.Release()
+		}
+		done <- err
+	}()
+	eventually(t, "a second GET while the first bundle's syncs are held", func() bool {
+		return w.objects.total() >= 2
+	})
+	// The round holds its two packs in hand now: one whose syncs are held,
+	// and one downloaded behind it. A third GET would be a backlog.
+	time.Sleep(50 * time.Millisecond)
+	if got := w.objects.total(); got != 2 {
+		t.Errorf("with its syncs held, a round of one GET at a time made %d GETs, want its two packs in hand", got)
+	}
+	release()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := w.objects.total(); got != 4 {
+		t.Errorf("the round made %d GETs for its four packs", got)
+	}
+}
+
+// THE NODE HOLDS TWO SHARES OF PACKS IN HAND: however many rounds run, the
+// node's packs between their GET and their place — downloading, or downloaded
+// and waiting on the disk — are at most installsPerFetch × NodeFetches, so a
+// joining node whose disk stalls under a burst of cold syncs stops starting
+// GETs rather than piling up downloads, and syncs in flight, without end.
+func TestTheNodeHoldsTwoSharesOfPacksInHand(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	var repos []string
+	for i := range 3 {
+		repo := w.repo(t, i+1)
+		for range 4 {
+			w.push(t, repo, "refs/heads/main", nil)
+		}
+		repos = append(repos, repo)
+	}
+	held := make(chan struct{})
+	release := sync.OnceFunc(func() { close(held) })
+	c := w.open(t, cache.FileSyncWith(func(f *os.File) error {
+		<-held
+		return f.Sync()
+	}))
+	t.Cleanup(release) // before the cache's Stop, which waits for the rounds
+	cache.SetNodeFetches(c, 1)
+	cache.SetFetchConcurrency(c, 4)
+	var wg sync.WaitGroup
+	for _, repo := range repos {
+		wg.Go(func() {
+			s, err := c.Sync(context.Background(), repo, linearizable)
+			if err != nil {
+				t.Errorf("sync of %s: %v", repo, err)
+				return
+			}
+			s.Release()
+		})
+	}
+	eventually(t, "the node's two packs in hand downloaded while their syncs are held", func() bool {
+		return w.objects.total() >= 2
+	})
+	time.Sleep(50 * time.Millisecond)
+	if got := w.objects.total(); got != 2 {
+		t.Errorf("with every sync held, three rounds made %d GETs through a node of one slot, "+
+			"want its two packs in hand", got)
+	}
+	release()
+	wg.Wait()
+	if _, most := cache.InHand(c); most != 2 {
+		t.Errorf("the node held at most %d packs in hand, want its two", most)
+	}
+}
+
+// A BUNDLE IS DURABLE BEFORE ANY OF IT IS PLACED: every file of a bundle is
+// synced while it is still in tmp/, the three of a bundle in flight together
+// — syncs one after another each pay a journal commit of their own — and no
+// file of the bundle is in objects/pack until all of them have been synced.
+func TestABundleIsDurableBeforeAnyOfItIsPlaced(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	_, row := w.push(t, repo, "refs/heads/main", nil)
+	var mu sync.Mutex
+	inFlight, most := 0, 0
+	together := make(chan struct{})
+	var once sync.Once
+	c := w.open(t, cache.FileSyncWith(func(f *os.File) error {
+		if dir := filepath.Dir(f.Name()); dir != w.path("tmp") {
+			t.Errorf("synced %s, not a file in tmp/", f.Name())
+		}
+		placed, err := filepath.Glob(w.path("repos", "*", "objects", "pack", "pack-"+row.GitChecksum+".*"))
+		if err != nil || len(placed) > 0 {
+			t.Errorf("while %s is synced, objects/pack already holds %v (%v)", filepath.Base(f.Name()), placed, err)
+		}
+		mu.Lock()
+		inFlight++
+		most = max(most, inFlight)
+		if inFlight == 3 {
+			once.Do(func() { close(together) })
+		}
+		mu.Unlock()
+		select {
+		case <-together:
+		case <-time.After(hangDetector):
+		}
+		err = f.Sync()
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		return err
+	}))
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	if most != 3 {
+		t.Errorf("at most %d of the bundle's three syncs were in flight together, want all three", most)
+	}
+	if got := packFiles(t, s.Dir); len(got) != 3 {
+		t.Errorf("objects/pack holds %v after the round, want the bundle's three files", got)
+	}
+}
+
+// A SYNC THAT FAILS PLACES NOTHING OF ITS BUNDLE: its files stay out of
+// objects/pack and leave tmp/, the round answers the failure, and the next
+// round downloads the pack again and places it.
+func TestASyncThatFailsPlacesNothingOfItsBundle(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	_, row := w.push(t, repo, "refs/heads/main", nil)
+	errDisk := errors.New("the disk failed this sync")
+	var failed atomic.Bool
+	c := w.open(t, cache.FileSyncWith(func(f *os.File) error {
+		if strings.HasSuffix(f.Name(), ".idx") && failed.CompareAndSwap(false, true) {
+			return errDisk
+		}
+		return f.Sync()
+	}))
+	if _, err := c.Sync(t.Context(), repo, linearizable); !errors.Is(err, errDisk) {
+		t.Fatalf("a round whose sync failed answered %v, want the sync's failure", err)
+	}
+	placed, err := filepath.Glob(w.path("repos", "*", "objects", "pack", "pack-"+row.GitChecksum+".*"))
+	if err != nil || len(placed) > 0 {
+		t.Errorf("a bundle whose sync failed has %v in objects/pack (%v)", placed, err)
+	}
+	if left := names(t, w.path("tmp")); len(left) > 0 {
+		t.Errorf("a bundle whose sync failed left %v in tmp/", left)
+	}
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	if got := packFiles(t, s.Dir); len(got) != 3 {
+		t.Errorf("the next round left %v in objects/pack, want the bundle's three files", got)
 	}
 }
 
@@ -255,8 +629,9 @@ func TestAColdSyncRunsNoGit(t *testing.T) {
 }
 
 // A BUNDLE IS SPLIT AS ITS ROW SAYS: the pack, the index and the reverse index
-// at the row's sizes, each byte for byte what the receiving git wrote — and
-// all three are in tmp/, checked, before any of them is in objects/pack.
+// at the row's sizes, each byte for byte what the receiving git wrote. That
+// all three are in tmp/, checked and durable, before any of them is in
+// objects/pack is TestABundleIsDurableBeforeAnyOfItIsPlaced's.
 func TestABundleIsSplitAsItsRowSays(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -271,22 +646,6 @@ func TestABundleIsSplitAsItsRowSays(t *testing.T) {
 		t.Fatalf("the large pack holds %d objects, want 3 000", large.Objects)
 	}
 	c := w.open(t)
-	cache.SetFetchConcurrency(c, 1)
-	installed := 0
-	cache.SetInstallHook(c, func(stage, packDir string) {
-		if stage != "fetched" {
-			return
-		}
-		tmp := names(t, w.path("tmp"))
-		if len(tmp) != 3 {
-			t.Errorf("at %q tmp/ holds %v, want one bundle's three files", stage, tmp)
-		}
-		if got := len(packFiles(t, filepath.Dir(filepath.Dir(packDir)))); got != 3*installed {
-			t.Errorf("at %q objects/pack holds %d pack files, want %d: a checked bundle's files are in "+
-				"objects/pack before every one is", stage, got, 3*installed)
-		}
-		installed++
-	})
 	s := w.sync(t, c, repo)
 	for _, row := range []code.PackRow{small, large} {
 		b := w.bundle(row.GitChecksum)
