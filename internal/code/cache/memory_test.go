@@ -517,7 +517,7 @@ func TestACheckTheNodesMemoryCannotHoldIsRefused(t *testing.T) {
 	fsck := cache.FsckCharge(c, repo)
 
 	cache.SetMaintenanceBudget(c, fsck-1)
-	if _, err := c.Verify(t.Context(), repo, false); !errors.Is(err, cache.ErrNoMemory) {
+	if _, err := verify(t.Context(), c, repo, false); !errors.Is(err, cache.ErrNoMemory) {
 		t.Errorf("Verify on a budget a byte short of its check = %v, want ErrNoMemory", err)
 	}
 	cache.SetMaintenanceBudget(c, fsck)
@@ -525,11 +525,11 @@ func TestACheckTheNodesMemoryCannotHoldIsRefused(t *testing.T) {
 	if !held {
 		t.Fatal("the case could not hold a byte of the budget")
 	}
-	if _, err := c.Verify(t.Context(), repo, false); !errors.Is(err, gitproc.ErrBusy) {
+	if _, err := verify(t.Context(), c, repo, false); !errors.Is(err, gitproc.ErrBusy) {
 		t.Errorf("Verify with the work in flight leaving no room = %v, want busy", err)
 	}
 	release()
-	if r, err := c.Verify(t.Context(), repo, false); err != nil || len(r.Problems) != 0 {
+	if r, err := verify(t.Context(), c, repo, false); err != nil || len(r.Problems) != 0 {
 		t.Errorf("Verify at its check's own charge = %+v, %v; want it run, and clean", r, err)
 	}
 }

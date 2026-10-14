@@ -71,11 +71,8 @@ func (p *Pool) admit(ctx context.Context, c Class) (release func(), waited time.
 		return nil, 0, fmt.Errorf("gitproc: git was not started: its caller had already gone: %w", context.Cause(ctx))
 	}
 	if c == ClassMaintenance {
-		if !l.tryAcquire() {
-			return nil, time.Since(start), fmt.Errorf("%w: this node runs at most %d maintenance processes at once (half its %d process slots)",
-				ErrBusy, l.size, p.read.size)
-		}
-		return l.release, time.Since(start), nil
+		release, err := p.tryMaintenance()
+		return release, time.Since(start), err
 	}
 	wait, cancel := context.WithTimeout(ctx, p.slotWait)
 	defer cancel()
