@@ -557,6 +557,14 @@ func TestEveryForcedUpdateOfAWidePushIsFound(t *testing.T) {
 // done — when its hook reaches the relay — never held through the push's
 // upload: with the push held inside its object-store put, the read lane lends
 // nothing and the gauge says so.
+//
+// The lane is read until it is whole rather than once, because the push lists
+// the commits it introduces BESIDE its upload (introduceAndStore), and that
+// listing holds a read slot of its own — a run, never a loan — until it ends by
+// itself, which on a loaded machine is after the upload reaches its put. A
+// loan that outlived its index-pack would last as long as the receive-pack,
+// which is held in its hook for as long as the upload is, so the lane never
+// comes whole and the case fails at the deadline.
 func TestALoanIsRepaidBeforeThePushsUpload(t *testing.T) {
 	c := newCase(t, codetest.SoloOptions{MaxProcesses: 4}, codetest.Settings())
 	node := c.Fleet.Nodes()[0]
@@ -568,7 +576,12 @@ func TestALoanIsRepaidBeforeThePushsUpload(t *testing.T) {
 	done := make(chan codetest.Pushed, 1)
 	go func() { done <- p.Push(c.Ctx, work, c.URL(0), "main") }()
 	<-reached
-	free, slots := node.Pool().Free(gitproc.ClassRead), node.Pool().Slots(gitproc.ClassRead)
+	slots := node.Pool().Slots(gitproc.ClassRead)
+	free := node.Pool().Free(gitproc.ClassRead)
+	for deadline := time.Now().Add(5 * time.Second); free != slots && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+		free = node.Pool().Free(gitproc.ClassRead)
+	}
 	lent := -1.0
 	for _, s := range node.Metrics().Read() {
 		if s.Name == metrics.CodeGitLentCores {
@@ -580,8 +593,8 @@ func TestALoanIsRepaidBeforeThePushsUpload(t *testing.T) {
 		t.Fatalf("the push held at its upload: %s", res)
 	}
 	if free != slots {
-		t.Errorf("with a push held in its upload the read lane has %d of %d slots free: a loan outlived its "+
-			"index-pack", free, slots)
+		t.Errorf("with a push held in its upload the read lane had %d of %d slots free after five seconds: "+
+			"a loan outlived its index-pack", free, slots)
 	}
 	if lent != 0 {
 		t.Errorf("with a push held in its upload %s reads %v, want 0", metrics.CodeGitLentCores, lent)
