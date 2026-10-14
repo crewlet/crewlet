@@ -673,6 +673,7 @@ func aRunningNodeWith(t *testing.T, company string, opts Options) (*Engine, nats
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	PinGitLanes(&b)
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(company))
 	if err != nil {

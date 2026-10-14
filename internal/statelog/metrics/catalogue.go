@@ -740,17 +740,18 @@ func Catalogue() []Instrument {
 				"approaching ten seconds is a node about to answer clones and pushes " +
 				"with 503 — every slot of one lane busy for a whole read attempt. " +
 				"`transfer` waiting is a node serving as many clones and pushes as " +
-				"its transfer lane admits (more git nodes, or more memory and a " +
-				"wider lane); `read` waiting is a node out of cores.",
+				"`git.max_transfers` admits (more git nodes, or more memory and a " +
+				"wider `git.max_transfers`); `read` waiting is a node out of " +
+				"`git.max_processes`, one core a slot.",
 		},
 		{
 			Name: CodeGitProcesses, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"class"},
 			Shows: "Git processes running on this node, by `class`. `transfer` " +
-				"pinned at the transfer lane's size while `crewlet.code.git.wait` " +
+				"pinned at `git.max_transfers` while `crewlet.code.git.wait` " +
 				"climbs is a node serving as many clones and pushes as its memory " +
 				"was sized for; `maintenance` is background index rebuilding, " +
-				"at most half the node's cores.",
+				"at most half of `git.max_processes`.",
 		},
 		{
 			Name: CodeGitLentCores, Kind: KindGauge, Unit: UnitCount,

@@ -324,8 +324,13 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	if invalid := config.CheckTiers(s.boot, company); invalid != nil {
 		return nil, &ValidationError{Err: invalid, Derived: derived}
 	}
+	// AND WHAT IT DOES BESIDE THIS NODE'S TIER A ([config.TierWarnings]),
+	// in the answer that applies it: a person turning code.native on reads
+	// the cross-tier consequence where they made the change, rather than in
+	// a node's log.
 	p := &prepared{
-		document: document, warnings: company.Warnings(), derived: derived, author: d.author,
+		document: document, derived: derived, author: d.author,
+		warnings: append(company.Warnings(), config.TierWarnings(s.boot, company)...),
 	}
 	if found {
 		p.base = active.ID

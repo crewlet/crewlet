@@ -49,6 +49,7 @@ func unseededBootstrap(t *testing.T, mutate func(*config.Bootstrap)) (*config.Bo
 	// other test in the run. One process owns a store file exclusively.
 	chosen := filepath.Join(t.TempDir(), "crewlet.db")
 	b.Store.Path = chosen
+	engine.PinGitLanes(&b)
 	if mutate != nil {
 		mutate(&b)
 	}

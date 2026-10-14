@@ -503,14 +503,10 @@ func (b operatorBasis) options(e *engine.Engine) operator.Options {
 	// was the only tool that read it. WHO THE CALLER IS reads it on every
 	// call now: the same chart says which seat a token is bound to, and
 	// without it a bound founder's own marks, pins and queue were written
-	// under their credential's name instead of theirs.
-	opts.Org = func() *org.Organization {
-		c := e.Company()
-		if c == nil {
-			return nil
-		}
-		return c.Org
-	}
+	// under their credential's name instead of theirs. The engine's own
+	// reading of it ([engine.Engine.Chart]), which the code host's persons
+	// read too, so a token names one person on every surface.
+	opts.Org = e.Chart
 	// AND WHAT A `${VAR}` IN IT RESOLVES TO, through this node's own chain:
 	// a binding sealed in the secret store binds its person here as it does
 	// for the seat's tools and the dashboard's reads.

@@ -129,6 +129,16 @@ type Config struct {
 	// node's seats.
 	Status func(context.Context) coord.NodeStatus
 
+	// RoleNeeded reports whether the COMPANY needs a role at all right now —
+	// false for git where the company hosts no code. Nil: every role is
+	// needed (every role but git always is).
+	//
+	// Asked by the unmanned-role check on every sweep, so it must not block:
+	// read the current epoch, never a store. Without it, adding git to the
+	// vocabulary would warn fleet_role_unmanned on every fleet that does not
+	// host code and declared its roles.
+	RoleNeeded func(placement.NodeRole) bool
+
 	// Hooks is what the engine does with a seat. Nil is legal.
 	Hooks Hooks
 
@@ -212,9 +222,11 @@ type Host struct {
 	serviceable func() (bool, string)
 	profile     placement.NodeProfile
 	status      func(context.Context) coord.NodeStatus
-	hooks       Hooks
-	clock       func() time.Time
-	protocol    int
+	// roleNeeded is Config.RoleNeeded; nil needs every role.
+	roleNeeded func(placement.NodeRole) bool
+	hooks      Hooks
+	clock      func() time.Time
+	protocol   int
 
 	ttl            time.Duration
 	heartbeat      time.Duration
@@ -315,6 +327,7 @@ func New(cfg Config) (*Host, error) {
 		serviceable:  cfg.Serviceable,
 		profile:      profile,
 		status:       cfg.Status,
+		roleNeeded:   cfg.RoleNeeded,
 		hooks:        cfg.Hooks,
 		clock:        cfg.Clock,
 		protocol:     orInt(cfg.Protocol, coord.ProtocolVersion),
@@ -555,6 +568,21 @@ func (h *Host) Held() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.Sorted(maps.Keys(h.held))
+}
+
+// NeedsRole reports whether the company, as this host reads it, needs a node
+// role at all right now ([Config.RoleNeeded]; every role where none was
+// given) — the question the unmanned-role check asks before it says a role is
+// missing.
+//
+// EXPORTED as the one place the answer is read, by the check and by whoever
+// has to prove the engine's answer reached it: the predicate is handed down
+// through the node, and a link dropped on the way warns fleet_role_unmanned
+// for git on every fleet that declares its roles and hosts no code — exactly
+// what the predicate was added to stop — while every test of the check itself
+// still passes.
+func (h *Host) NeedsRole(role placement.NodeRole) bool {
+	return h.roleNeeded == nil || h.roleNeeded(role)
 }
 
 // CompanySeats is the seat set this host currently sees, sorted by handle.

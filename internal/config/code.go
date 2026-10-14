@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // The code host's limits that both tiers and the domain read: config VALIDATES
@@ -138,6 +139,24 @@ type Code struct {
 	DeletedRetentionDays int        `yaml:"deleted_retention_days,omitempty" json:"deleted_retention_days,omitempty" js:"min=0;max=365" desc:"How long a repository removed from code.repos stays restorable by declaring it again under its name, before it is purged and its name is free: 1..365 days; unset (or 0) is 7."`
 	Limits               CodeLimits `yaml:"limits,omitempty" json:"limits,omitzero"`
 	Repos                []CodeRepo `yaml:"repos,omitempty" json:"repos,omitempty" desc:"The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again."`
+}
+
+// NeedsRole reports whether the company needs a node role at all: every role
+// but git always, and git exactly where the company hosts its repositories in
+// the engine (code.native) — a git node serves nothing for a company that does
+// not. Nil-safe: no company needs every role but git.
+//
+// THE ONE STATEMENT OF THE RULE, read by the fleet's unmanned-role check on
+// every node (the engine's seat.Config.RoleNeeded) and by the fleet view's
+// unmanned_roles, so a warning in one node's log and the screen an operator
+// reads can never disagree about whether the fleet is missing a role. Each
+// held its own copy once, and the screen's — a role nobody declared — named
+// git missing on every fleet that hosts no code and lists its nodes' roles.
+func (c *Company) NeedsRole(role placement.NodeRole) bool {
+	if role != placement.RoleGit {
+		return true
+	}
+	return c != nil && c.Code.Native
 }
 
 // DeletedRetention is code.deleted_retention_days as a duration, its default

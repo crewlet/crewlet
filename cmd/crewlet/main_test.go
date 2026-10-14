@@ -1468,6 +1468,42 @@ func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 	}
 }
 
+// THE TWO-FILE FORM SAYS WHAT THE PAIR DOES TOGETHER: a company hosting code
+// on a fleet whose files bucket is the default object store is valid twice
+// over, and every member holding the bucket then holds every pack — which
+// neither file shows alone. It is a warning, so the run still exits 0.
+//
+// Mutation: drop TierWarnings from validateBoth, and the advisory is missing.
+func TestValidatingBothFilesPrintsTheCrossTierWarnings(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fleet := "node:\n  roles: [data, git, ingress, seats, workers]\n" +
+		"store:\n  path: " + filepath.Join(dir, "crewlet.db") + "\n" +
+		"stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n  replicas: 3\n" +
+		"  cluster:\n    name: acme\n    peers: [nats://b.example.com:6222, nats://c.example.com:6222]\n" +
+		"coordination:\n  type: embedded-kv\n"
+	var out, errOut bytes.Buffer
+	args := append([]string{"validate", "-json"},
+		configPair(t, fleet, companyYAML+"code:\n  native: true\n")...)
+	if err := run(args, &out, &errOut); err != nil {
+		t.Fatalf("validate: %v\n%s", err, out.String())
+	}
+	var got struct {
+		Valid    bool             `json:"valid"`
+		Warnings []config.Warning `json:"warnings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("the -json output is not JSON: %v\n%s", err, out.String())
+	}
+	found := slices.ContainsFunc(got.Warnings, func(w config.Warning) bool {
+		return w.Kind == config.WarningAdvisory && w.Path == "store.objects.backend"
+	})
+	if !got.Valid || !found {
+		t.Fatalf("valid %t, warnings %+v: want a valid pair carrying the store.objects.backend "+
+			"advisory", got.Valid, got.Warnings)
+	}
+}
+
 // AN OPERATOR CAN TELL THE TWO APART IN PROSE. Both tiers' advisories share
 // the warning list with the references now, and under one undifferentiated
 // `warning:` line a dangling lead, which is broken and has to be corrected,

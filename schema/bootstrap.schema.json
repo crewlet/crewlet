@@ -231,6 +231,75 @@
         "null"
       ]
     },
+    "Git": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_dir": {
+          "description": "Where this node keeps its disposable copies of the company's repositories; relative to the store's directory; unset is \u003cstore dir\u003e/git. A volume of its own is recommended: its own filesystem with its own space, not a subvolume or dataset drawing on the store's pool. Never backed up (it carries a CACHEDIR.TAG).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "cache_max_bytes": {
+          "anyOf": [
+            {
+              "maximum": 70368744177664,
+              "minimum": 1073741824,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "The cache's byte budget; unset is derived at boot from the room the cache can use: the volume's free space plus what the cache already holds, less what an embedded broker storing its streams on the same volume may still write under its limit (stream.store_max_bytes, or its own derivation) and the request spools' allowance. Half of that room when the volume also holds the store, the replicated estate, the snapshots or the broker's streams; seven eighths of a volume of its own. Never more, and never raised to a minimum: a volume that leaves no room at all refuses the node's code host, naming what to change."
+        },
+        "max_processes": {
+          "anyOf": [
+            {
+              "maximum": 1024,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Git processes this node runs at once to answer reads, one core each, and half as many again for its caches' background maintenance; 0 is GOMAXPROCS."
+        },
+        "max_transfers": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Clones, fetches and pushes this node serves at once; 0 is four for each of max_processes, and no more than one for every 512 MiB of the node's memory. Each holds a few hundred MiB while it runs, so size it to memory rather than cores."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "LogFile": {
       "additionalProperties": false,
       "properties": {
@@ -476,7 +545,7 @@
           "description": "Agent turns this process runs at once; 0 takes the engine default. Per node, so a fleet's ceiling is N times this."
         },
         "roles": {
-          "description": "What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers.",
+          "description": "What this node does: data, git, ingress, seats, workers. Omit for all five. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers. git needs ingress.",
           "items": {
             "type": [
               "string",
@@ -1441,6 +1510,9 @@
     },
     "coordination": {
       "$ref": "#/$defs/Coordination"
+    },
+    "git": {
+      "$ref": "#/$defs/Git"
     },
     "logging": {
       "$ref": "#/$defs/Logging"

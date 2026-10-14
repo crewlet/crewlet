@@ -317,6 +317,16 @@ curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
 
 Like every other event this lives in each node's own log, so a node whose disk is gone took its rows with it — but a node that merely stopped reporting, or was replaced, still has them.
 
+### What an apply warns about
+
+An applied revision can be valid and still worth a line. Each node logs these **once for every epoch it applies**, and only when the apply succeeds — a refused revision is retried, and would otherwise repeat them for an epoch the node is not serving:
+
+- `org_admission_warning`, once for every [admission rule](configuration.md#what-a-stored-revision-is-held-to) the revision breaks;
+- `org_dangling_reference`, once for every reference it resolves to nothing ([Dangling references](organization-model.md#dangling-references));
+- `config_tier_warning`, once for every consequence of the revision beside **this node's own** Tier A — a company hosting code on a fleet's default object store, a git node whose cache budget cannot hold a repository at its size limit, a git node behind a disabled guard ([Warnings across the two tiers](configuration.md#warnings-across-the-two-tiers)). Each names the `path` of the field that answers it, the `revision` and the `epoch`. The cache budget compared is the one this node resolved — derived from its cache's volume where `git.cache_max_bytes` is unset — which neither document holds. Because one of the two documents is the node's own, the same revision can warn on a git node and say nothing on a node that serves no git.
+
+A node booting on a company says these at its reconciler's first tick, which applies the very activation it booted with — not at boot as well, which said each of them twice.
+
 ### A native backend changes at a restart
 
 Each node builds its native runtime once — the engine's own tracker and its knowledge base (and, with the code host, `code.native`) — from the company that started it, and it follows the fleet's logs rather than a revision. A revision that turns one of them on or off (`tracker.backend` or `knowledge.backend` moving to or from `native`, or `code.native` changing) activates normally and reports `ok`, and the node keeps serving what it was built with until it restarts: a tracker turned off is still served, and a knowledge base or a code host turned on is not served yet. The node says so once per activation with a `native_backend_needs_restart` warning naming the `field`, what it is `running` and what the revision `activated`:

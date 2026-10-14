@@ -39,6 +39,17 @@ const EvictInterval = time.Minute
 // once: 32 small reads in flight at 30 ms to the first byte are about a
 // thousand GETs a second, a fifth of what S3 serves one prefix.
 //
+// A NODE'S BOUND, NEVER THE FLEET'S. Every object is named under one `files/`
+// prefix (objstore.Key.Name, ADR-0026), and every git node that syncs a repository it has
+// never served asks this much of it: measured 680 to 948 small bundles a second
+// a node (BenchmarkColdSync), so five or six git nodes cold-syncing at once —
+// a fresh fleet, or a repository imported and then fetched through every node
+// by a balancer that spreads /git/ evenly — reach the 5 500 GETs a second S3
+// serves one prefix, past which it answers SlowDown until it has partitioned
+// the prefix: those syncs slow down, and nothing they hold is wrong. How many
+// nodes warm one repository is where its requests land, which routing
+// /git/<name> by repository keeps to one or two (docs/concepts/scaling.md).
+//
 // IT COUNTS OBJECTS, NOT REQUESTS. A bundle larger than one part is read by
 // s3obj as up to four ranges at once, the extra ones on buffers from the
 // node's one spare-part allowance, which uploads and downloads share — so

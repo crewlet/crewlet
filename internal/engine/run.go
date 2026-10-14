@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -243,6 +244,15 @@ type Engine struct {
 	// sandboxPollInterval is Options.SandboxPollInterval, kept because an
 	// apply can be what starts the poll.
 	sandboxPollInterval time.Duration
+
+	// gitHookArgv is Options.GitHook, kept because an apply can be what
+	// builds the code host ([Engine.gitHook]).
+	gitHookArgv []string
+
+	// cacheDisk is Options.cacheDisk, kept for the same reason: nil — every
+	// engine New builds outside this package's tests — reads the disk the
+	// node is on ([Engine.cacheVolume]).
+	cacheDisk *cacheVolume
 
 	// sandboxSeats are the seats whose sandbox control topic this node has
 	// attached, so a seat is attached exactly once however it came to be
@@ -738,6 +748,14 @@ type Options struct {
 	// rather than waiting out a real tick.
 	SandboxPollInterval time.Duration
 
+	// GitHook is the argv the code cache's proc-receive hook execs on a node
+	// that serves git. Nil — production — is THIS binary as
+	// host.HookCommand names it, `crewlet code hook proc-receive`, its path
+	// resolved through os.Executable and its symbolic links. A test binary is
+	// not crewlet, so a suite that pushes for real names one
+	// (codetest.HookCommand).
+	GitHook []string
+
 	// Environment is what a company's `${VAR}` references fall back to
 	// behind the secret store, and what the per-run endpoints' settings are
 	// read from ([sandbox.BuildOtelReceiver], [mcpbridge.Build]). Nil is
@@ -768,6 +786,14 @@ type Options struct {
 	// host's decision, and the knob exists only so a case can put the next
 	// tick out of reach and see what claims a seat without one.
 	sweepEvery time.Duration
+
+	// cacheDisk is what sizing the code cache reads of this node's disk in
+	// place of the disk itself ([Engine.cacheVolume]), nil for the disk.
+	// UNEXPORTED, so nothing outside this package's tests can set it
+	// (export_test.go): a running node has only the disk it is on, and the
+	// knob exists only so a case whose subject is the budget a disk derives
+	// is not decided by the free space of whatever machine runs it.
+	cacheDisk *cacheVolume
 }
 
 // New assembles an engine.
@@ -932,6 +958,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		mcp:                 mcp.NewBridge(nil),
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
+		gitHookArgv:         slices.Clone(opts.GitHook),
+		cacheDisk:           opts.cacheDisk,
 		usageEvery:          opts.usageEvery,
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
@@ -1251,7 +1279,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// node served the request — so behind a load balancer a refresh
 		// tells a different story each time.
 		Status: e.nodeStatus,
-		Turn:   e.Dispatch,
+		// WHICH ROLES THE COMPANY NEEDS, off the current epoch: git only
+		// where it hosts code, so a fleet that declared its roles without
+		// git is never told nobody serves it until it would matter.
+		RoleNeeded: e.roleNeeded,
+		Turn:       e.Dispatch,
 		// Before the mailbox opens and after it closes — see node.Config.
 		// A seat mid-detached-run must have its runs recovered and its mail
 		// parked before anything can deliver to it.
@@ -1976,6 +2008,14 @@ func (e *Engine) teardown(ctx context.Context) {
 	// proposal "not serving", which its asker takes to the repository's
 	// runner-up, and finishes the batch in flight with its real outcome
 	// ([Engine.stopCommitter]).
+	//
+	// AND THE CODE HOST BEFORE BOTH: every push in flight proposes through
+	// the estate to a committer, and every sync's linearizable read appends a
+	// barrier to the code log, so it is a publisher like the rest — and the
+	// requests it serves are a client's, which the API's listener, closed
+	// before this teardown began, has already finished or cut
+	// ([Engine.stopCodeHost]).
+	e.stopCodeHost(ctx)
 	e.stopCommitter(ctx)
 	e.stopServingEstate(ctx)
 	// AFTER THE DRAIN AND AFTER EVERY STATE-LOG PUBLISHER, which is what the
@@ -1984,8 +2024,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// exclusion while this node runs (statelog.AdmissionBlocks). So every
 	// loop above that appends to a log — the trim, the embedding duty, the
 	// usage publisher, the code-retention duty, the reconcile of code.repos,
-	// the collector's barriers, the committer and the writes peers route
-	// here — is stopped before it is withdrawn, and withdrawing it while a
+	// the collector's barriers, the code host's syncs and proposals, the
+	// committer and the writes peers route here — is stopped before it is
+	// withdrawn, and withdrawing it while a
 	// seat was still finishing a turn, or a duty was still publishing, would
 	// tell a coordinator the opposite of the truth.
 	if err := e.withdraw(ctx); err != nil {

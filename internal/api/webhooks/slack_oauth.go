@@ -3,18 +3,32 @@ package webhooks
 import (
 	"html/template"
 	"net/http"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 )
 
 // slackOAuthPage is the install landing page every provisioned Slack app
-// redirects to.
+// redirects to, and its Content-Security-Policy: its one inline style, by
+// hash, and no script at all.
 //
 // html/template, not string concatenation: every value on this page comes from
 // a query string an attacker controls, and it is rendered into a browser. The
 // contextual escaping is the whole reason to use a template here rather than
-// build the markup by hand.
-var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype html>
+// build the markup by hand. And the page shares an origin with the dashboard,
+// whose operator token is in localStorage: the template's escaping is the
+// first defence, and the policy is the one that holds if the escaping is ever
+// wrong.
+//
+// BUILT AT THE FIRST REQUEST THAT RENDERS IT, for [githubAppPage]'s reason:
+// every push's proc-receive hook is this binary, and runs every package's init.
+var slackOAuthPage = sync.OnceValues(func() (*template.Template, string) {
+	page := template.Must(template.New("slack-oauth").Parse(slackOAuthTemplate))
+	return page, pagepolicy.MustForTemplate(page, slackOAuthView{})
+})
+
+// slackOAuthTemplate is the page's text.
+const slackOAuthTemplate = `<!doctype html>
 <html>
   <head>
     <meta charset="utf-8">
@@ -58,16 +72,7 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
     {{end}}
   </body>
 </html>
-`))
-
-// slackOAuthPolicy is the page's Content-Security-Policy: its one inline
-// style, by hash, and no script at all.
-//
-// Every value on this page comes from the query string, and the page shares an
-// origin with the dashboard, whose operator token is in localStorage. The
-// template's escaping is the first defence; this is the one that holds if the
-// escaping is ever wrong.
-var slackOAuthPolicy = pagepolicy.MustForTemplate(slackOAuthPage, slackOAuthView{})
+`
 
 type slackOAuthView struct{ Heading, Error, Code, Handle string }
 
@@ -112,12 +117,13 @@ func slackOAuthLanding(w http.ResponseWriter, r *http.Request) {
 			"flow", map[bool]string{true: "cli", false: "manual"}[view.Handle != ""])
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	pagepolicy.Set(w.Header(), slackOAuthPolicy)
+	page, policy := slackOAuthPage()
+	pagepolicy.Set(w.Header(), policy)
 	w.WriteHeader(status)
-	// Rendered straight to the response: the template is parsed at
-	// startup, so the only way this errors is a broken connection, and
-	// there is no second status to write by then.
-	if err := slackOAuthPage.Execute(w, view); err != nil {
+	// Rendered straight to the response: the template is a constant this
+	// package's tests render, so the only way this errors is a broken
+	// connection, and there is no second status to write by then.
+	if err := page.Execute(w, view); err != nil {
 		log.Warn("slack_oauth_page_failed", "error", err)
 	}
 }

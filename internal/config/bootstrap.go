@@ -43,6 +43,11 @@ type Bootstrap struct {
 	// Store is the local database file this node materializes into.
 	Store Store `yaml:"store,omitempty" json:"store"`
 
+	// Git is how this node serves the company's repositories: its cache's
+	// directory and budget and its git processes. Read only on a node with
+	// the git role whose company sets code.native.
+	Git Git `yaml:"git,omitempty" json:"git,omitzero"`
+
 	// Stream is the durable event log — the source of truth every node
 	// writes through.
 	Stream Stream `yaml:"stream,omitempty" json:"stream"`
@@ -387,6 +392,7 @@ func (b *Bootstrap) Validate() error {
 	p.wrap(b.normalize())
 	p.wrap(b.Node.validate(field("node")))
 	p.wrap(b.Store.validate(field("store")))
+	p.wrap(b.Git.validate(field("git"), b.Store))
 	p.wrap(b.Stream.validate(field("stream")))
 	p.wrap(b.Coordination.validate(field("coordination")))
 	p.wrap(b.API.validate(field("api")))
@@ -584,7 +590,8 @@ func (b *Bootstrap) ValidateRoles() error {
 }
 
 // checkRolesAndBroker refuses the three pairings of roles and broker the
-// estate cannot run on.
+// estate cannot run on, and the one pairing of roles a git node cannot serve
+// on (git without the ingress whose listener it is served on).
 //
 // ONE PLACE FOR ALL THREE, because they are one decision rather than three:
 // every data node holds the whole estate as a MEMBER of the broker, and a node
@@ -596,6 +603,19 @@ func (b *Bootstrap) ValidateRoles() error {
 // ways out.
 func (b *Bootstrap) checkRolesAndBroker(p *problems, roles placement.RoleSet) {
 	data := roles.Has(placement.RoleData)
+	// GIT IS SERVED ON THE API LISTENER, which only a node with ingress
+	// mounts: a git node without it would build a cache and a host that no
+	// request can reach. Asked BEFORE the data rule below returns, so a
+	// data node is held to it too. NOT a "git needs data" rule: in this
+	// release git needs data only through ingress, and a node without data
+	// that names both is refused once, by the ingress rule below.
+	if roles.Has(placement.RoleGit) && !roles.Has(placement.RoleIngress) {
+		p.add(field("node.roles"), ErrConflict,
+			"%q needs %q: its routes are served on the API listener, which only a "+
+				"node with %q mounts. Add %q, or drop %q", placement.RoleGit,
+			placement.RoleIngress, placement.RoleIngress, placement.RoleIngress,
+			placement.RoleGit)
+	}
 	switch kind := b.BrokerKind(); {
 	case data && kind == placement.BrokerLeaf:
 		p.add(field("stream.leaf.urls"), ErrConflict,
@@ -985,8 +1005,8 @@ type Node struct {
 	// and then DefaultNodeID, so nothing has to be set to run one engine.
 	ID string `yaml:"id,omitempty" json:"id,omitempty" js:"pattern=^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" desc:"Stable identity of this process. Empty reads CREWLET_NODE_ID, then defaults to node-0."`
 
-	// Roles is what this process is willing to do: data, ingress, seats,
-	// workers. Omit the key to run every role — the single-process
+	// Roles is what this process is willing to do: data, git, ingress,
+	// seats, workers. Omit the key to run every role — the single-process
 	// default, and the shape every company starts as.
 	//
 	// `data` is the one role that is a promise about the DISK rather than
@@ -1001,7 +1021,7 @@ type Node struct {
 	// retention sweep, and one with no ingress node never hears a webhook.
 	// Neither is visible in any single node's config, so the engine checks
 	// it against live node presence at runtime.
-	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers."`
+	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, git, ingress, seats, workers. Omit for all five. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers. git needs ingress."`
 
 	// Labels are free-form facts about where this process runs (zone: eu,
 	// gpu: "true"), matched exactly by a seat's role.placement selector.
@@ -1032,6 +1052,7 @@ type Node struct {
 // config layer and the seat host can never disagree about what a role is.
 var nodeRoleNames = []string{
 	string(placement.RoleData),
+	string(placement.RoleGit),
 	string(placement.RoleIngress),
 	string(placement.RoleSeats),
 	string(placement.RoleWorkers),

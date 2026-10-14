@@ -25,7 +25,7 @@ configured per node.
 # Tier A, per node
 node:
   id: "${CREWLET_NODE_ID}"           # distinct and stable, per process
-  roles: [data, ingress, seats, workers]   # the default; omit the key
+  roles: [data, git, ingress, seats, workers]   # the default; omit the key
   labels: {zone: eu}                 # optional, matched by role.placement
   max_concurrent: 32                 # agent turns this process runs at once
 ```
@@ -33,6 +33,7 @@ node:
 | Role | What it does |
 |---|---|
 | `data` | Holds the company's durable state on its own disk: a full copy of the replicated estate, and the event log. `workers`' duties and `ingress`'s retention, capacity, eviction and backup surfaces read this node's own copy directly, so both require it (the API's tracker and knowledge-base routes go through the [estate router](#how-a-request-reaches-the-estate) instead). It does not decide the node's broker — its `stream` block does ([broker kinds](../guides/fleet.md#the-broker-members-and-leaves)) — but a data node on a leaf is refused, so every data node is a broker member holding a share of its replicas and a vote in its quorums. A node without it is [stateless](#a-node-that-holds-no-data) |
+| `git` | Serves the company's git repositories where it sets [`code.native`](code-host.md), from a [cache](code-host.md#the-cache-on-a-git-node) on its own disk — see [Git nodes](#git-nodes). Requires `ingress`, whose listener git is served on |
 | `ingress` | Serves the HTTP API — every integration's webhooks, the dashboard, the REST and WebSocket read surface |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns, and serves their agent-mode tool bridge when `CREWLET_MCP_BRIDGE_URL` is set |
 | `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the sandbox waiter, the maintenance sweep (retention and removed-seat mailbox retirement), the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion). These read their work list from the **org**, never from the node's own seats: a `workers` node runs no seats at all, so a duty that iterated the local seats would cover nothing. Creating every seat's mailbox is not among them: every node does that at start and on each apply |
@@ -40,8 +41,8 @@ node:
 ```mermaid
 flowchart TB
     subgraph fleet["The fleet"]
-        N1["node-a<br/><i>data · ingress · seats · workers</i>"]
-        N2["node-b<br/><i>data · ingress · seats · workers</i>"]
+        N1["node-a<br/><i>data · git · ingress · seats · workers</i>"]
+        N2["node-b<br/><i>data · git · ingress · seats · workers</i>"]
         N3["sat-eu<br/><i>seats</i> · zone=eu · no data"]
     end
     subgraph shared["Shared state — the company · one NATS estate"]
@@ -95,6 +96,43 @@ one (see [who has to acknowledge](../guides/retention.md#who-has-to-acknowledge)
 This is the shape for an agent host you want small and
 disposable — see [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data)
 and [ADR-0025](https://github.com/crewlet/crewlet/blob/main/adr/0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md).
+
+### Git nodes
+
+A node with the `git` role serves the company's repositories from a cache of
+its own, and git nodes scale **reads**: each keeps its own copy of every
+repository it is asked for, synced from the code log's rows and the object
+store, so a clone or a fetch is answered by the node that received it, and a
+burst of clones of one repository costs that node one sync however many there
+are. Each node holds its cache to its own byte budget (`git.cache_max_bytes`,
+or a share of its volume — [`git`](configuration.md#git)), and every node that
+serves a repository caches it whole, so a node's disk is sized for the
+repositories it serves rather than the company's total.
+
+**Pushes** do not scale with git nodes: a push to one repository is decided by
+that repository's one [committer](#how-a-request-reaches-the-estate), a data
+node, whichever git node received it — so a repository's pushes meet in one
+place and are committed a batch at a time, and the repositories spread across
+the data nodes.
+
+Where requests land decides how many caches a repository costs. A fleet whose
+every node serves git, with a balancer spreading `/git/` evenly, warms every
+repository on every node — one cold sync each, one download for every push the
+repository ever took, and each node's disk and background indexing for it. A
+fleet that never wrote `node.roles` is that fleet: every node has every role,
+`git` included, the moment its company sets `code.native`. Routing
+`/git/<name>` by repository keeps each warm on one or two nodes instead; it is
+a cost decision, never a correctness one
+([Deployment](../guides/deployment.md#the-code-host)).
+
+The object store sees the same multiplication. A git node reads at most 32
+bundles at once, about 700 to 950 small ones a second while it syncs a
+repository it has never served, and every bundle is named under the one
+`files/` prefix — so five or six git nodes cold-syncing at once (a fresh fleet,
+or a repository imported and then fetched through every node) reach the
+5 500 reads a second S3 serves one prefix, past which it answers `SlowDown`
+until it has partitioned the prefix. Those syncs slow down and nothing they
+hold is wrong, and routing by repository is again what bounds it.
 
 ### How a request reaches the estate
 

@@ -247,19 +247,20 @@ offers the same removal, by node id or by peer id.
 
 ## Node roles
 
-Every process declares what it is willing to do. The default is all four
-— that is the single-node deployment, and no existing config changes.
+Every process declares what it is willing to do. The default is all five
+— that is the single-node deployment.
 
 ```yaml
 # Tier A, per node
 node:
   id: "${CREWLET_NODE_ID}"
-  roles: [data, ingress, seats, workers]   # the default; omit the key
+  roles: [data, git, ingress, seats, workers]   # the default; omit the key
 ```
 
 | Role | What it does |
 |---|---|
 | `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, the vectors) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
+| `git` | Serves the company's git repositories, where the company sets [`code.native`](../concepts/code-host.md): a disposable [cache](../concepts/code-host.md#the-cache-on-a-git-node) of them on this node's disk, sized by its Tier A [`git` block](../concepts/configuration.md#git), and git itself run for their clones, fetches and pushes. Needs `ingress`, whose listener its routes are served on — and so, in this release, `data` too. Does nothing for a company that hosts no code |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints. A node without it serves only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
 | `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state-log trim, the embedding duty, the object store's collector, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
@@ -271,6 +272,24 @@ is an absence: nothing fires on a schedule, no webhook arrives, no
 sandbox run is ever collected. Nothing raises. So the engine checks the
 shape against live node presence and logs `fleet_role_unmanned` when a
 role has nobody doing it, and `fleet_role_manned` when it comes back.
+
+`git` is the one role a company may not need: a company that does not set
+`code.native` hosts nothing for it to serve, so it is reported unmanned only
+where the company hosts code, and a role that stops being needed while nobody
+held it — code turned off — is logged once as `fleet_role_unneeded`, never as
+a git node coming back.
+
+**Which nodes to give `git`.** Every ingress node a load balancer sends `/git/`
+to. A node that **lists** its roles serves git only if the list names it — a
+fleet that wrote `[data, ingress, …]` before it hosted code serves none until
+it does — while a node that declares no roles has every role, so a fleet that
+never wrote `node.roles` gives every node a cache, and each one syncs each
+repository it is asked for. That is correct, and costs a cold sync of every
+repository on every node; route `/git/<name>` by repository (a balancer hashing
+the path to a node, with the next one in line when it is down) to keep each
+repository warm on one or two nodes instead — see
+[Deployment](deployment.md#the-code-host) and
+[Scaling Out](../concepts/scaling.md#git-nodes).
 
 A node that does not run seats is also excluded from the denominator its
 peers divide seats by. Counting an ingress-only node would shrink every
@@ -392,7 +411,8 @@ node: {id: "${CREWLET_NODE_ID}"}          # all roles, on each
 # Ingress split out: two ingress nodes behind a load balancer, three
 # running the seats and the duties. Every node runs the engine, so the
 # ingress nodes hold the stream and a store of their own like the rest.
-node: {id: "${CREWLET_NODE_ID}", roles: [data, ingress]}
+# The ingress nodes serve git too, where the company hosts code.
+node: {id: "${CREWLET_NODE_ID}", roles: [data, git, ingress]}
 node: {id: "${CREWLET_NODE_ID}", roles: [data, seats, workers]}
 ```
 
@@ -604,7 +624,9 @@ The consequences worth stating plainly:
 
 ## Watching a fleet
 
-- **`fleet_role_unmanned`** — a job nobody is doing. Fix the roles.
+- **`fleet_role_unmanned`** — a job nobody is doing. Fix the roles. For
+  `git`, said only where the company sets `code.native`; `fleet_role_unneeded`
+  is the role no longer being needed.
 - **`seats_unplaceable`** — a seat nobody may run. Fix the selector,
   start a node that matches, or clear what made the only matching node
   withdraw (`seats_shed_unserviceable` on that node).

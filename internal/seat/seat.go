@@ -234,6 +234,8 @@ var unmannedHints = map[placement.NodeRole]string{
 	placement.RoleData: "no live node holds the company's durable state, so nothing " +
 		"can read or write the tracker or the knowledge base, and every node " +
 		"without the role is waiting on one that does. Give a node the 'data' role.",
+	placement.RoleGit: "no live node serves git, so nobody can clone, fetch or push the " +
+		"company's repositories. Give a node the 'git' role (it needs 'ingress').",
 	placement.RoleIngress: "no live node serves the HTTP API, so no webhook from any " +
 		"integration reaches this company and the dashboard is down. " +
 		"Give a node the 'ingress' role.",

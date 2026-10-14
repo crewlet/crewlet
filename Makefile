@@ -646,13 +646,14 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
                  ./internal/objstore/natsobj ./internal/objstore/natsobj/replicated \
                  ./internal/objstore/s3obj ./internal/statelog ./internal/store \
-                 ./internal/code/gitproc ./internal/code/cache ./internal/api/paced
+                 ./internal/code/gitproc ./internal/code/cache ./internal/api/paced \
+                 ./cmd/crewlet
 BENCH_PATTERN ?= .
 BENCH_TIME    ?= 3s
 BENCH_COUNT   ?= 1
 BENCH_TIMEOUT ?= 8h
 
-bench: ## measure the object store, the state log's write path, git and its cache, and a client's pace (not a gate)
+bench: ## measure the object store, the state log's write path, git and its cache, a client's pace and the push hook's start (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))
 	$(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
 	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \

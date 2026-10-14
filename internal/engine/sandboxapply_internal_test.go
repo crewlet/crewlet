@@ -394,6 +394,7 @@ func newSandboxNode(t testing.TB, company *config.Company) *Engine {
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	PinGitLanes(&b)
 	SeedStore(t, &b)
 	e, err := New(t.Context(), Options{
 		Bootstrap: &b, Company: company,

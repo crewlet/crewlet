@@ -96,6 +96,22 @@ const (
 	// a question about who holds broker state asks that, never this.
 	RoleData NodeRole = "data"
 
+	// RoleGit serves the company's git repositories — smart HTTP at /git/ on
+	// the API listener — and keeps a disposable cache of them on this node's
+	// disk (internal/code/cache). It needs RoleIngress, whose listener it is
+	// served on (and so RoleData, which ingress needs). It does nothing for a
+	// company that does not set code.native, which is why the fleet's
+	// unmanned-role check asks whether it is NEEDED before it warns
+	// (seat.Config.RoleNeeded).
+	//
+	// A NODE THAT DECLARES NO ROLES HAS IT, like every role: the
+	// single-process deployment, and every fleet that never wrote
+	// node.roles, serves git the moment its company sets code.native — which
+	// is what a person running one node expects. A node that LISTS its roles
+	// serves git only where the list names it, so adding the role to the
+	// vocabulary changes no listed node's behaviour.
+	RoleGit NodeRole = "git"
+
 	// RoleIngress terminates inbound traffic: the HTTP API, the dashboard,
 	// and the webhooks every integration posts to. A fleet with none of
 	// these still runs its agents and never hears from the outside world.
@@ -117,7 +133,7 @@ const (
 // allRoles is the vocabulary, in the order a profile is written to the wire.
 // Alphabetical, so two nodes describing the same role set produce byte-equal
 // meta.
-var allRoles = []NodeRole{RoleData, RoleIngress, RoleSeats, RoleWorkers}
+var allRoles = []NodeRole{RoleData, RoleGit, RoleIngress, RoleSeats, RoleWorkers}
 
 // Vocabulary is every role, in wire order — a fresh slice per call.
 //

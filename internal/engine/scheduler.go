@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 )
@@ -127,7 +126,7 @@ func (e *Engine) armSchedulerLocked(ctx context.Context, c *Company) {
 		// apply, so a captured pointer would pin the scheduler to the
 		// company that existed when it was built and fire deleted seats'
 		// schedules for the life of the process.
-		Org:    func() *org.Organization { return e.Company().Org },
+		Org:    e.Chart,
 		Ledger: claimer,
 		// The node's own config posture. A node that cannot apply the
 		// current epoch must not fire the previous company's crons — and
