@@ -110,6 +110,21 @@ const (
 	reasonNeedsRestart = "native_backend_needs_restart"
 )
 
+// reasonNotHeld is what a verify's 404 names when the repository is declared
+// and THIS node holds no copy of it — a different fact from a repository
+// nobody declared, which a client acts on the opposite way: a sweep of every
+// repository on one git node passes over the ones that node does not keep
+// (nothing there can be damaged) and fails on a name nobody declared. Both
+// are `not_found`, since neither has anything here to check; the reason is
+// what tells them apart without reading the sentence.
+const reasonNotHeld = "not_held"
+
+// notDeclared is the sentence a repository nobody declared is answered with,
+// naming the setting that declares one.
+func notDeclared(name string) string {
+	return fmt.Sprintf("no repository named %q is declared in code.repos", name)
+}
+
 // codeUnserved is how a code route answers a node that serves none of the
 // code host now, by the engine's reason:
 //
@@ -312,7 +327,7 @@ func codeRefusal(w http.ResponseWriter, what, repo string, err error) {
 	switch {
 	case errors.Is(err, code.ErrRepoNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error": stream.CodeNotFound, "detail": fmt.Sprintf("no repository named %q is declared", repo),
+			"error": stream.CodeNotFound, "detail": notDeclared(repo),
 		})
 	case errors.Is(err, code.ErrBadLevel), errors.Is(err, code.ErrBadCursor),
 		errors.Is(err, code.ErrInvalid):
@@ -409,11 +424,12 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, viewOf(v))
 	case errors.Is(err, code.ErrRepoNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error": stream.CodeNotFound, "detail": fmt.Sprintf("no repository named %q is declared", name),
+			"error": stream.CodeNotFound, "detail": notDeclared(name),
 		})
 	case errors.Is(err, cache.ErrNotHeld):
 		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error": stream.CodeNotFound, "detail": fmt.Sprintf("this node holds no copy of %q, so it has "+
+			"error": stream.CodeNotFound, "reason": reasonNotHeld,
+			"detail": fmt.Sprintf("this node holds no copy of %q, so it has "+
 				"nothing to check: verify the git nodes that serve it", name),
 		})
 	case errors.As(err, &running):

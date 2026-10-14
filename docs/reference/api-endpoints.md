@@ -4114,11 +4114,16 @@ until it ends.
 What can be refused without reading the repository is refused at once, having
 read nothing — so a retry costs nothing either:
 
-- `404 not_found` for a repository that is not declared, and for one **this
-  node holds no copy of**: a git node keeps a copy only of the repositories it
-  has served and not evicted, and building one to check would be a download of
-  the whole repository that then evicts a warm one. Verify the git nodes that
-  serve the repository — with requests routed by repository, one or two.
+- `404 not_found` for a repository that is not declared (its `detail` naming
+  `code.repos`), and for one **this node holds no copy of**, which carries
+  `"reason": "not_held"` beside it: a git node keeps a copy only of the
+  repositories it has served and not evicted, and building one to check would
+  be a download of the whole repository that then evicts a warm one. Verify the
+  git nodes that serve the repository — with requests routed by repository, one
+  or two. The two are told apart by the `reason` rather than the sentence
+  because a sweep of every repository on one node acts on them oppositely: a
+  repository the node does not keep has nothing there to be damaged, and is
+  passed over, while a name nobody declared is a mistake.
 - `503 unavailable` with `Retry-After: 10` when the node's maintenance lane has
   no free slot or the background work in flight leaves the check no memory: a
   check holds one slot of that lane, and its connectivity check's memory, from
