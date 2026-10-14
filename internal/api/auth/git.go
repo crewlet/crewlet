@@ -1,11 +1,13 @@
 package auth
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"slices"
 	"strings"
+	"testing"
 )
 
 // GitPrefix is where a person's git client reaches the code host, and
@@ -157,13 +159,38 @@ func advertises(r *http.Request, tail string) bool {
 // The response is never sniffed into anything else, and never cached in front
 // of the node: a refusal is about this moment — a drain, a credential — and a
 // proxy that kept one would go on refusing a request the node now serves.
+//
+// A SENTENCE IS ONE LINE, because git prints each line of the body as a
+// `remote:` line of its own and a sentence spanning two reaches a person as a
+// refusal broken in two. Every caller passes a sentence of its own making —
+// a literal, or error text it has already folded onto one line — so one that
+// still carries a newline inside it is the caller's bug: a test binary, where
+// every caller's sentence is exercised, panics naming it (oneLine); a
+// production one folds it onto one line rather than fail a refusal over its
+// punctuation. Trailing newlines are trimmed either way, and one written.
 func GitText(w http.ResponseWriter, status int, sentence string) {
+	line := oneLine(sentence, testing.Testing())
 	h := w.Header()
 	h.Set("Content-Type", "text/plain; charset=utf-8")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Cache-Control", "no-cache")
 	w.WriteHeader(status)
-	_, _ = io.WriteString(w, strings.TrimRight(sentence, "\n")+"\n")
+	_, _ = io.WriteString(w, line+"\n")
+}
+
+// oneLine is sentence as the one line [GitText] writes: its trailing newlines
+// trimmed, and any newline left inside it refused by panicking when strict —
+// a test binary — or folded into a space otherwise.
+func oneLine(sentence string, strict bool) string {
+	line := strings.TrimRight(sentence, "\n")
+	if !strings.Contains(line, "\n") {
+		return line
+	}
+	if strict {
+		panic(fmt.Sprintf("auth.GitText: the sentence %q spans more than one line, and git would "+
+			"print each as a remote: line of its own; write it as one", sentence))
+	}
+	return strings.ReplaceAll(line, "\n", " ")
 }
 
 // GitChallenge is the 401 a git route answers: a Basic challenge, then

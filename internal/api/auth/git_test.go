@@ -346,3 +346,20 @@ func TestGitTextIsTheFormGitPrints(t *testing.T) {
 		t.Errorf("body = %q", got)
 	}
 }
+
+// A SENTENCE IS ONE LINE: git prints each line of a refusal's body as a
+// `remote:` line of its own, so a sentence spanning two reaches a person as a
+// refusal broken in two. Every caller passes a sentence of its own making, so
+// one carrying a newline inside it is the caller's bug, and a test build —
+// where every caller's sentence is exercised — panics on it rather than
+// write it; a production build folds it onto one line rather than fail a
+// refusal over its punctuation.
+func TestGitTextRefusesASentenceOfTwoLines(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if recover() == nil {
+			t.Error("a sentence of two lines was written rather than refused")
+		}
+	}()
+	auth.GitText(httptest.NewRecorder(), http.StatusServiceUnavailable, "this node is draining\nretry in 30 s\n")
+}
