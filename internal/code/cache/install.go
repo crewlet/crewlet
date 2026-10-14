@@ -667,9 +667,14 @@ func (c *Cache) storeFailure(id string, p code.PackRow, err error) error {
 	return &ErrPackMissing{Repo: id, Pack: p, Damaged: damaged, Err: err}
 }
 
-// rejected is a bundle whose verified bytes are not its row's.
+// rejected is a bundle whose verified bytes are not its row's, logged under
+// the one name the node gives that fact: the code host logs it again, by the
+// same name, for each git request the failed sync answers, and names it to the
+// client — code_pack_rejected is the receiving node refusing a push's own
+// pack, a different fault with a different remedy.
 func (c *Cache) rejected(id string, p code.PackRow, err error) error {
-	c.log.Error("code_pack_rejected", "repo", id, "pack_id", p.PackID, "object", p.Object.String(), "error", err)
+	c.log.Error("code_pack_checksum_mismatch", "repo", id, "pack_id", p.PackID, "object", p.Object.String(),
+		"error", err)
 	return &ErrCorruptPack{Repo: id, Pack: p, Err: err}
 }
 

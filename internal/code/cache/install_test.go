@@ -824,8 +824,8 @@ func TestAChecksumMismatchIsNotRetried(t *testing.T) {
 			t.Errorf("the round read at linearizable (%+v): a mismatch is asked of no one again", call)
 		}
 	}
-	if len(w.logs.lines(t, "code_pack_rejected")) == 0 {
-		t.Error("no code_pack_rejected line")
+	if len(w.logs.lines(t, "code_pack_checksum_mismatch")) == 0 {
+		t.Error("no code_pack_checksum_mismatch line")
 	}
 	w.tmpEmpty(t)
 }
@@ -879,8 +879,8 @@ func TestBytesThatAreNotTheRowsBundleAreACorruptPack(t *testing.T) {
 			if !errors.As(err, &corrupt) || !errors.Is(err, code.ErrBadBundle) {
 				t.Fatalf("Sync: %v, want *ErrCorruptPack wrapping code.ErrBadBundle", err)
 			}
-			if len(w.logs.lines(t, "code_pack_rejected")) == 0 {
-				t.Error("no code_pack_rejected line")
+			if len(w.logs.lines(t, "code_pack_checksum_mismatch")) == 0 {
+				t.Error("no code_pack_checksum_mismatch line")
 			}
 			if statOK(t, filepath.Join(w.dir(t, cc, repo), "objects", "pack", "pack-"+row.GitChecksum+".idx")) {
 				t.Error("a corrupt bundle was installed")
