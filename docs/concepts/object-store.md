@@ -173,7 +173,9 @@ storage it already runs, takes the S3 backend.
 [repository the engine hosts](code-host.md) is one object, and nothing removes
 a repository's packs but the repository's own purge, so its repositories grow
 as long as the company works in them — on `nats`, on every member's disk
-beside the logs.
+beside the logs. And a git node bringing its
+[cache](code-host.md#the-cache-on-a-git-node) of a repository up from nothing
+reads every one of those objects, one a push and sixteen at once.
 
 The stream declares **no byte ceiling**, unlike the state logs: the engine
 reserves disk for the company's own records, whose growth the trim governs,

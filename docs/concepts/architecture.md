@@ -825,6 +825,7 @@ here.
 | Models, the fallback chain, the key pool | `internal/providers` | [Provider layer](overview.md#provider-layer) · [Subscription LLM backends](subscription-llm-backends.md) |
 | Detached coding runs | `internal/sandbox`, `internal/hostbox` | [Code sandbox](code-sandbox.md) |
 | The engine's own git repositories: their rows, the committer, the activation fence, the purge | `internal/code`, `internal/engine` (the reconcile of `code.repos` and the `code-retention` duty) | [Code host](code-host.md) |
+| A git node's cache of each repository, and the git processes it runs | `internal/code/cache`, `internal/code/gitproc` | [The cache on a git node](code-host.md#the-cache-on-a-git-node) |
 | Cron-scoped recurring work | `internal/schedule` | [Scheduling](scheduling.md) |
 | The company's sealed credentials | `internal/fleetsecrets` | [Secret store](secret-store.md) |
 | The local database and its migrations | `internal/store` | [Database](overview.md#database) · [Backups & restore](../guides/backup.md) |

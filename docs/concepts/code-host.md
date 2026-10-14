@@ -31,8 +31,9 @@ a repository's packs exactly as they treat a project's files: a required
 reference, kept while a live row names it (see
 [One object per upload](object-store.md#one-object-per-upload)).
 
-A git working directory on a node is never the record. It is a cache derived
-from the rows, disposable and rebuilt from them.
+A git repository on a node's disk is never the record. It is a
+[cache](#the-cache-on-a-git-node) derived from the rows, disposable and rebuilt
+from them.
 
 ### What it does not do yet
 
@@ -41,8 +42,9 @@ This is the product's current shape, not a configuration choice:
 - **Nothing serves git's HTTP transport yet**, so nobody clones or pushes a
   repository through this build. What exists is everything a push is decided
   by — the repositories, their protection rules, the committer below and the
-  rows it writes — and the routes that will carry git are reserved and
-  always guarded.
+  rows it writes — and the [cache](#the-cache-on-a-git-node) git will be
+  served from, built but run by no node yet; the routes that will carry git
+  are reserved and always guarded.
 - **Agents do not push.** The repositories, their protection rules and the
   decision of every push exist; a seat as a git user does not.
 - **There are no changes, reviews or checks** — no merge request, no review
@@ -347,6 +349,128 @@ with.
 
 ---
 
+## The cache on a git node
+
+A repository lives as rows on the code log and as pack bundles in the object
+store. A node that serves git keeps a **cache** of each repository it is asked
+for: an ordinary bare repository in a directory of the node's own, from which
+git's own `upload-pack` answers clones and fetches. The cache is disposable:
+nothing in it is the only copy of anything, and deleting it costs nothing but
+the time to download it again. The engine's [backup](../guides/backup.md)
+never copies it, and its directory carries a
+[`CACHEDIR.TAG`](https://bford.info/cachedir/), so a backup of your own run
+with `--exclude-caches` — tar, borg and restic all take it — leaves it out
+too; without that option they copy it like any other directory. The
+directory is the cache's alone: a node refuses one that already holds
+anything without that tag — a volume's own `lost+found` aside — because it
+empties its own scratch space there at every boot, and refuses one another
+process is using.
+
+A cache is a **function of the rows**: its refs are exactly the repository's
+refs at the log position it records, its packs exactly the repository's packs
+there. Nothing but the cache itself writes it — its sync, the adoption of a
+push's pack once the push's row has applied, and its background index — and a
+push never does: a push is received in a throwaway scratch repository that
+reads the cache through an alternate, so an object nobody committed can never
+appear in a cache, where any reader could fetch it by id.
+
+```mermaid
+flowchart LR
+  rows["code log rows<br/>(refs, packs)"] -->|"what moved since the cache's position"| sync[cache sync]
+  store[("object store<br/>S3 or the broker's bucket")] -->|"one object a push, 16 at once"| sync
+  sync -->|"split into pack, index, reverse index"| packs["objects/pack"]
+  sync -->|"after every pack they need"| refs["packed-refs, HEAD"]
+  refs --> serve["git upload-pack<br/>clones and fetches"]
+  packs --> serve
+```
+
+**Warm and cold.** After a push, every other node brings its cache forward by
+a **delta** the next time somebody fetches from it. A delta downloads only
+what changed — usually the push's one pack — and rewrites the repository's ref
+file, and that rewrite grows with the refs the repository holds: a delta takes
+about 7 ms in all at a thousand refs, and about 50 ms at the 100 000 a
+repository may hold. The node that received the push does not download it
+back: it links the pack its own git wrote into its cache once the push's row
+has applied. A **cold** cache — on a node that has never served the
+repository, or whose budget evicted it — downloads every pack: sixteen at once
+for one repository and at most thirty-two at once on the node, largest first,
+so a second repository's cold sync never waits behind the first one's longest
+downloads. Each is verified against its SHA-256 and installed as the receiving
+node's git indexed it — a push stores its pack together with its index, so no
+other node spends a core re-indexing it, and a cold sync is bound by the
+object store rather than the CPU. From an S3-shaped store answering in 30 ms,
+that is about 450 small packs a second: a repository of 10 000 pushes — one
+pack each, since nothing compacts them yet — comes up in about 22 seconds,
+before its first request is answered.
+
+The first fetch of a repository after a node restarts reads the whole of its
+rows once, reusing every pack the cache already holds, which is what makes a
+cache exact again after a crash, a full disk or a stray file. A cache never
+goes back because one data node's copy of the rows is behind; it goes back only
+when the code log did — recreated, or restored from an older backup — which the
+node notices, reading every repository whole at its next sync.
+
+**The budget.** A node holds its caches to a byte budget, counting everything
+they hold on disk: every repository's packs, indexes and refs, and the
+downloads and pushes in flight. Past it, the repositories used least recently
+are evicted, and nothing else evicts one: a repository nobody fetched over a
+weekend is still there on Monday, brought forward by the rows that changed
+rather than downloaded again. Each repository's last use survives a restart,
+so one read all day and rarely pushed to is not the first evicted after one.
+A repository a request is reading is never evicted — one larger than the whole
+budget is still served, logged as `code_cache_over_budget`, and evicted as soon
+as no request holds it. Every git node that serves a repository caches it
+**whole**, so size the volume for the repositories it serves, not the company's
+total. A dedicated disk is worth it, because a cold sync writes everything it
+downloads at the speed the object store delivers it.
+
+**Background indexing.** With one pack a push, git would search pack after
+pack for every object. So once a repository's packs have stood still for ten
+seconds — or the oldest has waited ten minutes, for one pushed to without pause
+— a git node writes it a multi-pack index with a bitmap, and a commit-graph, so
+a clone counts its objects from the bitmap rather than walking the history; and
+writes them again once 64 more packs have gathered beside them, at most every
+ten minutes and at most a tenth of a core's time for any one repository. A
+run, on one core, takes 16 to 30 seconds a gigabyte of packs, more a gigabyte
+the larger the repository. Runs take at most half the node's cores, one each,
+in a slot that is free or not at all, so they never make a push or a fetch
+wait; and only as many run at once as a quarter of a gibibyte a core holds
+beside the largest, each charged an estimate of 320 bytes of memory for every
+object of its repository — the bitmaps of large repositories were measured
+at about 255 to 266 bytes an object — so a node that has just joined does not
+index all its largest repositories at once. A cold cache of a repository
+holding 256 packs or more gets an index — without the bitmap — before its
+first request is answered, since at that count it saves the request more than
+it costs; the bitmap follows when the background indexing reaches the
+repository, which on a node that has just joined comes after every repository
+with more packs waiting. A cache without either is slower, never wrong.
+
+**Damage and repair.** When git finds a cache damaged — a pack or an index it
+cannot read, an object a row names that no pack holds — the node rebuilds it:
+the repository is read whole again from the rows and the object store into a
+new directory beside the damaged one, which replaces it once it is complete.
+Requests already reading the old copy finish on it, and any number of requests
+failing on one damaged cache cost one rebuild. A rebuild that does not end the
+failure is not repeated at once: the damage is then in the object store or in
+the rows rather than in the node's copy, and another rebuild would read the
+same bytes. So the next attempt waits ten minutes, each one after it twice as
+long, up to a day; a cache holding exactly what such a rebuild read is not
+rebuilt again for a day unless something writes into it; and every refusal is
+counted, and logged as `code_cache_rebuild_refused` at most once every ten
+minutes a repository. A pack the object store has lost — once a read at the
+log's head confirms a row still names it — or holds damaged fails the sync
+naming the pack, and the collector's daily audit raises the
+[`objects_missing`](object-store.md#alarms) alarm for the same object.
+
+**What to watch.** `crewlet.code.cache.bytes` against the budget,
+`crewlet.code.cache.repos`, `crewlet.code.cache.sync.duration` by `kind` (full
+syncs dominating is a cache too small to stay warm),
+`crewlet.code.cache.rebuilds` by `reason`, and
+`crewlet.code.cache.rebuild.refusals` by `rule` — rising at all, damage no
+rebuild repairs ([metrics reference](../reference/metrics.md)).
+
+---
+
 ## What the node logs
 
 | Line | Level | Means |
@@ -370,3 +494,4 @@ with.
 - [Replication](../guides/replication.md) — the state-log framework the code log rides
 - [Retention](../guides/retention.md) — the log's trim, and what a purge does and does not reach
 - [Backup](../guides/backup.md) — a repository's rows ride the store copy, its packs ride as required references
+- [Metrics](../reference/metrics.md) — the cache's bytes and repositories, its sync durations, and its rebuilds and refusals
