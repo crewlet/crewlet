@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -39,6 +40,14 @@ func (s *Server) ReceivePack() http.Handler { return http.HandlerFunc(s.receiveP
 // never a stale answer; code.ErrRepoNotFound when it is not declared, or when
 // the name is one the grammar refuses (a repository that cannot exist), and
 // ErrStopping on a stopping host.
+//
+// ErrStopping TOO FOR A VERIFY THE STOP CUT SHORT, wrapping what the cut left:
+// Stop ends every verify in flight through the host's lifetime, so its error
+// is then the context's own `canceled`, which reads as the caller giving up —
+// and a caller still waiting is owed what the node told every other request it
+// stopped serving (503, Retry-After StoppingRetryAfter), not a failure of the
+// repository it asked about. A verify its own caller ended is not one the stop
+// cut, and keeps its error.
 func (s *Server) VerifyRepo(ctx context.Context, name string, repair bool) (cache.VerifyReport, error) {
 	if !gitref.ValidRepoName(name) {
 		return cache.VerifyReport{}, code.ErrRepoNotFound
@@ -51,11 +60,21 @@ func (s *Server) VerifyRepo(ctx context.Context, name string, repair bool) (cach
 	s.inflight.Add(1)
 	s.mu.Unlock()
 	defer s.inflight.Done()
-	ctx, cancel := context.WithCancel(ctx)
+	work, cancel := context.WithCancel(ctx)
 	defer cancel()
 	//nolint:contextcheck // The host's lifetime ends a verify too: Stop must reach its git.
 	defer context.AfterFunc(s.life, cancel)()
 
+	report, err := s.verify(work, name, repair)
+	if err != nil && s.life.Err() != nil && ctx.Err() == nil {
+		return report, fmt.Errorf("%w: %w", ErrStopping, err)
+	}
+	return report, err
+}
+
+// verify is VerifyRepo's work under ctx: the name resolved, then the cache's
+// check of what it names.
+func (s *Server) verify(ctx context.Context, name string, repair bool) (cache.VerifyReport, error) {
 	ref, err := s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,
 		Fresh: statelog.Freshness{Level: statelog.ReadStale}})
 	if errors.Is(err, code.ErrRepoNotFound) {
