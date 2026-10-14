@@ -119,8 +119,8 @@ func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 func TestTheRouterReadsARefusalTheWayItWasSent(t *testing.T) {
 	t.Parallel()
 	var unserved *ErrUnserved
-	if !errors.As(throughWire(t, &ErrUnserved{Detail: "data-a: no answer"}), &unserved) ||
-		unserved.Detail != "data-a: no answer" {
+	if !errors.As(throughWire(t, &ErrUnserved{Detail: "data-a: no answer", NodeSilent: true}), &unserved) ||
+		unserved.Detail != "data-a: no answer" || !unserved.Silent() {
 		t.Fatalf("an unserved estate crossed as %+v", unserved)
 	}
 	unvouchedStep := throughWire(t, fmt.Errorf("walk: %w", tracker.ErrStepUnvouched))

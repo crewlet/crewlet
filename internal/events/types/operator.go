@@ -84,18 +84,23 @@ func (o AuditOutcome) Valid() bool {
 // outcomes that are failures of the call rather than states of a write.
 func (o AuditOutcome) failed() bool { return o == AuditRefused || o == AuditFailed }
 
-// The two transports an operator tool call arrives on.
+// The three transports a person's call arrives on.
 const (
 	// TransportAct is the dashboard's write surface, `/operator/act`.
 	TransportAct = "act"
 	// TransportMCP is an operator's own assistant, `/operator/mcp`.
 	TransportMCP = "mcp"
+	// TransportGit is a person's git client, smart HTTP at `/git/`: every
+	// push it makes is one record, whatever became of it.
+	TransportGit = "git"
 )
 
-// OperatorActed is one operator tool call that is not a proven read, on
-// either transport: the dashboard's act route and an operator's assistant
-// over MCP call the same catalogue, and an audit that depended on which one a
-// person used would be missing whichever half nobody tested.
+// OperatorActed is one call a person made that is not a proven read, on any
+// of the three transports: the dashboard's act route and an operator's
+// assistant over MCP call the same catalogue, and a person's git client
+// pushes through the code host — the third person transport, one record a
+// push (internal/code/host). An audit that depended on which one a person used
+// would be missing whichever half nobody tested.
 //
 // The ARGUMENTS ARE NEVER HERE, for the reason the act log line omits them: a
 // page body or a comment is the company's content, and it already lives in
@@ -110,6 +115,10 @@ type OperatorActed struct {
 
 	Transport string `json:"transport"`
 	Tool      string `json:"tool"`
+	// Repo is the repository a git push was made to — empty on every other
+	// transport. A refused push writes no row in the code domain, so this
+	// record is the only one that says where it was refused.
+	Repo string `json:"repo,omitempty"`
 	// RequestID is the caller's own request identity on the act
 	// transport, canonical, so every retry of one gesture carries the same
 	// value. MCP names none.
@@ -131,10 +140,14 @@ func (OperatorActed) EventType() string { return "operator_acted" }
 // Actor is the credential, which is who the records name as the author.
 func (e OperatorActed) Actor() string { return e.OperatorID }
 
-// SummaryFor names the verb and what became of it, and the person when the
-// credential is bound to one.
+// SummaryFor names the verb, the repository a git push was made to, and what
+// became of it — and the person when the credential is bound to one.
 func (e OperatorActed) SummaryFor(actor string) string {
-	return lead(asPerson(actor, e.ActorSeat), "ran "+e.Tool+": "+outcomeWords(e.Outcome, e.Refusal))
+	verb := "ran " + e.Tool
+	if e.Repo != "" {
+		verb += " on " + e.Repo
+	}
+	return lead(asPerson(actor, e.ActorSeat), verb+": "+outcomeWords(e.Outcome, e.Refusal))
 }
 
 // NewOperatorActed builds the audit record for one call, with [Failed]

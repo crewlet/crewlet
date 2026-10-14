@@ -3,6 +3,7 @@ package cache_test
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -251,5 +252,36 @@ func TestAnAdvertisementViewIsASnapshotOfTheRefs(t *testing.T) {
 	advert := string(res.Stdout)
 	if !strings.Contains(advert, old+" refs/heads/main") || strings.Contains(advert, tip+" refs/heads/main") {
 		t.Errorf("the view's advertisement does not list main at the old tip %s:\n%s", old, advert)
+	}
+}
+
+// A SPOOL HAS NO NAME: it is the open file and nothing else, so the kernel
+// removes it when it is closed whatever became of the request — a crash
+// included — and the janitor, which measures scratch/ by its names, never
+// counts a request's spool against the cache's budget.
+func TestASpoolHasNoName(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	c := w.open(t)
+	f, err := c.Spool()
+	if err != nil {
+		t.Fatalf("Spool: %v", err)
+	}
+	if got := names(t, w.path("scratch")); len(got) != 0 {
+		t.Errorf("a spool left %v under scratch/, where the janitor would count it", got)
+	}
+	if _, err := f.WriteString("0032want " + strings.Repeat("ab", 20) + "\n"); err != nil {
+		t.Fatalf("writing the spool: %v", err)
+	}
+	back, err := io.ReadAll(io.NewSectionReader(f, 0, 1<<20))
+	if err != nil || !strings.HasPrefix(string(back), "0032want ") {
+		t.Fatalf("reading the spool back = %q, %v", back, err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("closing the spool: %v", err)
+	}
+	c.Stop(context.Background())
+	if _, err := c.Spool(); !errors.Is(err, cache.ErrStopped) {
+		t.Errorf("Spool after Stop = %v, want ErrStopped", err)
 	}
 }

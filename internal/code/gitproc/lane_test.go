@@ -168,6 +168,40 @@ func TestAReceivePackIsLentFreeCores(t *testing.T) {
 	}
 }
 
+// FREE IS WHAT A RUN COULD TAKE WITHOUT WAITING: a lane's slots less those
+// held and, in the read lane, those lent to a push's receive-pack — so a
+// caller sizing independent reads by it, as a push's force check does, takes
+// only the cores nothing else claims and never queues behind itself.
+func TestFreeIsWhatNoRunAndNoLoanClaims(t *testing.T) {
+	t.Parallel()
+	p := fakePool(t, loanBody, gitproc.Options{MaxProcesses: 4, MaxTransfers: 2})
+	if got := p.Free(gitproc.ClassRead); got != 4 {
+		t.Fatalf("an idle four-core pool has %d read slots free, want 4", got)
+	}
+	h := hold(t, p, gitproc.ClassRead)
+	if got := p.Free(gitproc.ClassRead); got != 3 {
+		t.Errorf("with one read held %d read slots are free, want 3", got)
+	}
+	r := startReceive(t, p) // lent the two cores the read and its own thread leave
+	if got := p.Free(gitproc.ClassRead); got != 1 {
+		t.Errorf("with one read held and two cores lent %d read slots are free, want 1", got)
+	}
+	if got := p.Free(gitproc.ClassTransfer); got != 1 {
+		t.Errorf("with one receive-pack running %d of two transfer slots are free, want 1", got)
+	}
+	if got := p.Free(gitproc.ClassMaintenance); got != 2 {
+		t.Errorf("an idle maintenance lane of two has %d free", got)
+	}
+	r.end(t)
+	h.end(t)
+	if got := p.Free(gitproc.ClassRead); got != 4 {
+		t.Errorf("after every run ended %d read slots are free, want 4", got)
+	}
+	if got := p.Free("install"); got != 0 {
+		t.Errorf("a class the pool does not have has %d slots free", got)
+	}
+}
+
 // LOANS NEVER CLAIM A CORE TWICE: concurrent receive-packs are lent what the
 // earlier loans left, and the lane's held slots and loans never exceed its
 // size.

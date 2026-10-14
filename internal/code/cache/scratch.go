@@ -218,3 +218,32 @@ func (s *Scratch) discard() {
 	}
 	c.release(s.e, s.inc)
 }
+
+// Spool is a file a request's body that outgrew memory is written to: a
+// fetch's negotiation past the host's in-memory share, which a partial clone's
+// checkout reaches by naming every blob it lacks in one request.
+//
+// IT HAS NO NAME. It is created under scratch/ — on the cache's volume, never
+// a TMPDIR that may be memory — and unlinked at once, so it is the OPEN FILE
+// and nothing else: the kernel removes it when the last descriptor closes,
+// whatever the request's outcome and however the process ends, a crash
+// included, so no spool outlives its request and none is left for a boot to
+// find; and the janitor, which measures scratch/ by walking its names, never
+// counts one against the cache's budget. That is deliberate: a spool draws on
+// the host's own allowance (internal/code/host), and counted here, one
+// reader's large request would make the budget evict warm repositories that
+// every other reader then downloads again. The caller closes it.
+func (c *Cache) Spool() (*os.File, error) {
+	if c.isStopped() {
+		return nil, ErrStopped
+	}
+	f, err := os.CreateTemp(filepath.Join(c.dir, scratchDir), "spool-*")
+	if err != nil {
+		return nil, fmt.Errorf("cache: make a request's spool: %w", err)
+	}
+	if err := os.Remove(f.Name()); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("cache: unlink a request's spool %s: %w", f.Name(), err)
+	}
+	return f, nil
+}

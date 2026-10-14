@@ -504,7 +504,9 @@ func TestALinearizableCallerIsNeverAnsweredByAnOlderSync(t *testing.T) {
 // A CALLER THAT HANGS UP NEVER CANCELS THE SYNC: rounds run under the cache's
 // own lifetime, so the others waiting on one are answered whatever the first
 // caller's context does — and the pin a round takes for a caller that has gone
-// is never left behind.
+// is never left behind. The caller that hung up releases what it was
+// answered, the zero Synced, which releases nothing: a holder deferring the
+// release of a variable a later Sync may overwrite relies on it.
 func TestACallerThatHangsUpNeverCancelsTheSync(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -528,9 +530,7 @@ func TestACallerThatHangsUpNeverCancelsTheSync(t *testing.T) {
 	firstErr := make(chan error, 1)
 	go func() {
 		s, err := c.Sync(ctx, repo, stale)
-		if err == nil {
-			s.Release()
-		}
+		s.Release() // the zero Synced when it failed: a no-op, never a nil call
 		firstErr <- err
 	}()
 	<-reached
@@ -555,9 +555,11 @@ func TestACallerThatHangsUpNeverCancelsTheSync(t *testing.T) {
 		t.Errorf("pins = %d while the second caller holds the directory, want 1", got)
 	}
 	second.Release()
+	second.Release() // idempotent
 	if got := cache.Pins(c, repo); got != 0 {
 		t.Errorf("pins = %d after every caller let go, want 0", got)
 	}
+	cache.Synced{}.Release() // what a failed Sync answers releases nothing
 }
 
 // A REQUEST THAT IS NOT A SYNC IS REFUSED before any estate call: a sync

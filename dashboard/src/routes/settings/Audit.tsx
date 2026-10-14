@@ -148,10 +148,13 @@ const RUNTIME_ROW: Record<
 > = {
   // A TOOL CALL NAMES ITS TOOL AND NOTHING IT WAS CALLED WITH: the arguments
   // are the company's content, which lives in the history of whatever the call
-  // changed, never in the audit — so the empty cell says exactly that.
+  // changed, never in the audit — so the empty cell says exactly that. A GIT
+  // PUSH's subject is its repository: a refused push writes no row anywhere
+  // else, so the record's repository is the only place that says where it
+  // was refused.
   operator_acted: (row) => ({
     kind: row.tags?.tool ?? "tool call",
-    subject: "",
+    subject: row.tags?.repo ?? "",
     noSubject: "Not recorded",
   }),
   // A BACKUP'S SUBJECT IS WHERE IT WENT — a directory on the row's own node.

@@ -164,6 +164,11 @@ func TestTheRuntimeAuditsDimensionsSurviveIntoAListing(t *testing.T) {
 		Tool: "update_work_item", Outcome: types.AuditRefused, Refusal: "conflict",
 	}), events.TraceContext{})
 	acted.Node = "node-a"
+	pushed := events.New(types.NewOperatorActed(types.OperatorActed{
+		OperatorID: "maya-laptop", ActorSeat: "maya", Transport: types.TransportGit,
+		Tool: "git_push", Repo: "nimbus-web", Outcome: types.AuditRefused, Refusal: "protected_force",
+	}), events.TraceContext{})
+	pushed.Node = "node-c"
 
 	for _, c := range []struct {
 		event *events.Event
@@ -174,6 +179,10 @@ func TestTheRuntimeAuditsDimensionsSurviveIntoAListing(t *testing.T) {
 		}},
 		{acted, map[string]string{
 			"node": "node-a", "actor_seat": "maya", "tool": "update_work_item",
+			"failed": "true",
+		}},
+		{pushed, map[string]string{
+			"node": "node-c", "actor_seat": "maya", "tool": "git_push", "repo": "nimbus-web",
 			"failed": "true",
 		}},
 	} {

@@ -224,12 +224,14 @@ config_revision_applied    # one node's outcome, and how far it got
 # the runtime audit: source "operator", actor the token's own name, and
 # actor_seat the person it is bound to. One per call, whatever became of it;
 # never the arguments. Written by the node the call reached. The event store
-# promotes actor_seat, tool and dir to tags (beside every row's `node`), so a
-# listing — which carries no payload — can still say who, which tool, where
+# promotes actor_seat, tool, repo and dir to tags (beside every row's `node`),
+# so a listing — which carries no payload — can still say who, which tool, where
 operator_acted             # an operator tool call that is not a proven read,
                            # from the dashboard (/operator/act) or a person's
-                           # assistant (/operator/mcp): tool, transport,
-                           # request id, outcome, position or refusal
+                           # assistant (/operator/mcp), or a person's git push
+                           # (/git/, transport git, tool git_push, and the
+                           # repo it named): tool, transport, request id,
+                           # outcome, position or refusal
 backup_requested           # a POST /backup that began copying: dir, whether
                            # it finished, and how many streams. Which node's
                            # disk holds it is the envelope's `node`

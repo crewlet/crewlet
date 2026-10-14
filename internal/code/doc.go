@@ -19,7 +19,10 @@
 // ADR-0026 and ADR-0033), so the collector keeps every object a live row names,
 // the audit checks each one and a backup carries them. A git node's bare
 // repository is never the record: it is a cache derived from these rows,
-// disposable, rebuilt from them whenever it is lost or wrong.
+// disposable, rebuilt from them whenever it is lost or wrong — which holds
+// only because a repository's refs and packs move by records on its own
+// subject and by nothing else, receive-pack never runs in a cache, and git is
+// told `ok` only from a push's applied row (ADR-0036).
 //
 // # The bundle is the permanent format, and no stored pack reaches 2 GiB
 //

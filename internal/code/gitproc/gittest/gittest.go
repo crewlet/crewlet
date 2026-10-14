@@ -430,6 +430,28 @@ func Fake(t testing.TB, version, body string) string {
 	return path
 }
 
+// Wrap is the real git with a stand-in IN FRONT of it: an executable named git
+// in a fresh directory that runs body — POSIX sh, "$@" the arguments after
+// "git", "$real_git" the path of the git [Require] finds — and then execs the
+// real git with the same arguments, unless body exited first. `git version`
+// is the real git's own answer, never one a test spelled: a pool over the
+// stand-in decides what it decides from a version (the pack reuse it asks for,
+// a git it refuses) from the git that runs, and a test that held a fault at
+// one step of real git's work needs no exec of its own to ask what that git
+// is. Its path, for gitproc.Options.Path.
+func Wrap(t testing.TB, body string) string {
+	t.Helper()
+	git := Require(t)
+	path := filepath.Join(t.TempDir(), "git")
+	writeScript(t, path, "#!/bin/sh\n"+
+		"if [ \"${1-}\" = "+probe+" ]; then exit 0; fi\n"+
+		"real_git="+quote(git)+"\n"+
+		"if [ \"${1-}\" = version ]; then exec \"$real_git\" version; fi\n"+
+		body+"\n"+
+		"exec \"$real_git\" \"$@\"\n")
+	return path
+}
+
 // Call is one invocation a [Recording] saw.
 type Call struct {
 	GitDir string   // GIT_DIR as the process saw it ("" when none)

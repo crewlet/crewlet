@@ -1430,9 +1430,9 @@ func lookupArm(b *testing.B, w *syncWorld, root, src string, commits []string, p
 		}
 		b.Run(fmt.Sprintf("index=%s/op=missing", index), func(b *testing.B) {
 			for b.Loop() {
-				missing, err := c.Missing(b.Context(), s, oids)
-				if err != nil || len(missing) != 0 {
-					b.Fatalf("Missing of %d present objects: %d missing, %v", len(oids), len(missing), err)
+				missing, err := c.Missing(b.Context(), s, wants(oids...), int64(len(oids))*41)
+				if err != nil || missing != "" {
+					b.Fatalf("Missing of %d present objects: %q missing, %v", len(oids), missing, err)
 				}
 			}
 			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(len(oids)), "ns/lookup")

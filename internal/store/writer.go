@@ -136,15 +136,18 @@ var tagKeys = map[string]string{
 	// the ONLY record of which host's disk holds the copy, and the backup
 	// record deliberately leaves the node to the envelope.
 	"node": "node",
-	// The RUNTIME AUDIT's three dimensions (types.OperatorActed and
+	// The RUNTIME AUDIT's four dimensions (types.OperatorActed and
 	// types.BackupRequested, the only events that carry them): the person
-	// the acting credential is bound to, the operator tool a call ran, and
-	// the directory a backup was written to. Tags for the reason every one
-	// here is — the Audit log and the backup history draw these rows from a
-	// listing, which never selects the payload, and without them a row
-	// could say only the summary's prose about who did what and where.
+	// the acting credential is bound to, the operator tool a call ran, the
+	// repository a git push named, and the directory a backup was written
+	// to. Tags for the reason every one here is — the Audit log and the
+	// backup history draw these rows from a listing, which never selects the
+	// payload, and without them a row could say only the summary's prose
+	// about who did what and where. A refused push writes no row in the code
+	// domain, so its record's repository is the only place it is named.
 	"actor_seat": "actor_seat",
 	"tool":       "tool",
+	"repo":       "repo",
 	"dir":        "dir",
 }
 

@@ -39,12 +39,13 @@ from them.
 
 This is the product's current shape, not a configuration choice:
 
-- **Nothing serves git's HTTP transport yet**, so nobody clones or pushes a
-  repository through this build. What exists is everything a push is decided
-  by — the repositories, their protection rules, the committer below and the
-  rows it writes — and the [cache](#the-cache-on-a-git-node) git will be
-  served from, built but run by no node yet; the routes that will carry git
-  are reserved and always guarded.
+- **No node serves git's HTTP transport yet**, so nobody clones or pushes a
+  repository through this build. What exists is everything a push takes —
+  the repositories, their protection rules, the committer below and the rows
+  it writes, the [cache](#the-cache-on-a-git-node) git is served from, and
+  the git surface itself ([A push, end to end](#a-push-end-to-end)) — built
+  and tested but run by no node yet; the routes that will carry git are
+  reserved and always guarded.
 - **Agents do not push.** The repositories, their protection rules and the
   decision of every push exist; a seat as a git user does not.
 - **There are no changes, reviews or checks** — no merge request, no review
@@ -533,6 +534,174 @@ repository whose bitmap the node's memory cannot hold
 
 ---
 
+## A push, end to end
+
+A person pushes with git's own smart HTTP protocol, presenting their own API
+token as the password. The engine checks everything it can before it stores a
+byte, receives the push with real git in a repository of its own, stores the
+push's one pack, and has the repository's committer decide it — and tells git
+a ref moved only once the record that moved it has been applied.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant G as git push
+  participant H as code host
+  participant S as scratch receive-pack
+  participant P as proc-receive hook
+  participant O as object store
+  participant C as committer
+  participant L as code log
+  G->>H: GET info/refs (receive-pack)
+  H->>L: barrier: the repository's refs, now
+  H-->>G: the advertisement — or a refusal git prints
+  G->>H: POST git-receive-pack (commands, pack)
+  H->>H: read the commands; refuse what needs no object
+  H->>L: sync the cache through the barrier
+  H->>S: receive-pack in a scratch repository
+  S->>P: the ref updates git accepted
+  P->>H: relayed over the node's hook socket
+  H->>H: forced updates, blob sizes, new commits
+  H->>O: upload the push's one pack bundle
+  H->>C: propose the push
+  C->>L: one record, arbitrated on repo.<id>
+  L-->>C: applied — or durable, not yet applied
+  C-->>H: the push's row, or pending
+  H->>L: pending: read the push's row again, up to a minute
+  H-->>P: ok or ng per ref
+  P-->>S: the report
+  S-->>G: what git prints
+```
+
+**The advertisement is read at the log's head.** Every answer that names a
+ref — the refs a push or a protocol v0 clone is shown, a protocol v2
+`ls-refs`, a fetch by `want-ref` — is read through the code log's barrier, so
+a node cut off from the fleet answers 503 rather than an old head. An object
+fetch names ids that mean the same bytes on every node, so it takes what the
+node's cache holds; a fetch of an object the node has not seen yet — the
+client learned of it from a node further ahead — makes the node read the
+log's head once before it answers.
+
+**receive-pack never runs in a cache.** git moves a push's objects into the
+repository it runs in *before* any hook can refuse them, so a push received
+in a node's cache would leave a refused push's objects there — fetchable by id
+from that one node, and a base a later push could build on that no other node
+holds. So a push is received in a throwaway **scratch** repository whose one
+alternate is the cache, and its pack enters the cache only once its row has
+applied ([ADR-0036](https://github.com/crewlet/crewlet/blob/main/adr/0036-a-repositorys-refs-move-only-by-records-and-a-cache-is-derived.md)).
+The scratch is removed when the request ends, and a node that crashed with one
+open sweeps it at its next boot.
+
+**Checked before it is stored.** A push naming more than 1 000 refs, a token
+bound to nobody, an archived or deleted repository, a deletion or a direct
+push a protection refuses — each is refused before receive-pack runs, and
+nothing is stored. A forced update of a ref a protection keeps from forcing,
+and a blob larger than `code.limits.max_blob_bytes`, are known only once the
+objects are, so the hook checks them — and refuses the push before uploading
+anything. Only a push that passes every check is uploaded, as **one** object:
+its pack with the indexes the receiving git wrote.
+
+**An `ok` means the row applied.** The committer answers with the push's row
+once its record has been applied. A record that is durable on the log but not
+yet applied on the node that answered is **pending**: the host reads the
+push's row at once and again — after a quarter of a second, then at
+doubling intervals up to two seconds — for up to a minute (the state log's
+own stall grace), and answers git from the row if it appears. It never
+reports a pending push as
+`ok`, because a durable record can still be dropped — by an eviction, on
+every node — and then the push landed nowhere. While a push waits, the hook
+prints a line every five seconds naming the step it is on, so a balancer's
+idle timeout does not cut a push that is merely waiting.
+
+**What a refusal names.** A push answered `pending`, `unknown` or
+`not_applied` is not a push that failed in the ordinary sense — each says what
+is known about it:
+
+- `pending` — the record is durable at the position named and was not applied
+  here within the grace. Run the same `git push` again: a push that landed
+  reports `Everything up-to-date`.
+- `unknown` — the answer was lost (the node committing it went silent, or the
+  client's connection ended first): it may or may not have landed. Fetch, then
+  run the push again.
+- `not_applied` — the record was durable and every node dropped it. Nothing
+  landed; run the push again.
+
+Every push — applied, refused or failed, at the advertisement or at its body —
+is one `operator_acted` record on the node that received it, with transport
+`git`, the token's name and the person it is bound to, the repository and what
+became of the push. A fetch is not recorded.
+
+**Large fetch requests.** git's own HTTP server holds a fetch request in
+memory and refuses one past 10 MiB, and a partial clone breaks that: a
+checkout after `git clone --filter=blob:none` asks for every blob it lacks in
+one request, fifty bytes a blob, so a tree of more than about 210 000 files
+sends more than 10 MiB. The engine holds a request in memory as large as it
+is, up to a mebibyte — a clone's negotiation is a few kilobytes, and costs
+that — and spools the rest to an unnamed file on the cache's volume, removed
+when the request ends however it ends. What every request holds in memory at
+once comes out of a node-wide allowance, a mebibyte for each transfer slot, so
+a burst of fetches waiting for their slots is bounded by the node; a request
+that finds it spent is spooled rather than refused. A request is bounded by
+**its repository**: fifty bytes for every object the repository's packs hold
+and every live ref, beside the mebibyte — the most a request can legitimately
+name — and one past it is refused 413. The spools come out of an allowance of
+their own, 64 MiB for each transfer slot and never the cache's budget, and one
+credential's spooled requests may hold a quarter of it at once, in bytes and
+in requests; a request that finds the allowance or its credential's quarter
+spent is answered 503 at once, and one larger than a quarter by itself — about
+21 million wants on a sixteen-core node — is answered 413, since this node
+will never take it. A request's memory and its spool are given back as soon as
+git has read it and started its answer, not when a slow client finishes
+downloading. A blobless clone needs protocol v2, git's default since 2.28 —
+under v0 a fetch of a blob the client never saw advertised is refused.
+
+---
+
+## What git prints, and what it means
+
+git shows a refusal at the advertisement as `fatal: remote error: …` and a
+refusal of one ref as `! [remote rejected] <ref> (<code>: <sentence>)`. An HTTP
+error's text — a 503's, a 404's — git prints after `remote:` when it comes
+from the advertisement, and as `RPC failed` when it comes from a request in
+the middle of a transfer. Every 503 carries `Retry-After`, and says the same in
+words, since git does not read the header.
+
+| What happened | What git prints | What to do |
+|---|---|---|
+| No credential, or a wrong one | git asks for one (a 401 challenge) | Give your API token as the password. |
+| The repository is not declared | `repository "<name>" not found` (404) | Check the name in `code.repos`. |
+| The repository is deleted | `fatal: remote error: repository <name> is deleted; declaring it again in code.repos restores it …` | Declare it again before its purge to restore it as it was. |
+| The repository is archived (a push) | `fatal: remote error: …archived…`, or `(repo_archived: …)` per ref | Fetch only; unarchive it in `code.repos` to push. |
+| A token bound to nobody (a push) | `fatal: remote error: this token is not bound to a person: …` | Push with your own token — the one your human seat's `contact.crewlet_operator_id` names. |
+| More than 1 000 refs in one push | `(this push names more than 1000 refs; push them in parts …)` | Push the refs in groups. |
+| A ref moved since you fetched | `(stale: refs/heads/main is at <id>; fetch first)`, or `(stale: was at <id>, which this repository does not hold; fetch first)` when the commit you pushed from was never pushed here | Fetch, integrate, push again. |
+| A protection refused it | `(protected_force: refuses a force-push (protection <pattern>: allow_force))`, and `protected_delete` and `protected_direct` likewise | The rule named says what it allows. |
+| A tag moved, a reserved ref | `(tag_moved: …)`, `(reserved_ref: …)` | Create a new tag; push under `refs/heads/` or `refs/tags/`. |
+| One ref of an `--atomic` push refused | the refused ref's reason, and `(atomic: …)` on every other | Fix the refused ref; nothing of the push landed. |
+| A blob over the limit | `(blob_too_large: blob <id> (<path>) is <size>, past code.limits.max_blob_bytes …)` | Remove it from the history you push. |
+| The push is pending | `(pending: durable at <position>, unresolved here; re-run git push …)` | Run the push again. |
+| The outcome is unknown | `(unknown: outcome unknown (op …); fetch, then re-run git push)` | Fetch, then push again. |
+| Nothing took the push | `(unavailable: no data node took push <id>: …)` | Nothing landed; push again, or once the fleet has a data node serving. |
+| The object store failed | `(unavailable: object store unavailable: …)` | Nothing was stored; push again. |
+| The engine stopped mid-push | `crewlet: the engine went away during this push; its outcome is unknown …` | Fetch, then push again. |
+| Every git slot on the node is busy | `every git slot on this node stayed busy for 10 s: retry in 10 s` (503) | Retry, or against another node. |
+| The node ended git before it answered | `git on this node was stopped before it answered, stalled (…): retry in 10 s, or against another node` (503), or `past its deadline` | The node is too loaded to answer in time; retry, or against another node. |
+| The node cannot read the code log | `the code log could not be read here: …; retry in 10 s` (503) | The node is cut off from the fleet; retry against another. |
+| The node is stopping | `this node's code host is stopping: retry in 30 s …` (503) | Retry against another node. |
+| A pack the rows name is gone | `<repo>'s pack <id> is missing from the object store (the daily audit raises objects_missing for it) …` (503) | An operator's problem: see [`objects_missing`](object-store.md#alarms). |
+| A fetch request past its repository's bound | `this fetch request is larger than any repository <name> holds could need …` (413) | Fetch in parts. |
+| A fetch request past a quarter of the node's room for large requests | `this fetch request is larger than this node takes from one credential at once …` (413) | Fetch through a node with more cores, or fewer objects at once. |
+| The node's room for large requests is in use | `this node's room for large fetch requests is in use …` (503) | Retry, or against another node. |
+| The request's body could not be read (a gzip stream that fails its checksum; for a fetch, a body cut short too) | `the push's body could not be read: …`, or `the request body could not be read: …` for a fetch (400) | Nothing was stored; send it again, and if it fails the same way the client is sending a broken stream. |
+
+**What to watch.** `crewlet.code.push.duration` by `outcome` (`pending`
+growing is a code log slow to apply here; `unknown`, a committer that stopped
+answering), `crewlet.code.push.bytes` against the push limit, and
+`crewlet.code.fetch.duration` by `command` and `sync` ([metrics
+reference](../reference/metrics.md)).
+
+---
+
 ## What the node logs
 
 | Line | Level | Means |
@@ -546,6 +715,24 @@ repository whose bitmap the node's memory cannot hold
 | `code_retention_pass` | `INFO` | A pass that purged, failed a repository, held a purged name or stopped at its budget (`purged`, `steps`, `remain`, `failed`, `unhanded`); `DEBUG` when nothing was due. |
 | `code_retention_pass_failed` | `WARN` | A pass ended on an error; the next pass lists what is due again. |
 | `code_retention_duty_declined` | `WARN` | This node's copy of the code log is out of service, so it does not take the duty. |
+| `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the token and the person it is bound to, the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |
+| `code_fetch_retried` | `INFO` | git found this node's cache damaged during a fetch (`reason`: `corrupt`, `missing`); the cache was rebuilt and the fetch run again over the same request. |
+| `code_fetch_failed`, `code_push_failed` | `WARN` | git failed serving a request on this node — `code_push_failed` a push's (its advertisement, its receive-pack, a process its sync ran), `code_fetch_failed` a fetch's — by itself or ended by the node (`reason`: `deadline`, `stall`, or its `input` or `output` failing here, beside the pool's own `code_git_killed`), before its first byte (the client was told why, a push with its `push_id`) or after it (git's own words ended the answer, or, for a process the node ended, the connection was cut). |
+| `code_git_unavailable` | `WARN` | A git request could not read the code log here (no quorum, a copy out of service, no data node answering), answered 503. |
+| `code_git_ready` | `INFO` | The node's git is 2.40 or newer and its process pool is built: the git's `path` and `version`, its `read_slots`, `maintenance_slots` and `transfer_slots`, the `pack_reuse` it asks git for, and the empty `home` every git process runs with. |
+| `code_git_killed` | `WARN` | The node ended a git process (`class`, `command`): past its deadline (`reason`: `deadline`), or having read and written nothing for its stall bound (`stall`) — a minute for a transfer, twelve of git's keepalives. `DEBUG` when its caller ended it (`caller`): a client that hung up, a node stopping. |
+| `code_git_straggler_killed`, `code_git_pipe_held` | `WARN` | Something a git process started outlived it: still in its process group, and killed; or outside it and holding git's output open, which the node closed after five seconds. |
+| `code_git_signal_withheld`, `code_git_signal_failed` | `WARN` | The node could not read the kernel's record of a git process's group, so sent it no signal rather than risk signalling a stranger; or sending one failed. |
+| `code_git_protocol_dropped` | `DEBUG` | A client's `Git-Protocol` header was not one the node passes to git, and git ran without it. |
+| `code_git_abandoned` | `DEBUG` | A git request ended because its client hung up (`by`: `client`), answered nothing, or because the node is stopping (`by`: `stop`), answered 503 — never the code log failing. A push abandoned after its proposal is recorded as its session concluded it (`unknown`, `applied`). |
+| `code_pack_missing`, `code_pack_checksum_mismatch`, `code_bad_snapshot` | `ERROR` | A pack the rows name is gone from the object store or damaged there, a downloaded bundle is not the one its row describes, or the rows cannot be read into a cache — an operator's problem, answered 503. |
+| `code_pack_rejected`, `code_push_invalid` | `ERROR` | The receiving git wrote a pack the engine's own checks refuse, or the engine built a proposal the committer refused: a bug, and the push fails. Its bundle was already stored; no row names it, and the object collector removes it after its grace. |
+| `code_pack_adopt_failed` | `WARN` | The receiving node could not link a push's pack into its cache once its row applied; its next sync downloads it instead. |
+| `code_push_blob_path` | `WARN` | The path of a blob over the limit could not be found; the refusal names the blob without it. |
+| `code_hook_accept_failed` | `WARN` | The hook socket failed to accept a connection; it goes on accepting. |
+| `code_hook_protocol`, `code_hook_refused` | `WARN` | A push's hook spoke out of turn, or a connection to the hook socket named no session the engine started; the push fails and nothing is stored. |
+| `code_hook_panic` | `ERROR` | The engine failed while serving one push's hook: that push was refused and its stack logged, and the node goes on serving. |
+| `code_host_stop_unfinished` | `WARN` | The node stopped with git requests still running past its stop's wait. |
 
 A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.cache`. Every line at `INFO` and above is here; its `DEBUG` lines (each sync, each background index written, a run stopped from outside) are left out.
 

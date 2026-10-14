@@ -274,6 +274,18 @@ func (l *lane) repay(k int64) (out int64) {
 	return l.lent
 }
 
+// free is the slots neither held nor lent, and none while a run waits: a
+// waiter is queued only while every slot is held (the invariant), so a slot
+// that reads free then is one a release is handing straight to it.
+func (l *lane) free() int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.waiters.Len() > 0 {
+		return 0
+	}
+	return max(l.size-l.held-l.lent, 0)
+}
+
 // counts is the lane's held slots and outstanding loans, for the suite.
 func (l *lane) counts() (held, lent int64) {
 	l.mu.Lock()

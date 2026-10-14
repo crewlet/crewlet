@@ -764,6 +764,34 @@ func Catalogue() []Instrument {
 				"`read` sits low is slow uploads holding loans, and the reason " +
 				"a later push on this node indexes on one core.",
 		},
+		// ---- the code host ---------------------------------------------
+		{
+			Name: CodePushDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "How long a git push took on this node, from its request to its " +
+				"answer, by `outcome` (`applied`, `pending`, `unknown`, `refused`, " +
+				"`failed`). `pending` growing is a code log whose records are " +
+				"durable and slow to apply here; `unknown` is a committer that " +
+				"stopped answering; the tail of `applied` is what a person waits " +
+				"for a push.",
+		},
+		{
+			Name: CodePushBytes, Kind: KindHistogram, Unit: UnitBytes,
+			Shows: "The size of each push's bundle — the pack its receive-pack " +
+				"kept and the two indexes it wrote — observed once the pack is " +
+				"checked, whatever becomes of the push: the one object the object " +
+				"store stores for it, against `code.limits.max_push_bytes` (what " +
+				"the client may send) and the 1.25 GiB one push may store.",
+		},
+		{
+			Name: CodeFetchDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"command", "sync"},
+			Shows: "How long a fetch request took on this node, by `command` " +
+				"(`advertise`, `ls-refs`, `fetch`) and by what the cache had to " +
+				"do first (`sync`: `none`, `delta`, `full`). A `full` tail is cold " +
+				"caches downloading whole repositories; a `delta` tail is the " +
+				"barrier and the sync every answer that names a ref waits for.",
+		},
 		// ---- alarms ---------------------------------------------------
 		{
 			Name: AlarmActive, Kind: KindGauge, Unit: UnitCount,

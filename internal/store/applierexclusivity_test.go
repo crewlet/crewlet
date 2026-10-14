@@ -532,6 +532,14 @@ var allowedReplicatedWriter = []allowance{
 			"VACUUM INTO and the manifest — never to write a row.",
 	},
 	{
+		Prefix: "internal/code/codetest/solo.go", Kind: holder,
+		Why: "THE CODE HOST SUITE'S ONE-NODE TOPOLOGY: the engine's own " +
+			"composition for the code domain in one process. It opens the " +
+			"replicated estate through storetest.OpenEstate and hands the " +
+			"write handle to the framework's applier and write authority, " +
+			"as internal/engine/statelog.go does. It writes no row of its own.",
+	},
+	{
 		Prefix: "cmd/crewlet/ops.go", Kind: holder,
 		Why: "`crewlet migrate` opens the replicated estate beside the " +
 			"node's own file, which is how an operator's migration reaches " +

@@ -52,9 +52,9 @@ type Synced struct {
 	Position statelog.Position
 	// Kind is what this hand-out cost.
 	Kind SyncKind
-	// Release unpins Dir. Idempotent: a second call does nothing.
-	Release func()
 
+	// release unpins Dir, once: what [Synced.Release] calls.
+	release func()
 	// inc is which incarnation Dir is, and entry the repository it is one
 	// of: what Rebuild reads to tell whether that incarnation is still the
 	// one readers are handed. owner is the cache that handed it out — the
@@ -62,6 +62,18 @@ type Synced struct {
 	inc   *incarnation
 	entry *entry
 	owner *Cache
+}
+
+// Release unpins Dir. Idempotent — a second call does nothing — and A NO-OP
+// ON THE ZERO Synced, which every failed Sync answers: a holder that defers
+// the release of a variable a later Sync may overwrite (a fetch asking once
+// more at the log's head) releases whatever the variable holds when it
+// returns, and a failed second Sync must leave it something safe to release
+// rather than a nil function that panics on the request's goroutine.
+func (s Synced) Release() {
+	if s.release != nil {
+		s.release()
+	}
 }
 
 // handedOut refuses a Synced this cache did not hand out — a zero one, or
@@ -269,7 +281,7 @@ func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
 		Repo:     inc.repo,
 		Position: inc.at,
 		Kind:     kind,
-		Release:  sync.OnceFunc(func() { c.release(e, inc) }),
+		release:  sync.OnceFunc(func() { c.release(e, inc) }),
 		inc:      inc,
 		entry:    e,
 		owner:    c,

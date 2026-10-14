@@ -1,0 +1,201 @@
+package host
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// WHAT GIT IS TOLD A PUSH DID: `ok` for a ref ONLY from the push's own applied
+// row. A proposal answered `pending` is durable and not yet applied here, and
+// a durable record a gate then drops on every node is not a push that landed
+// — so pending is waited on, at most Timing.PendingGrace, and never reported
+// as ok (ADR-0036).
+
+// answered is one command as git is told it.
+type answered struct {
+	Ref    string
+	OK     bool
+	Reason code.Refusal
+	Detail string
+}
+
+// line is the command's proc-receive report line: `ok <ref>`, or `ng <ref>
+// <sentence>`, the sentence the command's Detail where one was formed and
+// `<code>: <the code's sentence>` otherwise.
+func (a answered) line() string {
+	if a.OK {
+		return "ok " + a.Ref
+	}
+	var words string
+	switch {
+	case a.Reason == "":
+		// A REFUSAL ONLY THE RECEIVER NAMES — a token bound to nobody, a
+		// command list past its bounds — has no code of the domain's.
+		words = a.Detail
+	case a.Detail == "":
+		words = string(a.Reason) + ": " + a.Reason.Sentence()
+	default:
+		words = string(a.Reason) + ": " + a.Detail
+	}
+	return "ng " + a.Ref + " " + sentence(words)
+}
+
+// answersFor is cmds as git is told them: ok and noop are ok, ng carries its
+// reason and its sentence.
+func answersFor(cmds []code.Command) []answered {
+	out := make([]answered, len(cmds))
+	for i, c := range cmds {
+		out[i] = answered{Ref: c.Ref, OK: c.Result == code.ResultOK || c.Result == code.ResultNoop,
+			Reason: c.Reason, Detail: c.Detail}
+	}
+	return out
+}
+
+// refuseRest is cmds with every command not already ng refused under reason
+// with detail.
+func refuseRest(cmds []code.Command, reason code.Refusal, detail string) []code.Command {
+	out := make([]code.Command, len(cmds))
+	for i, c := range cmds {
+		if c.Result != code.ResultNG {
+			c.Result, c.Reason, c.Detail = code.ResultNG, reason, detail
+		}
+		out[i] = c
+	}
+	return out
+}
+
+// silence is the estate router's own statement about a walk that ran nothing
+// (estate.ErrUnserved.Silent): whether a node it asked went silent — and so may
+// have run the proposal it never answered. Declared here, by the consumer,
+// because this package imports no estate.
+type silence interface{ Silent() bool }
+
+// verdict is what one push came to: what git is told for each command, and
+// the record's outcome.
+type verdict struct {
+	commands []code.Command
+	outcome  types.AuditOutcome
+	refusal  AuditRefusal
+	position statelog.Position
+	// applied: the push's row exists — its pack may be adopted.
+	applied bool
+}
+
+// decided is the verdict of a proposal's answer (Estate.Propose): every
+// command's answer and the audit's outcome, the pending wait included.
+func (s *Server) decided(ctx context.Context, sess *session, proposed []code.Command,
+	res code.ProposeResult, err error) verdict {
+
+	var quiet silence
+	switch {
+	case err != nil && ctx.Err() != nil:
+		// THE CLIENT HUNG UP: there is nobody to answer, and the batch may
+		// still land — the committer runs it under its own lifetime.
+		return verdict{commands: refuseRest(proposed, code.RefusalUnknown, ""), outcome: types.AuditUnknown}
+	case errors.Is(err, code.ErrInvalidProposal):
+		s.log.Error("code_push_invalid", "repo", sess.repo.Name, "push_id", sess.pushID, "error", err)
+		return verdict{commands: refuseRest(proposed, code.RefusalUnavailable,
+			"the engine refused its own proposal: "+sentence(err.Error())), outcome: types.AuditFailed}
+	case err != nil && errors.As(err, &quiet) && !quiet.Silent():
+		// NOTHING RAN IT: every node the walk asked answered that it
+		// would not, so the push did not land and a re-run lands it.
+		return verdict{commands: refuseRest(proposed, code.RefusalUnavailable,
+			fmt.Sprintf("no data node took push %s: %s", sess.pushID, sentence(err.Error()))),
+			outcome: types.AuditRefused, refusal: AuditRefusal(code.RefusalUnavailable)}
+	case err != nil:
+		// A NODE WENT SILENT, or the error does not say: it may have run
+		// the push, so whether it landed is unknown — never "nothing took
+		// it", which a re-run would then report as up to date.
+		return verdict{commands: refuseRest(proposed, code.RefusalUnknown,
+			fmt.Sprintf("no data node answered for push %s; whether it landed is unknown — fetch, then "+
+				"re-run git push", sess.pushID)), outcome: types.AuditUnknown}
+	case res.Answer.Refused != "":
+		detail := res.Answer.Detail
+		return verdict{commands: refuseRest(res.Answer.Commands, res.Answer.Refused, detail),
+			outcome: types.AuditRefused, refusal: AuditRefusal(res.Answer.Refused)}
+	case res.Outcome == statelog.OutcomePending:
+		return s.awaitPending(ctx, sess, proposed, res.Position)
+	case res.Outcome == statelog.OutcomeUnknown:
+		return verdict{commands: refuseRest(proposed, code.RefusalUnknown,
+			fmt.Sprintf("outcome unknown (op %s); fetch, then re-run git push", res.OpID)),
+			outcome: types.AuditUnknown}
+	}
+	// APPLIED, or answered with no record of its own: the commands are the
+	// row's (or the decision's where every one was noop or ng).
+	row := res.Outcome == statelog.OutcomeApplied || res.Answer.Collapsed
+	return settled(res.Answer.Commands, res.Position, row, res.Answer.Collapsed)
+}
+
+// settled is the verdict of a push whose commands are final — row reports that
+// its push row exists: applied with the row's position when any command moved
+// a ref or the answer collapsed onto an earlier row; applied with no position
+// when every command was a noop; refused under the first code otherwise.
+func settled(cmds []code.Command, at statelog.Position, row, collapsed bool) verdict {
+	v := verdict{commands: cmds, applied: row}
+	moved, noop := false, true
+	var first code.Refusal
+	for _, c := range cmds {
+		switch c.Result {
+		case code.ResultOK:
+			moved, noop = true, false
+		case code.ResultNG:
+			noop = false
+			if first == "" {
+				first = c.Reason
+			}
+		}
+	}
+	switch {
+	case moved || collapsed:
+		v.outcome, v.position = types.AuditApplied, at
+	case noop:
+		v.outcome = types.AuditApplied
+	default:
+		v.outcome, v.refusal = types.AuditRefused, AuditRefusal(first)
+	}
+	return v
+}
+
+// awaitPending waits for a push durable at at to apply, reading its outcome
+// until Timing.PendingGrace after the proposal returned: found, its row's
+// commands are the answer; not found at or past at, a gate dropped the record
+// and the push applied nowhere; any error — a node behind, nobody answering —
+// is read again after a wait that doubles from PendingFirst to PendingMax; and
+// a grace spent is `pending`, never `ok`.
+func (s *Server) awaitPending(ctx context.Context, sess *session, proposed []code.Command,
+	at statelog.Position) verdict {
+
+	sess.step("waiting for the push to apply")
+	deadline := s.now().Add(s.o.Timing.PendingGrace)
+	wait := s.o.Timing.PendingFirst
+	for {
+		out, err := s.o.Estate.PushOutcome(ctx, code.OutcomeQuery{RepoID: sess.repo.ID, PushID: sess.pushID, At: at})
+		switch {
+		case err == nil && out.Found:
+			return settled(out.Push.Commands, out.Push.Position, true, false)
+		case err == nil && out.Position.Packed() >= at.Packed():
+			return verdict{commands: refuseRest(proposed, code.RefusalNotApplied,
+				fmt.Sprintf("the push was durable at %s and applied nowhere; re-run git push", at)),
+				outcome: types.AuditRefused, refusal: AuditRefusal(code.RefusalNotApplied)}
+		}
+		left := deadline.Sub(s.now())
+		if left <= 0 || ctx.Err() != nil {
+			return verdict{commands: refuseRest(proposed, code.RefusalPending,
+				fmt.Sprintf("durable at %s, unresolved here; re-run git push (a push that landed reports "+
+					"up to date)", at)), outcome: types.AuditPending, position: at}
+		}
+		timer := time.NewTimer(min(wait, left))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+		wait = min(2*wait, s.o.Timing.PendingMax)
+	}
+}

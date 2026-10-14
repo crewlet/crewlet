@@ -169,3 +169,42 @@ func TestTheStandInsDoWhatTheySay(t *testing.T) {
 		t.Fatalf("the fake's body: %q, %v", res.Stdout, err)
 	}
 }
+
+// A WRAP IS THE REAL GIT BEHIND ITS BODY: it answers the real git's own
+// version, runs its body first — which may end the call, or run the real git
+// itself — and hands the real git every call its body did not end.
+func TestAWrapIsTheRealGitBehindItsBody(t *testing.T) {
+	t.Parallel()
+	direct, err := gitproc.New(t.Context(), gitproc.Options{Path: gittest.Require(t),
+		Home: filepath.Join(t.TempDir(), "home")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrap := gittest.Wrap(t, `case "$1" in
+anything) echo "body: $*"; exit 0 ;;
+rev-parse) "$real_git" "$@"; echo "after: $?"; exit 0 ;;
+esac`)
+	w, err := gitproc.New(t.Context(), gitproc.Options{Path: wrap, Home: filepath.Join(t.TempDir(), "home")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Version() != direct.Version() {
+		t.Errorf("the wrap answered version %v, the git behind it %v", w.Version(), direct.Version())
+	}
+	res, err := w.Run(t.Context(), gitproc.Cmd{Args: []string{"anything", "it's"}, Class: gitproc.ClassRead,
+		Deadline: gitproc.ReadDeadline})
+	if err != nil || string(res.Stdout) != "body: anything it's\n" {
+		t.Errorf("the wrap's body: %q, %v", res.Stdout, err)
+	}
+	bare := gittest.Empty(t)
+	res, err = w.Run(t.Context(), gitproc.Cmd{Dir: bare, Args: []string{"rev-parse", "--git-dir"},
+		Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
+	if err != nil || string(res.Stdout) != bare+"\nafter: 0\n" {
+		t.Errorf("rev-parse run by the wrap's body through the real git: %q, %v", res.Stdout, err)
+	}
+	res, err = w.Run(t.Context(), gitproc.Cmd{Dir: bare, Args: []string{"symbolic-ref", "HEAD"},
+		Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
+	if err != nil || strings.TrimSpace(string(res.Stdout)) != "refs/heads/main" {
+		t.Errorf("symbolic-ref, which the wrap's body leaves to the real git: %q, %v", res.Stdout, err)
+	}
+}

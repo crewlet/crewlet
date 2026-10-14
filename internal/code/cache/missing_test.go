@@ -3,8 +3,10 @@ package cache_test
 import (
 	"context"
 	"errors"
+	"iter"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -12,12 +14,12 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// MISSING NAMES ONLY ABSENT OBJECTS, in the order they were asked about, each
-// once: what a fetch's wants hold that the cache's packs do not, which is
-// what sends the fetch to one linearizable sync. One cat-file over the list;
-// an id that is not one is refused before git runs, and an empty list runs
-// nothing at all.
-func TestMissingNamesOnlyAbsentObjects(t *testing.T) {
+// MISSING ANSWERS THE FIRST ABSENT WANT, read from a stream: what a fetch's
+// wants hold that the cache's packs do not, which is what sends the fetch to
+// one linearizable sync. One cat-file over the stream; an id that is not one
+// is refused by name, an error the stream yields ends the check with it, and
+// a stream that yields nothing runs nothing at all.
+func TestMissingAnswersTheFirstAbsentWant(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
 	var calls func() []gittest.Call
@@ -42,22 +44,21 @@ func TestMissingNamesOnlyAbsentObjects(t *testing.T) {
 		}
 		return n
 	}
-	got, err := c.Missing(t.Context(), s, []string{tip, absent, blob, absent})
+	got, err := c.Missing(t.Context(), s, wants(tip, absent, blob, other), 1<<10)
 	if err != nil {
 		t.Fatalf("Missing: %v", err)
 	}
 	if n := asks(); n != 1 {
 		t.Errorf("Missing ran %d cat-file processes, want one", n)
 	}
-	if !slices.Equal(got, []string{absent}) {
-		t.Errorf("Missing = %v, want only %s", got, absent)
+	if got != absent {
+		t.Errorf("Missing = %q, want the first absent id %s", got, absent)
 	}
-	got, err = c.Missing(t.Context(), s, []string{other, tip, absent, other})
-	if err != nil {
-		t.Fatalf("Missing: %v", err)
+	if got, err = c.Missing(t.Context(), s, wants(other, tip, absent), 1<<10); err != nil || got != other {
+		t.Errorf("Missing = %q, %v; want %s, the first of two absent", got, err, other)
 	}
-	if !slices.Equal(got, []string{other, absent}) {
-		t.Errorf("Missing = %v, want %s then %s, each once", got, other, absent)
+	if got, err = c.Missing(t.Context(), s, wants(tip, blob, tip), 1<<10); err != nil || got != "" {
+		t.Errorf("Missing of held objects = %q, %v; want none", got, err)
 	}
 
 	for name, oid := range map[string]string{
@@ -66,21 +67,30 @@ func TestMissingNamesOnlyAbsentObjects(t *testing.T) {
 		"the zero id":   gitref.ZeroOID,
 		"a revision":    tip + "^{}",
 	} {
-		if _, err := c.Missing(t.Context(), s, []string{tip, oid}); !errors.Is(err, cache.ErrInvalid) ||
+		if _, err := c.Missing(t.Context(), s, wants(tip, oid), 1<<10); !errors.Is(err, cache.ErrInvalid) ||
 			!strings.Contains(err.Error(), oid) {
 			t.Errorf("Missing of %s = %v, want ErrInvalid naming %q", name, err, oid)
 		}
 	}
+	unreadable := errors.New("the spool could not be read")
+	failing := func(yield func(string, error) bool) {
+		if yield(tip, nil) {
+			yield("", unreadable)
+		}
+	}
+	if _, err := c.Missing(t.Context(), s, failing, 1<<10); !errors.Is(err, unreadable) {
+		t.Errorf("Missing over a stream that failed = %v, want its error", err)
+	}
 
 	ran := len(calls())
-	got, err = c.Missing(t.Context(), s, nil)
-	if err != nil || got != nil {
-		t.Errorf("Missing of nothing = %v, %v; want nil", got, err)
+	got, err = c.Missing(t.Context(), s, wants(), 0)
+	if err != nil || got != "" {
+		t.Errorf("Missing of nothing = %q, %v; want none", got, err)
 	}
 	if n := len(calls()); n != ran {
 		t.Errorf("Missing of nothing ran %d git processes", n-ran)
 	}
-	if _, err := c.Missing(t.Context(), cache.Synced{}, []string{tip}); !errors.Is(err, cache.ErrInvalid) {
+	if _, err := c.Missing(t.Context(), cache.Synced{}, wants(tip), 1<<10); !errors.Is(err, cache.ErrInvalid) {
 		t.Errorf("Missing in a zero Synced = %v, want ErrInvalid", err)
 	}
 	// Another cache's Synced is a directory this cache did not pin: asked
@@ -91,14 +101,56 @@ func TestMissingNamesOnlyAbsentObjects(t *testing.T) {
 	elsewhere.push(t, elsewhereRepo, "refs/heads/main", nil)
 	foreign := elsewhere.sync(t, elsewhere.open(t), elsewhereRepo)
 	ran = len(calls())
-	if _, err := c.Missing(t.Context(), foreign, []string{tip}); !errors.Is(err, cache.ErrInvalid) {
+	if _, err := c.Missing(t.Context(), foreign, wants(tip), 1<<10); !errors.Is(err, cache.ErrInvalid) {
 		t.Errorf("Missing in another cache's Synced = %v, want ErrInvalid", err)
 	}
 	if n := len(calls()); n != ran {
 		t.Errorf("Missing in another cache's Synced ran %d git processes", n-ran)
 	}
 	c.Stop(context.Background())
-	if _, err := c.Missing(t.Context(), s, []string{tip}); !errors.Is(err, cache.ErrStopped) {
+	if _, err := c.Missing(t.Context(), s, wants(tip), 1<<10); !errors.Is(err, cache.ErrStopped) {
 		t.Errorf("Missing after Stop = %v, want ErrStopped", err)
+	}
+}
+
+// MISSING READS ITS WANTS AS THEY ARE ASKED ABOUT AND STOPS AT THE FIRST
+// ABSENT ONE: a stream that never ends after it is ended with the check,
+// because nothing ever holds the whole of a fetch's wants — a partial clone's
+// checkout names every blob it lacks in one request, which the host spools —
+// and one absent want is the whole answer.
+func TestMissingStopsAtTheFirstAbsentWant(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	tip, _ := w.push(t, repo, "refs/heads/main", map[string]string{"a.txt": "alpha\n"})
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	absent := strings.Repeat("ab", 20)
+	var pulled atomic.Int64
+	endless := func(yield func(string, error) bool) {
+		if !yield(absent, nil) {
+			return
+		}
+		for yield(tip, nil) {
+			pulled.Add(1)
+		}
+	}
+	got, err := c.Missing(t.Context(), s, endless, 1<<30)
+	if err != nil || got != absent {
+		t.Fatalf("Missing over an endless stream = %q, %v; want %s", got, err, absent)
+	}
+	if n := pulled.Load(); n == 0 {
+		t.Errorf("the stream was pulled %d times past its first id: the check never read it as a stream", n)
+	}
+}
+
+// wants is a stream of ids, as the host's spooled request yields them.
+func wants(ids ...string) iter.Seq2[string, error] {
+	return func(yield func(string, error) bool) {
+		for _, id := range ids {
+			if !yield(id, nil) {
+				return
+			}
+		}
 	}
 }
