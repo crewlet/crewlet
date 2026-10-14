@@ -576,8 +576,8 @@ func noise(seed, size int) string {
 // A COLD SYNC RUNS NO GIT: a bundle carries the index and the reverse index
 // its receiving git wrote, so installing it is renames — no node but the
 // receiving one ever runs index-pack. The only processes a round may run are
-// the peel of the tags it sets and, past MidxPacks packs, the index it writes
-// before it answers.
+// the peel of the tags it sets and, from MidxRoundPacks packs (lowered here to
+// caseRoundPacks), the index it writes before it answers.
 func TestAColdSyncRunsNoGit(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -586,7 +586,7 @@ func TestAColdSyncRunsNoGit(t *testing.T) {
 		tag   bool
 		want  [][]string
 	}{
-		{name: "seven packs", packs: cache.MidxPacks - 1},
+		{name: "under the round's threshold", packs: caseRoundPacks - 1},
 		{name: "an annotated tag", packs: 3, tag: true, want: [][]string{{"cat-file", "--batch-check=%(objectname)", "--buffer"}}},
 		{name: "twenty packs", packs: 20, want: [][]string{{"multi-pack-index", "write", "--stdin-packs", "--no-progress"}}},
 	} {
@@ -602,7 +602,7 @@ func TestAColdSyncRunsNoGit(t *testing.T) {
 			if c.tag {
 				w.tag(t, repo, "v1", true)
 			}
-			cc := w.open(t)
+			cc := w.open(t, cache.RoundPacksAt(caseRoundPacks))
 			// The recording lists its calls in no order: what the sync ran
 			// is what is there now and was not before.
 			seen := map[string]int{}

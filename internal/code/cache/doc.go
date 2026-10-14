@@ -122,12 +122,17 @@
 // before it is called missing: a copy behind the log may name a pack a purge
 // has since removed.
 //
-// A full round that leaves [MidxPacks] or more packs and no multi-pack-index
-// writes one over exactly those packs — without a bitmap, a merge of the
-// packs' own indexes — before its refs' peel reads them and before it
-// answers: one push is one pack and nothing compacts them, and the request a
-// cold cache was synced for would otherwise be served by git searching every
-// pack's index for every object.
+// A full round that leaves [MidxRoundPacks] or more packs and no
+// multi-pack-index writes one over exactly those packs — without a bitmap, a
+// merge of the packs' own indexes — before its refs' peel reads them and
+// before it answers: one push is one pack and nothing compacts them, and the
+// request a cold cache was synced for would otherwise be served by git
+// searching every pack's index for every object. Under that count the index
+// costs the cold request more than it saves it (Measured, below), so the
+// round answers without one, and the maintainer's follows once the packs
+// have stood still and the runs queued before it have ended — on four cores
+// one at a time, most packs first, so on a node that just joined, after
+// every repository with more packs it synced (maintain.go).
 //
 // # One sync at a time, shared
 //
@@ -205,11 +210,11 @@
 // as [MaintenanceMemoryPerCore] holds beside the largest, so one repository's
 // hours-long bitmap holds back nobody else's and a node's largest
 // repositories falling due together do not take its memory at once; and at
-// most a tenth of a core's time a repository ([MidxDutyCycle]). It holds a pin, never the repository's round,
-// so no push or fetch waits for it; a full round that would sweep the
-// directory under it stops it first, because a multi-pack-index naming a pack
-// the sweep removes fails every read of the repository. A cache without the
-// bitmap is slower, never wrong.
+// most a tenth of a core's time a repository ([MidxDutyCycle]). It holds a
+// pin, never the repository's round, so no push or fetch waits for it; a
+// full round that would sweep the directory under it stops it first,
+// because a multi-pack-index naming a pack the sweep removes fails every
+// read of the repository. A cache without the bitmap is slower, never wrong.
 //
 // # The directory
 //
@@ -318,4 +323,76 @@
 // view stops listing its alternate's refs (AdvertiseConfig): 18 ms against
 // 14 ms at 10 000 refs and 117 ms against 112 ms at code.MaxRefsPerRepo
 // (100 000), where the listing doubled it, to 26 ms and 222 ms.
+//
+// The byte path, on the same machine (nproc 4) with git 2.43.0, its
+// CREWLET_BENCH_LARGE=1 arms too — the 5 GB index and the lookups over a
+// gigabyte and over 10 000 packs at three counts, everything else at six. A
+// COLD SYNC of 2 000 pushes of 150 KB, from the S3 fake at 30 ms to every
+// request's first byte and 80 MB/s a connection, takes 67 s one GET at a time,
+// 4.5 s at FetchConcurrency's sixteen and 2.9 s at NodeFetches' thirty-two —
+// 30, 448 and 680 bundles a second, and at 200 pushes, the round's index among
+// them, 30, 396 and 529 — while from a store in the process, the node's own
+// side alone, the same 2 000 take 2.9 s, 2.3 s and 2.1 s (679, 878 and 948 a
+// second): no git runs but the round's index and its peel, so a cold sync is
+// bound by its GETs and that side, never by a core. Sixteen is bound by its
+// GETs, at 93% of the 484 a second sixteen of the 33 ms each took allow; at
+// thirty-two each took 40 ms, the fake's server sharing the node's four cores.
+// The node's own side is a bundle's FILE WORK (BenchmarkBundleFiles: its files
+// created, written, synced and renamed, without the GET or the hashing):
+// sixteen at once, about 700 a second whether the syncs are made or not, bound
+// by creating the files — a third of a millisecond each, one at a time in tmp/
+// — while one at a time the syncs halve it, 386 against 826 a second, which is
+// why a bundle's three are issued together and its GET's share is free before
+// them. One push of 512 MiB among 200 makes the round 9.1 s, 2.5 s and 2.6 s:
+// past one GET at a time it is that bundle's own read, four ranges at once
+// (s3obj), that ends the round, and the whole node's width buys it nothing. A
+// DELTA SYNC — one push of 150 KB on a warm cache — costs 7.7 ms on a
+// repository of 1 000 refs and 56 ms at code.MaxRefsPerRepo (100 000), and
+// 8.6 ms and 61 ms at 10 000 packs: with the fake log's walk of every ref
+// taken out, about 7 ms and 46–48 ms whatever the pack count, the second
+// packed-refs rewritten whole.
+//
+// The MULTI-PACK-INDEX, over a source repository's composition — every commit
+// four files of one directory, so commits are a seventh of the objects
+// (BenchmarkMidx says how the history is built). The maintainer's index with
+// its bitmap and the commit-graph over 64 packs take 1.6 s at 100 MB (296 000
+// objects, 42 000 commits), 21 s at 1 GB (3.0 million, 424 000) and 152 s at
+// 5 GB (14.8 million, 2.1 million) — 16, 21 and 30 s a gigabyte — so
+// MidxMinInterval rather than MidxDutyCycle paces every repository under about
+// 3 GB of packs, and gitproc.PackWorkDeadline gives the gigabyte sixteen
+// minutes, about 48 times its run; the index a full round writes, with no
+// bitmap, 0.12 s, 1.1 s and 6.1 s. Pushes of 4 KiB landed beside the
+// maintainer's index cost counting a clone's objects about 0.06 ms each at
+// 100 MB and 0.09 ms at 1 GB (4.5 ms with none and 12.0 with 128; 6.9 and
+// 17.9 ms), and a clone's whole pack-objects nothing it shows up to 128 (1.06
+// and 1.11 s; 10.7 s either way): the figures MidxPacks is set from. Over the
+// 100 MB split into packs (BenchmarkPackLookup), a clone's pack-objects takes
+// 3.8, 5.1, 9.7, 12.3, 17.0 and 26 s across 8, 32, 128, 256, 512 and a
+// thousand packs with no multi-pack-index, 4.0, 5.2, 9.6, 11.4, 14.0 and 18 s
+// with the round's, and 0.83, 0.95, 1.44, 2.24, 3.72 and 6.3 s with the
+// maintainer's; Missing over 1 000 commits 3.9 and 4.2 ms at eight packs with
+// none and with the round's, 9.0 and 7.9 at 128, 17 and 12.6 at 256, 36 and 20
+// at 512, 87 and 37 at a thousand; a fetch of the newest four commits 12.4 ms
+// either way at eight, 13.9 and 13.2 at 128, 30 and 21 at a thousand — and
+// with the maintainer's bitmap 13.5, 15.1 and 38 ms; and the round's index
+// itself 105, 110, 117, 127, 135 and 162 ms. Over the gigabyte, at three runs,
+// the round's index costs 1.3 s at 128, 256 and 512 packs and saves a clone
+// 3, 20 and 69 s (114 against 111, 154 against 134, 236 against 167), a fetch
+// 4.7, 2.0 and 3.6 ms, where the maintainer's bitmap clones in 14, 18 and
+// 29 s. Where the threshold is decided the clone was measured again, six runs
+// of each with their spreads: at 128 packs the round's index saves it nothing
+// either size shows — 10.1 s with none and 10.2 with it over the 100 MB
+// (10.0–10.8 and 9.6–10.7), 110 and 111 s over the gigabyte (108–111 and
+// 104–116), which the three runs' 3 s was inside — and at 256 it saves 0.55 s
+// and 11 s (12.9 against 12.4, 12.6–13.5 and 11.9–12.9; 151 against 140,
+// 145–160 and 133–143), for writes of 0.13 s and 1.3 s: the figures
+// MidxRoundPacks is set from. Across 10 000 packs of the 100 MB the round's
+// index costs 0.53 s and saves a clone 122 s (146 against 24), Missing over
+// 1 000 commits 520 ms and a fetch 94 ms, while the maintainer's bitmap,
+// which opens every pack it covers, clones in 32 s and fetches in 300 ms:
+// past a thousand packs what a repository needs is fewer of them. Peeling
+// 5 000 tags in as many packs takes 0.65 s without the round's index and
+// 0.23 s with it, for a 0.19 s write, and a thousand 57 and 45 ms for a 35 ms
+// write: the peel is no reason for the round's index below thousands of
+// tagged packs.
 package cache

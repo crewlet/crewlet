@@ -2,8 +2,11 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -156,6 +159,58 @@ func StartMaintainerPass(c *Cache) (started []string, wait func() []string) {
 		slices.Sort(ran)
 		return ran
 	}
+}
+
+// IndexRound runs a full round's index step (indexRound) on repoID's current
+// incarnation over packs — the rows a full round would have read — holding
+// the repository's write lock as a round does, and reports whether it wrote
+// an index.
+func IndexRound(c *Cache, repoID string, packs []code.PackRow) bool {
+	e := lookup(c, repoID)
+	if err := c.acquireWrite(context.Background(), e); err != nil {
+		return false
+	}
+	defer c.releaseWrite(e, writeExclusive)
+	e.mu.Lock()
+	inc := e.current
+	e.mu.Unlock()
+	snap := snapshot{full: true, packs: make(map[packKey]code.PackRow, len(packs))}
+	for _, p := range packs {
+		snap.packs[packKey{packID: p.PackID, part: p.Part}] = p
+	}
+	return c.indexRound(context.Background(), e, inc, snap)
+}
+
+// ForgetMaintenance takes every maintenance output — the multi-pack-index
+// with its bitmap and reverse index, the commit-graph — out of repoID's
+// current incarnation, off the disk and out of what the cache holds of it,
+// as if no index had been written there and no run had ever ended: the
+// maintainer's next pass finds it due, and a full round's index step finds
+// no index in its way. With nothing running on the repository.
+func ForgetMaintenance(c *Cache, repoID string) error {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	inc := e.current
+	packDir := filepath.Join(inc.dir, "objects", "pack")
+	list, err := os.ReadDir(packDir)
+	if err != nil {
+		return err
+	}
+	paths := []string{filepath.Join(inc.dir, "objects", "info", "commit-graph")}
+	for _, d := range list {
+		if midxFile.MatchString(d.Name()) {
+			paths = append(paths, filepath.Join(packDir, d.Name()))
+		}
+	}
+	for _, p := range paths {
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	inc.midx = midxState{}
+	c.setSize(inc, inc.diskBytes, 0)
+	return nil
 }
 
 // SetMaintenanceMemory sets what the maintenance runs beside the largest may
@@ -383,6 +438,47 @@ func MergeRefs(dir string, moves []code.RefRow, digest string, w io.Writer) (int
 	err := mergeDelta(dir, w, moves, nil, digest, &out)
 	return out.refs, err
 }
+
+// RoundPacksAt makes the cache Open builds write its round's own
+// multi-pack-index once a full round leaves n packs — MidxRoundPacks in
+// production — so a case exercises the round's index without pushing
+// hundreds of packs.
+func RoundPacksAt(n int) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.roundPacks = n
+	}
+}
+
+// MidxPacksAt makes the cache Open builds find a repository due again once n
+// packs have gathered beside the maintainer's index — MidxPacks in
+// production — so a case reaches a run over that index without pushing
+// dozens of packs.
+func MidxPacksAt(n int) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.midxPacks = n
+	}
+}
+
+// OnRoundIndex makes the cache Open builds call fn with the incarnation's
+// directory every time a full round writes its own multi-pack-index there.
+func OnRoundIndex(fn func(dir string)) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.roundIndexed = fn
+	}
+}
+
+// SetRoundPacks sets how many packs a full round of c leaves before it writes
+// its own multi-pack-index. Between rounds, with nothing running.
+func SetRoundPacks(c *Cache, n int) { c.roundPacks = n }
 
 // SetFetchConcurrency sets how many downloads one round runs at once. Before
 // any sync.

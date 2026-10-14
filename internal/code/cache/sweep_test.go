@@ -64,15 +64,16 @@ func TestAFullRoundSweepsADeadWritersFilesBeforeItsIndex(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
 	repo := w.repo(t, 1)
-	for range cache.MidxPacks - 1 {
+	for range caseRoundPacks - 1 {
 		w.push(t, repo, "refs/heads/main", nil)
 	}
-	c := w.open(t)
+	round := cache.RoundPacksAt(caseRoundPacks)
+	c := w.open(t, round)
 	dir := w.sync(t, c, repo).Dir
 	w.push(t, repo, "refs/heads/main", nil)
 	packDir := filepath.Join(dir, "objects", "pack")
 	if statOK(t, filepath.Join(packDir, "multi-pack-index")) {
-		t.Fatal("a round under MidxPacks packs wrote an index: the case needs one with none")
+		t.Fatal("a round under its threshold wrote an index: the case needs one with none")
 	}
 
 	c.Stop(t.Context())
@@ -84,7 +85,7 @@ func TestAFullRoundSweepsADeadWritersFilesBeforeItsIndex(t *testing.T) {
 	for _, path := range dead {
 		write(t, path, "half written\n")
 	}
-	c = w.open(t)
+	c = w.open(t, round)
 	s, err := c.Sync(t.Context(), repo, linearizable)
 	if err != nil {
 		t.Fatalf("the first sync after a crash that left a maintenance run's files: %v", err)
@@ -96,7 +97,7 @@ func TestAFullRoundSweepsADeadWritersFilesBeforeItsIndex(t *testing.T) {
 		}
 	}
 	if !statOK(t, filepath.Join(s.Dir, "objects", "pack", "multi-pack-index")) {
-		t.Errorf("the full round of %d packs answered with no index: a dead writer's lock refused it", cache.MidxPacks)
+		t.Errorf("the full round of %d packs answered with no index: a dead writer's lock refused it", caseRoundPacks)
 	}
 	if got := w.logs.lines(t, "code_cache_round_index_skipped"); len(got) != 0 {
 		t.Errorf("the round's index was skipped: %v", got)

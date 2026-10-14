@@ -603,11 +603,13 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # the SHA-256 floor under every verified byte), an arbitrated write end to end
 # and the applier's drain (internal/statelog), the store's own drain
 # (internal/store), a git process through the pool end to end and
-# receive-pack's index-pack at one thread (internal/code/gitproc), a git
-# node's boot of its cache and what a directory sync costs a file
-# (internal/code/cache), and the pace a client's connection is held to, on a
-# real connection (internal/api/paced). Each package's doc records what it
-# measured, and on what machine.
+# receive-pack's index-pack at one thread (internal/code/gitproc), the git
+# cache's cold and delta syncs and a bundle's own file work, its index
+# maintenance and what a request pays across many packs, a node's boot of its
+# cache and what a directory sync costs a file (internal/code/cache), and the
+# pace a client's connection is held to, on a real connection
+# (internal/api/paced). Each package's doc records what it measured, and on
+# what machine.
 #
 # NOT A GATE, AND NO CI JOB RUNS IT: a benchmark on a shared runner measures
 # the runner's neighbours, and a gate on figures that noisy is one somebody
@@ -621,18 +623,24 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # -run '^$': -bench alone runs every test as well.
 # No -race: the detector multiplies costs unevenly, so a figure taken under it
 # describes the detector.
-# -v: a SKIPPED benchmark prints nothing without it. The real-bucket arm skips
+# -v: a SKIPPED benchmark prints nothing without it. The real-bucket arms skip
 # unless CREWLET_BENCH_S3_BUCKET names a bucket (internal/objstore/s3obj's
-# package doc), and an arm that silently did not run reads as one that
+# package doc), and the arms whose fixture takes minutes and gigabytes —
+# internal/code/cache's 2 000-push cold sync, its 10 000-pack repositories,
+# its 5 GB index and its gigabyte split into hundreds of packs — unless
+# CREWLET_BENCH_LARGE=1; an arm that silently did not run reads as one that
 # measured nothing worth showing. Not through skipgate, for the same reason:
 # an allowance there would make that skip silent again.
 # BENCH_TIME 3s: the 128 MiB cases take most of a second an operation, so at
 # go's default of one second they are one or two operations whose first-touch
 # page faults are the figure; at three they are several.
-# BENCH_TIMEOUT is a hang detector, as TEST_TIMEOUT is. The longest package,
-# internal/statelog with every arm, takes minutes at BENCH_COUNT=1 on four
-# vCPUs, so six counts fit many times over; a real bucket's arm is bounded by
-# its link.
+# BENCH_TIMEOUT is a hang detector, as TEST_TIMEOUT is. The longest package
+# is internal/code/cache, whose fixtures are real git: at BENCH_COUNT=6 on
+# four vCPUs its arms took an hour and three quarters, half an hour of it
+# BenchmarkBoot's thousand repositories, and with CREWLET_BENCH_LARGE=1 about
+# five hours, two of them the gigabyte split into packs, whose clones with no
+# index take minutes each. Eight hours holds six counts of everything with
+# room for a slower machine; a real bucket's arm is bounded by its link.
 BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
                  ./internal/objstore/natsobj ./internal/objstore/natsobj/replicated \
                  ./internal/objstore/s3obj ./internal/statelog ./internal/store \
@@ -640,7 +648,7 @@ BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
 BENCH_PATTERN ?= .
 BENCH_TIME    ?= 3s
 BENCH_COUNT   ?= 1
-BENCH_TIMEOUT ?= 2h
+BENCH_TIMEOUT ?= 8h
 
 bench: ## measure the object store, the state log's write path, git and its cache, and a client's pace (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))

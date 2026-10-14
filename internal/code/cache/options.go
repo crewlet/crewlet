@@ -117,6 +117,15 @@ type knobs struct {
 	// adoptSync, when set, is the directory sync an adoption's links are
 	// made durable by, in place of the real one: a case makes it fail.
 	adoptSync func(dir string) error
+	// roundPacks, when above zero, is how many packs a full round leaves
+	// before it writes its own index, in place of MidxRoundPacks: a case
+	// exercises the round's index with a handful of pushes.
+	roundPacks int
+	// midxPacks, when above zero, is how many packs gathered beside the
+	// maintainer's index make a repository due again, in place of
+	// MidxPacks: an interleaving reaches a run over the maintainer's own
+	// index with a handful of pushes.
+	midxPacks int
 	// fileSync, when set, makes a downloaded file durable in place of
 	// (*os.File).Sync: a case watches which syncs are in flight together,
 	// and what is already in objects/pack while they are.
@@ -128,6 +137,10 @@ type knobs struct {
 	// bundle's files made: a case holds one pack there while the round's
 	// others are free to ask before it.
 	asking func(object objstore.Key)
+	// roundIndexed, when set, is told the incarnation's directory every
+	// time a full round writes its own multi-pack-index there: the
+	// interleavings are held to reaching it.
+	roundIndexed func(dir string)
 }
 
 // validate refuses an Options value naming the field and what to set,

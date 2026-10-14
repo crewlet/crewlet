@@ -63,16 +63,27 @@ const NodeFetches = httpx.MaxIdleConnsPerHost
 // and largest first makes those its LONGEST — a bundle up to code.MaxPackBytes
 // holds its slot for minutes on a shared link — while every sync gates a
 // person's clone or a push's own step. The price is one cold repository alone
-// on a node reading at half the node's width: at 30 ms to the first byte and
-// 80 MB/s a connection, bundles of 150 KB arrive at about 500 a second rather
-// than a thousand, so 10 000 pushes' packs take about 20 seconds rather than
-// 10. On the broker's object store at three replicas (natsobj's measured
+// on a node reading at half the node's width, MEASURED (BenchmarkColdSync,
+// the S3 fake at 30 ms to the first byte and 80 MB/s a connection, four
+// vCPUs): 2 000 bundles of 150 KB arrive at 448 a second at sixteen against
+// 680 at thirty-two, so 10 000 pushes' packs take about 22 seconds rather
+// than 15. Sixteen is bound by its GETs: sixteen of the 33 ms each took allow
+// 484 a second, while this node's own side of a bundle — its files created,
+// written, synced and renamed — ran at 878 a second from a store in memory.
+// Thirty-two is bound by both: its GETs took 40 ms, the fake's server sharing
+// the four cores the node ran on (a real bucket's does not), which allows 794
+// a second against the node's own 948. One bundle of 512 MiB among 200 makes
+// the two the same (2.5 against 2.6 s): its own ranged read is the round's
+// tail. On the broker's object store at three replicas (natsobj's measured
 // section), a 64 KiB get that keeps its pull took about 4 ms, a pull the
 // cluster dropped cost a second (2 to 124 of 3 000 gets, with the machine's
 // load), and gets averaged 7.2–7.3 ms in runs that lost eight — so sixteen in
-// flight come to roughly 2 000 to 4 000 small bundles a second, a second more
-// for each lost pull: arithmetic from one get at a time, not a measurement of
-// sixteen at once. The share's reason holds on both backends.
+// flight would come to roughly 2 000 to 4 000 small bundles a second, past
+// what the node's own side takes, a second more for each lost pull:
+// arithmetic from one get at a time, not a measurement of sixteen at once.
+// The share's reason holds on both backends, and a joining node's first clone
+// of a large repository is what it costs — a judgment call between that clone
+// and the second repository's sync behind it.
 const FetchConcurrency = NodeFetches / 2
 
 // MaxSnapshotRestarts is how many times one round reads a snapshot again
@@ -85,20 +96,78 @@ const FetchConcurrency = NodeFetches / 2
 // so three in one round is a fault worth failing on, never load.
 const MaxSnapshotRestarts = 3
 
-// MidxPacks is how many packs a full round leaves before it writes a
-// multi-pack-index — without a bitmap — before it answers, and how many packs
-// gathered beside the maintainer's index make the repository due again.
+// MidxPacks is how many packs gathered beside the maintainer's index make the
+// repository due for another run.
 //
-// EIGHT: without the index, every object lookup searches each pack's own
-// .idx in turn, and one push is one pack with nothing compacting them, so a
-// repository reaches thousands. Under eight, a lookup is a handful of binary
-// searches and the index would be a git process on a cold request for
-// nothing; past it, the per-pack searches start to show. The index without a
-// bitmap is a merge of the packs' own indexes, proportional to their objects.
-// Eight is when a repository is DUE, not how many packs can stand outside the
-// index: those are the packs that land before the run that covers them,
-// which the debounce's ceiling and the interval bound (MidxMinInterval).
-const MidxPacks = 8
+// SIXTY-FOUR, MEASURED (BenchmarkMidx's stale arms: pushes of 4 KiB landed
+// beside the maintainer's index over the 100 MB and 1 GB histories; git
+// 2.43, four vCPUs, six counts). A pack outside the index is outside its
+// bitmap: a request that reaches it — a clone, a fetch of anything pushed
+// since — opens it and walks its commits and trees rather than reading them
+// off the bitmap, and that walk is what each such pack costs a request.
+// Counting a clone's objects took 4.5 ms with no pack beside the index and
+// 12.0 ms with 128 over the 100 MB, 6.9 and 17.9 ms over the gigabyte —
+// about 0.06 and 0.09 ms a pack — while a clone's whole pack-objects (1.1 s
+// and 10.7 s) moved by less than its own noise up to 128. A run rewrites the
+// whole index and bitmap: 1.6 s over the 100 MB, 21 s over the gigabyte. So
+// a repository run every M pushes pays a run's T every M pushes and each of
+// its q requests a push an average of M/2 packs' δ — least at M = √(2T/qδ):
+// for sixteen requests a push (a pipeline's fetches, the clones of the
+// coding runs a push starts), 58 at 100 MB and 173 at a gigabyte. Sixty-four
+// is the least at 100 MB, and runs a gigabyte's index more often than its
+// least to spare each request a few milliseconds, a third of a core-second
+// a push; where pushes come faster, MidxMinInterval and MidxDutyCycle bind
+// first. A judgment call on q: at four requests a push the least doubles,
+// and a count past it costs a request a twentieth of a millisecond a pack.
+// Counted in packs rather than objects, because a push here is a seat's
+// commit or a few: the one push that carries a whole history, an import, is
+// a repository's first pack, which no index covers, so it is due at once.
+// Eight, the count this replaced, ran the whole index every eight pushes to
+// hold a request's walk under half a millisecond.
+const MidxPacks = 64
+
+// MidxRoundPacks is how many packs a full round must leave before it writes a
+// multi-pack-index — without a bitmap — before it answers.
+//
+// 256, MEASURED (BenchmarkPackLookup: a source repository's history split
+// into ever more packs, as one push a pack with nothing compacting them
+// leaves a repository — 100 MB, 296 000 objects and 42 000 commits, and a
+// gigabyte, 3.0 million and 424 000; git 2.43, four vCPUs). The index is a
+// merge of the packs' own indexes, so what it costs follows the objects far
+// more than the packs — 0.13 s over the 100 MB at 128 packs and at 256, 1.3 s
+// over the gigabyte at 128, 256 and 512 — while what it saves a request
+// follows the packs. The threshold is decided by a clone's pack-objects: the
+// request a cold sync is most often for (a coding run's fresh sandbox makes
+// one first), and the one the index makes wait. Six runs of each, medians and
+// spreads: at 256 packs the index saves that clone 0.55 s over the 100 MB
+// (12.9 s against 12.4; 12.6–13.5 and 11.9–12.9) and 11 s over the gigabyte
+// (151 against 140; 145–160 and 133–143), so the cold clone alone pays the
+// index back at both sizes, four times over and eight. At 128 it saves
+// nothing either size shows — the round's index the slower median both times,
+// 10.1 s against 10.2 (10.0–10.8 and 9.6–10.7) and 110 against 111 (108–111
+// and 104–116) — so there the cold request waits for an index that saves it
+// nothing, and only the requests after it until the maintainer's index lands
+// could pay it back: a fetch of the newest four commits saves 0.7 ms over the
+// 100 MB and 4.7 ms over the gigabyte, Missing over 1 000 commits 1 and 5 ms,
+// so it takes 130 to 190 of them over the 100 MB and 260 to 280 over the
+// gigabyte. At 512 a clone saves 3 s and 69 s, at 32 nothing (these and the
+// fetches an earlier series, of six runs over the 100 MB and three over the
+// gigabyte). The refs' peel the index is written before decides nothing: it
+// saves less than the index costs below thousands of tagged packs
+// (BenchmarkPeel: 0.5 ms over 256 tags in as many packs and 12 ms over a
+// thousand, against writes of 11 and 35 ms).
+//
+// That window is not "a debounce later": the maintainer indexes a repository
+// once its packs have stood still for MidxDebounce and the runs ahead of it
+// have ended — on four cores ONE run at a time (maintenanceRuns), most packs
+// uncovered first, each at 16 to 30 s a gigabyte (MidxDutyCycle) — so on a
+// node that just joined, every repository it syncs due at once, the last
+// waits for all of them: a quarter of an hour or more for 50 GB. What a clone
+// misses in that window is the maintainer's BITMAP far more than this index —
+// 1.4 s with it against 9.6 at 128 packs over the 100 MB, 14 s against 111
+// over the gigabyte — which no round writes, since its walk is no request's
+// to wait for.
+const MidxRoundPacks = 256
 
 // MidxDebounce is how long a repository's packs must have stood still before
 // the maintainer indexes them — unless the oldest of them has waited
@@ -137,16 +206,17 @@ const MidxMaxWait = MidxMinInterval
 //
 // TEN MINUTES: a run rewrites the repository's whole index and walks its
 // history for the bitmap, which for the largest repository the defaults admit
-// is minutes, so a repository pushed to every few seconds would otherwise be
-// rebuilt continuously. In between, the packs pushed since are served from
-// their own indexes beside it — never a missing index — and that is the bound
-// on how many stand outside it: the pushes of one interval (or of
-// MidxDutyCycle times the last run, when that is longer), the run's own
+// is a quarter of an hour, so a repository pushed to every few seconds would
+// otherwise be rebuilt continuously. In between, the packs pushed since are
+// served from their own indexes beside it — never a missing index — and that
+// is the bound on how many stand outside it: the pushes of one interval (or
+// of MidxDutyCycle times the last run, when that is longer), the run's own
 // duration and a tick. At a push every five seconds and runs of seconds,
-// about 120 packs, each one more .idx a lookup the index does not answer
-// searches. A failed run waits it out too, so a repository whose run keeps
-// failing costs a run every ten minutes rather than every tick; a run stopped
-// from outside (Stop, a full round's sweep, a retire) is no run, and waits
+// about 120 packs, each one more walk of its own commits and trees for a
+// request that reaches it — a twentieth of a millisecond or so (MidxPacks).
+// A failed run waits it out too, so a repository whose run keeps failing
+// costs a run every ten minutes rather than every tick; a run stopped from
+// outside (Stop, a full round's sweep, a retire) is no run, and waits
 // nothing.
 const MidxMinInterval = 10 * time.Minute
 
@@ -160,28 +230,45 @@ const MidxMinInterval = 10 * time.Minute
 // repositories in every slot of it but the one kept for a person's verify,
 // each in a slot of its own and as many as MaintenanceMemoryPerCore holds
 // beside the largest, so one repository's long run holds one slot while the
-// others due run beside it. A judgment call that BenchmarkMidx's figures
-// confirm or retune.
+// others due run beside it — and on four cores that is the lane's ONE run, so
+// a repository due while the largest runs waits out that run, and the duty
+// cycle is what bounds how often. BenchmarkMidx confirms both bounds over a
+// source repository's composition, its commits a seventh of its objects —
+// what both writes follow, the commit-graph reading every commit and the
+// bitmap selecting and walking them: a run takes 16 s a gigabyte of packs at
+// 100 MB (1.6 s; 296 000 objects, 42 000 commits), 21 s at 1 GB (3.0 million,
+// 424 000) and 30 s at 5 GB (152 s; 14.8 million, 2.1 million), growing
+// faster than the bytes. So a run passes a minute — where the duty cycle
+// starts to bind — past about 3 GB, and the largest repository the defaults
+// admit (code.DefaultRepoMaxBytes, 20 GiB), at the 5 GB arm's rate and its
+// growth, runs about a quarter of an hour and is rebuilt at most every two
+// and a half; under 3 GB a repository is rebuilt at most every
+// MidxMinInterval.
 const MidxDutyCycle = 10
 
 // MaintenanceBytesPerObject is the memory one maintenance run is estimated
 // to hold for every object its repository's packs hold: what a run is
 // charged against MaintenanceMemoryPerCore.
 //
-// 256 BYTES, MEASURED (git 2.43, four shared vCPUs, synthetic histories of
-// fifty files a commit fast-imported into 65 packs): the costlier of a run's
-// two steps is the multi-pack-index's BITMAP, whose peak anonymous memory
-// was 401 MiB over about 2.1 million objects — 198 bytes an object — 247 MiB
-// over 1 060 000 (244), and 86 MiB over 212 000 (424, a fixed part still
-// showing); this repository's own history, 19 000 objects, took 10 MiB. The
-// commit-graph took 12 MiB over the 2.1 million. Resident size was larger
-// (2.0 GiB there), but the rest was the packs' own pages mapped in, which
-// the kernel takes back under pressure, so it is not what a run holds.
-// Rounded up past the million's figure, so the estimate never falls short
-// of a repository of a million objects or more, where it is the estimate
-// that matters. The objects are the packs' rows' own counts, so the estimate
-// is a multiplication, never a read of the disk.
-const MaintenanceBytesPerObject = 256
+// 320 BYTES, MEASURED (git 2.43, four shared vCPUs, the peak anonymous
+// memory of each of a run's processes): the costlier of a run's two steps is
+// the multi-pack-index's BITMAP. Over a source repository's composition
+// (BenchmarkMidx's history, commits a seventh of the objects) it held
+// 722 MiB over 3.0 million objects — 255 bytes an object — and 3.7 GiB over
+// 14.8 million (266), the commit-graph 112 MiB and 636 MiB beside them; over
+// histories of fifty files a commit, the shape first measured, 198 bytes an
+// object over 2.1 million, 244 over 1 060 000 and 424 over 212 000, a fixed
+// part still showing. So an object costs the bitmap more the more commits
+// there are of it, and a little more the larger the repository: rounded up
+// a fifth past the largest measurement, which covers the default largest
+// repository (code.DefaultRepoMaxBytes, 20 GiB) at that growth. Resident
+// size was larger, but the rest was the packs' own pages mapped in, which
+// the kernel takes back under pressure, so it is not what a run holds. The
+// objects are the packs' rows' own counts, so the estimate is a
+// multiplication, never a read of the disk. 256, the figure this replaced,
+// was rounded up past the fifty-files histories alone, and fell short of
+// the composition measured since.
+const MaintenanceBytesPerObject = 320
 
 // MaintenanceMemoryPerCore is how much memory the maintenance runs BESIDE
 // THE LARGEST ONE IN FLIGHT may be estimated at together, for every core
@@ -190,7 +277,7 @@ const MaintenanceBytesPerObject = 256
 // fall due together, indexes them as memory allows rather than all at once.
 //
 // THE LARGEST RUN IS NOT CHARGED. A repository's bitmap is the price of
-// serving it — a node that serves a repository of N objects holds N × 256
+// serving it — a node that serves a repository of N objects holds N × 320
 // bytes once to write it, at whatever moment it is written — so a run over
 // a repository past the whole allowance starts whenever a slot is free, and
 // only what the allowance holds runs beside it: never two such repositories
@@ -202,8 +289,8 @@ const MaintenanceBytesPerObject = 256
 // compute-optimised instance shapes, leaving about 1.1 GiB a core for the
 // store, the broker, the engine and the read lane's processes; a quarter of
 // a GiB of that is the maintainer's. On a four-core node it is 1 GiB — the
-// runs of four million objects beside the largest, or every slot of
-// repositories of typical size (under 100 000 objects: 25 MiB each) at once
+// runs of over three million objects beside the largest, or every slot of
+// repositories of typical size (under 100 000 objects: 31 MiB each) at once
 // — and it binds only when several repositories of millions of objects are
 // due together. A JUDGMENT CALL: larger lets a joining node's backlog clear
 // sooner at the risk of the memory the store and the broker need; smaller
