@@ -105,24 +105,73 @@ func (e *VerifyRunningError) Error() string {
 // verifications is a node's verifications: the latest of each repository,
 // by its id, kept until VerifyKept after it ended or until the next verify
 // of the same repository begins.
+//
+// AGED FROM THE FRONT OF A QUEUE, never by a walk: ended holds every
+// verification in the order it ended — the order of its Ended, each stamped
+// under mu as it is appended — so the ones past VerifyKept are a prefix of
+// it, and a sweep looks at them and at the first one still kept, and at
+// nothing else. A sweep of every repository a node holds keeps a
+// verification for each, and aged by a walk of the whole registry at every
+// StartVerify and every read of one, under the lock every check's end takes
+// too, that sweep cost the node a number of map visits quadratic in what it
+// held — some 10^8 at ten thousand repositories. An id a newer verification
+// of its repository replaced is no longer in byID, and is passed over when
+// the queue reaches it.
 type verifications struct {
 	mu     sync.Mutex
 	byID   map[uuid.UUID]*Verification
 	latest map[string]uuid.UUID // a repository's id → its latest verification
+	ended  []uuid.UUID          // every ended verification, the oldest end first
+}
+
+// begin keeps v as its repository's latest verification, dropping the one it
+// replaces; mu is held.
+func (r *verifications) begin(v *Verification) {
+	if r.byID == nil {
+		r.byID, r.latest = map[uuid.UUID]*Verification{}, map[string]uuid.UUID{}
+	}
+	if previous, ok := r.latest[v.RepoID]; ok {
+		delete(r.byID, previous)
+	}
+	r.byID[v.ID], r.latest[v.RepoID] = v, v.ID
+}
+
+// end records that the verification id ended at, set filling in how; mu is
+// held. One a newer verification of its repository already replaced is
+// nothing to record.
+func (r *verifications) end(id uuid.UUID, at time.Time, set func(*Verification)) {
+	v := r.byID[id]
+	if v == nil {
+		return
+	}
+	v.Ended = at
+	set(v)
+	r.ended = append(r.ended, id)
 }
 
 // sweep drops every verification that ended more than VerifyKept before
-// now; mu is held. Run at every StartVerify and Verification, so what a node
-// keeps needs no goroutine of its own to age.
-func (v *verifications) sweep(now time.Time) {
-	for id, got := range v.byID {
-		if got.State != VerifyRunning && now.Sub(got.Ended) > VerifyKept {
-			delete(v.byID, id)
-			if v.latest[got.RepoID] == id {
-				delete(v.latest, got.RepoID)
+// now, answering how many it looked at — those it dropped or passed over,
+// and the first one still kept; mu is held. Run at every StartVerify and
+// every read of a verification, so what a node keeps needs no goroutine of
+// its own to age.
+func (r *verifications) sweep(now time.Time) int {
+	looked := 0
+	for len(r.ended) > 0 {
+		looked++
+		id := r.ended[0]
+		v, ok := r.byID[id]
+		if ok && now.Sub(v.Ended) <= VerifyKept {
+			break
+		}
+		r.ended = r.ended[1:]
+		if ok {
+			delete(r.byID, id)
+			if r.latest[v.RepoID] == id {
+				delete(r.latest, v.RepoID)
 			}
 		}
 	}
+	return looked
 }
 
 // StartVerify begins a check of this node's cache of the repository named
@@ -190,13 +239,7 @@ func (s *Server) StartVerify(ctx context.Context, name string, repair bool) (Ver
 	}
 	v := &Verification{ID: uuid.Must(uuid.NewV7()), Repo: ref.Name, RepoID: ref.ID, Repair: repair,
 		State: VerifyRunning, Started: now}
-	if previous, ok := s.verifies.latest[ref.ID]; ok {
-		delete(s.verifies.byID, previous)
-	}
-	if s.verifies.byID == nil {
-		s.verifies.byID, s.verifies.latest = map[uuid.UUID]*Verification{}, map[string]uuid.UUID{}
-	}
-	s.verifies.byID[v.ID], s.verifies.latest[ref.ID] = v, v.ID
+	s.verifies.begin(v)
 	started = true
 	go s.runVerify(v.ID, checked, repair)
 	return *v, nil
@@ -233,13 +276,12 @@ func (s *Server) runVerify(id uuid.UUID, checked *cache.Verification, repair boo
 		err = fmt.Errorf("%w: %w", ErrStopping, err)
 	}
 	s.verifies.mu.Lock()
-	v := s.verifies.byID[id]
-	if v != nil {
-		v.Ended, v.Report, v.Err, v.State = s.now(), report, err, VerifyDone
+	s.verifies.end(id, s.now(), func(v *Verification) {
+		v.Report, v.Err, v.State = report, err, VerifyDone
 		if err != nil {
 			v.State = VerifyFailed
 		}
-	}
+	})
 	s.verifies.mu.Unlock()
 	if err != nil {
 		s.log.Warn("code_verify_failed", "repo", report.Name, "verify", id, "repair", repair,
