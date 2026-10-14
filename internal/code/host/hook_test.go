@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // A hook whose engine accepts it and then goes away fails the push and says
@@ -89,6 +91,60 @@ func TestTheHookBudgetIsItsSteps(t *testing.T) {
 	}
 	if got, want := gitproc.ReceivePackDeadline(1<<30, host.HookBudget(host.Production)), 74324*time.Second; got != want {
 		t.Errorf("ReceivePackDeadline(1 GiB) = %v (%d s), the documented %v", got, int64(got.Seconds()), want)
+	}
+}
+
+// A BALANCER IN FRONT OF A CLIENT WITHOUT SIDE-BAND IS SIZED BY THE SESSION'S
+// OWN BOUNDS: such a client hears nothing from the end of its upload to its
+// report, so docs/guides/deployment.md's idle timeout is what the session may
+// take before it gives a push up — the proposal's two write attempts and the
+// pending grace whatever the push's size, and for a large push the pack's own
+// work: git's indexing and the hook's three scans at gitproc.PackWorkDeadline
+// each, and the put at the pace floor. A figure stated beside the constants
+// rather than from them was 60 s, under the three minutes a one-commit push may
+// be silent when its committer fails over or its row resolves pending, and a
+// balancer at it cut exactly the pushes whose outcome may already be durable.
+//
+// Mutation: change ProposeBudget, the pending grace, PackWorkPerMiB or the
+// pace floor, and the page no longer says what the session takes.
+func TestTheIdleTimeoutForAClientWithoutSideBandIsTheSessionsBounds(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "guides", "deployment.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := strings.Join(strings.Fields(string(raw)), " ")
+	words := map[time.Duration]string{time.Minute: "a minute", 2 * time.Minute: "two minutes"}
+	fixed := host.ProposeBudget + host.Production.PendingGrace
+	if fixed%time.Minute != 0 || words[host.ProposeBudget] == "" || words[host.Production.PendingGrace] == "" {
+		t.Fatalf("ProposeBudget (%v) and the pending grace (%v) are no longer the whole minutes the page "+
+			"says: say there what they are, and here", host.ProposeBudget, host.Production.PendingGrace)
+	}
+	// What the session does after the pack is indexed, by its own budget:
+	// three scans, the put at the floor, the proposal and the pending wait.
+	if got, want := host.HookBudget(host.Production), 3*gitproc.PackWorkDeadline(code.MaxPackBytes)+
+		objstore.ReadBase+objstore.PaceFor(code.MaxPackBytes)+fixed; got != want {
+		t.Fatalf("HookBudget is %v and the page's steps sum to %v: say there what the hook does", got, want)
+	}
+	work := gitproc.PackWorkDeadline(1)
+	perMiB := 4*(gitproc.PackWorkDeadline(2<<20)-work) + objstore.MiBPace
+	if work != gitproc.ReadDeadline+time.Second || gitproc.PackWorkDeadline(2<<20)-work != time.Second ||
+		objstore.ReadBase != time.Minute {
+		t.Fatalf("a pack's work is %v and a second a mebibyte past the first, and a put %v and %v a "+
+			"mebibyte: say on the page what they are, and here", work, objstore.ReadBase, objstore.MiBPace)
+	}
+	for _, want := range []string{
+		fmt.Sprintf("keep the idle timeout at %d minutes or more, whatever the push's size", fixed/time.Minute),
+		fmt.Sprintf("the proposal is given %s", words[host.ProposeBudget]),
+		fmt.Sprintf("a row that resolved pending %s more", words[host.Production.PendingGrace]),
+		fmt.Sprintf("%d s and a second a mebibyte for git's indexing and for each of the engine's three scans",
+			gitproc.ReadDeadline/time.Second),
+		fmt.Sprintf("a minute and %d s a mebibyte (the floor every transfer is held to) for the object store's put",
+			objstore.MiBPace/time.Second),
+		fmt.Sprintf("about %d s a mebibyte in all", perMiB/time.Second),
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("docs/guides/deployment.md does not say %q", want)
+		}
 	}
 }
 
