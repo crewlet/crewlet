@@ -197,6 +197,27 @@ func TestASocketOpensAndGetsItsSnapshotImmediately(t *testing.T) {
 	}
 }
 
+func TestTheSnapshotIsStampedByTheServicesClock(t *testing.T) {
+	t.Parallel()
+	// EVERY ENVELOPE TAKES ITS STAMP FROM ONE CLOCK, the service's own
+	// (Options.Now), which every push already read while the handshake's
+	// snapshot alone read the wall clock: under a pinned or simulated clock
+	// the first frame a socket received was dated in another time than every
+	// frame after it.
+	f := newSocket(t, nil, nil)
+	conn, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	got := next(t, conn)
+	if kindOf(got) != stream.KindSnapshot {
+		t.Fatalf("first frame = %v, want a snapshot", got["kind"])
+	}
+	if want := clock.UTC().Format(time.RFC3339Nano); got["ts"] != want {
+		t.Fatalf("the snapshot is stamped %v; the service's clock reads %s", got["ts"], want)
+	}
+}
+
 func TestABadTokenFailsTheHandshakeRatherThanOpeningAndDying(t *testing.T) {
 	t.Parallel()
 	// Accepting and then closing makes the browser see a connection that

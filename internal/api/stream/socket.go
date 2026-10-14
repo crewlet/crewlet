@@ -428,7 +428,10 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 		writeLoop(ctx, conn, client)
 	})
 
-	client.Reply(Push(KindSnapshot, svc.Snapshot(client.Audience()), time.Now().UTC()))
+	// Stamped by the SERVICE's clock, as every push after it is: a
+	// wall-clock stamp here dated the first frame in another time than the
+	// rest under a pinned or simulated clock (Options.Now).
+	client.Reply(Push(KindSnapshot, svc.Snapshot(client.Audience()), svc.now()))
 
 	// THE CREDENTIAL IS ENDED OR DECIDED AGAIN FOR AS LONG AS THE SOCKET
 	// LIVES, on what can change it and at nothing else. See lifetime.go for
