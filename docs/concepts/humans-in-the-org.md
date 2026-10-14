@@ -140,6 +140,21 @@ Bind the token and your own work is on your own screen; leave it unbound and
 you are an operator outside the chart, writing under the token's own id with author kind
 `operator`, which is an ordinary state and not an error.
 
+**Your git pushes are yours, through the same token.** A company that hosts
+its repositories in the engine ([`code.native`](code-host.md)) is cloned,
+fetched and pushed to over HTTPS, with a person's own API token as git's
+password. git is the third way a person acts, beside the dashboard's act
+transport and their assistant's MCP, and it follows the same binding: a token
+bound to a human seat pushes **as that person**, while a token bound to nobody
+— and every caller of a disabled `api.auth` guard, who is nobody — fetches
+only, and a push with it is refused at its first request saying so. Every
+push is recorded as one `operator_acted` event with transport `git`: the token
+as the actor, the person it is bound to beside it, the repository and what
+became of the push. A fetch is a read and is not recorded. The [Code
+guide](../guides/code.md) is how to set it up, and
+[ADR-0037](https://github.com/crewlet/crewlet/blob/main/adr/0037-a-person-reaches-git-with-their-own-bound-token.md)
+why there is no second credential for git.
+
 **Your own marks and pins are the person's, and the record still names the
 token.** *Whose* state a document holds and *who wrote it* are two different
 questions with two different answers, and the person tools answer both. When

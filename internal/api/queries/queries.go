@@ -387,10 +387,10 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operat
 	// function both of them meet at, which is the same reason this package
 	// exists at all.
 	data, err := e.answer(withOperator(ctx, operatorID), p)
-	return data, unavailableIfTransient(err)
+	return data, ClassifyUnavailable(err)
 }
 
-// unavailableIfTransient turns a read this node could not serve YET into
+// ClassifyUnavailable turns a read this node could not serve YET into
 // [ErrUnavailable], leaving every other failure alone.
 //
 // AT THE REGISTRY, ONCE, rather than at each answer that reads something
@@ -407,7 +407,11 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operat
 // A refusal about the REQUEST is never reclassified, even when it wraps one of
 // those: the caller has to change what it asks, and "come back" would send the
 // identical request round a loop.
-func unavailableIfTransient(err error) error {
+//
+// EXPORTED for the code routes (internal/api/code.go), which answer outside
+// the registry and in its vocabulary: their "not yet" is this classification,
+// never a second list of what clears by waiting.
+func ClassifyUnavailable(err error) error {
 	switch {
 	case err == nil,
 		errors.Is(err, ErrUnavailable),

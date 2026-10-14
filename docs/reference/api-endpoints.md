@@ -29,6 +29,7 @@ operator credential — move to that listener and are served nowhere else:
 | `/webhooks/*` | Vendors (deliveries) and a person's browser returning from a vendor's app flow (`/webhooks/slack-oauth`, `/webhooks/github-app`) | `api.port` | `api.public` only |
 | `/otlp/{token}/v1/{signal}` | A sandbox exporting a coding run's telemetry | `api.port` | `api.public` only |
 | `/mcp/{token}` | A sandbox calling its seat's tools (agent mode) | `api.port` | `api.public` only |
+| `/git/*`, `/code/*` | A person's git client, with their own token; the CLI | `api.port` | `api.port` only — never published, since the credential is a person's operator token ([The code host](#the-code-host-git-and-code)) |
 | Everything else — `/health`, `/ready`, `/`, `/dashboard`, `/favicon.ico`, `/static/*`, `/ws/stream`, `/query/*`, every REST read, `/config`, `/secrets`, `/setup`, `/operator/*`, `/backup`, the `/work/*` and `/fleet/*` gestures | Operators, the dashboard, the CLI, orchestrators | `api.port` | `api.port` only |
 
 A public route asked of `api.port` answers `404` with the code `no_route` and a
@@ -217,6 +218,14 @@ every other route.
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
 | `POST` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Which tools it lists follows what the company runs, asked per request. Stateless: no session, so any node answers any request and a `GET` or `DELETE` is answered `405` |
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the person your token is bound to** — the dashboard's write surface. Refused `unbound` to a token no seat binds and to a disabled guard's caller (see [below](#operatoract--the-dashboards-write-surface)). Served wherever `/operator/mcp` is, over the same catalogue |
+| `GET` `HEAD` | `/git/{repo}/info/refs` | A git client's advertisement of a repository the engine hosts, on a node whose roles name `git`. git's protocol, a person's token as the Basic password; a push only with a token bound to a person. **Always needs a token**, never on `api.public` (see [The code host](#the-code-host-git-and-code)) |
+| `POST` | `/git/{repo}/git-upload-pack` | A clone's or a fetch's request (same) |
+| `POST` | `/git/{repo}/git-receive-pack` | A push (same) |
+| `GET` | `/code/repos` | The repositories the engine hosts, a page at a time, at the caller's freshness. **Always needs a token** (see [The code reads](#the-code-reads)) |
+| `GET` | `/code/repos/{name}` | One repository in detail (same) |
+| `GET` | `/code/repos/{name}/pushes` | One repository's push history, newest first, each push naming the person who made it (same) |
+| `POST` | `/code/repos/{name}/verify` | Begin a check of this git node's copy of one repository against its rows, `?repair=true` to rebuild what is damaged: answered `202` at once, the check running on (see [below](#post-codereposnameverify)) |
+| `GET` | `/code/repos/{name}/verify/{id}` | A check begun above: running, done with its report, or failed with why and what it found (see [below](#get-codereposnameverifyid)) |
 
 > **Auth.** Writes and every route of the always-guarded surfaces — `/config`,
 > `/secrets`, `/setup`, `/operator`, and the engine's own git host's `/git/*`
@@ -3979,6 +3988,168 @@ reanchor_refused`, and with it the answer carries the newest one as
 question. A node in a [capacity window](../guides/retention.md#changing-a-logs-ceiling)
 refuses every reanchor `409 reanchor_refused`, naming its mode: the reanchor
 appends a generation record, and the window's mode appends nothing.
+
+## The code host: `/git` and `/code`
+
+A company that sets [`code.native`](../concepts/code-host.md) hosts its git
+repositories in the engine. A person reaches them with git's own smart HTTP
+under `/git/`, on any node whose `node.roles` name `git` (an undeclared node
+has every role), and anybody holding a token reads the rows under `/code/` on
+every node. Both prefixes are **always guarded**, reads included, whatever
+`api.auth.allow_anonymous_read` opens, and **neither is ever on the [public
+listener](#which-listener-serves-what)**: the person's own API token is the
+credential, and that socket serves only outside parties, who hold none. On
+`/git/` — and on no other route — the token may arrive as the password of a
+Basic credential, which is the only way a git client sends one ([the auth
+note under Routes](#routes)). Who may push is the person the token is bound to:
+see [Persons and their tokens](../concepts/code-host.md#persons-and-their-tokens).
+
+**Every surface is asked of the engine on each request.** The code host is
+built with the node's native runtime — at boot, or at the first apply whose
+company sets `code.native`, which on a node that booted with no company comes
+after the API started — so the routes serve the moment it exists, with no
+restart.
+
+### git's smart HTTP
+
+| Method | Path | What it is |
+|---|---|---|
+| `GET` `HEAD` | `/git/{repo}/info/refs?service=git-upload-pack` | A clone's or a fetch's advertisement. `{repo}` is the repository's name, with or without `.git` |
+| `GET` `HEAD` | `/git/{repo}/info/refs?service=git-receive-pack` | A push's advertisement |
+| `POST` | `/git/{repo}/git-upload-pack` | A fetch's request: protocol v2's `ls-refs` and `fetch`, or v0's negotiation |
+| `POST` | `/git/{repo}/git-receive-pack` | A push |
+
+These speak git's protocol, not JSON, and a refusal on them is one
+`text/plain` line — the one form git prints — listed with what to do in [What
+git prints, and what it means](../concepts/code-host.md#what-git-prints-and-what-it-means).
+What a route answers before git is reached:
+
+- **A node without the `git` role** mounts none of them: `404 no_route`, as for
+  any route this node's configuration does not enable.
+- **A company that does not set `code.native`** (or no company yet): `404`,
+  `this company does not host code (code.native is not set)`.
+- **A company that sets it, on a node that serves none of it now** — or a
+  node that has not yet read whether it does: `503`, saying which of four it
+  is — judged from the configuration the fleet activated, never from what this
+  node last applied, so a company that has just turned `code.native` on is
+  never told it does not host code, and never stating what that configuration
+  says where the node has not read it:
+  - the node is **applying** the configuration the fleet activated — its
+    first company's code host still being built among it — and answers once
+    the apply ends: `Retry-After: 5`;
+  - its apply of a configuration that hosts code **failed**
+    (`config_apply_failed`: a code host that could not be built, a revision
+    the node refused — `GET /fleet` and its log say why): no `Retry-After`,
+    since waiting clears nothing, and another node serves it;
+  - its apply failed **before it could read** the configuration — the
+    revision could not be fetched, opened with the node's key or parsed — so
+    it cannot say whether the company hosts code, and says so: the same
+    `config_apply_failed` and no `Retry-After`, the detail naming what it
+    could not read rather than that the company hosts code;
+  - its native runtime was already running when `code.native` was turned on,
+    and serves it once **restarted** (`native_backend_needs_restart`): no
+    `Retry-After`, for the same reason.
+- **No credential, or a refused one**: `401` with `WWW-Authenticate: Basic
+  realm="crewlet", charset="UTF-8"`, which is what makes git ask its credential
+  helper.
+- **A draining node** finishes a fetch already begun and refuses a new fetch
+  and every request of a push, `503` with `Retry-After: 30` ([During a
+  drain](#during-a-drain)).
+
+### The code reads
+
+| Route | What it answers |
+|---|---|
+| `GET /code/repos` | The repositories, by name, a page at a time: `?status=` a comma list of `active`, `archived`, `deleted` and `purging` (unset is `active,archived`), `?limit=` (1–500, unset or `0` is 100) and `?cursor=` (the `next` of the page before). Each carries its id, name, status, owner, default branch, protection rules, ref and pack counts and bytes, the default branch's head, and how many pushes it has ever had |
+| `GET /code/repos/{name}` | One repository in detail: the listing's fields, its branch, tag and ref-tombstone counts, when it was created, and the `code.limits` of the node that served the read |
+| `GET /code/repos/{name}/pushes` | Its push history, newest first: `?limit=` (1–200, unset or `0` is 50) and `?cursor=`. Each push names its id, the token that pushed it (`actor`) and the person it is bound to (`actor_seat`), the node that received it, every ref it moved or was refused with the reason, its pack, and the position its record landed at |
+
+Every answer carries the `position` and the `level` it was read at. They read
+at the REST read path's level — `stale` by default — through the same
+freshness keys as every other read: `read_level` (`linearizable`, `stale` or
+`consistent_prefix`; `session` is refused naming the three, since none of the
+caller's writes lands on the code log through this surface), `max_lag_seconds`, `max_lag_seq`
+and `min_position` ([Read Consistency](../guides/consistency.md#which-surface-reads-at-which-level)).
+A client that must not conclude a repository is undeclared from an old copy —
+a script about to create one — asks `read_level=linearizable`: at `stale`, a
+repository declared a moment ago may not have reached this node's copy, and is
+answered `404`.
+
+A refusal is the read surface's: `404 not_found` for a repository that is not
+declared (and, with `detail`, for a company that hosts no code), `400
+bad_params` naming the parameter or the level refused, `503 unavailable` with
+`Retry-After` for what clears by waiting — this node behind the code log, no
+quorum, no data node serving the read — and `500 query_failed` for anything
+else. A company that hosts code on a node that serves none of it now — or a
+node that has not read whether it does — is the `503 unavailable` the git
+routes answer above, with a `reason` beside the `detail` a script or a
+balancer can act on — `applying` (with `Retry-After: 5`),
+`config_apply_failed` (a failed apply, or one that failed before the node
+could read the configuration, the `detail` saying which) or
+`native_backend_needs_restart` (with none). Every one of them is served
+through a drain.
+
+### `POST /code/repos/{name}/verify`
+
+Begins a check of **this node's** copy of one repository against its rows —
+every pack against the bytes its row names, the refs against what was written,
+and git's own connectivity check — and, with `?repair=true`, a rebuild of a
+copy found damaged (every pack the check found whole linked rather than
+downloaded again) that is then checked the same way. `repair` is `true` or
+`false`; anything else is `400 bad_params`.
+
+**It is the one `/code/` route whose work grows with the repository**: it reads
+every byte of the copy — tens of seconds a gigabyte, minutes for a large
+repository, more with a repair — which outlives any proxy's read timeout. So
+it answers at once, **`202 Accepted`**, with the verification running and its
+address in `Location`, and the check runs on the node's own time: the request
+ending, or a proxy closing it, ends nothing. Read the outcome there (below)
+until it ends.
+
+```json
+{ "id": "0190d2f2-…", "repo": "web", "repair": false, "state": "running",
+  "started": "2026-10-14T21:30:00Z" }
+```
+
+What can be refused without reading the repository is refused at once, having
+read nothing — so a retry costs nothing either:
+
+- `404 not_found` for a repository that is not declared, and for one **this
+  node holds no copy of**: a git node keeps a copy only of the repositories it
+  has served and not evicted, and building one to check would be a download of
+  the whole repository that then evicts a warm one. Verify the git nodes that
+  serve the repository — with requests routed by repository, one or two.
+- `503 unavailable` with `Retry-After: 10` when the node's maintenance lane has
+  no free slot or the background work in flight leaves the check no memory: a
+  check holds one slot of that lane, and its connectivity check's memory, from
+  its admission to its end — the node's background indexing keeps one slot for
+  it — so how many checks run at once is bounded by the lane.
+- `409 verify_running` when a check of the repository with the other `repair`
+  setting is running on the node, naming it as `running`. One with the same
+  setting is answered `202` as that one: two asking share one check.
+- `503 unavailable` with `Retry-After: 30` on a node whose code host is
+  stopping, and `500 query_failed` **with its sentence** when the node's memory
+  cannot hold the check at all — the sentence says to run it on a node with
+  more.
+
+A write to the drain — a repair rebuilds — so a draining node refuses it.
+Mounted only where git is served.
+
+### `GET /code/repos/{name}/verify/{id}`
+
+A verification begun by the `POST` above: `state` is `running`, `done` — with
+`report`, the node's check: `packs` and `refs` checked, every `problems`
+sentence naming the file and both values (none is a copy exactly its rows),
+and after a repair `rebuilt` and, as `found`, what the first check found — or
+`failed`, with `error` (`unavailable` for what a retry or a restart clears, a
+stop among them; `query_failed` otherwise), `detail`, its sentence — a pack the
+object store does not hold, the stop that cut it short — and `report`, **what
+the check found before it failed**. `ended` is set once it is not running.
+
+The node keeps a verification **an hour after it ends**, until the
+repository's next verify begins, and never across a restart: a verification it
+does not keep is `404 not_found`. A read, so a draining node still answers it.
+A client polls it every few seconds; what it costs is a lookup.
 
 ## Agent Memory
 

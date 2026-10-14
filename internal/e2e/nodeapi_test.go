@@ -207,6 +207,9 @@ func wireAPI(
 		// another cross the object store the way a deployment's do, and a
 		// harness node serves the purge and the gate a deployment's does.
 		Native: api.EngineNative(e),
+		// THE ENGINE'S OWN GIT HOST AND THE CODE READS, through the
+		// adapter `crewlet run` uses, asked per request.
+		Code: api.EngineCode(e),
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return e.WebhookSecrets() },
 			Publisher: backends.Queue,

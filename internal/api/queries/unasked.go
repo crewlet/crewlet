@@ -146,7 +146,7 @@ func (s Sources) workRouting(ctx context.Context, n Native, p Params) (any, erro
 	if record == "" {
 		return nil, badParams("record_id", "", nil)
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}

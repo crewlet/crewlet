@@ -39,19 +39,10 @@ from them.
 
 This is the product's current shape, not a configuration choice:
 
-- **The API does not mount git's HTTP routes yet**, so nobody clones or
-  pushes a repository through this build. What exists is everything a push
-  takes — the repositories, their protection rules, the committer below and
-  the rows it writes — and, on every node with the `git`
-  [role](configuration.md#noderoles), the code host itself, built and started
-  at boot or at the activation that brings the company's native runtime up:
-  the [cache](#the-cache-on-a-git-node) git is served from, sized and placed by
-  the node's Tier A [`git` block](configuration.md#git), the node's own git
-  (2.40 or newer, checked at boot), and the git surface
-  ([A push, end to end](#a-push-end-to-end)). The routes that will carry git
-  are reserved and always guarded.
-- **Agents do not push.** The repositories, their protection rules and the
-  decision of every push exist; a seat as a git user does not.
+- **Only people use git.** A person clones, fetches and pushes over HTTPS
+  with their own API token ([Persons and their
+  tokens](#persons-and-their-tokens)); a seat as a git user does not exist
+  yet, so agents do not push.
 - **There are no changes, reviews or checks** — no merge request, no review
   and no CI gate in front of a protected branch. A protection rule decides
   what a push may do to a ref, and nothing else stands in front of one.
@@ -528,6 +519,22 @@ log's head confirms a row still names it — or holds damaged fails the sync
 naming the pack, and the collector's daily audit raises the
 [`objects_missing`](object-store.md#alarms) alarm for the same object.
 
+**Checking a copy.** An operator asks a git node to check its copy of a
+repository against the rows — every pack hashed as the bundle its push stored,
+the refs against what was written, git's own connectivity check — and, asked
+to, to repair what it finds damaged, linking in every pack it found whole so
+the repair downloads only the rest ([`POST
+/code/repos/{name}/verify`](../reference/api-endpoints.md#post-codereposnameverify)).
+A check reads every byte of the copy, so it runs on the node's own time and is
+read until it ends rather than answered in one request, and it is **admitted
+before it reads anything**: it holds a slot of the maintenance lane — the one
+the background indexing leaves free — and its connectivity check's memory from
+its first read to its last, and a node with neither free refuses it at once
+rather than after reading the repository. It checks only a copy the node
+holds: one it never served has nothing to check, and building one would be a
+download of the whole repository that evicts a warm one — so a check goes to
+the git nodes that serve the repository.
+
 **What to watch.** `crewlet.code.cache.bytes` against the budget,
 `crewlet.code.cache.repos`, `crewlet.code.cache.sync.duration` by `kind` (full
 syncs dominating is a cache too small to stay warm),
@@ -536,6 +543,46 @@ syncs dominating is a cache too small to stay warm),
 rebuild repairs — and `crewlet.code.cache.maintenance.refused`, above zero a
 repository whose bitmap the node's memory cannot hold
 ([metrics reference](../reference/metrics.md)).
+
+---
+
+## Persons and their tokens
+
+A person reaches a repository with git's own smart HTTP at
+`https://<the API's address>/git/<name>.git`, on the node's `api.port`, and
+with the credential they already have: their own Tier A API token, given to
+git as the **password** (git asks for it, or a credential helper answers; the
+user name is ignored). There is no second credential for git — no SSH key and
+no deploy token — because the token is already how the engine knows who a
+person is, and a second identity system would be one more thing to revoke and
+audit ([ADR-0037](https://github.com/crewlet/crewlet/blob/main/adr/0037-a-person-reaches-git-with-their-own-bound-token.md)).
+
+- **A token bound to a human seat pushes as that person** — the seat whose
+  `contact.crewlet_operator_id` names the token. That is the same binding the
+  dashboard's writes and an assistant's operator tools go by, and git is the
+  third way a person acts beside them.
+- **A token bound to nobody fetches only**, and so does every caller of a
+  disabled `api.auth` guard: a push is refused at its first request, before
+  anything is sent, saying the token is not bound to a person.
+- **Every push is recorded** as one `operator_acted` event with transport
+  `git`: the token as the actor, the person beside it, the repository and
+  what became of the push — refused ones included. A fetch is a read and is
+  not.
+- **`/git/` and `/code/` are always guarded**, reads included, whatever
+  `api.auth.allow_anonymous_read` opens: a repository is the company's source.
+  The token may arrive as git's Basic password on `/git/` and on no other
+  route. Neither prefix is ever on the [public
+  listener](../reference/api-endpoints.md#which-listener-serves-what) — it
+  serves outside parties, who hold no operator token.
+
+git is served by every node whose `node.roles` name `git` (an undeclared node
+has every role), once the company sets `code.native`: the node builds the code
+host at boot, or at the activation that brings its native runtime up, and
+refuses to start one on a git older than 2.40. A node without the role answers
+every `/git/` request `404`. Every node answers the code host's REST reads
+(`GET /code/repos…`, [API Endpoints](../reference/api-endpoints.md#the-code-host-git-and-code)).
+The [Code guide](../guides/code.md) walks through turning it on, declaring a
+repository, binding a token and the first push.
 
 ---
 
@@ -752,6 +799,8 @@ reference](../reference/metrics.md)).
 | `code_hook_protocol`, `code_hook_refused` | `WARN` | A push's hook spoke out of turn, or a connection to the hook socket named no session the engine started; the push fails and nothing is stored. |
 | `code_hook_panic` | `ERROR` | The engine failed while serving one push's hook: that push was refused and its stack logged, and the node goes on serving. |
 | `code_host_stop_unfinished` | `WARN` | The node stopped with git requests still running past its stop's wait. |
+| `code_verify_finished` | `INFO` | A check of this node's copy of a repository ended: the `packs` it checked, the `problems` it found, and whether a repair `rebuilt` it. Its report is read at `GET /code/repos/{name}/verify/{id}` for an hour after. |
+| `code_verify_failed` | `WARN` | A check of this node's copy of a repository could not end — a stop cut it short, a pack the object store lacks stopped its repair — with the `problems` it had found by then. |
 
 A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.cache`. Every line at `INFO` and above is here; its `DEBUG` lines (each sync, each background index written, a run stopped from outside) are left out.
 

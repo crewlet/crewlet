@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,6 +51,93 @@ func (e *Engine) CodeHost() (*host.Server, bool) {
 		return nil, false
 	}
 	return n.codeHost, true
+}
+
+// Why this node serves none of the code host now ([Engine.CodeUnserved]).
+var (
+	// ErrCodeNotHosted: the company this node serves does not set
+	// code.native, and nor does the configuration the fleet activated, as
+	// this node last read it.
+	ErrCodeNotHosted = errors.New("engine: this company does not host code (code.native is not set)")
+	// ErrCodeApplying: this node is behind the configuration the fleet
+	// activated and is applying it — a first apply building the native
+	// runtime among them. Clears in seconds, by itself.
+	ErrCodeApplying = errors.New("engine: this node is applying the configuration the fleet activated")
+	// ErrCodeApplyFailed: the configuration the fleet activated sets
+	// code.native, as this node read it, and this node's apply of it
+	// failed (config_apply_failed): a code host that could not be built, a
+	// revision this node refused. Clears only when an apply succeeds, which
+	// a corrected revision's activation is what usually brings.
+	ErrCodeApplyFailed = errors.New("engine: this node could not apply the configuration the fleet " +
+		"activated, which hosts code (config_apply_failed)")
+	// ErrCodeUnknown: this node's apply of the configuration the fleet
+	// activated failed BEFORE it could read what that configuration says
+	// (config_apply_failed): the revision could not be read from this
+	// node's store, fetched from the coordination store, opened with this
+	// node's key or parsed. So this node cannot say whether the company
+	// hosts code at all, and says that — never [ErrCodeApplyFailed]'s
+	// "which hosts code", which would tell a company that never set
+	// code.native that it had. Clears when an attempt reads the revision:
+	// the next tick's retry where the failure was a blip, a corrected
+	// revision's activation where the revision itself is unreadable here.
+	ErrCodeUnknown = errors.New("engine: this node could not read the configuration the fleet " +
+		"activated, so cannot say whether this company hosts code (config_apply_failed)")
+	// ErrCodeNeedsRestart: the company this node serves sets code.native,
+	// and this node's native runtime was already running without the code
+	// host when it was set; it serves it once restarted
+	// (native_backend_needs_restart).
+	ErrCodeNeedsRestart = errors.New("engine: this node's native runtime was started without the code " +
+		"host, and serves it once restarted (native_backend_needs_restart)")
+)
+
+// CodeUnserved says why this node serves none of the code host — neither
+// [Engine.CodeHost] nor [OperatorCode] — as one of five sentinels, which the
+// API answers each in its own way: not hosted is a 404, the other four a
+// 503, and only an apply in flight clears by waiting.
+//
+// DECIDED FROM WHAT THE FLEET ACTIVATED, as this node's reconciler last read
+// it, and never from this node's published epoch alone: an apply publishes
+// its epoch only once the runtime it needs is built, so a node building its
+// first company's code host, or one whose apply of it failed, still serves
+// the previous epoch — and that epoch says the company hosts no code, which
+// is exactly what a person who just turned it on must not be told. Between an
+// activation and the tick that reads it — milliseconds on the nudge the
+// activation broadcasts, a reconcile interval at most — a node answers by the
+// activation it last read.
+//
+// WHAT THIS NODE HAS NOT READ IT DOES NOT CLAIM. A failed apply is
+// [ErrCodeApplyFailed] — "which hosts code" — only where the attempt decoded
+// the revision and found code.native set; one that failed before it could
+// decode it is [ErrCodeUnknown], since a revision that could not be read here
+// may host no code at all. An apply in flight, decoded or not, is
+// [ErrCodeApplying], whose sentence says only that this node is applying.
+//
+// Asked only where the code host was found absent, and answering as of now:
+// a caller that found it absent asks again after this answer, since the
+// runtime may have come up between the two (api.EngineCode).
+func (e *Engine) CodeUnserved() error {
+	if c := e.Company(); c != nil && c.Config != nil && c.Config.Code.Native {
+		// The epoch this node serves hosts code, so the runtime that serves
+		// none of it was built before code.native was set: an apply starts a
+		// runtime with the code host before it publishes the epoch.
+		return ErrCodeNeedsRestart
+	}
+	r := e.reconciler.Load()
+	if r == nil {
+		return ErrCodeNotHosted
+	}
+	p := r.snapshot()
+	switch {
+	case p.target == 0 || p.target == p.applied:
+		return ErrCodeNotHosted
+	case p.targetRead && !p.targetCode:
+		return ErrCodeNotHosted
+	case p.attempts > 0 && p.attemptStarted.IsZero() && !p.targetRead:
+		return fmt.Errorf("%w (epoch %d)", ErrCodeUnknown, p.target)
+	case p.attempts > 0 && p.attemptStarted.IsZero():
+		return fmt.Errorf("%w (epoch %d)", ErrCodeApplyFailed, p.target)
+	}
+	return fmt.Errorf("%w (epoch %d)", ErrCodeApplying, p.target)
 }
 
 // boundSeat is the human seat an operator token is bound to by

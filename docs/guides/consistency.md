@@ -64,7 +64,7 @@ for what is left when there is no age to claim, and the answer says so.
 ## Which surface reads at which level
 
 The level is a property of the **surface asking**, never of the caller who
-happened to omit the key. There are four:
+happened to omit the key:
 
 | Surface | Default | May the caller choose? |
 |---|---|---|
@@ -72,6 +72,9 @@ happened to omit the key. There are four:
 | The operator MCP, about tracker content | `linearizable` | No |
 | The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` |
 | Any answer **about replication** — the retention report, Settings › Backups & retention's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
+| A person's git client, for every answer that names a ref — the refs a clone, a fetch or a push is shown, a protocol v2 `ls-refs`, a fetch by `want-ref` | `linearizable` | No |
+| A git fetch of objects by id | none — an object id names the same bytes on every node; a want this node has not seen takes one `linearizable` sync first | No |
+| The [code host](../concepts/code-host.md)'s REST reads, `/code/repos…` | `stale`, as the REST read path's | Yes — `linearizable`, `stale` or `consistent_prefix`; `session` is refused `400`, since none of the caller's writes lands on the code log through this surface |
 
 **Only the screen chooses**, and the reason is that only the screen can see
 what it got: the level and the lag are rendered beside the rows, so a person
@@ -103,6 +106,21 @@ board from for a year.
 
 Every answer reports the level it was **actually** read at, so a caller that
 asked for one and got another can tell.
+
+**git has no level to choose, and needs none.** Every answer git is given
+that names a ref is read at the log's head, so a node cut off from the fleet
+answers `503` rather than an old head; an object fetch names ids, which mean
+the same bytes on every node, so it is served from what the node holds — and
+when the client asks for an object it learned of from a node further ahead,
+the node reads the log's head once before it answers. A push is answered `ok`
+for a ref only once the push's own record has been **applied**, never on a
+record that is durable and not yet applied: see [A push, end to
+end](../concepts/code-host.md#a-push-end-to-end).
+
+**A client that must not conclude "not declared" from an old copy** — a
+script about to create or import a repository — reads `/code/repos/{name}` at
+`read_level=linearizable`: at the default `stale`, a repository declared a
+moment ago may not be on this node's copy yet, and is answered `404`.
 
 ## Bounding staleness
 

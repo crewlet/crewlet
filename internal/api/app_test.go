@@ -240,6 +240,9 @@ func withRequired(opts api.Options) api.Options {
 	if opts.Audit == nil {
 		opts.Audit = queuememory.New()
 	}
+	if opts.Code == nil {
+		opts.Code = fixedCode{}
+	}
 	return opts
 }
 
@@ -280,7 +283,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Sources.Coord", "Sources.Native", "Sources.Retention",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
-		"Config", "Secrets", "Setup", "Operator", "Retention", "Native", "Capacity",
+		"Config", "Secrets", "Setup", "Operator", "Retention", "Native", "Code", "Capacity",
 		"FleetBroker", "Backup", "Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
