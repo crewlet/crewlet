@@ -315,10 +315,24 @@ var cacheWriters = []struct{ file, kind, why string }{
 			"the index with its bitmap and without one, and the graph"},
 	{"internal/code/cache/scratch.go", kindOS,
 		"a push's scratch repository and an advertisement view under scratch/: their directories, HEAD, " +
-			"config and alternates, and a view's packed-refs linked from its incarnation"},
+			"config and alternates, and a view's packed-refs linked from its incarnation; and a request's " +
+			"spool (Spool), created there and unlinked at once, so it is no file of the cache's"},
 	{"internal/code/cache/adopt.go", kindOS,
 		"the receiving node's own pack, once its row has applied: linked into tmp/ and from there into " +
 			"objects/pack, and its staging names removed"},
+	{"internal/code/host/receive.go", kindGit + " receive-pack",
+		"a push, received in its SCRATCH repository (cache.NewScratch) — never in a cache, since git " +
+			"migrates a push's objects into the repository it runs in before any hook can refuse them; " +
+			"the pack enters the cache only by Adopt, once its row has applied"},
+	{"internal/code/host/advertise.go", kindGit + " receive-pack",
+		"a push's advertisement (`--advertise-refs`, which writes nothing), run in an advertisement view " +
+			"under scratch/ (cache.AdvertiseView), never in a cache"},
+	{"internal/code/host/scan.go", kindRuntime,
+		"rev-list over a push's new values in its scratch — the path of a blob over the limit and the " +
+			"commits the push introduces — whose argument lists are this file's literals and object ids"},
+	{"internal/code/host/relay.go", kindOS,
+		"the hook relay's private socket directory under TMPDIR, made at Start and removed at Stop: no " +
+			"path of the cache's"},
 }
 
 type writerKey struct{ file, kind string }

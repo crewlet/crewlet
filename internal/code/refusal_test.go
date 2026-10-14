@@ -381,3 +381,37 @@ func TestAGoneRepositorysSentenceNamesItsState(t *testing.T) {
 			"repository being purged, purged, or never created", s)
 	}
 }
+
+// EVERY SENTENCE A RECEIVER WRITES INTO A PROPOSAL FITS IT, at its longest:
+// a ref of MaxRefNameBytes refused under each protection flag of a rule whose
+// pattern is as long as a pattern may be, and stale at an id the repository
+// does not hold. Each names no ref — git prints the ref beside it — and a
+// proposal carrying it beside an update still standing validates, so the code
+// host never has a push refused whole for a sentence of its own.
+func TestEveryReceiverSentenceFitsAProposal(t *testing.T) {
+	t.Parallel()
+	ref := "refs/heads/" + strings.Repeat("r", code.MaxRefNameBytes-len("refs/heads/"))
+	pattern := "refs/tags/" + strings.Repeat("p", code.MaxRefNameBytes-len("refs/tags/"))
+	if !gitref.ValidPattern(pattern) || !gitref.ValidRef(ref) {
+		t.Fatalf("the longest ref (%v) and pattern (%v) must be ones the grammar takes",
+			gitref.ValidRef(ref), gitref.ValidPattern(pattern))
+	}
+	rule := code.Protection{Pattern: pattern, DirectPush: code.DirectNone}
+	for reason, detail := range map[code.Refusal]string{
+		code.RefusalProtectedDirect: code.ProtectionDetail(rule, code.RefusalProtectedDirect),
+		code.RefusalProtectedDelete: code.ProtectionDetail(rule, code.RefusalProtectedDelete),
+		code.RefusalProtectedForce:  code.ProtectionDetail(rule, code.RefusalProtectedForce),
+		code.RefusalStale:           code.UnheldDetail(oidOf("an id this repository never held")),
+	} {
+		if strings.Contains(detail, "refs/heads/") {
+			t.Errorf("%s's sentence names a ref: %q", reason, detail)
+		}
+		p := proposal("0190f3c4-0000-7000-8000-00000000c0de",
+			code.Command{Ref: ref, Old: oidOf("A"), New: oidOf("B"), Result: code.ResultNG, Reason: reason,
+				Detail: detail},
+			update("refs/heads/main", oidOf("A"), oidOf("C")))
+		if err := p.Validate(); err != nil {
+			t.Errorf("a proposal carrying %s's sentence at its longest (%d bytes): %v", reason, len(detail), err)
+		}
+	}
+}

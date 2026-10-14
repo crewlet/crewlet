@@ -135,7 +135,7 @@ func (v *verdicts) verdict(push, command int, c Command) (Refusal, string) {
 	}
 	var got verdict
 	if r, rule := ProtectionRefusal(c, v.rules); r != "" {
-		got = verdict{refusal: r, detail: protectionDetail(c, rule, r)}
+		got = verdict{refusal: r, detail: ProtectionDetail(rule, r)}
 	}
 	v.of[key] = got
 	v.formed++
@@ -296,7 +296,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		refused, detail = RefusalRepoDeleted, gone.Detail()
 	case repo.status == RepoStatusArchived:
 		refused = RefusalRepoArchived
-		detail = fmt.Sprintf("repository %s is archived and read-only", repo.name)
+		detail = ArchivedDetail(repo.name)
 	}
 	if refused != "" {
 		for _, i := range open {
@@ -695,20 +695,37 @@ func statelessDetail(c Command, r Refusal) string {
 	return r.Sentence()
 }
 
-// protectionDetail names the rule that refused c and the flag it refused it
-// by — the rule [ProtectionRefusal] answered with its refusal, so naming it
-// asks no rule about the ref a second time.
-func protectionDetail(c Command, rule Protection, r Refusal) string {
+// ProtectionDetail names the rule that refused a command and the flag it
+// refused it by — the rule [ProtectionRefusal] answered with its refusal, so
+// naming it asks no rule about the ref a second time. ONE SPELLING for the
+// decide and the code host, which refuses a protected update before it
+// uploads anything (ADR-0008).
+//
+// IT NAMES NO REF: git prints the ref beside the reason, and the code host
+// carries this sentence in a proposal, whose every Detail is bounded
+// (maxDetailBytes) — a ref and a pattern of MaxRefNameBytes each could never
+// fit there beside the words, and a push whose sentence did not fit was
+// refused whole as the receiver's own bug.
+func ProtectionDetail(rule Protection, r Refusal) string {
 	switch r {
 	case RefusalProtectedDirect:
-		return fmt.Sprintf("%s takes no direct push (protection %s: direct_push none)",
-			c.Ref, rule.Pattern)
+		return fmt.Sprintf("takes no direct push (protection %s: direct_push none)", rule.Pattern)
 	case RefusalProtectedDelete:
-		return fmt.Sprintf("%s may not be deleted (protection %s: allow_delete)", c.Ref, rule.Pattern)
+		return fmt.Sprintf("may not be deleted (protection %s: allow_delete)", rule.Pattern)
 	case RefusalProtectedForce:
-		return fmt.Sprintf("%s refuses a force-push (protection %s: allow_force)", c.Ref, rule.Pattern)
+		return fmt.Sprintf("refuses a force-push (protection %s: allow_force)", rule.Pattern)
 	}
 	return r.Sentence()
+}
+
+// UnheldDetail is the sentence of a branch update the code host refuses
+// stale before proposing it: the id the client says the ref was at is no
+// object this repository holds — the client's ref came from history never
+// pushed here, or one a force-push replaced — so nothing can say how the
+// update relates to it. Named by its abbreviation, and no ref, for
+// ProtectionDetail's reason: it travels in a proposal.
+func UnheldDetail(old string) string {
+	return fmt.Sprintf("was at %s, which this repository does not hold; fetch first", short(old))
 }
 
 // The push decide's statements, each registered in plan_test.go. The refs a

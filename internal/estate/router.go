@@ -522,7 +522,26 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 type ErrUnserved struct {
 	// Detail is who was asked and what each said, in order.
 	Detail string
+
+	// NodeSilent records that a node the walk asked went SILENT
+	// ([Router.silent]) — read through [ErrUnserved.Silent]. Exported so it
+	// crosses the wire with the rest of the refusal: an estate nobody served
+	// on the far side of a second hop says the same of its own walk.
+	NodeSilent bool
 }
+
+// Silent reports whether a node the walk asked went silent rather than
+// answering that it would not run the operation.
+//
+// A walk in which nobody went silent is one in which NOTHING RAN the
+// operation — every node answered that its copy was out of service, could not
+// run it, or was behind — and a caller with a write may say so definitively:
+// the code host tells a person "no data node took the push", which a re-run
+// then lands. One in which a node went silent may not: a write whose node
+// never answered may have run there — a committer that appended and lost its
+// reply — and told "nothing took it", the person's re-run would report the
+// push already up to date, a false negative about a push that landed.
+func (e *ErrUnserved) Silent() bool { return e.NodeSilent }
 
 func (e *ErrUnserved) Error() string {
 	if e.Detail == "" {
@@ -545,6 +564,11 @@ type held struct {
 type walk struct {
 	reasons  []string
 	fallback *held
+
+	// silent is set once a node the walk asked said nothing ([Router.silent]):
+	// a walk that ends unserved then may have had the operation run by that
+	// node ([ErrUnserved.Silent]).
+	silent bool
 
 	// lagging is every node whose copy answered [unservedLagging], in the
 	// order the walk asked them — this node among them, by its own id,
@@ -656,7 +680,7 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 	if w.fallback != nil {
 		return w.fallback.value, w.fallback.err
 	}
-	return nil, &ErrUnserved{Detail: strings.Join(w.reasons, "; ")}
+	return nil, &ErrUnserved{Detail: strings.Join(w.reasons, "; "), NodeSilent: w.silent}
 }
 
 // lastResort asks the copies the walk passed over for lagging their logs, in
@@ -758,6 +782,7 @@ func (r *Router) silent(ctx context.Context, spec *opSpec, node string, w *walk)
 		return fmt.Errorf("estate: %s: %w", spec.name, ctx.Err())
 	}
 	w.note("%s: no answer", node)
+	w.silent = true
 	return nil
 }
 

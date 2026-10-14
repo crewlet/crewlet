@@ -15,9 +15,9 @@
 // code_refs at the position its state names, its packs exactly the
 // code_packs there, and [Cache.Sync] writes it by CONVERGENCE — derive the
 // target from the rows, make the directory equal to it — never by replaying
-// what happened. TestNothingButSyncWritesACache holds that from both sides:
-// the files under internal/code that write the filesystem or run a git
-// process that may write are a reviewed list, each with its reason, and
+// what happened (ADR-0036). TestNothingButSyncWritesACache holds that from
+// both sides: the files under internal/code that write the filesystem or run
+// a git process that may write are a reviewed list, each with its reason, and
 // seeded interleavings of what a node's cache meets — pushes, refused
 // pushes, adoptions, syncs killed mid-step, crashes, evictions, rebuilds,
 // maintenance, a log recreated backwards — end every time in caches equal to
@@ -92,8 +92,11 @@
 // to download it — before it lets the directory go. So the node that took a
 // push downloads it only when a round that read the push's row had already
 // begun that pack's GET before the adoption handed it the staging, or when
-// the links fail. [Cache.Missing] is a fetch's question beside it: which of
-// its wants the cache lacks, which sends the fetch to one linearizable sync.
+// the links fail. [Cache.Missing] is a fetch's question beside it: the first
+// of its wants the cache lacks, which sends the fetch to one linearizable
+// sync — asked of the wants as a STREAM, read from wherever the host holds the
+// request (a partial clone's checkout names every blob it lacks in one
+// request, which the host spools), and ended at the first absent one.
 //
 // # The byte path is shaped for S3
 //

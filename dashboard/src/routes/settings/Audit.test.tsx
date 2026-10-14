@@ -472,6 +472,29 @@ test("runtime calls are merged in, drawn as the person, and narrowed by Where", 
   expect(screen.queryByText("took it off the board")).toBeNull();
 });
 
+// A GIT PUSH IS DRAWN AGAINST ITS REPOSITORY. A refused push writes no row in
+// the code domain, so the runtime audit's repository is the only record of
+// where it was refused; every other tool call still records no subject.
+test("a git push names its repository as what it was done to", async () => {
+  serving({
+    events: {
+      events: [
+        runtimeEvent({
+          id: "ev-push",
+          summary: "U0FOUNDER (jane) ran git_push on nimbus-web: refused (protected_force)",
+          tags: { node: "node-a", actor_seat: "jane", tool: "git_push", repo: "nimbus-web" },
+        }),
+      ],
+      next: null,
+      exhausted: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("git push")).toBeTruthy());
+  expect(screen.getByText("nimbus-web")).toBeTruthy();
+  expect(screen.queryByText("Not recorded")).toBeNull();
+});
+
 // A WINDOWED PAGE THAT FILLED IS REPORTED TOO. The runtime audit and the
 // tracker's feed are windowed by the engine, but a page is still a page: a busy
 // week reaches further back than one, and the screen must not claim it saw the

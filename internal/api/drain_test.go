@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 )
 
@@ -602,5 +603,16 @@ func TestAProcessWithNoEngineHasNothingToDrain(t *testing.T) {
 	a := newApp(t, api.Options{Bootstrap: &b})
 	if rec := send(t, a, http.MethodPost, "/backup"); refusedForDraining(t, rec) {
 		t.Error("a process with no engine refused a write for draining")
+	}
+}
+
+// A STOPPING CODE HOST TELLS GIT WHAT A DRAINING NODE TELLS EVERY OTHER
+// CALLER: the one wait that takes a stopping node out of a balancer's
+// rotation. The code host imports nothing of the API, so its figure is its
+// own constant, held to this one here.
+func TestTheGitStopRetryIsTheDrainRetry(t *testing.T) {
+	if host.StoppingRetryAfter != api.DrainRetryAfter {
+		t.Errorf("a stopping code host answers Retry-After %v, a draining node %v: a git client and a balancer "+
+			"would be told two waits for one stop", host.StoppingRetryAfter, api.DrainRetryAfter)
 	}
 }

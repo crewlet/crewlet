@@ -508,6 +508,24 @@ func (p *Pool) Slots(c Class) int {
 	return int(p.lane(c).size)
 }
 
+// Free is how many of class c's slots a run could take right now WITHOUT
+// WAITING: those neither held nor — in the READ lane — lent to a push's
+// receive-pack (MaxLentCores), and none while a run waits in the lane (an
+// unknown class: 0). A moment's reading, never a reservation: a run started
+// on it may still find its slot taken by another and wait, as any run does.
+//
+// It is what a caller with several INDEPENDENT reads to make sizes their
+// parallelism by — a push's force check asks one merge-base a branch it moves
+// — so that a node with idle cores answers them at once while a loaded one
+// asks them one after another, exactly as before, rather than a push taking
+// every slot of the lane and queueing the other readers behind itself.
+func (p *Pool) Free(c Class) int {
+	if !c.Valid() {
+		return 0
+	}
+	return int(p.lane(c).free())
+}
+
 // lane is the lane class c waits in; c must be valid.
 func (p *Pool) lane(c Class) *lane {
 	switch c {

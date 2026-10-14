@@ -1258,6 +1258,36 @@ func TestNoServingNodeSaysSo(t *testing.T) {
 	}
 }
 
+// AN UNSERVED WALK SAYS WHETHER A NODE WENT SILENT. One in which every node
+// answered that it would not run the operation is one in which NOTHING RAN it,
+// and a caller with a write may say so definitively; one in which a node said
+// nothing may have had it run there — a committer that appended and lost its
+// reply — and the code host then tells the person the outcome is unknown,
+// never that nothing took the push.
+func TestAnUnservedWalkSaysWhetherANodeWentSilent(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		silent bool
+	}{{name: "every node refused"}, {name: "a node went silent", silent: true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t, "data-a", "data-b")
+			f.nodes["data-a"].set(func(n *fakeNode) { n.outOfService = true })
+			f.nodes["data-b"].set(func(n *fakeNode) { n.outOfService, n.silent = !tc.silent, tc.silent })
+			_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+			var unserved *ErrUnserved
+			if !errors.As(err, &unserved) {
+				t.Fatalf("err = %v, want ErrUnserved", err)
+			}
+			if unserved.Silent() != tc.silent {
+				t.Fatalf("Silent() = %v for a walk where %s (%v), want %v", unserved.Silent(),
+					tc.name, err, tc.silent)
+			}
+		})
+	}
+}
+
 // A TURN'S SPEND CROSSES, AS THE SEAT, AND AN UNANSWERED ONE IS ASKED AGAIN
 // UNDER THE SAME OPERATION.
 //

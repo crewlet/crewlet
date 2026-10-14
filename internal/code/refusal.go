@@ -193,6 +193,16 @@ func (g RepoGone) Detail() string {
 	return fmt.Sprintf("repository %s does not exist", g.ID)
 }
 
+// ArchivedDetail is the sentence of a push refused repo_archived: which
+// repository, where it is archived, and what it still serves. ONE SPELLING
+// for the two places that refuse it (ADR-0008) — the push decide, from the
+// rows, and the code host, at a push's advertisement or its request, where a
+// person's git prints it as the reason the push was refused.
+func ArchivedDetail(name string) string {
+	return fmt.Sprintf("repository %s is archived and read-only (code.repos archived: true): "+
+		"it is fetched, and takes no push", name)
+}
+
 // StatelessRefusal is the rules of the push decide that no state decides —
 // or "" when none fires, checked in this order:
 //

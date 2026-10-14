@@ -122,9 +122,7 @@ func (c *Cache) await(ctx context.Context, e *entry, w *waiter) (Synced, error) 
 		// goes back.
 		got := w.got
 		e.mu.Unlock()
-		if got.Release != nil {
-			got.Release()
-		}
+		got.Release()
 	default:
 		w.gone = true
 		e.mu.Unlock()

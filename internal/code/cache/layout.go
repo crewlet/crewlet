@@ -38,9 +38,9 @@ const (
 	lockName = "lock"
 	// reposDir holds one incarnation per repository.
 	reposDir = "repos"
-	// scratchDir holds a receive-pack's scratch repositories and the
-	// advertisement views; every one belongs to a request of the process
-	// that made it.
+	// scratchDir holds a receive-pack's scratch repositories, the
+	// advertisement views and — unnamed — the requests' spools (Spool);
+	// every one belongs to a request of the process that made it.
 	scratchDir = "scratch"
 	// tmpDir holds every file before its rename into place, and downloads
 	// in progress.

@@ -107,9 +107,13 @@ type PushAnswer struct {
 }
 
 // maxDetailBytes is the longest Detail a receiver may fill in on a command it
-// refused: one sentence naming a ref (MaxRefNameBytes would not fit beside
-// words, and a ref is what git prints beside the reason anyway).
-const maxDetailBytes = 256
+// refused: one sentence, which names NO REF — git prints the ref beside the
+// reason anyway — and at most one protection's pattern, which may be as long
+// as a ref (MaxRefNameBytes, gitref's pattern grammar), beside its words. So
+// the bound is that pattern and room for the words of the longest sentence a
+// receiver forms ([ProtectionDetail]'s, 52 bytes); every sentence the code
+// host writes into a proposal is held under it by a test, at its longest.
+const maxDetailBytes = MaxRefNameBytes + 64
 
 // Validate refuses a proposal this domain cannot decide, wrapping
 // [ErrInvalidProposal] and naming the field. The receiver forms proposals, so
