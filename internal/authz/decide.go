@@ -13,26 +13,48 @@ import (
 // Class is one authority rule, shared by every action that obeys it.
 //
 // THE RULES ARE THE CLOSED SET, NOT THE VERBS. There are dozens of verbs and
-// thirteen ways to decide one, so a table keyed on the verb would state
-// thirteen rules dozens of times and drift on whichever copy somebody edited.
+// fifteen ways to decide one, so a table keyed on the verb would state
+// fifteen rules dozens of times and drift on whichever copy somebody edited.
 // A verb picks its class in [rules] and the class is written once, here.
 type Class string
 
 const (
-	// ClassRead — the ordinary read: the board, a project's files, the
-	// pages, the org chart, the roster, the fleet, spend.
+	// ClassEverybody — everybody's overview: the org chart, the agents'
+	// status, spend, schedules, who to ask, the routes that admit a request
+	// a tool then decides. Any principal whose stage may act, and nothing
+	// else asked.
 	//
-	// NO RELATION, WHICH IS WHAT MAKES IT THE OPEN ONE — but the state
-	// grant all the same. The design this implements called this class
-	// "any authenticated principal", and that was written against the
-	// removal of anonymous reads rather than against a vocabulary that
-	// has a read grant in it. Taken literally it makes
-	// [iam.GrantStateRead] open nothing at all: a service account minted
-	// to file bugs would read the whole board, every prompt-adjacent
-	// surface and the fleet, and an operator narrowing it to work:write
-	// would find the narrowing did nothing. This package's own walk over
-	// [iam.AllGrants] is what caught that.
-	ClassRead Class = "read"
+	// A CLASS RATHER THAN AN ABSENT ROW, because "no rule" is refused
+	// ([ReasonUnknownAction]) — a verb somebody forgot must not ship open —
+	// and a verb everybody may take is a decision that has to be written
+	// down where a reader can see it was made.
+	ClassEverybody Class = "everybody"
+
+	// ClassApp — using one app: every tracker read and write, every page
+	// read and write. Whoever holds the row's app ([rule.app]), which an
+	// administrator holds through [iam.Expand].
+	ClassApp Class = "app"
+
+	// ClassAnyApp — a gesture that draws on whichever apps the caller uses:
+	// a question answered from the company's pages and its work, which
+	// searches each half only for a caller who holds its app. Whoever holds
+	// any one app; a caller with none is told every app would do.
+	ClassAnyApp Class = "any_app"
+
+	// ClassAppOrAsked — a work item somebody may be ASKED about. Whoever
+	// holds the row's app, OR the person an open ask on the item names
+	// ([Object.Asked]): a colleague who put a question to somebody needs
+	// them to be able to read it and answer, and a person who answers
+	// questions is not thereby somebody who uses the tracker.
+	//
+	// THE ASKED ARM IS NARROW BY CONSTRUCTION. It admits only a caller an
+	// OPEN ask names, and only once a surface has read the item and
+	// resolved its asks — an object nobody has read yet is answered
+	// [ErrUnresolved] for a caller without the app, so the surface reads the
+	// row and decides again — and the tracker's writer still refuses an
+	// answer from anybody but the person asked. After answering, the item
+	// is the tracker's again.
+	ClassAppOrAsked Class = "app_or_asked"
 
 	// ClassSelf — the acting principal's OWN working state: its diary, its
 	// episodes, its skills, its onboarding marker, a tool skill it loads
@@ -42,30 +64,25 @@ const (
 	// [ClassOwnRecord]. internal/agent/builtin states the boundary these
 	// verbs rest on: they take no handle at all, because "an agent
 	// recalling another's episodes or writing into another's diary would
-	// make the per-seat memory a shared one". An operator READING a seat's
-	// memory is a different surface with a grant of its own
-	// ([iam.GrantAuditRead] over /agents/{id}/memory), and admitting
-	// it here too would be a second answer to one question — which is the
-	// drift this whole package exists to remove.
+	// make the per-seat memory a shared one". Somebody else READING a seat's
+	// memory is a different verb with a rule of its own
+	// ([ActionSeatTrailRead]), and admitting it here too would be a second
+	// answer to one question — which is the drift this whole package
+	// exists to remove.
 	ClassSelf Class = "self"
 
-	// ClassColleagueWrite — the ordinary work of a colleague: filing,
-	// commenting, updating, ranking, relating; keeping a file in a
-	// project; authoring a page. Governed
-	// by the capability rather than by any relation, because a company
-	// that hands somebody work:write is saying exactly this.
-	ClassColleagueWrite Class = "colleague_write"
-
 	// ClassOwnRecord — a person's own inbox and pins. The owner, or the
-	// admin path that lets an operator unstick a departed person's queue.
+	// admin path that lets an administrator unstick a departed person's
+	// queue — and the row's app beside either ([rule.app]).
 	//
 	// NO LEAD PATH. A lead may re-order what their report works on
 	// ([ClassOwnOrLead]); marking somebody's mail read is not the same
 	// gesture and nobody asked for it.
 	ClassOwnRecord Class = "own_record"
 
-	// ClassOwnOrLead — a person's priorities and their day. The owner,
-	// whoever leads them, or the admin path.
+	// ClassOwnOrLead — a person's priorities and their day, and a seat's
+	// own controls and trail. The owner, whoever leads them, or the admin
+	// path — and the row's app beside any of them, where the row names one.
 	ClassOwnOrLead Class = "own_or_lead"
 
 	// ClassSavedView — a saved view, whose authority follows what the view
@@ -89,14 +106,27 @@ const (
 
 	// ClassContainer — a container's own policy. For a PROJECT: its
 	// fields, its default assignee, a task's routing unit, a tag rename, the
-	// project's archive. For a PAGE CONTAINER: its own settings and a page's
-	// rename. Whoever leads that container, or the admin path — and the
-	// object's KIND picks which of the two relations is asked.
+	// project's archive. Whoever leads that container, or the admin path —
+	// and the object's KIND picks which of the two relations is asked.
 	ClassContainer Class = "container"
 
+	// ClassTidy — taking one's own work out of circulation and putting it
+	// back: trashing, restoring and renaming a page, removing and restoring
+	// a work item. Its container's lead, the admin path, OR whoever WROTE
+	// it ([Object.Author]: a page's creator, an item's reporter).
+	//
+	// THE AUTHOR ARM IS WHAT MAKES IT ITS OWN CLASS rather than
+	// [ClassDestructive]. Somebody who filed a duplicate or drafted a page in
+	// the wrong place should not need a lead to tidy it up, and a container
+	// lead taking a colleague's work out of their project is a different
+	// gesture from that colleague withdrawing their own. What the author
+	// arm does NOT reach is anybody else's work: a subtree of items under
+	// theirs stays the lead's (the tool says so), and a PURGE, which
+	// nothing undoes, stays admin's.
+	ClassTidy Class = "tidy"
+
 	// ClassSubtree — the org chart: the seats and units of the company
-	// document. The ROW's own grant (`config:write` to change it,
-	// `config:read` to read it), or a LEAD over the part concerned: a unit
+	// document. The admin path, or a LEAD over the part concerned: a unit
 	// is in a principal's SUBTREE when they are the effective lead of it or
 	// of any unit above it ([Chart.LeadsUnit]), and [Object.Container]
 	// names the unit a change reaches — empty for the company root, which no
@@ -107,8 +137,8 @@ const (
 	// WRITE REACHES, on both sides of it (internal/api/configapi): where a
 	// seat or a unit was, where it is now and what its references name,
 	// while a project, space, channel, address or contact id it states is
-	// the company grant's ([ActionConfigWrite]) like a credential. That is
-	// what keeps a lead inside their own team — a lead who could hand their
+	// the company's ([ActionConfigWrite]) like a credential. That is what
+	// keeps a lead inside their own team — a lead who could hand their
 	// unit to somebody else, make a report the CEO's manager or declare a
 	// project as their team's would gain authority outside it through the
 	// very relations this package decides everything else by.
@@ -121,66 +151,60 @@ const (
 	// lead alone in the team they are about to staff.
 	ClassSubtree Class = "subtree"
 
-	// ClassDestructive — removing, restoring and moving a task out of its
-	// project, removing a file from one, trashing and restoring a page. The CONTAINER's lead, or the
-	// admin path: a colleague may file work in a project and may not take
-	// it out again.
+	// ClassDestructive — moving a task out of its project and removing a
+	// file from one. The CONTAINER's lead, or the admin path: a colleague
+	// may file work in a project and may not carry it away again.
 	ClassDestructive Class = "destructive"
 
 	// ClassAuthored — editing and removing a comment, on a page or on a
 	// work item. Whoever wrote it, or the admin path.
 	ClassAuthored Class = "authored"
 
-	// ClassOperator — the company's own controls: configuration, secrets,
-	// integrations, the node. The action names the grant it needs, because
-	// these are the surfaces where the grants differ from each other by
-	// design — reading a credential and rotating one are opposite risks.
-	ClassOperator Class = "operator"
+	// ClassAdmin — running the company: configuration, secrets,
+	// integrations, the catalogue, the tool-skill pages, the directory's
+	// writes, the deployment, the company-wide trail, the purges. Admin,
+	// and nobody else.
+	ClassAdmin Class = "admin"
 
-	// ClassDirectoryRead — who can reach this company, and how: the
-	// directory listing, one person's row, the credentials that exist, the
-	// sessions that are open, the estate's own report.
-	//
-	// THREE WAYS IN, and each is a different party asking the same
-	// question. The person the row is ABOUT, because somebody must be able
-	// to see what they themselves carry; whoever holds
-	// [iam.GrantPeopleManage], because they are the party that writes it;
-	// and whoever holds [iam.GrantAuditRead], because "who can reach this
-	// company" is the audit question and an auditor who could not ask it
-	// could not audit anything.
+	// ClassDirectory — one person's directory row and what hangs off it:
+	// reading it, their credentials, their sessions. The person the row is
+	// ABOUT, or admin.
 	//
 	// THE OBJECT IS A PERSON ID, never a login or a handle — this is the
 	// one place in the table where that is true, and it is forced: the
 	// identity estate keys on an id precisely because a person changes
 	// their login, and a self check against a mutable name would open
 	// somebody else's row the day they swapped.
-	ClassDirectoryRead Class = "directory_read"
-
-	// ClassDirectorySelf — a gesture on one person's own credentials or
-	// sessions: minting a token, revoking one, ending every session.
-	// The person themselves, or whoever manages people.
 	//
-	// NO AUDIT PATH, which is what makes it its own class rather than
-	// [ClassDirectoryRead]: an auditor establishes what a company's access
-	// looks like and never changes it, and a grant that could end a
-	// session is a grant that can lock a company out of its own engine.
-	ClassDirectorySelf Class = "directory_self"
+	// ONE CLASS where there were two: a directory READ admitted an auditor
+	// beside the people manager, and a directory GESTURE did not, and with
+	// both of those folded into admin the two rules said the same thing.
+	ClassDirectory Class = "directory"
 )
 
-// Classes are the thirteen, in declaration order.
+// Classes are the fifteen, in declaration order.
 var Classes = []Class{
-	ClassRead, ClassSelf, ClassColleagueWrite, ClassOwnRecord, ClassOwnOrLead,
-	ClassSavedView, ClassContainer, ClassSubtree, ClassDestructive,
-	ClassAuthored, ClassOperator, ClassDirectoryRead,
-	ClassDirectorySelf,
+	ClassEverybody, ClassApp, ClassAnyApp, ClassAppOrAsked, ClassSelf,
+	ClassOwnRecord, ClassOwnOrLead, ClassSavedView, ClassContainer,
+	ClassTidy, ClassSubtree, ClassDestructive, ClassAuthored, ClassAdmin,
+	ClassDirectory,
+}
+
+// relationClasses are the classes that decide on the principal's RELATION to
+// the object — its owner, its lead, its author — and that ask the row's app
+// beside the relation ([withApp]).
+var relationClasses = []Class{
+	ClassOwnRecord, ClassOwnOrLead, ClassSavedView, ClassContainer,
+	ClassTidy, ClassDestructive, ClassAuthored,
 }
 
 // Decide answers whether p may do a to o.
 //
 // # The order of the checks is the contract
 //
-// STAGE FIRST, because a principal part-way through enrolment holds grants it
-// may not yet use, and every rule below would happily honour them.
+// STAGE FIRST, because a principal part-way through enrolment holds
+// permissions it may not yet use, and every rule below would happily honour
+// them.
 //
 // THEN THE CLASS, and an action with no class is REFUSED rather than allowed
 // or passed through. It is the one refusal that is a build mistake rather than
@@ -196,18 +220,23 @@ var Classes = []Class{
 // never succeed, on every retry, for ever. The reason is a closed value a
 // caller can branch on; that is what it is for.
 //
-// THEN THE HUMAN-ONLY BAR, which is a fact about the VERB and therefore
-// decided before any class reads any relation — see [rule.humanOnly] — and the
-// PERSON-PRESENT bar where it covers every arm, for the same reason: a machine
-// token is refused a verb that needs somebody at a keyboard before any class
-// tells it to ask for a grant no token can carry ([rule.presence]). Where the
-// bar spares the self arm it is asked once the class has said which arm
-// admitted.
+// THEN THE HUMAN-ONLY AND SEAT-ONLY BARS, which are facts about the VERB and
+// therefore decided before any class reads any relation — see
+// [rule.humanOnly] and [rule.seatOnly] — and the PERSON-PRESENT bar where it
+// covers every arm, for the same reason: a machine token is refused a verb
+// that needs somebody at a keyboard before any class weighs what it carries
+// ([rule.presence]). Where the bar spares the self arm it is asked once the
+// class has said which arm admitted.
 //
 // THE ADMIN PATH IS CHECKED BEFORE THE CHART, on every class that has one,
-// because the chart can fail and the grant cannot: an operator holding
-// fleet:operate — or config:write, on the org chart — must not be told "I
-// cannot tell" by a node that is behind.
+// because the chart can fail and the permission cannot: an administrator must
+// not be told "I cannot tell" by a node that is behind.
+//
+// THE ROW'S APP IS ASKED AFTER THE RELATION ([withApp]), so a refusal names
+// what would actually admit: a lead short of the app is told the app, and a
+// caller the relation refused is told admin. A caller short of the app is
+// never answered unknown on a relation row, because no answer the chart could
+// give would admit them.
 //
 // AND THE PROOF LAST, at now: a verb whose row asks for a recent proof of
 // identity refuses an ADMITTED principal whose proof is older than that
@@ -223,18 +252,25 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	if !known {
 		return Decision{Reason: ReasonUnknownAction}
 	}
-	// AND AN AGENT NEVER TAKES A HUMAN-ONLY VERB, checked before the
-	// class so the refusal names what it actually is: an agent holding
-	// the grant is told it is a seat, not that it lacks a capability it
+	// AN AGENT NEVER TAKES A HUMAN-ONLY VERB, checked before the class so
+	// the refusal names what it actually is: an agent holding the
+	// permission is told it is a seat, not that it lacks a capability it
 	// plainly has. See [rule.humanOnly].
 	if r.humanOnly && p.Kind == iam.KindSeat {
 		return Decision{Reason: ReasonSeatRefused}
+	}
+	// AND NOTHING BUT AN AGENT TAKES A SEAT-ONLY ONE, for the mirror
+	// reason: a person holding admin is told the verb is an agent's, not
+	// sent to ask for a permission that would change nothing. See
+	// [rule.seatOnly].
+	if r.seatOnly && p.Kind != iam.KindSeat {
+		return Decision{Reason: ReasonSeatOnly}
 	}
 	_, throughToken := p.MachineToken()
 	if throughToken && r.presence == PresenceRequired {
 		return Decision{Reason: ReasonTokenRefused}
 	}
-	d := withAlso(p, r, decideClass(ctx, p, r, o, chart))
+	d := withApp(p, r, decideClass(ctx, p, r, o, chart))
 	// THE PROOF LAST, and only over an ADMISSION: a refusal is already
 	// the answer, and an unknown is already "ask me again". See the
 	// package doc and [rule.recency].
@@ -277,8 +313,42 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 	chart Chart) Decision {
 
 	switch r.class {
-	case ClassRead:
-		return granted(p, iam.GrantStateRead)
+	case ClassEverybody:
+		return Decision{Allowed: true, Reason: ReasonEverybody}
+
+	case ClassApp:
+		return granted(p, r.app)
+
+	case ClassAnyApp:
+		// ANY ONE APP, and a refusal names every one of them: holding
+		// either would admit, and admin is left out because it covers
+		// both ([Decision.Grants]).
+		for _, app := range iam.Apps {
+			if p.Can(app) {
+				return consulting(Decision{Allowed: true, Reason: ReasonGrant}, iam.Apps...)
+			}
+		}
+		return consulting(Decision{Reason: ReasonNoGrant}, iam.Apps...)
+
+	case ClassAppOrAsked:
+		if p.Can(r.app) {
+			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, r.app)
+		}
+		// THE PERSON ASKED, by the seat they hold or the login they act
+		// under — an ask names a seat handle, and a person acting as
+		// their seat is named by it.
+		if o.Asked != "" && (p.Seat != "" && p.Seat == o.Asked ||
+			p.Login != "" && p.Login == o.Asked) {
+
+			return Decision{Allowed: true, Reason: ReasonAsked}
+		}
+		if o.Unresolved {
+			// NOBODY HAS READ THE ITEM YET, so nobody knows whether an
+			// open ask on it names this caller: read it, resolve its
+			// asks, and decide again on the row.
+			return Decision{Reason: ReasonNoGrant, Err: ErrUnresolved}
+		}
+		return consulting(Decision{Reason: ReasonNoGrant}, r.app)
 
 	case ClassSelf:
 		// THE OBJECT IS THE CALLER, OR IT IS NOBODY. These verbs take no
@@ -295,12 +365,9 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		}
 		return Decision{Reason: ReasonNotSelf}
 
-	case ClassColleagueWrite:
-		return granted(p, writeGrantFor(o.Kind))
-
 	case ClassOwnRecord, ClassOwnOrLead:
-		// NO GRANT ON THE UNNAMED REFUSAL: it is taken before the admin
-		// path is consulted, so no capability would have changed it.
+		// NO PERMISSION ON THE UNNAMED REFUSAL: it is taken before the
+		// admin path is consulted, so no permission would have changed it.
 		if o.Owner == "" {
 			return Decision{Reason: ReasonUnnamed}
 		}
@@ -330,7 +397,7 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 			adminGrant)
 
 	case ClassSavedView:
-		// EVERY ANSWER BELOW IS ONE THE ADMIN GRANT WOULD HAVE
+		// EVERY ANSWER BELOW IS ONE THE ADMIN PATH WOULD HAVE
 		// OVERRIDDEN, because it is consulted first.
 		if p.Can(adminGrant) {
 			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
@@ -369,49 +436,71 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		}
 		// THE WORKSPACE, and anything this build does not know. A tab
 		// every person in the company lands on is the admin path,
-		// which the grant check above is.
+		// which the check above is.
 		return consulting(Decision{Reason: ReasonNotLead}, adminGrant)
 
 	case ClassContainer, ClassDestructive:
 		if p.Can(adminGrant) {
 			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
 		}
+		if o.Unresolved && o.Container == "" {
+			// THE ROW IS NOT READ YET, so nobody knows which project it
+			// is filed in: read it and decide again. Answered as a
+			// refusal naming nothing, a surface offering verbs before it
+			// had read a row listed none of these to a project's own
+			// lead.
+			return Decision{Reason: ReasonNotLead, Err: ErrUnresolved}
+		}
 		if o.Container == "" {
 			return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
 		}
-		// THE KIND PICKS THE RELATION, for [Chart.LeadsContainer]'s
-		// reason: a page container and a tracker project are two key
-		// classes a unit declares in two fields, and one relation asked
-		// with the other's key matches only a company that spelled them
-		// the same.
-		if o.Kind == KindContainer || o.Kind == KindPage {
-			return consulting(leadsContainer(ctx, chart, actorOf(p), o.Container), adminGrant)
+		return consulting(leadsByKind(ctx, chart, actorOf(p), o), adminGrant)
+
+	case ClassTidy:
+		if p.Can(adminGrant) {
+			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
 		}
-		return consulting(leadsProject(ctx, chart, actorOf(p), o.Container), adminGrant)
+		// THE AUTHOR TIDIES THEIR OWN, by the login they act under or the
+		// seat they hold — a bound person's writes are recorded under
+		// their seat's handle.
+		if o.Author != "" && (p.Login != "" && p.Login == o.Author ||
+			p.Seat != "" && p.Seat == o.Author) {
+
+			return consulting(Decision{Allowed: true, Reason: ReasonAuthor}, adminGrant)
+		}
+		if o.Unresolved {
+			// NOBODY HAS READ THE ROW, so neither its author nor its
+			// container is known: read it and decide again.
+			return Decision{Reason: ReasonNotLead, Err: ErrUnresolved}
+		}
+		if o.Container == "" {
+			return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
+		}
+		return consulting(leadsByKind(ctx, chart, actorOf(p), o), adminGrant)
 
 	case ClassSubtree:
-		// THE ROW'S OWN GRANT IS THE ADMIN PATH, and it needs no chart.
-		if p.Can(r.grant) {
-			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, r.grant)
+		// THE ADMIN PATH, and it needs no chart.
+		if p.Can(adminGrant) {
+			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
 		}
 		if o.Unresolved {
 			// THE BODY IS NOT READ YET. Anybody bound to a seat could
 			// lead some unit, so the surface reads the write and
 			// decides each place it reaches; nobody else leads any.
 			if p.Seat == "" {
-				return consulting(Decision{Reason: ReasonNotLead}, r.grant)
+				return consulting(Decision{Reason: ReasonNotLead}, adminGrant)
 			}
-			return consulting(Decision{Allowed: true, Reason: ReasonLead}, r.grant)
+			return consulting(Decision{Allowed: true, Reason: ReasonLead}, adminGrant)
 		}
 		if o.Container == "" {
 			// THE ROOT IS REFUSED AS A UNIT SOMEBODY ELSE LEADS IS, with
-			// no chart asked: the remedy is the same grant, and the
+			// no chart asked: the remedy is the same permission, and the
 			// surface decides a read of an id it cannot find at the root,
 			// so a reason of its own would tell that read apart from a
 			// seat in another team.
-			return consulting(Decision{Reason: ReasonNotLead}, r.grant)
+			return consulting(Decision{Reason: ReasonNotLead}, adminGrant)
 		}
-		return consulting(leadsUnit(ctx, chart, actorOf(p), o.Container), r.grant)
+		return consulting(leadsUnit(ctx, chart, actorOf(p), o.Container), adminGrant)
 
 	case ClassAuthored:
 		if o.Author == "" {
@@ -428,37 +517,25 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		}
 		return consulting(Decision{Reason: ReasonNotAuthor}, adminGrant)
 
-	case ClassOperator:
-		if r.also != "" {
-			return grantedBoth(p, r.grant, r.also)
-		}
-		return granted(p, r.grant)
+	case ClassAdmin:
+		return granted(p, adminGrant)
 
-	case ClassDirectoryRead, ClassDirectorySelf:
-		// THE TWO WAYS IN BY CAPABILITY, and the read has one more than
-		// the gesture: an auditor establishes who can reach a company
-		// and never changes it.
-		ways := []iam.Grant{iam.GrantPeopleManage}
-		if r.class == ClassDirectoryRead {
-			ways = append(ways, iam.GrantAuditRead)
-		}
+	case ClassDirectory:
 		// THE PERSON THEMSELVES FIRST, compared on the ID and never on
 		// a name. An object naming nobody — a listing — cannot reach
 		// this arm, which is correct: a listing is not about anybody
-		// in particular, so it falls through to the capabilities.
+		// in particular, so it falls through to admin.
 		if o.Owner != "" && p.ID != uuid.Nil && p.ID.String() == o.Owner {
-			return consulting(Decision{Allowed: true, Reason: ReasonSelf}, ways...)
+			return consulting(Decision{Allowed: true, Reason: ReasonSelf}, adminGrant)
 		}
-		for _, g := range ways {
-			if p.Can(g) {
-				return consulting(Decision{Allowed: true, Reason: ReasonGrant}, ways...)
-			}
+		if p.Can(adminGrant) {
+			return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
 		}
-		// NO GRANT rather than NOT SELF, because the capability is what
+		// NO GRANT rather than NOT SELF, because the permission is what
 		// almost every caller here is missing and the self arm is the
-		// exception — telling an administrator without people:manage
-		// that they "are not that person" sends them to the wrong fix.
-		return consulting(Decision{Reason: ReasonNoGrant}, ways...)
+		// exception — telling somebody without admin that they "are not
+		// that person" sends them to the wrong fix.
+		return consulting(Decision{Reason: ReasonNoGrant}, adminGrant)
 	}
 	// UNREACHABLE WHILE Classes AND THIS SWITCH AGREE, which a test in
 	// this package asserts in both directions. It is a refusal rather
@@ -467,33 +544,48 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 	return Decision{Reason: ReasonUnknownAction}
 }
 
-// withAlso holds a RELATION row's decision to the capability it asks beside
-// the relation ([rule.also]); an operator row asks its own inside its class.
+// withApp holds a RELATION class's decision to the row's app ([rule.app]).
 //
-// AFTER THE CLASS, so the refusal names exactly what would admit: the self
-// arm, a lead and the admin path are each one grant short, and a caller the
-// relation refused is short of the admin grant AND this one — a conjunction,
-// as [grantedBoth] names one. A refusal that consulted no grant (nobody
-// named) is no closer for holding it, and an unknown is still unknown.
-func withAlso(p iam.Principal, r rule, d Decision) Decision {
-	if r.also == "" || r.class == ClassOperator || d.Unknown() || p.Can(r.also) {
+// AFTER THE CLASS, so the refusal names exactly what would admit. A caller
+// the relation admitted — the owner, a lead, an author — and who lacks the
+// app is one app short, and told so. A caller the relation would only have
+// been TOLD TO RESOLVE ([ErrUnresolved]) and who lacks the app is refused the
+// same way, before anything is read: such a caller is never let through to a
+// directory lookup or a row read the app would still refuse. A caller the
+// relation refused is told admin, its admin path, which already covers every
+// app.
+//
+// AND A CHART THAT COULD NOT ANSWER CANNOT ADMIT a caller the app refuses, so
+// that caller is refused naming the app rather than answered unknown. Every
+// arm of a row that names an app needs the app — the owner's, a lead's and an
+// author's beside their relation, and the admin path through [iam.Expand],
+// which is checked before the chart — so whatever the chart would have said,
+// the answer was already no. Left unknown, it was a 503 telling a caller to
+// come back to a refusal: a person holding no app who leads a unit, asking
+// for a report's queue while the node applied a revision.
+//
+// UNCHANGED for a row naming no app, for a class that is not a relation
+// (the app classes decide on the app themselves), and for a caller who holds
+// the app — an administrator among them, through [iam.Expand] — whose unknown
+// stays unknown, because for them the chart's answer is the decision.
+func withApp(p iam.Principal, r rule, d Decision) Decision {
+	if r.app == "" || !slices.Contains(relationClasses, r.class) || p.Can(r.app) {
 		return d
 	}
-	if d.Allowed {
-		return consulting(Decision{Reason: ReasonNoGrant}, r.also)
+	// Admitted, told to resolve, or a chart that could not answer: none of
+	// them can be an admission for a caller without the app.
+	if d.Allowed || d.Err != nil {
+		return consulting(Decision{Reason: ReasonNoGrant}, r.app)
 	}
-	if len(d.Grants) == 0 {
-		return d
-	}
-	return consulting(d, append(slices.Clone(d.Grants), r.also)...)
+	return d
 }
 
-// granted is the capability check, with the two reasons it produces.
+// granted is the permission check, with the two reasons it produces.
 //
-// An EMPTY grant names nothing in [Decision.Grants], because there is no
-// capability that would have admitted anybody: it is a gate somebody forgot
+// An EMPTY permission names nothing in [Decision.Grants], because there is no
+// permission that would have admitted anybody: it is a gate somebody forgot
 // to fill in, and a refusal naming "" as the remedy would send a reader to
-// ask for a grant that does not exist.
+// ask for a permission that does not exist.
 func granted(p iam.Principal, g iam.Grant) Decision {
 	if g == "" {
 		return Decision{Reason: ReasonNoGrant}
@@ -504,32 +596,7 @@ func granted(p iam.Principal, g iam.Grant) Decision {
 	return consulting(Decision{Reason: ReasonNoGrant}, g)
 }
 
-// grantedBoth is the capability check of a row that asks for TWO capabilities
-// at once ([rule.also]).
-//
-// A REFUSAL NAMES WHAT THIS PRINCIPAL LACKS, and every one of them is needed —
-// the one place [Decision.Grants] is a conjunction rather than a choice. It
-// names the missing ones and not both, because the grant a caller already
-// holds is not what would change the answer: an SRE holding the deployment's
-// grant is told the directory's is missing, and nothing else. An allow names
-// both, which is what admitted them.
-func grantedBoth(p iam.Principal, first, second iam.Grant) Decision {
-	if first == "" || second == "" {
-		return Decision{Reason: ReasonNoGrant}
-	}
-	var missing []iam.Grant
-	for _, g := range []iam.Grant{first, second} {
-		if !p.Can(g) {
-			missing = append(missing, g)
-		}
-	}
-	if len(missing) == 0 {
-		return consulting(Decision{Allowed: true, Reason: ReasonGrant}, first, second)
-	}
-	return consulting(Decision{Reason: ReasonNoGrant}, missing...)
-}
-
-// consulting records which capabilities the rule that decided would have
+// consulting records which permissions the rule that decided would have
 // admitted the principal on — see [Decision.Grants].
 //
 // ONE HELPER RATHER THAN A FIELD SET AT EACH RETURN, so an arm reads as the
@@ -645,6 +712,20 @@ func leadsProject(ctx context.Context, chart Chart, actor, project string) Decis
 	return Decision{Reason: ReasonNotLead}
 }
 
+// leadsByKind asks the chart about the container a task, a project, a page or
+// a page container is filed in, by the relation its KIND names.
+//
+// THE KIND PICKS THE RELATION, for [Chart.LeadsContainer]'s reason: a page
+// container and a tracker project are two key classes a unit declares in two
+// fields, and one relation asked with the other's key matches only a company
+// that spelled them the same.
+func leadsByKind(ctx context.Context, chart Chart, actor string, o Object) Decision {
+	if o.Kind == KindContainer || o.Kind == KindPage {
+		return leadsContainer(ctx, chart, actor, o.Container)
+	}
+	return leadsProject(ctx, chart, actor, o.Container)
+}
+
 // actorOf is the handle the CHART knows this principal by.
 //
 // THE SEAT, FALLING BACK TO THE LOGIN. A chart holds seats: a person — every
@@ -657,28 +738,4 @@ func actorOf(p iam.Principal) string {
 		return p.Seat
 	}
 	return p.Login
-}
-
-// writeGrantFor is which capability covers writing this kind of thing.
-//
-// THE OBJECT DECIDES, not the verb, because the split the closed eleven makes is
-// by SURFACE: a company routinely wants an automation that files bugs and may
-// not edit the handbook. A kind with no write grant answers the zero, which
-// [granted] refuses — the same shape as a gate somebody forgot to fill in.
-func writeGrantFor(k ObjectKind) iam.Grant {
-	switch k {
-	case KindTask, KindProject, KindPerson:
-		return iam.GrantWorkWrite
-	case KindPage, KindContainer:
-		return iam.GrantKnowledgeWrite
-	case KindUnit:
-		// A UNIT IS THE COMPANY'S OWN SHAPE, not a colleague's work, so
-		// no colleague-write verb takes one — and stating the grant
-		// anyway is the difference between a kind that is unreachable
-		// here and one that falls through to the empty gate below by
-		// accident. The org chart reaches its authority through
-		// ClassSubtree instead.
-		return iam.GrantConfigWrite
-	}
-	return ""
 }

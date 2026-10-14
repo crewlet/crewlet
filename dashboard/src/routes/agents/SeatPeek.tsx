@@ -15,8 +15,8 @@
  *
  * The identity directory binds a person to a human seat, and every person
  * comes from one, so a human seat's peek says what holds it — its holder and
- * their stage, the open invitation that names it, or that it is vacant — and,
- * for a reader holding `people:manage`, offers what the seat's card menu and
+ * their stage, the open invitation that names it (an admin's to see), or that
+ * it is vacant — and, for an admin, offers what the seat's card menu and
  * its page offer: Invite and Create on a vacant seat, Cancel invitation on an
  * invited one. On a phone, whose chart is rows with no card menu, this is
  * where those gestures are.
@@ -27,23 +27,24 @@
  * windows all arrive with the org projection and the `agents` push, so they
  * cost nothing. What does cost a read:
  *
- *   * `work_workload` — the seat's open work, for every reader;
- *   * `fleet` — which node holds the seat and since when — on
- *     `fleet:operate`, so it is asked only of a reader holding it; every
+ *   * `work_workload` — the seat's open work, for a reader holding Tracker,
+ *     whose question it is;
+ *   * `fleet` — which node holds the seat and since when — on Admin, so it
+ *     is asked only of an admin; every
  *     other reader is told what the health push says (`heldBy`: this node, by
  *     name, or another),
  *     exactly as the profile's Setup card tells them, rather than being sent
  *     a refusal to draw or told a fact already on their screen is withheld;
  *   * `work_item_turns` — which turn this is on its task ("Turn 2") — asked
- *     only while the seat is working on one.
+ *     only while the seat is working on one, of a Tracker holder.
  *
  * And for a HUMAN seat, one REST read of the directory (`GET /iam/seats`),
- * asked only of a reader it answers (`people:manage` or `audit:read`) and
- * never for an agent's seat, whose holder is the engine.
+ * which every signed-in reader is answered (masked per reader), and never for
+ * an agent's seat, whose holder is the engine.
  *
  * The company document is NOT read: the model chain a turn resolves is on the
- * org projection for a reader holding `config:read` — the one who could read
- * the document — and everybody else is told which grant shows it
+ * org projection for an admin — the one who could read the document — and
+ * everybody else is told which access shows it
  * ([resolvedAbsence]), so a per-peek read of the whole guarded configuration
  * (on every `[`/`]` step through a list) would buy nothing.
  *
@@ -90,9 +91,9 @@ import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/l
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { TRACKER, accessNames } from "~/lib/access.ts";
 import {
   canManagePeople,
-  canReadDirectory,
   SEAT_GESTURE_WORDS,
   SeatGestureDialog,
   seatGestures,
@@ -232,15 +233,17 @@ function SeatPeekBody({
   const item = ref?.key ? itemAddress(turnItem(ref)) : "";
 
   // THE THREE READS — see the file's doc.
-  const workload = useQuery("work_workload", undefined, { pollMs: 60_000 });
-  // THE FLEET'S LEASES ARE THE DEPLOYMENT'S, read on `fleet:operate`: asked
-  // only of a reader holding it, and everybody else is told what the health
-  // push says.
-  const fleet = useQuery("fleet", undefined, { enabled: viewer.operatesFleet, pollMs: 60_000 });
+  const workload = useQuery("work_workload", undefined, {
+    enabled: viewer.tracker,
+    pollMs: 60_000,
+  });
+  // THE FLEET'S LEASES ARE THE DEPLOYMENT'S, read on Admin: asked only of an
+  // admin, and everybody else is told what the health push says.
+  const fleet = useQuery("fleet", undefined, { enabled: viewer.admin, pollMs: 60_000 });
   const turns = useQuery(
     "work_item_turns",
     { id: item, limit: 1 },
-    { enabled: state === "working" && item !== "" },
+    { enabled: viewer.tracker && state === "working" && item !== "" },
   );
 
   const ordinal =
@@ -263,7 +266,7 @@ function SeatPeekBody({
   const absent = resolvedAbsence(viewer);
   const place = unitPath(seat.unit);
   // WHO HOLDS A HUMAN SEAT — the directory read, see the file's doc.
-  const readsDirectory = human && !viewer.asking && canReadDirectory(viewer.grants);
+  const readsDirectory = human && !viewer.asking && !viewer.anonymous;
   const directory = useHumanSeats(readsDirectory);
   const holding = directory.data?.find((row) => row.handle === seat.handle);
   const gestures = canManagePeople(viewer.grants) ? seatGestures(holding) : [];
@@ -389,7 +392,7 @@ function SeatPeekBody({
 
             <dt>Running on</dt>
             <dd>
-              {!viewer.operatesFleet ? (
+              {!viewer.admin ? (
                 // WHAT THE PUBLIC PUSH SAYS, as the profile says it: this
                 // node by name, or another — never which peer, which is the
                 // operator's fleet read.
@@ -428,7 +431,13 @@ function SeatPeekBody({
 
         <dt>Open work</dt>
         <dd>
-          {workload.error ? (
+          {viewer.loading ? (
+            <EmptyValue label="Checking your access" />
+          ) : !viewer.tracker ? (
+            // NOT ASKED: the open work is the tracker's, and a reader without
+            // it is told what would show it rather than a refusal.
+            <EmptyValue label={`Needs ${accessNames([TRACKER])} access`} />
+          ) : workload.error ? (
             <EmptyValue label="The tracker did not answer" />
           ) : !workload.data ? (
             <EmptyValue label="Reading the tracker" />

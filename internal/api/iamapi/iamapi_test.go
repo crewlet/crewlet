@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -56,12 +57,12 @@ func newRig(t *testing.T, options ...func(*iamapi.Options)) *rig {
 			ID: alice.String(), Kind: iam.KindPerson, Stage: iam.StageActive,
 			Login: "alice.admin", Seat: "founder",
 			NameSealed: []byte("sealed-name"), EmailSealed: []byte("sealed-email"),
-			Grants: []iam.Grant{iam.GrantPeopleManage, iam.GrantStateRead},
+			Grants: []iam.Grant{iam.GrantAdmin},
 		},
 		bob.String(): {
 			ID: bob.String(), Kind: iam.KindPerson, Stage: iam.StageActive,
 			Login: "bob.sre", Seat: "sre-desk", NameSealed: []byte("sealed-name"),
-			Grants: []iam.Grant{iam.GrantStateRead},
+			Grants: []iam.Grant{iam.GrantTracker},
 		},
 	}}
 	writer := &fakeWriter{}
@@ -78,7 +79,7 @@ func newRig(t *testing.T, options ...func(*iamapi.Options)) *rig {
 		},
 		Opener:       fakeOpener{},
 		ExternalBase: "https://crewlet.example.com",
-		Ceiling:      iam.AllGrants,
+		Admin:        iam.AdminServe,
 		TokenIDs:     func() []string { return nil },
 		// EVERY BINDING HOLDS unless a case says otherwise: the rig's
 		// administrator is bound to "founder", and a report that found
@@ -163,8 +164,17 @@ func administrator() iam.Principal {
 	return proved(iam.Principal{
 		ID: alice, Login: "alice.admin", Kind: iam.KindPerson,
 		Stage: iam.StageActive, Seat: "founder",
-		Grants: []iam.Grant{iam.GrantPeopleManage, iam.GrantStateRead},
+		Grants: []iam.Grant{iam.GrantAdmin},
 	})
+}
+
+// staleAdministrator is the administrator a day after they last proved who
+// they are: every read of the directory still answers them, and every write of
+// it asks them to prove it again.
+func staleAdministrator() iam.Principal {
+	p := administrator()
+	p.ReauthAt = time.Now().Add(-time.Hour)
+	return p
 }
 
 // proved gives p a proof of identity a minute old, the way the guard composes
@@ -175,18 +185,13 @@ func proved(p iam.Principal) iam.Principal {
 	return p
 }
 
-func auditor() iam.Principal {
-	return proved(iam.Principal{
-		ID:    uuid.MustParse("018f3a9c-0000-7000-8000-0000000000c3"),
-		Login: "carol.audit", Kind: iam.KindPerson, Stage: iam.StageActive,
-		Grants: []iam.Grant{iam.GrantAuditRead},
-	})
-}
-
+// ordinary is somebody who signed in holding EVERY APP and not admin — the
+// most a caller can carry and still be nobody this surface answers about
+// anybody else, so a refusal of theirs is about admin and nothing less.
 func ordinary() iam.Principal {
 	return proved(iam.Principal{
 		ID: bob, Login: "bob.sre", Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead},
+		Stage: iam.StageActive, Grants: slices.Clone(iam.Apps),
 	})
 }
 
@@ -591,12 +596,17 @@ func (w *fakeWriter) CancelInvitation(_ context.Context, _, opID, reason string)
 	return w.did("cancel")
 }
 
-// MayConfer is the record's own rule, over the grants the rig's authority
-// handed this writer: a case about a grant the caller may not confer is about
-// the surface asking it, and a fake that admitted everything would pass it.
+// MayConfer is the record's own rule ([iamdomain.Writer.MayConfer]), over the
+// grants the rig's authority handed this writer: a case about a grant the
+// caller may not confer is about the surface asking it, and a fake that
+// admitted everything would pass it. THROUGH [iam.Expand] on both sides, as
+// the domain compares — so an admin confers every app, and a name this build
+// does not know is kept where the row holds it and refused where it is added.
 func (w *fakeWriter) MayConfer(before, after []iam.Grant) error {
+	held := iam.Expand(before)
+	caller := iam.Principal{Grants: w.grants}
 	for _, g := range after {
-		if !slices.Contains(before, g) && !slices.Contains(w.grants, g) {
+		if !slices.Contains(held, g) && !caller.Can(g) {
 			return fmt.Errorf("%w: conferring %s needs the same grant",
 				iamdomain.ErrRefused, g)
 		}
@@ -654,10 +664,15 @@ func (fakeOpener) OpenInvitation(_ string, sealed string) (string, error) {
 // EVERY /iam ROUTE IS GUARDED, READS INCLUDED.
 //
 // For the reason /secrets guards its listing: a map of who can reach a
-// company and how is worth as much to an attacker as the grants themselves.
-// The control is the ordinary principal — somebody who signed in and holds
-// nothing — because a case that only tried an anonymous caller would pass on
-// a surface that admitted every authenticated one.
+// company and how is worth as much to an attacker as the permissions
+// themselves. The control is the ordinary principal — somebody who signed in
+// holding every app and not admin — because a case that only tried an
+// anonymous caller would pass on a surface that admitted every authenticated
+// one.
+//
+// THE ONE READ THAT IS EVERYBODY'S is who holds each human seat (ADR-0033's
+// overview): served to that same principal, and to nobody unresolved, with
+// what it masks the seat listing's own cases' subject.
 func TestEveryIamReadIsGuarded(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
@@ -666,46 +681,29 @@ func TestEveryIamReadIsGuarded(t *testing.T) {
 		"/iam/people/" + alice.String(),
 		"/iam/people/" + alice.String() + "/sessions",
 		"/iam/check",
-		"/iam/seats",
 		"/iam/audit",
+		"/iam/invitations",
+		"/iam/node-tokens",
 	} {
-		if got := r.as(ordinary(), http.MethodGet, target, nil); got.status != http.StatusForbidden {
-			t.Errorf("%s answered %d to a principal holding nothing, want 403 "+
-				"(body %v)", target, got.status, got.body)
+		got := r.as(ordinary(), http.MethodGet, target, nil)
+		if got.status != http.StatusForbidden {
+			t.Errorf("%s answered %d to a principal holding every app and not "+
+				"admin, want 403 (body %v)", target, got.status, got.body)
+		} else if grants, _ := got.body[authz.DetailGrants].([]any); !slices.Equal(grants,
+			[]any{string(iam.GrantAdmin)}) {
+			t.Errorf("%s refused naming %v, want [admin]", target, grants)
 		}
 		if got := r.as(iam.Principal{}, http.MethodGet, target, nil); got.status == http.StatusOK {
 			t.Errorf("%s served an unresolved principal", target)
 		}
 	}
-}
-
-// AN AUDITOR READS THE DIRECTORY AND CHANGES NOTHING.
-//
-// "Who can reach this company, and how" is the audit question, so audit:read
-// opens the listing — and the control is the write beside it, because a class
-// that admitted an auditor to both would make the read grant a write grant.
-func TestAnAuditorReadsTheDirectoryAndWritesNothing(t *testing.T) {
-	t.Parallel()
-	r := newRig(t)
-	if got := r.as(auditor(), http.MethodGet, "/iam/people", nil); got.status != http.StatusOK {
-		t.Errorf("the listing answered %d to an auditor, want 200 (body %v)",
+	if got := r.as(ordinary(), http.MethodGet, "/iam/seats", nil); got.status != http.StatusOK {
+		t.Errorf("/iam/seats answered %d to a resolved principal, want 200: "+
+			"who holds each seat is everybody's overview (body %v)",
 			got.status, got.body)
 	}
-	for _, call := range []struct {
-		method, target string
-		body           any
-	}{
-		{http.MethodPost, "/iam/people", map[string]any{"login": "x.y"}},
-		{http.MethodPatch, "/iam/people/" + bob.String(), map[string]any{}},
-		{http.MethodDelete, "/iam/people/" + bob.String(), nil},
-		{http.MethodDelete, "/iam/people/" + bob.String() + "/sessions", nil},
-		{http.MethodPost, "/iam/invitations", map[string]any{"email": "a@example.com"}},
-	} {
-		got := r.as(auditor(), call.method, call.target, call.body)
-		if got.status != http.StatusForbidden {
-			t.Errorf("%s %s answered %d to an auditor, want 403",
-				call.method, call.target, got.status)
-		}
+	if got := r.as(iam.Principal{}, http.MethodGet, "/iam/seats", nil); got.status == http.StatusOK {
+		t.Error("/iam/seats served an unresolved principal")
 	}
 }
 
@@ -737,7 +735,7 @@ func TestAPersonReadsTheirOwnRowAndNobodyElses(t *testing.T) {
 //
 // TWO THINGS CLOSE IT INDEPENDENTLY and this pins the pair rather than either
 // alone — the mount names NO object, so the self arm has nothing to compare
-// against, and the verb's class is [authz.ClassOperator], which ignores the
+// against, and the verb's class is [authz.ClassAdmin], which ignores the
 // object entirely. Breaking one leaves the other holding, which is the point:
 // a surface where the hole needs two mistakes is one that survives a
 // refactor.
@@ -745,7 +743,7 @@ func TestEditingYourOwnRowIsNotASelfGesture(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	got := r.as(ordinary(), http.MethodPatch, "/iam/people/"+bob.String(),
-		map[string]any{"grants": []string{"people:manage"}})
+		map[string]any{"grants": []string{string(iam.GrantAdmin)}})
 	if got.status != http.StatusForbidden {
 		t.Errorf("editing their own grants answered %d, want 403 (body %v)",
 			got.status, got.body)
@@ -855,7 +853,8 @@ func TestAWriteIsAuthoredByTheCallerAndNotByTheNode(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
-		"login": "dana.sre", "email": "dana@example.com", "name": "Dana",
+		"grants": iam.Apps,
+		"login":  "dana.sre", "email": "dana@example.com", "name": "Dana",
 		"seat": "platform-lead",
 	})
 	if got.status != http.StatusCreated {
@@ -871,7 +870,7 @@ func TestAWriteIsAuthoredByTheCallerAndNotByTheNode(t *testing.T) {
 	if r.writer.kind != iam.KindPerson {
 		t.Errorf("author kind %q, want person", r.writer.kind)
 	}
-	if !slices.Contains(r.writer.grants, iam.GrantPeopleManage) {
+	if !slices.Contains(r.writer.grants, iam.GrantAdmin) {
 		t.Errorf("the writer carries %v, which is not the caller's own set",
 			r.writer.grants)
 	}
@@ -898,7 +897,8 @@ func TestACreateNamingASeatIsOneRecord(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
-		"login": " dana.sre ", "email": " dana@example.com\t", "seat": " founder ",
+		"grants": iam.Apps,
+		"login":  " dana.sre ", "email": " dana@example.com\t", "seat": " founder ",
 	})
 	if got.status != http.StatusCreated {
 		t.Fatalf("status %d (body %v)", got.status, got.body)
@@ -922,7 +922,8 @@ func TestACreateNamingASeatIsOneRecord(t *testing.T) {
 	r.writer.refusals = map[string]error{"create": fmt.Errorf(
 		"%w: a person needs an address", iamdomain.ErrNotFindable)}
 	got = r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
-		"login": "dana.sre", "email": "   ", "seat": "founder",
+		"grants": iam.Apps,
+		"login":  "dana.sre", "email": "   ", "seat": "founder",
 	})
 	if r.writer.created.Email != "" || got.status != http.StatusBadRequest {
 		t.Errorf("a blank address reached the writer as %q and answered %d %v, "+
@@ -949,7 +950,8 @@ func TestAPersonsCreateHandsOutTheirFirstPasswordLink(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
-		"email": "Dana.Ng@Example.com", "name": "Dana", "seat": "platform-lead",
+		"grants": iam.Apps,
+		"email":  "Dana.Ng@Example.com", "name": "Dana", "seat": "platform-lead",
 	})
 	if got.status != http.StatusCreated {
 		t.Fatalf("status %d (body %v)", got.status, got.body)
@@ -987,7 +989,8 @@ func TestAPersonsCreateHandsOutTheirFirstPasswordLink(t *testing.T) {
 
 	machine := newRig(t)
 	got = machine.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
-		"kind": "machine", "login": "ci:release",
+		"grants": []iam.Grant{},
+		"kind":   "machine", "login": "ci:release",
 	})
 	if got.status != http.StatusCreated {
 		t.Fatalf("a service account's create answered %d (body %v)", got.status,
@@ -1013,7 +1016,8 @@ func TestALoginTheAddressCannotProposeIsAskedFor(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
-		"email": "___@example.com", "seat": "platform-lead",
+		"grants": iam.Apps,
+		"email":  "___@example.com", "seat": "platform-lead",
 	})
 	if got.status != http.StatusBadRequest || got.body["field"] != "login" {
 		t.Errorf("an address proposing nothing answered %d %v, want 400 naming "+
@@ -1027,7 +1031,8 @@ func TestALoginTheAddressCannotProposeIsAskedFor(t *testing.T) {
 	r.writer.refusals = map[string]error{"create": fmt.Errorf(
 		"%w: a person needs an address", iamdomain.ErrNotFindable)}
 	got = r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
-		"seat": "platform-lead",
+		"grants": iam.Apps,
+		"seat":   "platform-lead",
 	})
 	if got.status != http.StatusBadRequest || got.body["field"] == "login" ||
 		r.writer.created.Login != "" {
@@ -1119,7 +1124,8 @@ func TestAPersonIsNeverCreatedOrInvitedWithoutASeat(t *testing.T) {
 		t.Parallel()
 		r := newRig(t)
 		got := r.as(administrator(), http.MethodPost, "/iam/people",
-			map[string]any{"kind": "machine", "login": "ci:release"})
+			map[string]any{"kind": "machine", "login": "ci:release",
+				"grants": []iam.Grant{}})
 		if got.status != http.StatusCreated || r.writer.created.Seat != "" {
 			t.Errorf("answered %d %v with seat %q, want 201 and no seat",
 				got.status, got.body, r.writer.created.Seat)
@@ -1148,6 +1154,260 @@ func TestAPersonIsNeverCreatedOrInvitedWithoutASeat(t *testing.T) {
 	})
 }
 
+// A PERSON IS NEVER CREATED OR INVITED WITHOUT STATING WHAT THEY MAY DO.
+//
+// There is no default an omission could stand for: somebody enrolled holding
+// every app and somebody enrolled holding the overview alone are both
+// legitimate, so a body naming neither is one whose author did not decide —
+// and the record it lands decides who may use the tracker and the knowledge
+// base until somebody notices. So `grants` is REQUIRED on a create, a service
+// account's included, and on an invitation: absent is `400 invalid_body`
+// naming the field, decided BEFORE ANY KEY IS READ OR LINK MINTED, as a
+// missing seat is. A name this build does not know is refused the same way,
+// naming the set — never forwarded for the record to refuse as authority
+// nobody holds. The CONTROL is each body with `grants` stated.
+//
+// Mutation: drop the requirement and the omitted bodies publish; read an
+// absent list as `[]` and they publish holding nothing.
+func TestAPersonIsNeverCreatedOrInvitedWithoutGrants(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, target string
+		body         map[string]any
+	}{
+		{"a person's create", "/iam/people", map[string]any{
+			"login": "dana.sre", "email": "dana@example.com", "seat": "founder"}},
+		{"a service account's create", "/iam/people", map[string]any{
+			"kind": "machine", "login": "ci:release"}},
+		{"an invitation", "/iam/invitations", map[string]any{
+			"email": "dana@example.com", "seat": "founder"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			got := r.as(administrator(), http.MethodPost, tc.target, tc.body)
+			if got.status != http.StatusBadRequest ||
+				got.body["error"] != string(httpjson.CodeInvalidBody) ||
+				got.body["field"] != "grants" {
+				t.Fatalf("an omitted list answered %d %v, want 400 invalid_body "+
+					"naming grants", got.status, got.body)
+			}
+			if detail, _ := got.body["detail"].(string); !strings.Contains(detail,
+				"admin, tracker, knowledge") {
+				t.Errorf("the refusal reads %q, want the permissions named", detail)
+			}
+			if len(r.writer.calls) != 0 {
+				t.Errorf("an omitted list published %v", r.writer.calls)
+			}
+			for _, handed := range []string{"id", "url", "op_id"} {
+				if _, ok := got.body[handed]; ok {
+					t.Errorf("the refusal carries %s: %v", handed, got.body)
+				}
+			}
+
+			unknown := maps.Clone(tc.body)
+			unknown["grants"] = []string{"tracker", "billing"}
+			got = r.as(administrator(), http.MethodPost, tc.target, unknown)
+			if got.status != http.StatusBadRequest || got.body["field"] != "grants" ||
+				!strings.Contains(fmt.Sprint(got.body["detail"]), `"billing"`) {
+				t.Errorf("a name this build does not know answered %d %v, want "+
+					"400 naming it and the set", got.status, got.body)
+			}
+			if len(r.writer.calls) != 0 {
+				t.Errorf("an unknown name published %v", r.writer.calls)
+			}
+
+			stated := maps.Clone(tc.body)
+			stated["grants"] = iam.Apps
+			if got := r.as(administrator(), http.MethodPost, tc.target,
+				stated); got.status != http.StatusCreated {
+				t.Errorf("the control, with grants stated, answered %d %v",
+					got.status, got.body)
+			}
+		})
+	}
+}
+
+// AN EMPTY LIST IS THE OVERVIEW, NOT AN OMISSION.
+//
+// `[]` is a decision — somebody who reads the overview and uses no app
+// (ADR-0033) — and it reaches the record as an empty set, where an omission is
+// refused: the two must never collapse into one, in either direction. The
+// CONTROL is a list naming an app, which reaches the record as given.
+//
+// Mutation: read `[]` as absent and these answer 400; carry the pointer's nil
+// through as the record's grants and the control's assertions still hold while
+// the empty case reaches the record as nil.
+func TestAnEmptyGrantListIsTheOverview(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
+		"login": "dana.sre", "email": "dana@example.com", "seat": "founder",
+		"grants": []string{},
+	})
+	if got.status != http.StatusCreated {
+		t.Fatalf("a create stating [] answered %d %v, want 201", got.status, got.body)
+	}
+	if r.writer.created.Grants == nil || len(r.writer.created.Grants) != 0 {
+		t.Errorf("the record was asked for grants %#v, want an empty set", r.writer.created.Grants)
+	}
+	got = r.as(administrator(), http.MethodPost, "/iam/invitations", map[string]any{
+		"email": "eve@example.com", "seat": "founder", "grants": []string{},
+	})
+	if got.status != http.StatusCreated {
+		t.Fatalf("an invitation stating [] answered %d %v, want 201", got.status,
+			got.body)
+	}
+	if r.writer.invited.Grants == nil || len(r.writer.invited.Grants) != 0 {
+		t.Errorf("the invitation carries grants %#v, want an empty set",
+			r.writer.invited.Grants)
+	}
+	got = r.as(administrator(), http.MethodPost, "/iam/invitations", map[string]any{
+		"email": "fay@example.com", "seat": "founder",
+		"grants": []string{"knowledge"},
+	})
+	if got.status != http.StatusCreated ||
+		!slices.Equal(r.writer.invited.Grants, []iam.Grant{iam.GrantKnowledge}) {
+		t.Errorf("the control answered %d and carries %v, want knowledge",
+			got.status, r.writer.invited.Grants)
+	}
+}
+
+// A NAME THIS BUILD DOES NOT KNOW MAY BE REMOVED OVER HTTP, AND NEVER ADDED.
+//
+// A newer peer may write a permission this build has never heard of onto a
+// row; it is KEPT AND IGNORED (ADR-0033). So an administrator here may take it
+// off (`remove_grants`), and may restate the whole set with it left on — an
+// edit that leaves it alone must not be refused for its presence — but may
+// never add it, as `add_grants` or inside a whole set the row does not already
+// carry it in. Every addition is refused `400` naming the set before anything
+// publishes.
+//
+// Mutation: refuse every unknown name in a whole set and the restatement goes
+// red; stop refusing unknown additions and the two additions publish; refuse
+// one in `remove_grants` and the tidy-up does.
+func TestAnUnknownGrantMayBeRemovedButNotAddedOverHTTP(t *testing.T) {
+	t.Parallel()
+	carrying := func(t *testing.T) *rig {
+		r := newRig(t)
+		row := r.directory.people[bob.String()]
+		row.Grants = []iam.Grant{iam.GrantTracker, "billing"}
+		r.directory.people[bob.String()] = row
+		r.writer.document = &iamdomain.Person{V: iamdomain.DocumentVersion,
+			Kind: iam.KindPerson, Stage: iam.StageActive, Grants: row.Grants}
+		return r
+	}
+	for _, tc := range []struct {
+		name   string
+		body   map[string]any
+		status int
+		want   []iam.Grant
+	}{
+		{"taken off with remove_grants", map[string]any{
+			"remove_grants": []string{"billing"}}, http.StatusOK,
+			[]iam.Grant{iam.GrantTracker}},
+		{"kept by a whole set that restates it", map[string]any{
+			"grants": []string{"tracker", "knowledge", "billing"}}, http.StatusOK,
+			[]iam.Grant{iam.GrantTracker, iam.GrantKnowledge, "billing"}},
+		{"added with add_grants", map[string]any{
+			"add_grants": []string{"payroll"}}, http.StatusBadRequest, nil},
+		{"added inside a whole set", map[string]any{
+			"grants": []string{"tracker", "billing", "payroll"}},
+			http.StatusBadRequest, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := carrying(t)
+			got := r.as(administrator(), http.MethodPatch,
+				"/iam/people/"+bob.String(), tc.body)
+			if got.status != tc.status {
+				t.Fatalf("answered %d %v, want %d", got.status, got.body, tc.status)
+			}
+			if tc.status != http.StatusOK {
+				if !strings.Contains(fmt.Sprint(got.body["detail"]), `"payroll"`) ||
+					!strings.Contains(fmt.Sprint(got.body["detail"]), "admin, tracker, knowledge") {
+					t.Errorf("the refusal reads %v, want the name and the set", got.body)
+				}
+				if len(r.writer.calls) != 0 {
+					t.Errorf("an unknown addition published %v", r.writer.calls)
+				}
+				return
+			}
+			if !slices.Equal(r.writer.document.Grants, tc.want) {
+				t.Errorf("the document holds %v, want %v", r.writer.document.Grants,
+					tc.want)
+			}
+		})
+	}
+}
+
+// A TOKEN WRITING AN ADMINISTRATIVE RECORD IS `token_refused`, NOT A LACK OF
+// AUTHORITY.
+//
+// The identity estate refuses every administrative record written through a
+// machine token ([iamdomain.ErrTokenRefused], wrapping ErrRefused): a token
+// may carry admin (ADR-0033), so what keeps it off inviting, granting and
+// suspending is that nobody is present, not a permission. The answer is the
+// code the authority table's presence rows give the same request at the route
+// — 403 `token_refused`, reason `token_refused`, NO permission named, since
+// none would admit a token — and never `unauthorized`, which would send the
+// caller to ask for admin they already hold. It is matched BEFORE the
+// authority arm it wraps. The CONTROL is a plain authority refusal, which is
+// still `unauthorized`.
+//
+// Mutation: match ErrRefused first and every row answers `unauthorized`.
+func TestATokenWritingAnAdministrativeRecordIsTokenRefused(t *testing.T) {
+	t.Parallel()
+	byToken := fmt.Errorf("%w: %w: the stage was asked through the machine "+
+		"token pat:x, and an administrative identity record needs a person "+
+		"present — sign in", iamdomain.ErrRefused, iamdomain.ErrTokenRefused)
+	for _, tc := range []struct {
+		name, call, method, target string
+		body                       map[string]any
+	}{
+		{"a suspension", "stage", http.MethodPatch, "/iam/people/" + bob.String(),
+			map[string]any{"stage": "suspended"}},
+		{"an invitation", "invite", http.MethodPost, "/iam/invitations",
+			map[string]any{"email": "dana@example.com", "seat": "founder",
+				"grants": iam.Apps}},
+		{"a create", "create", http.MethodPost, "/iam/people",
+			map[string]any{"email": "dana@example.com", "seat": "founder",
+				"grants": iam.Apps}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.refusals = map[string]error{tc.call: byToken}
+			got := r.as(administrator(), tc.method, tc.target, tc.body)
+			if got.status != http.StatusForbidden ||
+				got.body["error"] != string(httpjson.CodeTokenRefused) ||
+				got.body[authz.DetailReason] != string(authz.ReasonTokenRefused) {
+				t.Fatalf("answered %d %v, want 403 token_refused", got.status, got.body)
+			}
+			if grants, _ := got.body[authz.DetailGrants].([]any); len(grants) != 0 {
+				t.Errorf("the refusal names %v: no permission admits a token here",
+					grants)
+			}
+			for _, handed := range []string{"url", "token"} {
+				if _, ok := got.body[handed]; ok {
+					t.Errorf("a refused record handed out a %s", handed)
+				}
+			}
+
+			// THE CONTROL: the same record refused for authority alone.
+			r = newRig(t)
+			r.writer.refusals = map[string]error{tc.call: fmt.Errorf(
+				"%w: this party may not", iamdomain.ErrRefused)}
+			got = r.as(administrator(), tc.method, tc.target, tc.body)
+			if got.status != http.StatusForbidden ||
+				got.body["error"] != string(httpjson.CodeUnauthorized) {
+				t.Errorf("a plain refusal answered %d %v, want 403 unauthorized",
+					got.status, got.body)
+			}
+		})
+	}
+}
+
 // A SEAT NAMED ON A NODE THAT RUNS NO COMPANY IS `409 no_active_revision`, NOT
 // A 503.
 //
@@ -1167,9 +1427,11 @@ func TestASeatOnANodeRunningNoCompanyIsNoActiveRevision(t *testing.T) {
 		body                       map[string]any
 	}{
 		{"a create", "create", http.MethodPost, "/iam/people",
-			map[string]any{"email": "dana@example.com", "seat": "founder"}},
+			map[string]any{"email": "dana@example.com", "seat": "founder",
+				"grants": iam.Apps}},
 		{"an invitation", "invite", http.MethodPost, "/iam/invitations",
-			map[string]any{"email": "dana@example.com", "seat": "founder"}},
+			map[string]any{"email": "dana@example.com", "seat": "founder",
+				"grants": iam.Apps}},
 		{"a move", "identity", http.MethodPatch, "/iam/people/" + bob.String(),
 			map[string]any{"seat": "founder"}},
 	} {
@@ -1213,7 +1475,8 @@ func TestTheInviteUrlIsReturnedExactlyOnce(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	got := r.as(administrator(), http.MethodPost, "/iam/invitations",
-		map[string]any{"email": "sarah@example.com", "seat": " platform-lead "})
+		map[string]any{"email": "sarah@example.com", "seat": " platform-lead ",
+			"grants": iam.Apps})
 	if got.status != http.StatusCreated {
 		t.Fatalf("status %d (body %v)", got.status, got.body)
 	}
@@ -1287,19 +1550,100 @@ const inviteRoute = "#/invite/"
 
 // THE REPORT NAMES A COMPANY THAT CANNOT ADMINISTER ITSELF.
 //
-// No active person holding a credential carries people:manage, which is the
-// one finding that is not somebody to fix but nobody left to fix them with.
-func TestTheReportNamesACompanyWithNoAdministrator(t *testing.T) {
+// No active person holding an enrolled credential holds admin, which is the
+// one finding that is not somebody to fix but nobody left to fix them with —
+// and `people_with_admin` counts the persons who do. Admin is counted through
+// [iam.Expand]'s premise and nothing else: a row of every app and no admin is
+// nobody's administrator. The CONTROL is the same company once its admin has
+// set a password, which counts her and raises nothing.
+//
+// Mutation: count a row holding any permission at all and the tracker-only
+// person makes the company administrable.
+func TestTheCheckNamesACompanyWithNoAdmin(t *testing.T) {
 	t.Parallel()
+	password := func(person uuid.UUID) []iamdomain.CredentialRow {
+		return []iamdomain.CredentialRow{{ID: "pw-" + person.String(),
+			PersonID: person.String(), Method: iamdomain.MethodPassword}}
+	}
 	r := newRig(t)
-	// Nobody holds a credential, so nobody counts.
+	// Only bob — every app, no admin — holds a credential.
+	r.directory.people[bob.String()] = iamdomain.PersonRow{
+		ID: bob.String(), Kind: iam.KindPerson, Stage: iam.StageActive,
+		Login: "bob.sre", Seat: "sre-desk", Grants: slices.Clone(iam.Apps),
+	}
+	r.directory.creds = map[string][]iamdomain.CredentialRow{
+		bob.String(): password(bob)}
 	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
 	if got.status != http.StatusOK {
 		t.Fatalf("status %d (body %v)", got.status, got.body)
 	}
-	if !hasFinding(got.body, string(iamapi.KindNoManageHolder)) {
+	if !hasFinding(got.body, string(iamapi.KindNoAdminHolder)) {
 		t.Errorf("the report does not name the missing administrator: %v",
 			got.body)
+	}
+	if n, _ := got.body["people_with_admin"].(float64); n != 0 {
+		t.Errorf("people_with_admin = %v with nobody enrolled holding admin",
+			got.body["people_with_admin"])
+	}
+
+	// THE CONTROL: alice, who holds admin, sets a password.
+	r.directory.creds[alice.String()] = password(alice)
+	got = r.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if hasFinding(got.body, string(iamapi.KindNoAdminHolder)) {
+		t.Errorf("a company with an enrolled admin was reported without one: %v",
+			got.body)
+	}
+	if n, _ := got.body["people_with_admin"].(float64); n != 1 {
+		t.Errorf("people_with_admin = %v, want 1 — alice alone",
+			got.body["people_with_admin"])
+	}
+}
+
+// A SERVICE ACCOUNT HOLDING ADMIN LEAVES THE COMPANY WITH NO ADMIN.
+//
+// A service account may hold admin (ADR-0033), and its live token is a way in
+// it has used — but no token ever writes an administrative identity record
+// (internal/iamdomain refuses one written through a machine token, and the
+// directory's write rows ask a person present), so a company whose only
+// active admin is a service account is one where nobody can invite, grant or
+// revoke. Counted, it would be reported administrable. The CONTROL is the
+// same company with a person holding admin and a password beside it.
+//
+// Mutation: count every kind toward the administrators and the first half
+// reports nothing.
+func TestAServiceAccountHoldingAdminLeavesTheCompanyWithNoAdmin(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	robot := unboundServiceAccount()
+	robot.Grants = []iam.Grant{iam.GrantAdmin}
+	r.directory.people[ciRelease.String()] = robot
+	r.directory.creds = map[string][]iamdomain.CredentialRow{
+		ciRelease.String(): {{ID: "tok", PersonID: ciRelease.String(),
+			Method: iamdomain.MethodToken, ExpiresAt: at.Add(time.Hour)}},
+	}
+	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if got.status != http.StatusOK {
+		t.Fatalf("status %d (body %v)", got.status, got.body)
+	}
+	if !hasFinding(got.body, string(iamapi.KindNoAdminHolder)) {
+		t.Errorf("a company whose only enrolled admin is a service account "+
+			"was reported administrable: %v", got.body)
+	}
+	if n, _ := got.body["people_with_admin"].(float64); n != 0 {
+		t.Errorf("people_with_admin = %v, want 0: a service account is no person",
+			got.body["people_with_admin"])
+	}
+
+	// THE CONTROL: alice, a person holding admin, sets a password.
+	r.directory.creds[alice.String()] = []iamdomain.CredentialRow{{ID: "pw",
+		PersonID: alice.String(), Method: iamdomain.MethodPassword}}
+	got = r.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if hasFinding(got.body, string(iamapi.KindNoAdminHolder)) {
+		t.Errorf("a person holding admin and a password left the company "+
+			"reported without one: %v", got.body)
+	}
+	if n, _ := got.body["people_with_admin"].(float64); n != 1 {
+		t.Errorf("people_with_admin = %v, want 1", got.body["people_with_admin"])
 	}
 }
 
@@ -1391,17 +1735,37 @@ func TestABindingTheChartCannotJudgeIsCountedAsUnchecked(t *testing.T) {
 	}
 }
 
-// A GRANT THIS NODE'S CEILING WITHHOLDS IS REPORTED, because the row declares
-// it and this node does not honour it — a legal state on a fleet mid-rollout
-// that nothing else would say.
-func TestTheReportNamesAGrantTheCeilingClamps(t *testing.T) {
+// AN ADMIN A REFUSING NODE CLAMPS IS REPORTED, because the row holds admin
+// and this node does not honour it — a legal state on a fleet whose nodes
+// disagree about `api.auth.admin`, which nothing else would say. Only admin is
+// ever clamped: the person's apps are kept, so bob, who holds an app and no
+// admin, raises nothing. The CONTROL is a node that serves admin, where alice
+// raises nothing either.
+//
+// Mutation: raise it for any row holding a permission and bob is reported;
+// raise it whatever the posture and the control goes red.
+func TestTheCheckNamesAnAdminARefusingNodeClamps(t *testing.T) {
 	t.Parallel()
-	r := newRig(t, func(o *iamapi.Options) {
-		o.Ceiling = []iam.Grant{iam.GrantStateRead}
-	})
+	r := newRig(t, func(o *iamapi.Options) { o.Admin = iam.AdminRefuse })
 	got := r.as(administrator(), http.MethodGet, "/iam/check", nil)
-	if !hasFinding(got.body, string(iamapi.KindClampedGrant)) {
-		t.Errorf("the report does not name the clamped grant: %v", got.body)
+	finding := findingOf(got.body, string(iamapi.KindAdminClamped))
+	if finding == nil || finding["person"] != alice.String() ||
+		finding["grant"] != string(iam.GrantAdmin) {
+		t.Errorf("the report does not name alice's clamped admin: %v", got.body)
+	}
+	rows, _ := got.body["findings"].([]any)
+	for _, raw := range rows {
+		row, _ := raw.(map[string]any)
+		if row["kind"] == string(iamapi.KindAdminClamped) &&
+			row["person"] == bob.String() {
+			t.Errorf("bob, who holds no admin, was reported clamped: %v", row)
+		}
+	}
+
+	serving := newRig(t)
+	got = serving.as(administrator(), http.MethodGet, "/iam/check", nil)
+	if hasFinding(got.body, string(iamapi.KindAdminClamped)) {
+		t.Errorf("a node serving admin reported a clamp: %v", got.body)
 	}
 }
 
@@ -1419,7 +1783,7 @@ func TestTheReportNamesAGrantTheCeilingClamps(t *testing.T) {
 func TestTheReportIsInTheOrderItSaysItIs(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, func(o *iamapi.Options) {
-		o.Ceiling = []iam.Grant{iam.GrantStateRead}
+		o.Admin = iam.AdminRefuse
 		o.Bindings = func(_ context.Context, row iamdomain.PersonRow) (bool, string, error) {
 			return row.Seat == "founder", "the seat founder is not in the org chart", nil
 		}
@@ -1436,11 +1800,11 @@ func TestTheReportIsInTheOrderItSaysItIs(t *testing.T) {
 		order = append(order, row["kind"].(string)+" "+who)
 	}
 	want := []string{
-		string(iamapi.KindNoManageHolder) + " ",
+		string(iamapi.KindNoAdminHolder) + " ",
 		string(iamapi.KindNoCredential) + " alice.admin",
 		string(iamapi.KindNoCredential) + " bob.sre",
 		string(iamapi.KindDanglingBinding) + " alice.admin",
-		string(iamapi.KindClampedGrant) + " alice.admin",
+		string(iamapi.KindAdminClamped) + " alice.admin",
 	}
 	if !slices.Equal(order, want) {
 		t.Errorf("the report reads\n  %s\nwant\n  %s", strings.Join(order, "\n  "),
@@ -1452,7 +1816,7 @@ func TestTheReportIsInTheOrderItSaysItIs(t *testing.T) {
 //
 // A person created a minute ago holds their first password link and nothing
 // else: they CAN get in, so they are not reported as holding no credential —
-// but they have not, so a company whose only holder of people:manage is them is
+// but they have not, so a company whose only holder of admin is them is
 // one nobody can administer yet, and the report says so in its own words,
 // "an enrolled credential". A link that lapsed is no way in at all, and the
 // finding names the reset that repairs it. The CONTROL is the same person
@@ -1479,7 +1843,7 @@ func TestALiveLinkIsAWayInAndNotAnEnrolment(t *testing.T) {
 		t.Errorf("a person holding a live first link was reported holding no "+
 			"credential: %v", got.body)
 	}
-	if !hasFinding(got.body, string(iamapi.KindNoManageHolder)) {
+	if !hasFinding(got.body, string(iamapi.KindNoAdminHolder)) {
 		t.Errorf("a company whose only administrator has never set a password "+
 			"was reported administrable: %v", got.body)
 	}
@@ -1502,7 +1866,7 @@ func TestALiveLinkIsAWayInAndNotAnEnrolment(t *testing.T) {
 		alice.String(): {{ID: "pw", PersonID: alice.String(),
 			Method: iamdomain.MethodPassword}}}
 	got = r.as(administrator(), http.MethodGet, "/iam/check", nil)
-	if nocred(got.body) || hasFinding(got.body, string(iamapi.KindNoManageHolder)) {
+	if nocred(got.body) || hasFinding(got.body, string(iamapi.KindNoAdminHolder)) {
 		t.Errorf("an administrator holding a password was reported: %v", got.body)
 	}
 
@@ -1597,7 +1961,7 @@ func TestARefusedLoginOrKindIsABadRequestAndNotAFault(t *testing.T) {
 		r.writer.err = fmt.Errorf("%w: the domain's own sentence", refusal)
 		got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
 			"login": "token:ops", "email": "mallory@example.com", "name": "Mallory",
-			"seat": "platform-lead",
+			"seat": "platform-lead", "grants": iam.Apps,
 		})
 		if got.status != http.StatusBadRequest {
 			t.Errorf("%v answered %d, want 400 (body %v)", refusal, got.status,
@@ -1627,7 +1991,7 @@ func TestAWriteThatLostItsRaceIsStale(t *testing.T) {
 		statelog.ErrConflict)
 	got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
 		"login": "dana.sre", "email": "dana@example.com", "name": "Dana",
-		"seat": "platform-lead",
+		"seat": "platform-lead", "grants": iam.Apps,
 	})
 	if got.status != http.StatusConflict || got.body["error"] != "stale" {
 		t.Errorf("a lost race answered %d %v, want 409 stale", got.status,
@@ -1715,7 +2079,7 @@ func TestALoginAndASeatMoveInOneRecord(t *testing.T) {
 	// path: a seat move and a grants edit, both landed.
 	r = newRig(t)
 	got = r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(),
-		map[string]any{"seat": "sre", "grants": []string{"state:read"}})
+		map[string]any{"seat": "sre", "grants": []string{"knowledge"}})
 	if got.status != http.StatusOK || got.body["landed"] != nil {
 		t.Errorf("an edit whose every record landed answered %d %v, want 200 "+
 			"naming nothing as landed", got.status, got.body)
@@ -1747,8 +2111,8 @@ func TestALoginAndASeatMoveInOneRecord(t *testing.T) {
 	// AND WHAT THE SURFACE CAN JUDGE IS REFUSED BEFORE ANY RECORD, each
 	// beside a seat move that would otherwise land: a login cleared — a
 	// login of nothing but spaces too, told it is being cleared rather than
-	// that its grammar is wrong — a stage this build cannot name, a grant
-	// the caller may not confer.
+	// that its grammar is wrong — a stage this build cannot name, a
+	// permission this build does not know being added.
 	for name, tc := range map[string]struct {
 		body   map[string]any
 		status int
@@ -1759,9 +2123,9 @@ func TestALoginAndASeatMoveInOneRecord(t *testing.T) {
 			"login": "   "}, http.StatusBadRequest},
 		"a stage nobody can name": {map[string]any{"seat": "platform-lead",
 			"stage": "paused"}, http.StatusBadRequest},
-		"a grant the caller does not hold": {map[string]any{
-			"seat": "platform-lead", "grants": []string{"secrets:read"}},
-			http.StatusForbidden},
+		"a permission nobody knows, added": {map[string]any{
+			"seat": "platform-lead", "grants": []string{"billing"}},
+			http.StatusBadRequest},
 	} {
 		r := newRig(t)
 		got := r.as(administrator(), http.MethodPatch,
@@ -1785,12 +2149,12 @@ func TestALoginAndASeatMoveInOneRecord(t *testing.T) {
 // WHEN IT LANDS.
 //
 // An editor works from a read, and another administrator may change the same
-// person before the edit lands. Bob's row is read holding state:read; by the
+// person before the edit lands. Bob's row is read holding tracker; by the
 // time the document is decided another administrator has stripped it in one
-// case and given him audit:read in the other. Adding people:manage leaves the
-// strip standing, and removing state:read leaves the new audit:read — where
-// the whole set the editor's read implied would hand state:read back and take
-// audit:read away, and nothing refuses either, since only an addition needs
+// case and given him knowledge in the other. Adding knowledge leaves the
+// strip standing, and removing tracker leaves the new knowledge — where the
+// whole set the editor's read implied would hand tracker back and take
+// knowledge away, and nothing refuses either, since only an addition needs
 // the caller to hold the grant. Mutation: apply the change to the row read
 // before the decide rather than to the document it is handed, and both go red.
 func TestAGrantChangeLeavesWhatItDoesNotNameAsItLands(t *testing.T) {
@@ -1802,13 +2166,13 @@ func TestAGrantChangeLeavesWhatItDoesNotNameAsItLands(t *testing.T) {
 	}{
 		"a grant stripped meanwhile stays stripped": {
 			decided: nil,
-			body:    map[string]any{"add_grants": []string{"people:manage"}},
-			want:    []iam.Grant{iam.GrantPeopleManage},
+			body:    map[string]any{"add_grants": []string{"knowledge"}},
+			want:    []iam.Grant{iam.GrantKnowledge},
 		},
 		"a grant given meanwhile stays given": {
-			decided: []iam.Grant{iam.GrantStateRead, iam.GrantAuditRead},
-			body:    map[string]any{"remove_grants": []string{"state:read"}},
-			want:    []iam.Grant{iam.GrantAuditRead},
+			decided: []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
+			body:    map[string]any{"remove_grants": []string{"tracker"}},
+			want:    []iam.Grant{iam.GrantKnowledge},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1830,25 +2194,26 @@ func TestAGrantChangeLeavesWhatItDoesNotNameAsItLands(t *testing.T) {
 
 	// AND A BODY THAT CANNOT SAY WHICH IT MEANS IS REFUSED BEFORE ANY RECORD:
 	// both shapes at once, a grant both added and removed, a name that is no
-	// grant (removed as nothing, it would be a typo answered 200) — and an
-	// addition the caller may not confer is refused there too.
+	// permission ADDED (one REMOVED is how a row is tidied of a newer peer's
+	// name, which the unknown-name case below holds) — and an addition the
+	// caller may not confer is refused there too: the caller here may edit
+	// the row and holds every app, but not admin.
 	for name, tc := range map[string]struct {
 		body   map[string]any
+		caller iam.Principal
 		status int
 	}{
 		"the whole set and a change": {map[string]any{
-			"grants": []string{"state:read"}, "add_grants": []string{"people:manage"}},
-			http.StatusBadRequest},
+			"grants": []string{"tracker"}, "add_grants": []string{"knowledge"}},
+			administrator(), http.StatusBadRequest},
 		"a grant added and removed": {map[string]any{
-			"add_grants": []string{"state:read"}, "remove_grants": []string{"state:read"}},
-			http.StatusBadRequest},
-		"a name that is no grant": {map[string]any{
-			"remove_grants": []string{"state:raed"}}, http.StatusBadRequest},
-		"an addition the caller does not hold": {map[string]any{
-			"add_grants": []string{"secrets:read"}}, http.StatusForbidden},
+			"add_grants": []string{"tracker"}, "remove_grants": []string{"tracker"}},
+			administrator(), http.StatusBadRequest},
+		"a name that is no permission, added": {map[string]any{
+			"add_grants": []string{"trackr"}}, administrator(), http.StatusBadRequest},
 	} {
 		r := newRig(t)
-		got := r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(),
+		got := r.as(tc.caller, http.MethodPatch, "/iam/people/"+bob.String(),
 			tc.body)
 		if got.status != tc.status {
 			t.Errorf("%s answered %d, want %d (body %v)", name, got.status,
@@ -1857,6 +2222,29 @@ func TestAGrantChangeLeavesWhatItDoesNotNameAsItLands(t *testing.T) {
 		if len(r.writer.calls) != 0 {
 			t.Errorf("%s published %v before it was refused", name, r.writer.calls)
 		}
+	}
+	// AN ADDITION THE WRITER MAY NOT CONFER is refused before any record.
+	// No caller this route admits lacks a permission the build knows —
+	// admin carries them all — so the case hands the writer fewer grants
+	// than its caller: what it pins is the ORDER, the record's own rule
+	// asked before the first record publishes, which every refusal that
+	// rule can give depends on. Mutation: drop the early ask and the edit
+	// publishes before the record refuses it.
+	r := newRig(t, func(o *iamapi.Options) {
+		inner := o.Authority
+		o.Authority = func(p iam.Principal) iamapi.Writer {
+			p.Grants = []iam.Grant{iam.GrantTracker}
+			return inner(p)
+		}
+	})
+	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(),
+		map[string]any{"add_grants": []string{"knowledge"}})
+	if got.status != http.StatusForbidden {
+		t.Errorf("an addition the writer may not confer answered %d, want 403 "+
+			"(body %v)", got.status, got.body)
+	}
+	if len(r.writer.calls) != 0 {
+		t.Errorf("a refused conferral published %v", r.writer.calls)
 	}
 }
 
@@ -1898,9 +2286,9 @@ func TestARefusalPartwayNamesWhatLanded(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	r.writer.refusals = map[string]error{"update": fmt.Errorf(
-		"%w: conferring state:read needs the same grant", iamdomain.ErrRefused)}
+		"%w: conferring knowledge needs the same grant", iamdomain.ErrRefused)}
 	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+alice.String(),
-		map[string]any{"login": "alice.ops", "grants": []string{"state:read"}})
+		map[string]any{"login": "alice.ops", "grants": []string{"knowledge"}})
 	if got.status != http.StatusForbidden {
 		t.Fatalf("status %d (body %v), want 403", got.status, got.body)
 	}
@@ -1944,7 +2332,7 @@ func TestACreateWhoseSeatIsTakenCreatesNobody(t *testing.T) {
 		Field: iamdomain.UniqueSeat, Value: "platform-lead", Person: bob.String()}}
 	got := r.as(administrator(), http.MethodPost, "/iam/people",
 		map[string]any{"login": "dana.sre", "email": "dana@example.com",
-			"seat": "platform-lead"})
+			"seat": "platform-lead", "grants": iam.Apps})
 	if got.status != http.StatusConflict {
 		t.Fatalf("status %d (body %v), want the seat's 409", got.status, got.body)
 	}
@@ -1976,7 +2364,8 @@ func TestAGesturesOwnReasonSaysWhatWasDoneAndByWhom(t *testing.T) {
 	}{
 		{"a create", http.MethodPost, "/iam/people", map[string]any{
 			"login": "dana.sre", "email": "dana@example.com",
-			"seat": "platform-lead"}, "create", "created by alice.admin"},
+			"seat": "platform-lead", "grants": iam.Apps}, "create",
+			"created by alice.admin"},
 		{"an edit", http.MethodPatch, "/iam/people/" + bob.String(),
 			map[string]any{"name": "Bob"}, "update", "changed by alice.admin"},
 		{"a suspension", http.MethodPatch, "/iam/people/" + bob.String(),
@@ -1992,7 +2381,8 @@ func TestAGesturesOwnReasonSaysWhatWasDoneAndByWhom(t *testing.T) {
 			"/iam/people/" + bob.String() + "/sessions", nil,
 			"revoke", "every session ended by alice.admin"},
 		{"an invitation", http.MethodPost, "/iam/invitations",
-			map[string]any{"email": "dana@example.com", "seat": "platform-lead"},
+			map[string]any{"email": "dana@example.com", "seat": "platform-lead",
+				"grants": iam.Apps},
 			"invite", "invited by alice.admin"},
 		{"a cancellation", http.MethodDelete, "/iam/invitations/inv-1", nil,
 			"cancel", "cancelled by alice.admin"},
@@ -2053,7 +2443,7 @@ func TestAValueSomebodyHoldsIsRefusedInWordsAPersonReads(t *testing.T) {
 			r.writer.refusals = map[string]error{"create": tc.taken}
 			got := r.as(administrator(), http.MethodPost, "/iam/people",
 				map[string]any{"login": "dana.sre", "email": "dana@example.com",
-					"seat": "platform-lead"})
+					"seat": "platform-lead", "grants": iam.Apps})
 			detail, _ := got.body["detail"].(string)
 			if got.status != http.StatusConflict || got.body["error"] != "invalid" ||
 				!strings.Contains(detail, tc.want) ||
@@ -2092,7 +2482,7 @@ func TestAnotherCreateUnderOneKeyIsAnotherOperation(t *testing.T) {
 		t.Helper()
 		got := r.asWith(administrator(), http.MethodPost, "/iam/people",
 			map[string]any{"login": login, "email": login + "@example.com",
-				"seat": "platform-lead"},
+				"seat": "platform-lead", "grants": iam.Apps},
 			http.Header{opkey.Header: {key}})
 		if got.status/100 != 2 {
 			t.Fatalf("a create answered %d: %v", got.status, got.body)
@@ -2155,8 +2545,8 @@ func TestTwoEditsAreTwoOperationsAndARetryIsOne(t *testing.T) {
 		_ = json.Unmarshal(rec.Body.Bytes(), &answer)
 		return r.writer.updated.OpID, answer.OpID
 	}
-	first, _ := patch("", []iam.Grant{iam.GrantStateRead})
-	second, _ := patch("", []iam.Grant{iam.GrantPeopleManage})
+	first, _ := patch("", []iam.Grant{iam.GrantTracker})
+	second, _ := patch("", []iam.Grant{iam.GrantKnowledge})
 	if first == second {
 		t.Errorf("two different edits of one person were published under one "+
 			"op id %q, so the broker acknowledges the second as the first", first)
@@ -2165,21 +2555,21 @@ func TestTwoEditsAreTwoOperationsAndARetryIsOne(t *testing.T) {
 	// request publishes under is a step of the scoped key its answer hands
 	// back — the one a retry sends unchanged.
 	key := statelog.NewOpID(time.Now(), "people-update")
-	keyed, scoped := patch(key, []iam.Grant{iam.GrantStateRead})
+	keyed, scoped := patch(key, []iam.Grant{iam.GrantTracker})
 	if scoped == "" || !strings.HasPrefix(keyed, scoped+".") {
 		t.Errorf("a request carrying the Idempotency-Key %q answered %q and "+
 			"was published as %q, which is not a step of it", key, scoped, keyed)
 	}
-	if again, _ := patch(key, []iam.Grant{iam.GrantStateRead}); again != keyed {
+	if again, _ := patch(key, []iam.Grant{iam.GrantTracker}); again != keyed {
 		t.Errorf("the same request under the same key was published as %q "+
 			"and then %q: a retry would land twice", keyed, again)
 	}
-	if retried, _ := patch(scoped, []iam.Grant{iam.GrantStateRead}); retried != keyed {
+	if retried, _ := patch(scoped, []iam.Grant{iam.GrantTracker}); retried != keyed {
 		t.Errorf("the same request under the key its answer handed back was "+
 			"published as %q, not %q: the retry an unknown asks for would land "+
 			"twice", retried, keyed)
 	}
-	if other, _ := patch(key, []iam.Grant{iam.GrantPeopleManage}); other == keyed {
+	if other, _ := patch(key, []iam.Grant{iam.GrantKnowledge}); other == keyed {
 		t.Errorf("another edit under the same key was the first one's "+
 			"operation %q: the ledger answers it as landed and writes "+
 			"nothing of it", keyed)
@@ -2206,9 +2596,9 @@ func TestTheTrailServesTheCredentialBesideTheActor(t *testing.T) {
 			PersonID: bob.String(), Actor: "alice.admin",
 			ActorKind: iam.KindPerson, Version: 1},
 	}
-	got := r.as(auditor(), http.MethodGet, "/iam/audit", nil)
+	got := r.as(administrator(), http.MethodGet, "/iam/audit", nil)
 	if got.status != http.StatusOK {
-		t.Fatalf("the trail answered %d to an auditor (body %v)", got.status,
+		t.Fatalf("the trail answered %d to an admin (body %v)", got.status,
 			got.body)
 	}
 	events, _ := got.body["events"].([]any)

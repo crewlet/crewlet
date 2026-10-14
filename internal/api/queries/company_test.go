@@ -549,7 +549,7 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 	}
 }
 
-// EVERY ANSWER SETTINGS DRAWS NEEDS AN OPERATOR CREDENTIAL.
+// EVERY ANSWER SETTINGS DRAWS IS ADMIN'S.
 //
 // The dashboard's rail marks all five Admin destinations `guarded: true`: it
 // draws a lock on the row and its palette says "needs a token". That flag is
@@ -560,13 +560,13 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 // held which seat, the lease epochs and the rollout's progress.
 //
 // The two here are the two this registry gates by these sources;
-// Configuration's four are [TestTheConfigQueryIsOperatorOnly] and Credentials
+// Configuration's four are [TestTheConfigQueryIsAdmins] and Credentials
 // is `/secrets`, a prefix guarded whole. Named rather than derived, because
 // the mapping from a screen to the question it asks lives in each screen's own
 // `useQuery` call and no gate can see across the two languages — so the
 // registration check below is what stops this list going quiet: a name nothing
 // registers fails rather than passing as "gated".
-func TestTheAdminWorkspacesAnswersAreOperatorOnly(t *testing.T) {
+func TestTheAdminWorkspacesAnswersAreAdmins(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	r := queries.NewRegistry()
@@ -583,26 +583,24 @@ func TestTheAdminWorkspacesAnswersAreOperatorOnly(t *testing.T) {
 			t.Errorf("%s is not registered, so this case asserts nothing about it", what)
 			continue
 		}
-		// AND IT NEEDS MORE THAN THE ORDINARY READ. Both describe the
-		// DEPLOYMENT rather than the company's work, so a credential
-		// cut down to `state:read` — the reader that replaced the
-		// anonymous posture — must not reach either.
-		if got := r.Needs(what); got == iam.GrantStateRead || !got.Valid() {
-			t.Errorf("%s is an Admin answer the rail locks and needs %q, which "+
-				"the ordinary dashboard reader carries", what, got)
+		// AND IT IS ADMIN'S. Both describe the DEPLOYMENT rather than the
+		// company's work, so somebody who uses every app of the company
+		// must not reach either.
+		if got := r.PostureOf(what).Grant(); got != iam.GrantAdmin {
+			t.Errorf("%s is an Admin answer the rail locks and requires %q, "+
+				"which is not admin", what, got)
 		}
-		// AND THE ORDINARY READER IS ACTUALLY REFUSED, which is what
-		// the declaration above is worth: asserting the grant alone
-		// would pass on a registry that declared one and enforced
-		// nothing.
+		// AND SOMEBODY HOLDING EVERY APP IS ACTUALLY REFUSED, which is
+		// what the declaration above is worth: asserting it alone would
+		// pass on a registry that declared one and enforced nothing.
 		narrow := iam.WithPrincipal(t.Context(), iam.Principal{
 			ID: uuid.New(), Login: "token:reader", Kind: iam.KindMachine,
-			Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead},
+			Stage: iam.StageActive, Grants: iam.Apps,
 		})
 		if _, err := r.Answer(narrow, what, nil); !errors.Is(
 			err, queries.ErrUnauthorized) {
 
-			t.Errorf("%s answered %v to the ordinary dashboard reader, want an "+
+			t.Errorf("%s answered %v to somebody holding every app, want an "+
 				"authorization refusal", what, err)
 		}
 	}
@@ -3007,15 +3005,22 @@ func TestTheFleetSaysHowFarANodesOwnCopyHasComeUp(t *testing.T) {
 	}
 }
 
-// A MIXED GRANT CEILING IS VISIBLE, which is the only reason the hash exists.
+// EACH NODE'S ADMIN POSTURE IS VISIBLE, because a fleet that disagrees about it
+// is legal and otherwise silent.
 //
-// `api.auth.max_grants` is intersected at decision time, per node, per
-// request, and nothing is written when it changes — that is what makes
-// lowering it immediate, and what makes a fleet whose nodes disagree a LEGAL
-// state a rolling restart passes through. Invisible, the symptom is a person
-// whose authority depends on which node a load balancer sent them to. Two
-// different digests on this view is that being said out loud.
-func TestTheFleetShowsANodeWhoseGrantCeilingDiffers(t *testing.T) {
+// `api.auth.admin` is applied at decision time, per node, per request, and
+// nothing is written when it changes — that is what makes turning a node to
+// `refuse` immediate, and what makes a fleet whose nodes disagree a LEGAL state
+// a rolling restart passes through (or a deliberate one: an admin node beside
+// nodes published to the people who only use the company). Invisible, the
+// symptom is a person whose authority depends on which node a load balancer
+// sent them to. Each row naming its node's posture is that being said out loud
+// — and a node serving no API names none rather than reading as one that
+// refuses.
+//
+// Mutation: publish the field under another key, or always, and this goes
+// red.
+func TestTheFleetReportsEachNodesAdminPosture(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()
 	claim := func(node string, status coord.NodeStatus) {
@@ -3029,8 +3034,8 @@ func TestTheFleetShowsANodeWhoseGrantCeilingDiffers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	claim("node-a", coord.NodeStatus{GrantCeilingHash: "aaaa1111"})
-	claim("node-b", coord.NodeStatus{GrantCeilingHash: "bbbb2222"})
+	claim("node-a", coord.NodeStatus{AdminPosture: iam.AdminServe})
+	claim("node-b", coord.NodeStatus{AdminPosture: iam.AdminRefuse})
 	// A node that serves no API declares none, and must not read as a
 	// third opinion.
 	claim("node-c", coord.NodeStatus{})
@@ -3042,13 +3047,16 @@ func TestTheFleetShowsANodeWhoseGrantCeilingDiffers(t *testing.T) {
 	for _, row := range rows(t, body["nodes"]) {
 		byID[fmt.Sprint(row["id"])] = row
 	}
-	if byID["node-a"]["grant_ceiling"] == byID["node-b"]["grant_ceiling"] {
-		t.Errorf("two nodes with different ceilings read the same: %v vs %v",
-			byID["node-a"]["grant_ceiling"], byID["node-b"]["grant_ceiling"])
+	for node, want := range map[string]iam.AdminPosture{
+		"node-a": iam.AdminServe, "node-b": iam.AdminRefuse,
+	} {
+		if got := byID[node]["admin"]; got != string(want) {
+			t.Errorf("%s reports its admin posture as %v, want %s", node, got, want)
+		}
 	}
-	if _, present := byID["node-c"]["grant_ceiling"]; present {
-		t.Error("a node that declares no ceiling carries one anyway, so a " +
-			"worker binding no API reads as a third disagreement")
+	if _, present := byID["node-c"]["admin"]; present {
+		t.Error("a node that serves no API carries an admin posture anyway, so " +
+			"a worker binding no API reads as a node that refuses")
 	}
 }
 

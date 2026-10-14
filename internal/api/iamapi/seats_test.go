@@ -30,9 +30,11 @@ func seatsRig(t *testing.T) *rig {
 	})
 	r.directory.bindings = []iamdomain.SeatBinding{
 		{Person: alice.String(), Login: "alice.admin", Kind: iam.KindPerson,
-			Seat: "founder", Stage: iam.StageActive},
+			Seat: "founder", Stage: iam.StageActive,
+			NameSealed: []byte("sealed-name")},
 		{Person: bob.String(), Login: "bob.sre", Kind: iam.KindPerson,
-			Seat: "ops-lead", Stage: iam.StageSuspended},
+			Seat: "ops-lead", Stage: iam.StageSuspended,
+			NameSealed: []byte("sealed-name")},
 		{Person: "p-gone", Login: "gone.person", Kind: iam.KindPerson,
 			Seat: "removed-seat", Stage: iam.StageActive},
 	}
@@ -124,7 +126,7 @@ func TestIamSeatsListsHumanSeatsAndWhatHoldsThem(t *testing.T) {
 		t.Error("a binding to a seat the company does not hold was listed as a seat")
 	}
 
-	unheld := seatsOf(t, r.as(auditor(), http.MethodGet, "/iam/seats?unheld=true", nil))
+	unheld := seatsOf(t, r.as(administrator(), http.MethodGet, "/iam/seats?unheld=true", nil))
 	if _, listed := unheld["sales"]; len(unheld) != 1 || !listed {
 		t.Errorf("?unheld=true = %v, want sales alone — a suspended person "+
 			"still holds their seat, and an open invitation holds its own", unheld)
@@ -132,6 +134,89 @@ func TestIamSeatsListsHumanSeatsAndWhatHoldsThem(t *testing.T) {
 
 	if got := r.as(administrator(), http.MethodGet, "/iam/seats?unheld=maybe", nil); got.status != http.StatusBadRequest {
 		t.Errorf("?unheld=maybe = %d, want 400", got.status)
+	}
+}
+
+// EVERYBODY SEES WHO HOLDS EACH SEAT, AND ONLY AN ADMIN SEES THEIR LOGIN.
+//
+// The org chart is everybody's overview (ADR-0033), and so is who sits in each
+// of its human seats — drawn by the name they go by. What identifies their
+// ACCOUNT — the directory id, the login a sign-in form takes, how far through
+// enrolment they are — is the directory's: an admin reads it, and so does the
+// holder about themselves. An OPEN INVITATION carries the address it was sent
+// to, so it is an admin's alone, and so is `?unheld=true`, the helper every
+// admin gesture that puts somebody on a seat picks from — refused anybody else
+// naming admin. A name this keyring cannot open is `sealed`, never an empty
+// name a screen would draw as a vacant seat.
+//
+// Mutations: send the login to every reader and the colleague's view of the
+// founder goes red; drop the holder-about-themselves arm and bob's own row
+// does; send the invitation to everybody and support's does.
+func TestEverybodySeesWhoHoldsEachSeatAndOnlyAdminSeesTheirLogin(t *testing.T) {
+	t.Parallel()
+	r := seatsRig(t)
+
+	// A COLLEAGUE — every app, no admin, holding the ops lead's seat.
+	seen := seatsOf(t, r.as(ordinary(), http.MethodGet, "/iam/seats", nil))
+	founder := part(seen["founder"], "holder")
+	if founder["name"] != "Opened Name" || founder["kind"] != string(iam.KindPerson) {
+		t.Errorf("a colleague sees the founder's seat held by %v, want her "+
+			"name and kind", founder)
+	}
+	for _, account := range []string{"person", "login", "stage"} {
+		if _, shown := founder[account]; shown {
+			t.Errorf("a colleague is sent the founder's %s: %v", account, founder)
+		}
+	}
+	own := part(seen["ops-lead"], "holder")
+	if own["person"] != bob.String() || own["login"] != "bob.sre" ||
+		own["stage"] != string(iam.StageSuspended) {
+		t.Errorf("bob's own seat reads %v, want his own account beside his name",
+			own)
+	}
+	if part(seen["support"], "invitation") != nil {
+		t.Errorf("a colleague is sent the open invitation on support: %v",
+			seen["support"])
+	}
+	raw, _ := json.Marshal(seen)
+	if strings.Contains(string(raw), "invited@example.com") ||
+		strings.Contains(string(raw), "alice.admin") {
+		t.Errorf("a colleague's listing carries an address or another's "+
+			"login: %s", raw)
+	}
+
+	// AN ADMIN sees the account and the invitation.
+	all := seatsOf(t, r.as(administrator(), http.MethodGet, "/iam/seats", nil))
+	if held := part(all["founder"], "holder"); held["login"] != "alice.admin" ||
+		held["person"] != alice.String() || held["stage"] != string(iam.StageActive) {
+		t.Errorf("an admin sees the founder as %v, want her account", held)
+	}
+	if part(all["support"], "invitation") == nil {
+		t.Errorf("an admin is not sent the open invitation on support: %v",
+			all["support"])
+	}
+
+	// THE VACANCY HELPER IS AN ADMIN'S.
+	got := r.as(ordinary(), http.MethodGet, "/iam/seats?unheld=true", nil)
+	if grants, _ := got.body["grants"].([]any); got.status != http.StatusForbidden ||
+		len(grants) != 1 || grants[0] != string(iam.GrantAdmin) {
+		t.Errorf("?unheld=true for a colleague = %d %v, want 403 naming admin",
+			got.status, got.body)
+	}
+
+	// A NAME THIS KEYRING CANNOT OPEN is sealed, never vacant.
+	locked := newRig(t, func(o *iamapi.Options) {
+		o.Opener = failingOpener{person: alice.String(),
+			err: errors.New("no key on this ring")}
+	})
+	locked.directory.bindings = []iamdomain.SeatBinding{{Person: alice.String(),
+		Login: "alice.admin", Kind: iam.KindPerson, Seat: "founder",
+		Stage: iam.StageActive, NameSealed: []byte("sealed-name")}}
+	held := part(seatsOf(t, locked.as(ordinary(), http.MethodGet, "/iam/seats",
+		nil))["founder"], "holder")
+	if held["sealed"] != true || held["name"] != nil || held["kind"] != string(iam.KindPerson) {
+		t.Errorf("a name this keyring cannot open reads %v, want sealed with "+
+			"its kind and no name", held)
 	}
 }
 

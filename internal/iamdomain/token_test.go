@@ -31,9 +31,8 @@ func tokenOwner(t *testing.T, rig *writeRig, login string) string {
 		Name: "Jane Doe", Email: login + "@example.com", Login: login,
 		Seat:          rig.vacantSeat(strings.ReplaceAll(login, ".", "-")),
 		LinkExpiresAt: firstLinkExpiry,
-		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite,
-			iam.GrantPeopleManage, iam.GrantSecretRead},
-		OpID: "op-enrol-" + person, Reason: "a hire",
+		Grants:        []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
+		OpID:          "op-enrol-" + person, Reason: "a hire",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
@@ -97,12 +96,11 @@ func checked(t *testing.T, rig *writeRig, token credential.Token) credential.Tok
 	return credential.CheckToken(token, row, brokerAt, statelog.StallGrace)
 }
 
-// A TOKEN IS MINTED FROM ITS OWNER'S CURRENT GRANTS, AND VERIFIES.
+// A TOKEN IS MINTED FROM ITS OWNER'S CURRENT PERMISSIONS, AND VERIFIES.
 //
-// Asked for nothing in particular, it carries every grant the owner holds that
-// a token may carry — never secrets:read or people:manage, which need a person
-// present. Mutation: drop the refused grants' filter and the token carries the
-// secret store.
+// Asked for nothing in particular, it carries every permission the owner
+// holds, in the vocabulary's order. Mutation: default an omitted list to
+// nothing and the token carries no app.
 func TestATokenIsMintedFromItsOwnersCurrentGrantsAndVerifies(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -113,10 +111,10 @@ func TestATokenIsMintedFromItsOwnersCurrentGrantsAndVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
-	if !slices.Equal(minted.Grants, []iam.Grant{iam.GrantStateRead,
-		iam.GrantWorkWrite}) {
-		t.Errorf("the token carries %v, want the owner's grants a token may "+
-			"carry", minted.Grants)
+	if !slices.Equal(minted.Grants, []iam.Grant{iam.GrantTracker,
+		iam.GrantKnowledge}) {
+		t.Errorf("the token carries %v, want every permission the owner holds",
+			minted.Grants)
 	}
 	if got := checked(t, rig, token); got.Answer != credential.TokenValid {
 		t.Fatalf("a freshly minted token answered %q (%s)", got.Answer, got.Detail)
@@ -143,19 +141,18 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 		in    iamdomain.TokenMint
 		wants error
 	}{
-		{"a grant the owner does not hold", asOwner(rig, owner), iamdomain.TokenMint{
-			Grants: []iam.Grant{iam.GrantConfigWrite}}, iamdomain.ErrRefused},
-		{"secrets:read, which the owner holds", asOwner(rig, owner), iamdomain.TokenMint{
-			Grants: []iam.Grant{iam.GrantSecretRead}}, iamdomain.ErrRefused},
-		{"people:manage, which the owner holds", asOwner(rig, owner), iamdomain.TokenMint{
-			Grants: []iam.Grant{iam.GrantPeopleManage}}, iamdomain.ErrRefused},
+		{"a permission the owner does not hold", asOwner(rig, owner),
+			iamdomain.TokenMint{Grants: []iam.Grant{iam.GrantAdmin}},
+			iamdomain.ErrRefused},
+		{"a name this build does not know", asOwner(rig, owner),
+			iamdomain.TokenMint{Grants: []iam.Grant{"swarm"}}, iamdomain.ErrRefused},
 		// THE OWNER THEMSELVES, signed in holding less than their row
-		// declares — a session whose provider carried fewer grants, a
-		// node whose ceiling is lower: whoever mints a token sees its
-		// value, so it carries nothing the minting party does not hold.
-		{"a grant the MINTING party does not hold",
-			asOwner(rig, owner, iam.GrantStateRead),
-			iamdomain.TokenMint{Grants: []iam.Grant{iam.GrantWorkWrite}},
+		// declares — a node that refuses admin, say: whoever mints a token
+		// sees its value, so it carries nothing the minting party does not
+		// hold.
+		{"a permission the MINTING party does not hold",
+			asOwner(rig, owner, iam.GrantTracker),
+			iamdomain.TokenMint{Grants: []iam.Grant{iam.GrantKnowledge}},
 			iamdomain.ErrRefused},
 		{"an expiry already past", asOwner(rig, owner), iamdomain.TokenMint{
 			ExpiresAt: brokerAt.Add(-time.Minute)}, iamdomain.ErrInvalidToken},
@@ -198,14 +195,14 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 	}
 }
 
-// A PERSON'S TOKEN IS THEIRS ALONE TO MINT, AND A SERVICE ACCOUNT'S IS WHOEVER
-// MANAGES PEOPLE'S — DECIDED ON THE WRITER'S OWN PARTY.
+// A PERSON'S TOKEN IS THEIRS ALONE TO MINT, AND A SERVICE ACCOUNT'S IS AN
+// ADMINISTRATOR'S — DECIDED ON THE WRITER'S OWN PARTY.
 //
 // Whoever mints a token is shown its value, and the token acts as its owner —
-// so `people:manage` minting on a person's account was an administrator
-// holding a credential that acts as them, with nothing but the mint to say
-// so. The grant covers the accounts nobody can mint for as themselves: a
-// service account has no login page.
+// so an administrator minting on a person's account was holding a credential
+// that acts as them, with nothing but the mint to say so. Admin covers the
+// accounts nobody can mint for as themselves: a service account has no login
+// page.
 //
 // WHO IS MINTING IS THE PARTY'S, and a caller holding a writer cannot restate
 // it. It was a field of the mint the caller filled in, so any caller could
@@ -216,17 +213,17 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 // decide the person arm on anything but the party's id and the Tier A party
 // mints; drop the person arm and the administrator mints; drop the
 // machine-token refusal and jane's own token mints another; drop the machine
-// arm and a party without the grant mints for a pipeline.
+// arm and a party without admin mints for a pipeline.
 func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	owner := tokenOwner(t, rig, "jane.doe")
 
-	// THE DEPLOYMENT, AND A TIER A TOKEN HOLDING EVERY GRANT, each minting
-	// on jane's account.
+	// THE DEPLOYMENT, AND A TIER A TOKEN HOLDING ADMIN, each minting on
+	// jane's account.
 	for name, w := range map[string]*iamdomain.Writer{
 		"the node's own writer": rig.writer,
-		"a Tier A token holding every grant": rig.writer.As(
+		"a Tier A token holding admin": rig.writer.As(
 			principalNamed(iam.TokenLogin("ops"), iam.KindMachine, iam.AllGrants)),
 		"an administrator": rig.writer.As(
 			principalNamed("ana.admin", iam.KindPerson, iam.AllGrants)),
@@ -272,30 +269,30 @@ func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
 	}
 
 	// A SERVICE ACCOUNT: the administrator mints for it, and a party
-	// without people:manage may not.
+	// without admin may not.
 	service := uuid.Must(uuid.NewV7()).String()
 	if err := rig.enrol(iamdomain.Creation{
 		PersonID: service, Kind: iam.KindMachine, Stage: iam.StageActive,
 		Name: "Release pipeline", Login: "svc:release",
-		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
+		Grants: []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
 		OpID:   "op-enrol-svc", Reason: "a pipeline",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	rig.drain()
 	administrator := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
-		[]iam.Grant{iam.GrantPeopleManage, iam.GrantStateRead, iam.GrantWorkWrite}))
+		[]iam.Grant{iam.GrantAdmin}))
 	if _, _, err := mintFor(t, rig, administrator, iamdomain.TokenMint{
 		PersonID: service}); err != nil {
 		t.Errorf("an administrator minting a service account's token: %v", err)
 	}
 	colleague := rig.writer.As(principalNamed("dana.sre", iam.KindPerson,
-		[]iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite}))
+		[]iam.Grant{iam.GrantTracker, iam.GrantKnowledge}))
 	if _, _, err := mintFor(t, rig, colleague, iamdomain.TokenMint{
 		PersonID: service,
-		Grants:   []iam.Grant{iam.GrantStateRead}}); !errors.Is(err, iamdomain.ErrRefused) {
+		Grants:   []iam.Grant{iam.GrantTracker}}); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("a party without %s minting for a service account answered "+
-			"%v, want a refusal", iam.GrantPeopleManage, err)
+			"%v, want a refusal", iam.GrantAdmin, err)
 	}
 }
 
@@ -427,7 +424,7 @@ func TestATokenFollowsItsOwnersStandingAfterTheMint(t *testing.T) {
 		_, err := rig.writer.UpdatePerson(t.Context(), iamdomain.PersonUpdate{
 			PersonID: owner,
 			Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
-				p.Grants = []iam.Grant{iam.GrantStateRead}
+				p.Grants = []iam.Grant{iam.GrantTracker}
 				return p, nil
 			},
 			OpID: "op-demote", Reason: "moved teams",
@@ -441,8 +438,8 @@ func TestATokenFollowsItsOwnersStandingAfterTheMint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := row.EffectiveGrants(); !slices.Equal(got, []iam.Grant{iam.GrantStateRead}) {
-		t.Errorf("a demoted owner's token carries %v, want state:read alone", got)
+	if got := row.EffectiveGrants(); !slices.Equal(got, []iam.Grant{iam.GrantTracker}) {
+		t.Errorf("a demoted owner's token carries %v, want the tracker alone", got)
 	}
 	if got := checked(t, rig, token); got.Answer != credential.TokenValid {
 		t.Fatalf("a demoted owner's token answered %q (%s); demotion narrows "+
@@ -460,5 +457,83 @@ func TestATokenFollowsItsOwnersStandingAfterTheMint(t *testing.T) {
 	if got := checked(t, rig, token); got.Answer != credential.TokenRefused {
 		t.Errorf("a suspended owner's token answered %q (%s)", got.Answer,
 			got.Detail)
+	}
+}
+
+// A TOKEN MINTED ADMIN CARRIES WHAT ITS OWNER KEEPS.
+//
+// Admin is mintable: what keeps a token off the gestures that need a person
+// present is the authority table's presence and this domain's refusal of an
+// administrative record written through one, not a permission it cannot hold.
+// So an administrator's token asked for nothing carries everything they hold,
+// admin included, and one minted [admin] carries every app through it — and
+// both are cut, per request, to what the owner still holds: an administrator
+// demoted to the knowledge base leaves a token minted [admin] carrying the
+// knowledge base, still valid. Mutation: refuse admin at the mint and the
+// first case goes red; read the mint's list without expanding it and the
+// demoted owner's token carries nothing.
+func TestATokenMintedAdminCarriesWhatItsOwnerKeeps(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	owner := uuid.Must(uuid.NewV7()).String()
+	if err := rig.enrol(iamdomain.Creation{
+		PersonID: owner, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Ana Admin", Email: "ana@example.com", Login: "ana.admin",
+		Seat: rig.vacantSeat("ana-admin"), LinkExpiresAt: firstLinkExpiry,
+		Grants: []iam.Grant{iam.GrantAdmin},
+		OpID:   "op-enrol-" + owner, Reason: "a hire",
+	}); err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	rig.drain()
+	everything, _, err := mintFor(t, rig, asOwner(rig, owner, iam.GrantAdmin),
+		iamdomain.TokenMint{PersonID: owner})
+	if err != nil {
+		t.Fatalf("mint with nothing asked: %v", err)
+	}
+	if !slices.Equal(everything.Grants, iam.AllGrants) {
+		t.Errorf("an administrator's token asked for nothing carries %v, want %v",
+			everything.Grants, iam.AllGrants)
+	}
+	minted, token, err := mintFor(t, rig, asOwner(rig, owner, iam.GrantAdmin),
+		iamdomain.TokenMint{PersonID: owner, Grants: []iam.Grant{iam.GrantAdmin}})
+	if err != nil {
+		t.Fatalf("mint admin: %v", err)
+	}
+	if !slices.Equal(minted.Grants, []iam.Grant{iam.GrantAdmin}) {
+		t.Errorf("a token minted admin records %v", minted.Grants)
+	}
+	row, err := rig.reader(t).MachineToken(t.Context(), token.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := row.EffectiveGrants(); !slices.Equal(got, iam.AllGrants) {
+		t.Errorf("a token minted admin carries %v, want admin and every app", got)
+	}
+	if err := rig.draining(func() error {
+		_, err := rig.writer.UpdatePerson(t.Context(), iamdomain.PersonUpdate{
+			PersonID: owner,
+			Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
+				p.Grants = []iam.Grant{iam.GrantKnowledge}
+				return p, nil
+			},
+			OpID: operationKey(), Reason: "stepped back",
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rig.drain()
+	if row, err = rig.reader(t).MachineToken(t.Context(), token.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := row.EffectiveGrants(); !slices.Equal(got,
+		[]iam.Grant{iam.GrantKnowledge}) {
+		t.Errorf("after the owner stepped back the token carries %v, want the "+
+			"knowledge base alone", got)
+	}
+	if got := checked(t, rig, token); got.Answer != credential.TokenValid {
+		t.Errorf("the demoted owner's admin token answered %q (%s); a demotion "+
+			"narrows it and does not end it", got.Answer, got.Detail)
 	}
 }

@@ -35,14 +35,13 @@ import (
 // authority table's, exactly as on every other surface.
 
 // The principals the cases act as: two people the identity directory binds to
-// seats, a pipeline's token bound to nobody, and a token that may only read.
+// seats, a pipeline's token bound to nobody, and a token that uses the
+// knowledge base and not the tracker.
 var (
-	founder = person("jane.founder", "jane-founder",
-		iam.GrantStateRead, iam.GrantWorkWrite, iam.GrantKnowledgeWrite)
-	cofounder = person("kim.cofounder", "kim-cofounder",
-		iam.GrantStateRead, iam.GrantWorkWrite, iam.GrantKnowledgeWrite)
-	pipeline = machine("token:ci", iam.GrantStateRead, iam.GrantWorkWrite)
-	reader   = machine("token:reader", iam.GrantStateRead)
+	founder   = person("jane.founder", "jane-founder", iam.Apps...)
+	cofounder = person("kim.cofounder", "kim-cofounder", iam.Apps...)
+	pipeline  = machine("token:ci", iam.GrantTracker)
+	reader    = machine("token:reader", iam.GrantKnowledge)
 )
 
 // company is the chart the cases run in: the two people's seats, and an agent.
@@ -240,7 +239,7 @@ func TestAnActTheTableRefusesIsAnsweredInTheEnvelope(t *testing.T) {
 		t.Fatalf("a reader's create answered %d %v, want 403 unauthorized", status, answer)
 	}
 	grants, _ := answer["grants"].([]any)
-	if answer["reason"] == nil || !slices.Contains(grants, any(string(iam.GrantWorkWrite))) {
+	if answer["reason"] == nil || !slices.Contains(grants, any(string(iam.GrantTracker))) {
 		t.Errorf("the refusal %v does not name its reason and the grant that "+
 			"would have admitted the caller", answer)
 	}
@@ -485,6 +484,34 @@ func (p *recordingProject) ops() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return slices.Clone(p.opIDs)
+}
+
+// THE ANSWER IS OFFERED TO SOMEBODY WITHOUT THE TRACKER.
+//
+// A person kept off the board may still post the answer to a question an open
+// ask on a work item puts to them — and whether one does is the item's, which
+// nobody has read when a screen asks what to enable. The table says so
+// ([authz.ErrUnresolved] for the comment), which is offerable, so the comment
+// control is enabled and the tool decides on the item; the board's ordinary
+// writes, which no ask admits, are not offered at all.
+func TestActsOffersTheAnswerToAPersonWithoutTracker(t *testing.T) {
+	t.Parallel()
+	s := actSurface(t, &recordingWork{})
+	acts, err := s.Acts(t.Context(), reader)
+	if err != nil {
+		t.Fatalf("Acts: %v", err)
+	}
+	if !slices.Contains(acts, tracker.CommentOnWorkTool) {
+		t.Errorf("somebody without the tracker is not offered %s, so an ask put "+
+			"to them could never be answered from a screen: %v",
+			tracker.CommentOnWorkTool, acts)
+	}
+	for _, write := range []string{tracker.CreateWorkItemTool, tracker.UpdateWorkItemTool} {
+		if slices.Contains(acts, write) {
+			t.Errorf("somebody without the tracker is offered %s, which no ask "+
+				"admits them to: %v", write, acts)
+		}
+	}
 }
 
 // A READ IS NOT SERVED HERE. The socket answers every question the dashboard

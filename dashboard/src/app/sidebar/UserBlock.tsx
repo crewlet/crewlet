@@ -13,9 +13,10 @@
  * says it is not bound rather than reporting a fault.
  * NOBODY: the block says so and offers the sign-in. Each is a sentence, never
  * a blank avatar, because "who does the engine think I am" is the question
- * every write this dashboard makes turns on. The GRANTS are said in the
- * popover, under the login, since they are what decides which of those writes
- * and screens the reader reaches.
+ * every write this dashboard makes turns on. Their ACCESS is said in the
+ * popover, under the login ("Admin", "Tracker · Knowledge", "Overview only"),
+ * since it is what decides which of those writes and screens the reader
+ * reaches.
  *
  * THE READER IS CALLED BY THEIR OWN NAME, never their seat's (`readerName` in
  * `lib/viewer.ts`): their directory row's name, else their login, with the
@@ -24,8 +25,8 @@
  * chart's name for a place and often a role, so a person with no name of
  * their own was "Founder" here while their Account said they had no name. One
  * rule for every state, including a session the viewer has not answered for
- * (it never does without `state:read`): that arm said "Signed in" while the
- * session it read named the reader's seat.
+ * (it never does for a socket the engine refused): that arm said "Signed in"
+ * while the session it read named the reader's seat.
  *
  * AND A READ THAT FAILED IS NOT NOBODY. Where the frame's `GET /auth/session`
  * failed — a 503, the network — rather than being refused, the browser may
@@ -54,7 +55,7 @@
  * its title is the Account row's own hint, the one description the palette
  * and the popover show; and at rest it draws the rail's pressable mark, a
  * chevron in quiet ink, where it drew nothing until hovered. Its title was the
- * grants line, which answered a question the reader had not asked.
+ * access line, which answered a question the reader had not asked.
  *
  * AND IT IS THE ACCOUNT'S ROW, so it is marked current on `#/account` exactly
  * as a sidebar row is on its own page — raised, with the hairline — since the
@@ -71,10 +72,10 @@
  *
  * SIGNING OUT DOES NOT WAIT FOR THE SOCKET. The viewer is a socket question,
  * and a person the socket refuses — a seat taken out of the chart (`403
- * seat_unavailable`), a session without `state:read` — never has it answered:
- * the socket stops dialling on a refusal, and is never dialled for a session
- * without the grant. So the block reads the frame's `GET /auth/session`
- * (`lib/frameSession.ts`) whatever the viewer says, and while the viewer has
+ * seat_unavailable`), a stage that may not act — never has it answered: the
+ * socket stops dialling on a refusal. So the block reads the frame's `GET
+ * /auth/session` (`lib/frameSession.ts`) whatever the viewer says, and while
+ * the viewer has
  * not answered, a session it names is offered the two sign-outs under its own
  * login.
  *
@@ -120,13 +121,14 @@ import { goSignIn, signOut } from "~/lib/session.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
 import { readerName, type ViewerState } from "~/lib/viewer.ts";
+import { accessLine } from "~/lib/access.ts";
 import type { SessionAnswer } from "~/protocol/index.ts";
 import { WORKSPACES, workspaceOf, workspaceRow } from "../nav.ts";
 import { preload } from "../lazyScreen.ts";
 
-/** The grants a principal carries, as one line. */
+/** The access a principal carries, as one line (`lib/access.ts`'s `accessLine`). */
 export function grantsLine(grants: readonly string[]): string {
-  return grants.length > 0 ? `Holds ${grants.join(", ")}` : "Holds no grants";
+  return `Access: ${accessLine(grants)}`;
 }
 
 /**
@@ -142,7 +144,7 @@ export function grantsLine(grants: readonly string[]): string {
  *
  * THE SESSION STANDS IN FOR A VIEWER THAT NEVER ANSWERS. The viewer is a
  * socket question, and the socket stops dialling for a person the engine will
- * not serve (no `state:read`, a seat taken out of the chart), so the foot said
+ * not serve (a seat taken out of the chart), so the foot said
  * "Checking who you are" for good while the menu beside it named them — and
  * then "Signed in" while the session it read named their seat.
  */

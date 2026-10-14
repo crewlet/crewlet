@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -268,6 +270,10 @@ func (unreachableRuns) ListActive(context.Context) ([]sandbox.PendingRun, error)
 	return nil, fmt.Errorf("sandbox: list runs: %w", coord.ErrUnavailable)
 }
 
+func (unreachableRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
+	return sandbox.PendingRun{}, false, fmt.Errorf("sandbox: read run: %w", coord.ErrUnavailable)
+}
+
 // The run board reads the fleet's coordination store, so a blip there is "ask
 // again in a moment" like any other, not a failure. It reached the client as
 // `query_failed` and a 500, where the reference promised a 503.
@@ -485,5 +491,113 @@ func TestARunNamesTheItemItIsOn(t *testing.T) {
 	item, _ := rows[0]["work_item"].(*types.WorkItem)
 	if item == nil || item.Key != "ENG-415" {
 		t.Errorf("the run's work_item is %#v, want ENG-415", rows[0]["work_item"])
+	}
+}
+
+// parkedRun is a coding run of the agent seat `swe` parked on a question put
+// to ana, carrying every body field and a work item.
+func parkedRun() sandbox.PendingRun {
+	return sandbox.PendingRun{
+		TurnID: "t-1", AgentHandle: "swe", Role: "SWE", Status: sandbox.StatusAwaiting,
+		TaskDescription: "port the importer", Question: "which branch?",
+		Reply:           "chat:C1",
+		AudienceHandles: []string{"ana"},
+		BridgeCalls:     []sandbox.BridgeCall{{Name: "get_work_item", Args: `{"id":"ENG-1"}`}},
+		WorkItem:        &types.WorkItem{Backend: "native", ID: "task-1", Key: "ENG-1"},
+		CreatedAt:       runBase,
+	}
+}
+
+// boardAs is the one row of the board over [parkedRun], as the caller in ctx
+// reads it against chart.
+func boardAs(ctx context.Context, t *testing.T, chart authz.Chart) map[string]any {
+	t.Helper()
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Sandbox: fixedRuns{parkedRun()}, Chart: chart})
+	got, err := r.Answer(ctx, "sandbox_runs", nil)
+	if err != nil {
+		t.Fatalf("sandbox_runs: %v", err)
+	}
+	rows := got.(map[string]any)["runs"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("the board holds %d runs, want one", len(rows))
+	}
+	return rows[0].(map[string]any)
+}
+
+// A RUN'S STATUS IS EVERYBODY'S AND ITS BODY IS ITS SEAT'S TRAIL (ADR-0033).
+//
+// Every reader sees the run — its seat, its state, where it is — and only an
+// admin and the seat's lead see what it was asked, who is waiting on it and
+// what its agent called; the work item it is on goes to whoever holds the
+// tracker, whatever else they read. A withheld body is said (`body_withheld`)
+// rather than left to read as a run that was asked nothing.
+//
+// Mutation: show the body to every reader ([Sources.runReach] answering Body
+// true) and the stranger's row goes red; drop the tracker rule and the lead's
+// does.
+func TestASandboxRunsBodyIsItsSeatsTrail(t *testing.T) {
+	t.Parallel()
+	body := []string{"task_description", "question", "reply", "bridge_calls"}
+	for _, c := range []struct {
+		name     string
+		ctx      context.Context
+		chart    authz.Chart
+		body     bool
+		workItem bool
+	}{
+		{"an admin", asGrants(t, "", iam.GrantAdmin), flatChart{}, true, true},
+		{"the seat's lead, holding no permission", asSeat(t, "lead"),
+			leadsChart{lead: "lead", report: "swe"}, true, false},
+		{"a stranger holding every app", asSeat(t, "pat", iam.Apps...), flatChart{},
+			false, true},
+		{"a stranger holding nothing", asSeat(t, "pat"), flatChart{}, false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			row := boardAs(c.ctx, t, c.chart)
+			if row["turn_id"] != "t-1" || row["agent_handle"] != "swe" ||
+				row["status"] != sandbox.StatusAwaiting {
+				t.Errorf("the run's status is not everybody's: %v", row)
+			}
+			for _, key := range body {
+				if _, shown := row[key]; shown != c.body {
+					t.Errorf("%s is shown: %v, want %v", key, shown, c.body)
+				}
+			}
+			if row["body_withheld"] != !c.body {
+				t.Errorf("body_withheld = %v, want %v", row["body_withheld"], !c.body)
+			}
+			if _, shown := row["work_item"]; shown != c.workItem {
+				t.Errorf("work_item is shown: %v, want %v", shown, c.workItem)
+			}
+		})
+	}
+}
+
+// A PARKED QUESTION REACHES THE PEOPLE IT IS PUT TO, whatever their reach to
+// the seat that asked it: they cannot answer what they were not shown. The rest
+// of the run's body stays its seat's trail, so ana — who does not lead `swe` —
+// reads the question and not the task behind it, and somebody the question is
+// not put to reads neither.
+//
+// Mutation: drop the audience arm of the question's class, and ana is shown no
+// question at all.
+func TestAParkedQuestionReachesItsAudience(t *testing.T) {
+	t.Parallel()
+	asked := boardAs(asSeat(t, "ana"), t, flatChart{})
+	if asked["question"] != "which branch?" {
+		t.Errorf("the person the question is put to was shown %v, want it", asked["question"])
+	}
+	for _, key := range []string{"task_description", "reply", "bridge_calls"} {
+		if _, shown := asked[key]; shown {
+			t.Errorf("the person asked was shown the run's %s, which is its seat's trail", key)
+		}
+	}
+	if asked["body_withheld"] != true {
+		t.Errorf("body_withheld = %v, want true: the task is still withheld", asked["body_withheld"])
+	}
+	if _, shown := boardAs(asSeat(t, "bo"), t, flatChart{})["question"]; shown {
+		t.Error("somebody the question is not put to was shown it")
 	}
 }

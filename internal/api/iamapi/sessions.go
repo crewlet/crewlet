@@ -105,17 +105,17 @@ func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {
 
 // PostInvalidateAll is `POST /iam/invalidate-all`.
 //
-// # It is the restore runbook's last step, and it takes BOTH hats
+// # It is the restore runbook's last step, and it is admin's
 //
-// fleet:operate AND people:manage, the design's rule, stated once on the
-// authority table's row and again on the record (internal/iamdomain): a
-// restore is run by whoever runs the deployment, and ending every session and
-// machine token at once ends every person's authority, which is the
-// directory's to decide. It used to be admitted here on fleet:operate alone
-// while the record refused anybody without people:manage, so an operator the
-// route let through was refused a step later — and the argument that a
-// machine token could never reach this gesture rested on that unstated second
-// check.
+// Admin, a person present and a recent proof — stated once on the authority
+// table's row and again on the record (internal/iamdomain), which also refuses
+// it through a machine token ([iamdomain.ErrTokenRefused]): a restore is run by
+// whoever runs the deployment, and ending every session and machine token at
+// once ends every person's authority. It used to need two separate grants, one
+// asked at the route and the other only at the record, so a caller the route
+// let through was refused a step later — and the argument that a machine token
+// could never reach this gesture rested on that unstated second check. It now
+// rests on two stated ones: the row's `presence` and the record's own lock.
 //
 // A backup taken before a revocation restores the session rows that revocation
 // ended, so a pre-restore bearer would work again — a cookie, or a machine

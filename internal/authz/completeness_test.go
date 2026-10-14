@@ -143,12 +143,13 @@ func TestARouteWithNoPolicyIsRefusedAtTheMount(t *testing.T) {
 	}
 }
 
-// EVERY GRANT THE VOCABULARY DECLARES IS ASKED FOR BY SOMETHING.
+// EVERY PERMISSION THE VOCABULARY DECLARES IS ASKED FOR BY SOMETHING.
 //
-// A capability nothing consults is a capability an operator can be given and
-// which opens nothing, which reads to them as a gate that is broken. Walked
-// from [iam.AllGrants] rather than from this package's table, so the day the
-// vocabulary grows an eleventh the walk fails until a verb asks for it.
+// A permission nothing consults is one an administrator can tick on
+// somebody's row and which opens nothing, which reads to them as a gate that
+// is broken. Walked from [iam.AllGrants] rather than from this package's
+// table, so the day the vocabulary grows a fourth name the walk fails until a
+// verb asks for it.
 func TestEveryGrantIsAskedForBySomeVerb(t *testing.T) {
 	t.Parallel()
 	asked := map[iam.Grant]bool{}
@@ -161,9 +162,9 @@ func TestEveryGrantIsAskedForBySomeVerb(t *testing.T) {
 			}
 		}
 	}
-	// THE WRITE GRANTS ARE ASKED THROUGH AN OBJECT, so they are walked
-	// again over the kinds that carry them: the company object above
-	// reaches only the operator rows.
+	// THE APPS ARE ASKED OF THE OBJECTS THEY GOVERN, so they are walked
+	// again over every kind: the company object above reaches the admin
+	// rows and every app row that reads no object.
 	for _, kind := range authz.ObjectKinds {
 		for _, a := range authz.Actions() {
 			for _, g := range iam.AllGrants {
@@ -294,7 +295,7 @@ func TestAnUndecidableRequestIsNotAForbiddenOne(t *testing.T) {
 // undecidable arm.
 func TestTheRoutersOwnRefusalIsTheEnvelope(t *testing.T) {
 	t.Parallel()
-	refused := authz.Decide(t.Context(), grantedOnly(iam.GrantStateRead),
+	refused := authz.Decide(t.Context(), grantedOnly(iam.GrantTracker),
 		authz.ActionConfigWrite, authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, decidedAt)
 	if refused.Allowed || refused.Unknown() {
 		t.Fatalf("the fixture decision was %+v, want a plain refusal", refused)
@@ -339,7 +340,7 @@ func TestTheRoutersOwnRefusalIsTheEnvelope(t *testing.T) {
 				t.Errorf("reason = %v, want the rule's own", body[authz.DetailReason])
 			}
 			grants, _ := body[authz.DetailGrants].([]any)
-			if len(grants) != 1 || grants[0] != string(iam.GrantConfigWrite) {
+			if len(grants) != 1 || grants[0] != string(iam.GrantAdmin) {
 				t.Errorf("grants = %v, want the grant the rule consulted",
 					body[authz.DetailGrants])
 			}
@@ -440,7 +441,7 @@ func policyFor(pattern string) authz.Policy {
 	return authz.Policy{Action: authz.ActionWorkList}
 }
 
-// grantedOnly is an active person carrying exactly one capability.
+// grantedOnly is an active person carrying exactly one permission.
 func grantedOnly(g iam.Grant) iam.Principal {
 	p := person("jane.doe", g)
 	return p
@@ -480,7 +481,8 @@ func TestTheContextGuardDecidesAnUnresolvedCallerAsUnknown(t *testing.T) {
 	}
 
 	self := guard(request(func(r *http.Request) *http.Request {
-		return r.WithContext(iam.WithPrincipal(r.Context(), person("jane.doe")))
+		return r.WithContext(iam.WithPrincipal(r.Context(),
+			person("jane.doe", iam.GrantTracker)))
 	}), policy)
 	if !self.Allowed || self.Reason != authz.ReasonSelf {
 		t.Errorf("the owner of the record decided %+v, want admitted as self", self)
@@ -492,7 +494,7 @@ func TestAdmitAnswersTheRoutersOwnRefusal(t *testing.T) {
 	t.Parallel()
 	refuse := func(*http.Request, authz.Policy) authz.Decision {
 		return authz.Decision{Reason: authz.ReasonNoGrant,
-			Grants: []iam.Grant{iam.GrantSecretRead}}
+			Grants: []iam.Grant{iam.GrantAdmin}}
 	}
 	rec := httptest.NewRecorder()
 	if authz.Admit(rec, httptest.NewRequest(http.MethodGet, "http://x/secrets/A", nil),

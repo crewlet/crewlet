@@ -230,17 +230,7 @@ function answering(
       return Promise.resolve(
         answers.viewer ?? {
           login: "U0FOUNDER",
-          grants: [
-            "config:read",
-            "config:write",
-            "secrets:write",
-            "fleet:operate",
-            "people:manage",
-            "audit:read",
-            "state:read",
-            "work:write",
-            "knowledge:write",
-          ],
+          grants: ["admin", "tracker", "knowledge"],
           handle: "ada",
           owner: "ada",
           name: "Ada Lovelace",
@@ -857,12 +847,12 @@ describe("the page header", () => {
   // marked.
   test("Settings draws its sections as a column, locked where the reader lacks the grant", async () => {
     location.hash = "#/settings/secrets";
-    // A READER THE SOCKET ANSWERS, so holding the company's grant: what they
-    // lack is the section's own (`sectionOpen`).
+    // A READER THE SOCKET ANSWERS — every signed-in principal is one, holding
+    // nothing at all: what they lack is the section's own (`sectionOpen`).
     const { store, socket } = answering({
       viewer: {
         login: "reader",
-        grants: ["state:read"],
+        grants: [],
         handle: "",
         owner: "reader",
         name: "",
@@ -874,7 +864,7 @@ describe("the page header", () => {
     const column = screen.getByRole("navigation", { name: "Settings sections" });
     const current = column.querySelector('[aria-current="page"]');
     expect(current?.textContent).toContain("Secrets");
-    expect(current?.textContent).toContain("needs config:read");
+    expect(current?.textContent).toContain("needs Admin");
     const general = Array.from(column.querySelectorAll("a")).find((a) =>
       a.textContent?.startsWith("General"),
     );
@@ -1121,7 +1111,7 @@ test("the engine row reads the push and opens the engine panel", async () => {
   expect(within(panel).getByText("Epoch 42")).toBeDefined();
 });
 
-// THE ALARMS' NAMES ARE THE RETENTION REPORT'S, which takes `fleet:operate`,
+// THE ALARMS' NAMES ARE THE RETENTION REPORT'S, which takes Admin,
 // so the panel asks for them only where Settings › Backups & retention, the
 // section that lists them, opens for the reader: decided by the rule every
 // lock is drawn by, over the frame's one reading of what the reader holds. A
@@ -1132,7 +1122,7 @@ test("the engine panel asks the alarms' names only of a reader the report's sect
   const report = { domains: [], alarms: [{ kind: "backup_age", detail: "", remedy: "" }] };
   const holdsNothingButTheCompany = {
     login: "reader",
-    grants: ["state:read"],
+    grants: [],
     handle: "ada",
     owner: "ada",
     name: "Ada Lovelace",
@@ -1157,7 +1147,7 @@ test("the engine panel asks the alarms' names only of a reader the report's sect
     await settle();
     expect(
       asked.some((a) => a.what === "retention"),
-      viewer ? "a reader without fleet:operate" : "a reader holding fleet:operate",
+      viewer ? "a reader without Admin" : "a reader holding Admin",
     ).toBe(asks);
     cleanup();
   }

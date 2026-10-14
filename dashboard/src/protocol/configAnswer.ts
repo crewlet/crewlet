@@ -125,7 +125,7 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
       : [];
     return { kind: "managed", managedBy };
   }
-  // A WRITE REFUSED PART BY PART. Without `config:write` the engine admits a
+  // A WRITE REFUSED PART BY PART. Without Admin the engine admits a
   // write only where everything it changes is inside a unit the caller leads,
   // and its refusal names each part that is not (`refused`,
   // `configapi.RefusedChange`): the caller holds what they need for the rest,
@@ -219,7 +219,7 @@ export function refusedSentence(entry: Record<string, unknown>): string {
   const value = text(entry.value);
   const place = text(entry.place);
   const op = text(entry.op) || "changed";
-  const grant = "takes the config:write grant";
+  const grant = "takes Admin access";
   const subject = kind === "seat" ? `@${id}` : `Unit ${id}`;
   const where = place ? `in ${place}` : "at the company's top level";
   if (kind === "document") {
@@ -247,7 +247,7 @@ export function refusedSentence(entry: Record<string, unknown>): string {
     case "named":
       return `${subject}: a lead or manages entry ${where} already names ${value}, outside the units you lead, so adding it ${grant}.`;
     case "duplicate":
-      return `${value} answers to two seats or units, and only the config:write grant can change them.`;
+      return `${value} answers to two seats or units, and only Admin access can change them.`;
     default:
       return text(entry.side) === "after"
         ? `${subject} would sit ${where}, outside the units you lead.`

@@ -1,8 +1,6 @@
 package config
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"net"
 	"net/netip"
 	"net/url"
@@ -136,12 +134,12 @@ type API struct {
 // AND holds the ingress role.
 //
 // The one predicate the authentication rules turn on, in one place: a node
-// that serves the API needs an external URL, a grant ceiling and a credential,
-// and one that does not needs none of them. A PORT ALONE IS NOT IT — a node
-// without ingress binds api.port for its probes (and a seats node's tool
-// bridge) and serves no route anybody signs in to, so asking it for a ceiling
-// and a token would be ceremony every worker pays for a surface it never
-// opens. The keyring is not among them: every node needs it, serving or not
+// that serves the API needs an external URL, an admin posture and a
+// credential, and one that does not needs none of them. A PORT ALONE IS NOT IT
+// — a node without ingress binds api.port for its probes (and a seats node's
+// tool bridge) and serves no route anybody signs in to, so asking it for a
+// posture and a token would be ceremony every worker pays for a surface it
+// never opens. The keyring is not among them: every node needs it, serving or not
 // ([Bootstrap.validateTopology]).
 //
 // THE BOOTSTRAP'S RATHER THAN THE API BLOCK'S, because half of the answer is
@@ -491,7 +489,7 @@ func checkTrustedProxy(path Path, block string) error {
 // whose safe value was its zero, declared `omitempty`, so `false` did not
 // survive an export round trip — a deployment that had closed it re-opened
 // itself the first time its config went through `PUT /config`. A deliberately
-// public reader is now a named token holding read grants and nothing else,
+// public reader is now a named token holding the apps it reads and nothing else,
 // which is listable, revocable without a restart, and present in the audit log.
 //
 // `disabled` authenticated the EMPTY credential into full operator authority,
@@ -529,34 +527,41 @@ func checkTrustedProxy(path Path, block string) error {
 // is: the loader decodes Tier A with unknown keys refused, so a file still
 // carrying one fails rather than running a posture it no longer describes.
 type APIAuth struct {
-	// MaxGrants is THE CEILING: the most authority this deployment will
-	// let a company's own directory confer. REQUIRED once the API is
-	// served.
+	// Admin is whether THIS NODE grants admin to those who hold it
+	// (`serve`), or clamps admin away and keeps every app (`refuse`).
+	// REQUIRED once the API is served, and its zero is refused rather than
+	// read as either.
 	//
-	// # Why a ceiling exists at all, when every grant is already declared
+	// # Why a node decides this at all, when every permission is declared
 	//
-	// Because the declarations are made in a tier this one does not
-	// trust. A person's grants live in the replicated store and are
-	// written by whoever holds people.manage. Without a bound, a
-	// directory write confers ANY capability it names — including the
-	// secret store — and the operator who owns the machines never said
-	// it could. Tier A states the bound and never
-	// reads Tier B, which is the same direction every other Tier A
-	// posture runs in.
+	// Because the declarations are made in a tier this one does not trust.
+	// A person's permissions live in the replicated store and are written by
+	// whoever holds admin; admin is host access, and the operator who owns
+	// the machines may want some of them — a node published to the people
+	// who use the company, say — never to serve it whatever a row says.
+	// Tier A states that and never reads Tier B, which is the same direction
+	// every other Tier A posture runs in.
 	//
-	// It is intersected at DECISION time, per node, per request: nothing
-	// is written when it changes, so lowering it takes effect on the next
-	// request that node serves and needs no config apply, no migration
-	// and no restart of the fleet. A fleet whose nodes disagree is
-	// therefore a LEGAL state during a rollout — and one nobody could see,
-	// which is why each node publishes a hash of its own resolved ceiling
-	// on its presence lease.
+	// ADMIN AND NOTHING ELSE, because an app is the company's ordinary work:
+	// a node that refused the tracker would refuse its own colleagues their
+	// board, and a ceiling over a list of permissions was a set an operator
+	// had to read to answer the one question they ever asked of it. The
+	// clamp keeps every app — [iam.AdminPosture.Effective] expands before it
+	// clamps — so an administrator signed in on a refusing node keeps the
+	// tracker and the knowledge base.
 	//
-	// REQUIRED RATHER THAN DEFAULTED TO ALL ELEVEN, because a default that
-	// grants everything is a ceiling that does nothing, and one that
-	// grants a subset silently locks out whatever it left out. Eleven
-	// lines in a config diff is what a reviewer needs to see.
-	MaxGrants []iam.Grant `yaml:"max_grants,omitempty" json:"max_grants,omitempty" desc:"The most authority the directory may confer. Required once the API is served."`
+	// It is applied at DECISION time, per node, per request: nothing is
+	// written when it changes, so changing it takes effect on the next
+	// request that node serves after a restart and needs no config apply
+	// and no migration. A fleet whose nodes disagree is therefore a LEGAL
+	// state — and one nobody could see, which is why each node publishes
+	// its own posture on its presence lease.
+	//
+	// REQUIRED RATHER THAN DEFAULTED, because either default would be a
+	// decision nobody made: `serve` publishes host access on a node an
+	// operator meant for colleagues, and `refuse` locks every administrator
+	// out of a node they meant to sign in on.
+	Admin iam.AdminPosture `yaml:"admin,omitempty" json:"admin,omitempty" js:"enum=serve|refuse" desc:"Whether this node grants admin to those who hold it (serve), or clamps admin away and keeps every app (refuse). Required once the API is served."`
 
 	// Session bounds how long a proof of identity lasts.
 	Session APISession `yaml:"session,omitempty" json:"session,omitzero"`
@@ -610,8 +615,8 @@ type APIAuth struct {
 
 	// CompanyWriters, when set, are the ids of the Tier A tokens that alone
 	// may CHANGE the company document, and no other credential may. Empty
-	// (the default) leaves every write to the authority table — a holder of
-	// `config:write`, or a lead inside their own subtree — which is the
+	// (the default) leaves every write to the authority table — an
+	// administrator, or a lead inside their own subtree — which is the
 	// posture of a company edited by people.
 	//
 	// It exists for a document something ELSE is the source of: a GitOps
@@ -691,41 +696,6 @@ func (a APIAuth) Passwords() int {
 	return a.MinPasswordLength
 }
 
-// Ceiling is the resolved ceiling as a set, for the per-request intersection.
-func (a APIAuth) Ceiling() []iam.Grant { return a.MaxGrants }
-
-// CeilingHash is a stable digest of the resolved ceiling, for the value a node
-// publishes about itself.
-//
-// SORTED AND DEDUPLICATED FIRST, so two nodes running the same ceiling written
-// in a different order — which is every fleet whose config is assembled by a
-// template — publish the same hash. An unsorted digest would report a mixed
-// ceiling on a fleet that has none, and an operator who saw that once would
-// stop believing the signal.
-//
-// It is a HASH rather than the list because it rides a presence lease's Meta,
-// which every node in the fleet reads on every heartbeat: ten strings per node
-// is a payload that grows with the fleet to say one bit.
-func (a APIAuth) CeilingHash() string {
-	// EMPTY IS NOT A CEILING OF NOTHING. A node that serves no HTTP
-	// surface declares no ceiling, and hashing the empty set would give
-	// it a digest that differs from every serving node's — drawing a
-	// disagreement across a fleet whose worker nodes simply have no
-	// opinion. The absent value is what says "not saying"; see
-	// [coord.NodeStatus.GrantCeilingHash].
-	if len(a.MaxGrants) == 0 {
-		return ""
-	}
-	sorted := make([]string, 0, len(a.MaxGrants))
-	for _, g := range a.MaxGrants {
-		sorted = append(sorted, string(g))
-	}
-	slices.Sort(sorted)
-	sorted = slices.Compact(sorted)
-	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
-	return hex.EncodeToString(sum[:8])
-}
-
 // APISession bounds how long a proof of identity lasts.
 //
 // EVERY FIELD HERE IS AN UPPER BOUND, never a schedule. The IDLE deadline —
@@ -763,8 +733,9 @@ type APISession struct {
 	// tried and went: it sent an administrator who had proved half an hour
 	// earlier to prove again between one screen and the next, while what
 	// actually keeps those gestures from a stolen credential is not a
-	// proof's age — they ask a grant no machine token may carry, or are
-	// refused to any request a machine token presented.
+	// proof's age — internal/authz refuses them to any request a machine
+	// token presented, and internal/iamdomain refuses an administrative
+	// record written through one.
 	//
 	// THE FLOOR IS FIVE MINUTES because below it an administrator
 	// re-proves between one screen and the next, and THE CEILING A DAY
@@ -951,22 +922,28 @@ type APIToken struct {
 	// startup and never stored.
 	Token string `secret:"true" yaml:"token" json:"token" js:"required" desc:"Token value or ${VAR} reference."`
 
-	// Grants is what this credential may do. REQUIRED and non-empty: a
-	// credential's blast radius is stated at the pin, never inferred.
+	// Grants is what this credential may do: `admin`, `tracker`,
+	// `knowledge`. REQUIRED and non-empty: a credential's blast radius is
+	// stated at the pin, never inferred. The founder's break-glass token is
+	// `[admin]`; a CI pipeline that files work is `[tracker]`.
 	//
 	// THIS IS THE CHANGE THAT MAKES A TOKEN SAFE TO HAVE. Before it, one
 	// token was the whole operator surface — the config document, the
 	// secret store, the fleet, every transcript — so the CI pipeline that
 	// needed to file a work item held the credential that could read
 	// every key the company owns.
-	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do. Required and non-empty."`
+	//
+	// STRICT, unlike a replicated row: a name this build does not know is
+	// refused here, naming the set, because a file an operator wrote is a
+	// typo rather than a newer peer's record.
+	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do: admin, tracker, knowledge. Required and non-empty."`
 }
 
 // validate checks the auth block; serving is [Bootstrap.ServesAPI].
 func (a *APIAuth) validate(path Path, api API, serving bool) error {
 	var p problems
 
-	p.wrap(a.validateCeiling(path, serving))
+	p.wrap(a.validateAdmin(path, serving))
 	p.wrap(a.Session.validate(at(path, "session")))
 	p.wrap(a.Audit.validate(at(path, "audit")))
 	p.wrap(a.validatePasswords(path, api, serving))
@@ -1011,32 +988,23 @@ func (a *APIAuth) validateWriters(path Path) error {
 	return p.err()
 }
 
-// validateCeiling is the required-once-served rule on max_grants.
-func (a *APIAuth) validateCeiling(path Path, serving bool) error {
+// validateAdmin is the required-once-served rule on `api.auth.admin`.
+func (a *APIAuth) validateAdmin(path Path, serving bool) error {
 	var p problems
-	if len(a.MaxGrants) == 0 {
+	switch {
+	case a.Admin == "":
 		if serving {
-			p.add(at(path, "max_grants"), ErrMissing,
-				"required once this node serves the API: it is the bound on what this "+
-					"company's own directory may confer on anybody, and the tier "+
-					"that holds the keyring is the tier that states it. There is no "+
-					"default, because one granting everything is a ceiling that "+
-					"does nothing and one granting a subset silently locks out "+
-					"whatever it left out. The full set is %v", iam.AllGrants)
+			p.add(at(path, "admin"), ErrMissing,
+				"required once this node serves the API: `serve` grants admin "+
+					"to those who hold it on this node, and `refuse` clamps admin "+
+					"away here and keeps every app. There is no default, because "+
+					"either one is a decision about whether this node publishes "+
+					"host access, and that is the operator's to make")
 		}
-		return p.err()
-	}
-	seen := make(map[iam.Grant]struct{}, len(a.MaxGrants))
-	for i, g := range a.MaxGrants {
-		gp := idx(at(path, "max_grants"), i)
-		if !g.Valid() {
-			p.add(gp, ErrUnknownValue,
-				"%q is not a grant this build knows. The set is %v", g, iam.AllGrants)
-		}
-		if _, dup := seen[g]; dup {
-			p.add(gp, ErrConflict, "duplicate grant %q", g)
-		}
-		seen[g] = struct{}{}
+	case !a.Admin.Valid():
+		p.add(at(path, "admin"), ErrUnknownValue,
+			"%q is not an admin posture this build knows. The set is %v",
+			a.Admin, iam.AdminPostures)
 	}
 	return p.err()
 }
@@ -1107,9 +1075,7 @@ func (a *APIAuth) validateTokens(path Path, serving bool) error {
 					"where it is pinned, never inferred. Name what this token "+
 					"is for — the full set is %v", iam.AllGrants)
 		}
-		p.wrap(checkGrants(at(tp, "grants"), t.Grants, a.MaxGrants,
-			"a token may not carry authority the deployment's own ceiling "+
-				"withholds from everybody else"))
+		p.wrap(checkGrants(at(tp, "grants"), t.Grants, a.Admin))
 	}
 
 	// A DEPLOYMENT WITH NO TIER A TOKEN IS A FAULT, and a fault rather
@@ -1135,26 +1101,34 @@ func (a *APIAuth) validateTokens(path Path, serving bool) error {
 	return p.err()
 }
 
-// checkGrants refuses a grant this build does not know and one the ceiling
-// withholds.
+// checkGrants refuses a permission this build does not know, and admin on a
+// node that refuses it.
 //
-// AN ABSENT CEILING CLAMPS NOTHING HERE. Its own required-once-served rule has
-// already been reported by then, and re-reporting every grant as "outside the
-// ceiling" would bury that one real fault under ten derived ones.
-func checkGrants(path Path, grants, ceiling []iam.Grant, why string) error {
+// ADMIN ON A REFUSING NODE IS A CONFLICT, NOT A NO-OP. The token would be
+// clamped to its apps on every request this node serves, so a file listing it
+// says one thing and the node does another — and the break-glass token an
+// operator reaches for on the day nobody can sign in would turn out to run
+// nothing. Read through [iam.Expand] as every comparison of permissions is,
+// though a refusing posture only ever withholds admin itself. A posture that
+// is unset or unknown is its own rule's fault, already reported, and clamps
+// nothing here.
+func checkGrants(path Path, grants []iam.Grant, admin iam.AdminPosture) error {
 	var p problems
 	for i, g := range grants {
 		gp := idx(path, i)
 		if !g.Valid() {
 			p.add(gp, ErrUnknownValue,
-				"%q is not a grant this build knows. The set is %v", g, iam.AllGrants)
-			continue
+				"%q is not a permission this build knows. The set is %v", g, iam.AllGrants)
 		}
-		if len(ceiling) > 0 && !slices.Contains(ceiling, g) {
-			p.add(gp, ErrConflict,
-				"%q is outside `api.auth.max_grants`, and %s. Add it to the "+
-					"ceiling if this deployment allows it, or drop it here",
-				g, why)
+	}
+	if admin == iam.AdminRefuse && slices.Contains(iam.Expand(grants), iam.GrantAdmin) {
+		for i, g := range grants {
+			if g == iam.GrantAdmin {
+				p.add(idx(path, i), ErrConflict,
+					"`api.auth.admin` is refuse, so this node clamps admin away "+
+						"and this token would carry its apps alone. Serve admin "+
+						"on this node, or drop admin from the token")
+			}
 		}
 	}
 	return p.err()

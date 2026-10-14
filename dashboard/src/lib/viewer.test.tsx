@@ -32,9 +32,11 @@ afterEach(() => {
 
 describe("who the dashboard thinks you are", () => {
   test("a bound person names the seat, and is neither unbound nor anonymous", async () => {
+    // ADMIN ALONE, as a stored row may hold it: every app is included, so
+    // the reader is read as holding both without the engine listing them.
     answering({
       login: "ana.diaz",
-      grants: ["work:write", "fleet:operate"],
+      grants: ["admin"],
       handle: "ana",
       owner: "ana",
       name: "Ana Diaz",
@@ -45,7 +47,9 @@ describe("who the dashboard thinks you are", () => {
     expect(result.current.name).toBe("Ana Diaz");
     expect(result.current.kind).toBe("human");
     expect(result.current.owner).toBe("ana");
-    expect(result.current.operatesFleet).toBe(true);
+    expect(result.current.admin).toBe(true);
+    expect(result.current.tracker).toBe(true);
+    expect(result.current.knowledge).toBe(true);
     expect(result.current.unbound).toBe(false);
     expect(result.current.anonymous).toBe(false);
   });
@@ -56,7 +60,7 @@ describe("who the dashboard thinks you are", () => {
   test("a person no seat holds is UNBOUND, and their record is their login", async () => {
     answering({
       login: "ops.seven",
-      grants: ["work:write"],
+      grants: ["tracker"],
       handle: "",
       owner: "ops.seven",
       name: "",
@@ -66,7 +70,9 @@ describe("who the dashboard thinks you are", () => {
     await waitFor(() => expect(result.current.unbound).toBe(true));
     expect(result.current.login).toBe("ops.seven");
     expect(result.current.owner).toBe("ops.seven");
-    expect(result.current.operatesFleet).toBe(false);
+    expect(result.current.admin).toBe(false);
+    expect(result.current.tracker).toBe(true);
+    expect(result.current.knowledge).toBe(false);
     expect(result.current.anonymous).toBe(false);
   });
 

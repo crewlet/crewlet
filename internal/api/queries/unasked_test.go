@@ -274,8 +274,9 @@ func (s *stubMemory) Overview(_ context.Context, seats []memread.Seat) (memread.
 	return memread.Overview{}, s.err
 }
 
-// trailCompany holds two AGENT seats, since a seat's trail is an agent's —
-// a person keeps no memory and says nothing on a surface through the engine.
+// trailCompany holds three AGENT seats, since a seat's trail is an agent's —
+// a person keeps no memory and says nothing on a surface through the engine —
+// and three so a lead of one has a seat beside it they do not lead.
 const trailCompany = `
 name: Acme
 providers:
@@ -287,6 +288,9 @@ roles:
     llm: p
   - name: Bo Lang
     handle: bo
+    llm: p
+  - name: Cy Park
+    handle: cy
     llm: p
 `
 
@@ -300,22 +304,26 @@ func trailSources(t *testing.T, memory *stubMemory) queries.Sources {
 	return queries.Sources{Company: companySource(t, cfg), Memory: memory, Chart: flatChart{}}
 }
 
-// A SEAT'S THREADS ARE ITS TRAIL, AND THE AUDIT READ OPENS EVERY SEAT'S.
+// A LEAD READS THEIR OWN SEATS' TRAIL, AND NO ONE ELSE'S (ADR-0033).
 //
-// What a seat said on a chat surface is the record of what happened, which is
-// what `audit:read` opens on `/events` for every seat at once — so the one
-// question that answers it per seat must not decide it by a different rule.
-// It did: registered on `audit:read`, it then asked the owner-or-lead rule a
-// person's QUEUE takes, and an auditor holding the grant was refused every
-// seat's threads but their own while reading every phase record those seats
-// ever wrote. Four rows, because the rule has four edges:
+// What a seat remembered and said is its trail, read under one verb
+// ([authz.ActionSeatTrailRead]) by the seat itself, whoever leads it, and an
+// admin — and by nobody else, whatever apps they hold: a lead steers, pauses
+// and answers for their agents and could do none of it well blind, while
+// somebody who merely shares the company does not read every prompt an agent
+// was given. Its rows, over both halves of the trail:
 //
 //   - no handle is the caller's own seat, as on every personal question;
-//   - an auditor with no relation to the seat reads it;
-//   - the deployment's admin grant WITHOUT the audit read does not, because
-//     the admin path of the relation rules is not the audit grant;
-//   - and neither does a lead, for the same reason.
-func TestASeatsThreadsAreReadOnTheAuditGrant(t *testing.T) {
+//   - an admin with no relation to the seat reads it;
+//   - a lead holding NO permission reads the seat they lead, since a seat's
+//     trail belongs to no app;
+//   - and that lead is refused the seat beside it they do not lead, as is a
+//     caller holding every app — each told admin would have admitted them.
+//
+// Mutation: make `audit.seat.read` admin-only (the company-wide trail's rule)
+// and the lead's row goes red; drop the lead arm's chart check and the
+// refused rows do.
+func TestALeadReadsTheirSeatsTrailAndNoOneElses(t *testing.T) {
 	t.Parallel()
 	own := &stubMemory{}
 	if _, err := askAsSeat(t, trailSources(t, own), "ana", "conversations", nil); err != nil {
@@ -325,71 +333,62 @@ func TestASeatsThreadsAreReadOnTheAuditGrant(t *testing.T) {
 		t.Errorf("no handle asked the holder about %q, want the caller's own seat",
 			own.seat.Handle)
 	}
-
-	auditor := &stubMemory{}
-	if _, err := askHolding(t, trailSources(t, auditor), "ana", "conversations",
-		map[string]any{"handle": "bo"}, iam.GrantAuditRead); err != nil {
-		t.Fatalf("an auditor with no relation to bo was refused bo's threads: %v", err)
-	}
-	if auditor.seat.Handle != "bo" {
-		t.Errorf("the holder was asked about %q, want the seat the auditor named",
-			auditor.seat.Handle)
-	}
-
-	for _, c := range []struct {
-		name   string
-		chart  authz.Chart
-		grants []iam.Grant
-	}{
-		{"the admin grant without the audit read", flatChart{},
-			[]iam.Grant{iam.GrantStateRead, iam.GrantFleetOperate}},
-		{"a lead without the audit read", leadsChart{lead: "ana", report: "bo"},
-			[]iam.Grant{iam.GrantStateRead}},
+	for _, question := range []struct{ what, param string }{
+		{"conversations", "handle"}, {"agent_memory", "id"},
 	} {
-		refusedStub := &stubMemory{}
-		s := trailSources(t, refusedStub)
-		s.Chart = c.chart
-		_, err := askHolding(t, s, "ana", "conversations",
-			map[string]any{"handle": "bo"}, c.grants...)
-		var refusal *queries.Refusal
-		if !errors.As(err, &refusal) || !errors.Is(err, queries.ErrUnauthorized) {
-			t.Errorf("%s read bo's threads: %v", c.name, err)
-			continue
+		admin := &stubMemory{}
+		if _, err := askHolding(t, trailSources(t, admin), "pat", question.what,
+			map[string]any{question.param: "bo"}, iam.GrantAdmin); err != nil {
+			t.Fatalf("%s: an admin with no relation to bo was refused: %v", question.what, err)
 		}
-		if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantAuditRead}) {
-			t.Errorf("%s was refused naming %v, want the audit read that "+
-				"would have admitted them", c.name, refusal.Grants)
+		if admin.seat.Handle != "bo" {
+			t.Errorf("%s: the holder was asked about %q, want the seat the admin named",
+				question.what, admin.seat.Handle)
 		}
-		if refusedStub.seat.Handle != "" {
-			t.Errorf("%s: the holder was asked about %q anyway", c.name,
-				refusedStub.seat.Handle)
-		}
-	}
-}
 
-// AND A SEAT'S MEMORY IS THE SAME TRAIL, decided by the same verb: an auditor
-// with no relation to a seat reads its memory exactly as they read its
-// threads, and a caller holding everything BUT the audit read is refused
-// naming it. The verb's rule changing — to the owner-or-lead rule a person's
-// queue takes, say — fails this and the threads case together, which is what
-// asking one verb from both questions is for.
-func TestASeatsMemoryIsReadOnTheSameVerbAsItsThreads(t *testing.T) {
-	t.Parallel()
-	s := trailSources(t, &stubMemory{})
-	if _, err := askHolding(t, s, "ana", "agent_memory",
-		map[string]any{"id": "bo"}, iam.GrantAuditRead); err != nil {
-		t.Fatalf("an auditor with no relation to bo was refused bo's memory: %v", err)
-	}
-	everythingElse := slices.DeleteFunc(slices.Clone(iam.AllGrants),
-		func(g iam.Grant) bool { return g == iam.GrantAuditRead })
-	_, err := askHolding(t, s, "ana", "agent_memory",
-		map[string]any{"id": "bo"}, everythingElse...)
-	var refusal *queries.Refusal
-	if !errors.As(err, &refusal) {
-		t.Fatalf("a caller without the audit read reached bo's memory: %v", err)
-	}
-	if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantAuditRead}) {
-		t.Errorf("refused naming %v, want the audit read", refusal.Grants)
+		led := &stubMemory{}
+		s := trailSources(t, led)
+		s.Chart = leadsChart{lead: "ana", report: "bo"}
+		if _, err := askHolding(t, s, "ana", question.what,
+			map[string]any{question.param: "bo"}); err != nil {
+			t.Fatalf("%s: bo's lead, holding no permission, was refused bo's trail: %v",
+				question.what, err)
+		}
+		if led.seat.Handle != "bo" {
+			t.Errorf("%s: the holder was asked about %q, want bo", question.what,
+				led.seat.Handle)
+		}
+
+		for _, c := range []struct {
+			name   string
+			chart  authz.Chart
+			asked  string
+			grants []iam.Grant
+		}{
+			{"a lead asking for a seat they do not lead",
+				leadsChart{lead: "ana", report: "bo"}, "cy", nil},
+			{"a caller holding every app and leading nobody", flatChart{}, "bo",
+				slices.Clone(iam.Apps)},
+		} {
+			refusedStub := &stubMemory{}
+			s := trailSources(t, refusedStub)
+			s.Chart = c.chart
+			_, err := askHolding(t, s, "ana", question.what,
+				map[string]any{question.param: c.asked}, c.grants...)
+			var refusal *queries.Refusal
+			if !errors.As(err, &refusal) || !errors.Is(err, queries.ErrUnauthorized) {
+				t.Errorf("%s: %s read %s's trail: %v", question.what, c.name, c.asked, err)
+				continue
+			}
+			if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantAdmin}) {
+				t.Errorf("%s: %s was refused naming %v, want admin, which would "+
+					"have admitted them", question.what, c.name, refusal.Grants)
+			}
+			if refusedStub.seat.Handle != "" {
+				t.Errorf("%s: %s: the holder was asked about %q anyway", question.what,
+					c.name, refusedStub.seat.Handle)
+			}
+		}
 	}
 }
 

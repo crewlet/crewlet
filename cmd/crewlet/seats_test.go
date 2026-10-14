@@ -142,9 +142,9 @@ func TestSeatsARefusalOnAuthorityNamesTheGrant(t *testing.T) {
 	node := newFakeActNode(t)
 	node.status = http.StatusForbidden
 	node.refusal = map[string]any{"error": "unauthorized", "reason": "not_lead",
-		"grants": []string{"fleet:operate"}}
+		"grants": []string{"admin"}}
 	_, _, err := cli(t, "seats", "pause", "swe", bootstrapForURL(t, node.server.URL))
-	if err == nil || !strings.Contains(err.Error(), "fleet:operate") ||
+	if err == nil || !strings.Contains(err.Error(), "admin") ||
 		strings.Contains(err.Error(), "did not accept") {
 		t.Errorf("err = %v, want the grant that would admit the caller", err)
 	}

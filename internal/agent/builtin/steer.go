@@ -72,12 +72,12 @@ type SteerDeps struct {
 //
 // # Whose turn it is to steer
 //
-// The turn's SEAT's lead's, or the deployment's ([authz.ActionTurnSteer]) —
-// never any reader's, since everybody signed in holds a credential. The seat
+// The turn's SEAT's lead's, or an admin's ([authz.ActionTurnSteer]) — never
+// any reader's, since everybody signed in reads the overview. The seat
 // is what the decision needs and the one thing this node cannot know: the
 // turn runs wherever its seat is held. So the decision is taken in two steps.
 // First on the turn as named, a record nobody has resolved yet
-// ([authz.Object.Unresolved]): the deployment's grant admits there and then,
+// ([authz.Object.Unresolved]): admin admits there and then,
 // and a caller who leads nobody is refused with exactly the answer they would
 // get on a seat they do not lead — neither costs a round trip. A caller who
 // leads somebody is told to resolve the record, and a PROBE asks the fleet
@@ -122,8 +122,8 @@ func (t *steerTurn) Description() string {
 		"for the rest of the turn. Use it to redirect work you can see going the " +
 		"wrong way; for anything longer than a paragraph, or for work the turn " +
 		"has not started, write on the work item instead. Find running turns and " +
-		"their ids on the live view. Only the seat's lead, or whoever operates " +
-		"the deployment, may steer its turn."
+		"their ids on the live view. Only the seat's lead, or an admin, may " +
+		"steer its turn."
 }
 
 func (t *steerTurn) Parameters() map[string]any {
@@ -294,8 +294,8 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string) *tools.Result {
 
 // seatOf is the handle the authority is asked about for the seat a reply
 // names: by its id through the running org, and the reply's own handle where
-// this org no longer holds the seat — which nobody leads, so only the
-// deployment's grant would have passed.
+// this org no longer holds the seat — which nobody leads, so only admin
+// would have passed.
 // False when the reply names no seat at all.
 func (t *steerTurn) seatOf(reply steer.Reply) (string, bool) {
 	id, err := uuid.Parse(reply.Agent)

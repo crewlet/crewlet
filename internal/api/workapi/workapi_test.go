@@ -43,7 +43,7 @@ func TestEachOutcomeIsItsOwnStatus(t *testing.T) {
 		{"the node could not tell who is asking", chart{}, unknown,
 			http.MethodPost, "/work/items", create, nil, http.StatusServiceUnavailable},
 		{"the table refused at the route", chart{},
-			as(person("ana", iam.GrantStateRead)), http.MethodPost, "/work/items",
+			as(person("ana", iam.GrantKnowledge)), http.MethodPost, "/work/items",
 			create, nil, http.StatusForbidden},
 		// A ROW-DECIDED VERB on a chart that could not answer: the route
 		// admitted a reader and the tool's own ask could not decide.
@@ -537,9 +537,9 @@ func TestARankMovePlacesAnItemBesideItsNeighbour(t *testing.T) {
 		map[string]any{"before": "OPS-1"}, "If-Match", "3"); got.status != http.StatusUnprocessableEntity {
 		t.Errorf("a card placed on another project's board answered %d", got.status)
 	}
-	if got := r.do(as(person("ana", iam.GrantStateRead)), http.MethodPost,
+	if got := r.do(as(person("ana", iam.GrantKnowledge)), http.MethodPost,
 		"/work/items/ENG-1/rank", map[string]any{"after": "ENG-2"}, "If-Match", "3"); got.status != http.StatusForbidden {
-		t.Errorf("a reader moved a card: %d", got.status)
+		t.Errorf("somebody without the tracker moved a card: %d", got.status)
 	}
 }
 
@@ -671,20 +671,20 @@ func TestThePageTrashIsTheContainersLeads(t *testing.T) {
 	}
 }
 
-// A TOOL SKILL'S PAGE TAKES config:write ON EVERY ROUTE THAT CHANGES IT.
+// A TOOL SKILL'S PAGE TAKES ADMIN ON EVERY ROUTE THAT CHANGES IT.
 //
 // The skills container's pages are injected into every seat's turn, so taking
 // one out of circulation, putting it back, renaming it or destroying it
 // changes the prompt the company runs under exactly as editing its body does.
-// `save_page` asks for the grant through the tool; these four reach the store
-// without one, so without asking here a caller refused a skill's body could
-// still delete the skill. Asked on top of each verb's own rule: `root` holds
-// fleet:operate and knowledge:write — every destructive rule's admin path —
-// and is refused until it also holds config:write.
-func TestEveryRouteThatChangesAToolSkillNeedsConfigWrite(t *testing.T) {
+// `save_page` asks for it through the tool; these four reach the store without
+// one, so without asking here a caller refused a skill's body could still
+// delete the skill. Asked on top of each verb's own rule: `root` CREATED the
+// page and leads its space — so every tidy verb's own rule admits them — and
+// is refused until they hold admin.
+func TestEveryRouteThatChangesAToolSkillNeedsAdmin(t *testing.T) {
 	t.Parallel()
-	operator := person("root", iam.GrantStateRead, iam.GrantKnowledgeWrite,
-		iam.GrantFleetOperate)
+	operator := person("root", iam.GrantKnowledge)
+	operator.ReauthAt = time.Now().Add(time.Hour)
 	for _, c := range []struct {
 		method, target string
 		body           any
@@ -703,6 +703,7 @@ func TestEveryRouteThatChangesAToolSkillNeedsConfigWrite(t *testing.T) {
 			r := &rig{t: t, mux: http.NewServeMux(), reader: newReader(),
 				writes: &writes{}, kb: newKB(), audit: &auditLog{}}
 			r.kb.page.Page.Container = "TS"
+			r.kb.page.Page.Author = "root"
 			halves := r.halves()
 			halves.Pages.SkillsContainer = func() string { return "ts" }
 			svc, err := workapi.New(workapi.Options{
@@ -718,17 +719,17 @@ func TestEveryRouteThatChangesAToolSkillNeedsConfigWrite(t *testing.T) {
 
 			got := r.do(as(operator), c.method, c.target, c.body, headers...)
 			if got.status != http.StatusForbidden {
-				t.Errorf("without config:write it answered %d: %v", got.status, got.body)
+				t.Errorf("without admin it answered %d: %v", got.status, got.body)
 			}
 			if len(r.kb.did) != 0 {
 				t.Fatalf("a refused caller reached the store: %v", r.kb.did)
 			}
 
-			withConfig := operator
-			withConfig.Grants = append(slices.Clone(operator.Grants), iam.GrantConfigWrite)
-			got = r.do(as(withConfig), c.method, c.target, c.body, headers...)
+			withAdmin := operator
+			withAdmin.Grants = []iam.Grant{iam.GrantAdmin}
+			got = r.do(as(withAdmin), c.method, c.target, c.body, headers...)
 			if got.status != http.StatusOK {
-				t.Errorf("with config:write it answered %d: %v", got.status, got.body)
+				t.Errorf("with admin it answered %d: %v", got.status, got.body)
 			}
 			if !slices.Equal(r.kb.did, []string{c.did}) {
 				t.Errorf("the store did %v, want %q", r.kb.did, c.did)
@@ -767,7 +768,7 @@ func TestARemarkIsTakenDownByItsAuthorOrAModerator(t *testing.T) {
 
 // EVERY ROUTE THIS SURFACE MOUNTS IS GUARDED, and it mounts exactly these —
 // the one read among them, a project file's download, included, since it
-// streams what the board's `state:read` discloses.
+// streams what the tracker discloses to whoever uses it.
 //
 // Guarded is what a route IS on this engine; the exemption list is the whole
 // of what is not. A write surface landing on it would file work with no

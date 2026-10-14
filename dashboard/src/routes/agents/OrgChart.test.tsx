@@ -4,7 +4,7 @@
  * doing, a node per unit with its project and its lead, the legend's counts,
  * and a node that opens its seat or unit beside the chart — and, for a reader
  * the identity directory answers, what holds each human seat, with the
- * gestures that fill one for a reader holding `people:manage`.
+ * gestures that fill one for a reader holding Admin.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -133,17 +133,7 @@ beforeEach(() => {
 /** Every grant an operator holds. */
 const OPERATOR = {
   login: "ops",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   acts: [],
@@ -237,10 +227,10 @@ test("every seat of the applied chart is a node with its state word and state li
   expect(card("Jane Founder").getAttribute("title")).toBe("Human · reviews releases · @jane");
 });
 
-// A HUMAN NODE SAYS WHAT HOLDS ITS SEAT, for a reader the directory answers,
-// under its name in the node's neutral ink — who holds a seat is not something
-// it is doing. The CONTROL is the grantless reader above, who is asked nothing
-// and reads "Human seat". Mutation: drop the holding from the node's caption
+// A HUMAN NODE SAYS WHAT HOLDS ITS SEAT, for every signed-in reader, under its
+// name in the node's neutral ink — who holds a seat is not something it is
+// doing. The CONTROL is the browser nobody signed in on above, who is asked
+// nothing and reads "Human seat". Mutation: drop the holding from the node's caption
 // and the three captions read "Human seat".
 test.each([
   [
@@ -256,7 +246,7 @@ test.each([
   ["vacant", {}, "Vacant"],
 ])("a %s human seat's card says what holds it", async (_, holding, line) => {
   jane = holding;
-  await mount({ ...OPERATOR, grants: ["state:read", "audit:read"] });
+  await mount({ ...OPERATOR, grants: ["admin"] });
   await act(async () => {});
   const founder = card("Jane Founder");
   expect(caption("Jane Founder")).toBe(line);
@@ -265,15 +255,28 @@ test.each([
   expect(founder.hasAttribute("data-state")).toBe(false);
 });
 
-test("a reader the directory does not answer is never asked it", async () => {
-  await mount({ ...OPERATOR, grants: ["state:read", "work:write"] });
+// WHO HOLDS A SEAT IS PART OF THE OVERVIEW: every signed-in reader is asked
+// the directory's listing — the engine masks it per reader — and reads what
+// holds each human seat, while only an admin is offered a gesture on one. The
+// CONTROL is a browser nobody has signed in on, who is asked nothing. Mutation:
+// gate the listing on Admin again and the tracker reader reads "Human seat".
+test("every signed-in reader reads who holds a human seat, and only an admin acts on it", async () => {
+  await mount({ ...OPERATOR, grants: ["tracker"] });
+  await act(async () => {});
+  expect(fetched).toContain("/iam/seats");
+  expect(caption("Jane Founder")).toBe("Vacant");
+  expect(controls("Jane Founder")).toEqual([]);
+  cleanup();
+  fetched = [];
+
+  await mount();
   expect(fetched).not.toContain("/iam/seats");
   expect(caption("Jane Founder")).toBe("Human seat");
   expect(card("Jane Founder").getAttribute("title")).toBe("Human · reviews releases · @jane");
 });
 
 // A DIRECTORY READ THAT FAILED IS SAID over the chart: drawn as nothing, an
-// administrator saw the chart a reader holding neither grant sees — "Human
+// administrator saw the chart a browser nobody signed in on sees — "Human
 // seat" and no menu — with no word why. The CONTROL is the same
 // administrator with the listing answered, who is shown no such banner.
 // Mutation: drop the banner and the sentence is gone.
@@ -298,10 +301,10 @@ test("a directory that did not answer an administrator is said over the chart", 
   expect(screen.queryByText("The identity directory did not answer")).toBeNull();
 });
 
-// THE NODE'S MENU FILLS A VACANT SEAT, for `people:manage` alone, through the
+// THE NODE'S MENU FILLS A VACANT SEAT, for Admin alone, through the
 // tree's own pattern: a pointer strip beside the node and the same items
 // under the ContextMenu key on the node itself, since a tree's items hold
-// nothing focusable. The CONTROLS: an auditor reads "Vacant" with no menu,
+// nothing focusable. The CONTROLS: a reader without Admin reads "Vacant" with no menu,
 // and an agent's node has none. Mutation: give every human card the menu, or
 // drop the grant check, and a line here goes red.
 test("a vacant human card offers Invite and Create in its menu to an administrator alone", async () => {
@@ -333,7 +336,7 @@ test("a vacant human card offers Invite and Create in its menu to an administrat
   expect(screen.getByRole("dialog", { name: "Create a person on Jane Founder" })).toBeTruthy();
   cleanup();
 
-  await mount({ ...OPERATOR, grants: ["state:read", "audit:read"] });
+  await mount({ ...OPERATOR, grants: ["tracker"] });
   await act(async () => {});
   const read = card("Jane Founder");
   expect(caption("Jane Founder")).toBe("Vacant");
@@ -389,13 +392,21 @@ test("an invited human card's menu cancels its invitation, and a held one has no
 // THE STRUCTURE IS THE BUILDER'S: the company at the root, each unit with its
 // type and the project its work is filed under, and its lead in a pill.
 test("the structure draws the company, and each unit with its project and its lead", async () => {
-  await mount();
+  await mount({ login: "jane.doe", grants: ["tracker"], owner: "jane", acts: [] });
   expect(caption("Acme")).toBe("Company");
   expect(caption("Core")).toBe("Unit · ENG");
   expect(card("Core").getAttribute("title")).toBe("2 seats. Projects: ENG");
   expect(leadOf("Core")).toBe("Lead: CTO");
   expect(leadOf("Developer Relations")).toBe("Lead: PM (inherited)");
   expect(leadOf("Leadership")).toBe("Lead");
+  cleanup();
+
+  // THE PROJECT IS THE TRACKER'S: a reader without Tracker is not asked a
+  // question the engine would refuse, and a unit's node carries its type alone.
+  const { asked } = await mount({ login: "sam", grants: ["knowledge"], owner: "sam", acts: [] });
+  expect(asked).not.toContain("work_projects");
+  expect(caption("Core")).toBe("Unit");
+  expect(leadOf("Core")).toBe("Lead: CTO");
 });
 
 // AN AGENT SEAT IS TONED, as the builder tones one; a person, a unit and the
@@ -465,17 +476,7 @@ test("Add seat is held with its reason for a reader nobody has signed in", async
 test("an operator's Add seat goes to the builder, adding an agent", async () => {
   await mount({
     login: "ops",
-    grants: [
-      "config:read",
-      "config:write",
-      "secrets:write",
-      "fleet:operate",
-      "people:manage",
-      "audit:read",
-      "state:read",
-      "work:write",
-      "knowledge:write",
-    ],
+    grants: ["admin", "tracker", "knowledge"],
     handle: "jane",
     owner: "jane",
     acts: [],
@@ -489,7 +490,7 @@ test("an operator's Add seat goes to the builder, adding an agent", async () => 
 test("a lead's Add seat goes to the builder, adding to the unit they lead", async () => {
   await mount({
     login: "cto.person",
-    grants: ["state:read", "work:write"],
+    grants: ["tracker"],
     handle: "cto",
     owner: "cto",
     acts: [],
@@ -512,7 +513,7 @@ test("Add seat is held with the managed sentence for a reader who is not a write
 
   await mount({
     login: "cto.person",
-    grants: ["state:read", "work:write"],
+    grants: ["tracker"],
     handle: "cto",
     owner: "cto",
     acts: [],

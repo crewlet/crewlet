@@ -48,17 +48,17 @@ func newSocketWith(t *testing.T, authOpts func(*config.APIAuth), query stream.Qu
 	if authOpts != nil {
 		authOpts(&b.API.Auth)
 	}
-	// AND EVERY FIXTURE CREDENTIAL CAN READ what the socket carries, for
-	// the same reason: the socket refuses a caller without `state:read`,
-	// and the grant ceiling is intersected on every request. A case about
-	// what a NARROWER credential receives states its own grants.
-	if b.API.Auth.MaxGrants == nil {
-		b.API.Auth.MaxGrants = iam.AllGrants
+	// AND EVERY FIXTURE CREDENTIAL RECEIVES EVERY KIND, the audit feed
+	// and every seat's body included: an admin's, on a node serving admin.
+	// A case about what a NARROWER credential receives states its own
+	// permissions — an empty list included, which is a reader of the
+	// overview alone.
+	if b.API.Auth.Admin == "" {
+		b.API.Auth.Admin = iam.AdminServe
 	}
 	for i := range b.API.Auth.Tokens {
 		if b.API.Auth.Tokens[i].Grants == nil {
-			b.API.Auth.Tokens[i].Grants = []iam.Grant{iam.GrantStateRead,
-				iam.GrantAuditRead}
+			b.API.Auth.Tokens[i].Grants = []iam.Grant{iam.GrantAdmin}
 		}
 	}
 	// THE DEPLOYMENT HAS AN ADDRESS, as every served one must, so a case
@@ -652,11 +652,11 @@ func TestTheSocketsCallerReachesTheQuery(t *testing.T) {
 // and that case cannot be reached from here.
 func TestAWatchNeedsAnOperator(t *testing.T) {
 	t.Parallel()
-	// THE ADMIN GRANT, so the counterfactual below is about the credential
-	// and not about whose seat "lead" is — which is watch_test.go's.
+	// ADMIN, so the counterfactual below is about the credential and not
+	// about whose seat "lead" is — which is watch_test.go's.
 	f := newSocket(t, func(a *config.APIAuth) {
 		a.Tokens = []config.APIToken{{ID: "founder", Token: fixtureToken,
-			Grants: []iam.Grant{iam.GrantStateRead, iam.GrantFleetOperate}}}
+			Grants: []iam.Grant{iam.GrantAdmin}}}
 	}, nil)
 
 	if conn, _, err := f.dialAnonymous(t); err == nil {
@@ -880,42 +880,104 @@ func TestADisconnectedClientLeavesTheHub(t *testing.T) {
 	t.Errorf("clients = %d after a disconnect, want 0", f.svc.Hub().Clients())
 }
 
-// A RESOLVED CALLER WHO MAY READ NONE OF WHAT THE SOCKET CARRIES IS REFUSED
-// BEFORE THE UPGRADE, and the page's plain-HTTP re-ask sees why.
+// EVERY RESOLVED PRINCIPAL OPENS THE SOCKET, a principal holding no
+// permission at all included, and receives the overview and nothing else.
 //
-// Every push is a `state:read` question's answer or an `audit:read` one's, so
-// the socket used to accept anybody resolved and hand them the whole company's
-// state. 403 rather than 401: the credential is fine, and signing in again
-// reaches the same grants.
-func TestASocketWithoutStateReadIsRefusedBeforeTheUpgrade(t *testing.T) {
+// What the socket carries is the company's overview — the roster, what each
+// seat is doing, the org chart, spend, schedules — which is everybody's
+// (ADR-0033). It used to refuse a caller without the board's read grant before
+// the upgrade, which left a person invited with no app staring at a dashboard
+// that could not connect, while the questions beside it answered them. What a
+// reader may not read is withheld by the audience, kind by kind: the audit feed
+// is an admin's, so the overview reader's snapshot carries no `events` key.
+//
+// Mutation: refuse a principal holding no permission at the handshake, or give
+// the overview reader the audit feed, and this fails.
+func TestEveryResolvedPrincipalOpensTheSocket(t *testing.T) {
 	t.Parallel()
-	const auditOnly = "a-token-carrying-audit-read-alone"
+	const overviewToken = "a-token-carrying-no-permission-at-all"
 	f := newSocket(t, func(a *config.APIAuth) {
 		a.Tokens = []config.APIToken{
 			{ID: "founder", Token: fixtureToken},
-			{ID: "auditor", Token: auditOnly, Grants: []iam.Grant{iam.GrantAuditRead}},
+			{ID: "viewer", Token: overviewToken, Grants: []iam.Grant{}},
 		}
 	}, nil)
-	conn, res, err := f.dial(t, auditOnly)
-	if err == nil {
-		_ = conn.Close(websocket.StatusNormalClosure, "")
-		t.Fatal("a caller without state:read opened the socket")
-	}
-	if res == nil || res.StatusCode != http.StatusForbidden {
-		t.Fatalf("the handshake answered %v, want 403: %v", res, err)
-	}
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
-		f.server.URL+"/ws/stream", nil)
+	conn, _, err := f.dial(t, overviewToken)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("a resolved principal holding no permission was refused the "+
+			"socket: %v", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+auditOnly)
-	plain, err := f.server.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+	snapshot := next(t, conn)
+	if snapshot["kind"] != string(stream.KindSnapshot) {
+		t.Fatalf("first frame is %v, want the snapshot", snapshot["kind"])
 	}
-	defer plain.Body.Close()
-	if plain.StatusCode != http.StatusForbidden {
-		t.Fatalf("the plain re-ask answered %d, want 403", plain.StatusCode)
+	data, _ := snapshot["data"].(map[string]any)
+	if _, ok := data["agents"]; !ok {
+		t.Errorf("the overview reader's snapshot has no roster: %v", data)
+	}
+	if _, ok := data["events"]; ok {
+		t.Error("the overview reader's snapshot carries the audit feed, which " +
+			"is an admin's")
+	}
+}
+
+// A PRINCIPAL WHOSE STAGE MAY NOT ACT IS REFUSED THE SOCKET, before the
+// upgrade and naming the stage.
+//
+// Every surface states the authority table's first check — the query
+// registry and every route the table decides — and the socket states it too
+// rather than relying on whatever the guard in front of it happens to refuse:
+// the guard's session table refuses a suspended person today, but a principal
+// reaching this handler resolved by any other path must not open a stream of
+// the company because the one check every other surface makes was left to a
+// layer above. Refused before the upgrade, where a page's HTTP re-ask can read
+// the status.
+//
+// The principal is placed on the request as the guard's middleware places one,
+// because no credential the guard serves resolves to a stage that may not act —
+// which is the point of holding the socket to the rule itself.
+//
+// Mutation: drop the stage check, and the suspended person's request is
+// upgraded (426 to a plain GET) rather than refused.
+func TestAPrincipalWhoseStageMayNotActIsRefusedTheSocket(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: fixtureToken,
+		Grants: []iam.Grant{iam.GrantAdmin}}}
+	b.API.Auth.Admin = iam.AdminServe
+	b.API.ExternalURL = fixtureOrigin
+	handler := stream.Handler(auth.New(&b), auth.NewCSRF(&b),
+		buildService(t, stream.Options{}), nil)
+
+	for _, stage := range []iam.Stage{iam.StageActive, iam.StageSuspended,
+		iam.StageRetired} {
+		p := iam.Principal{Login: "jo.park", Kind: iam.KindPerson, Seat: "analyst",
+			Stage: stage, Grants: []iam.Grant{iam.GrantAdmin}}
+		req := httptest.NewRequest(http.MethodGet, "/ws/stream", nil)
+		req = req.WithContext(iam.WithPrincipal(req.Context(), p))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if stage.MayAct() {
+			if rec.Code == http.StatusForbidden {
+				t.Errorf("an %s person was refused the socket: %s", stage,
+					rec.Body.String())
+			}
+			continue
+		}
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("a %s person's handshake answered %d, want 403 before the "+
+				"upgrade", stage, rec.Code)
+			continue
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("the refusal is not the engine's envelope: %v", err)
+		}
+		if body["reason"] != "stage" {
+			t.Errorf("a %s person's refusal names reason %v, want the stage",
+				stage, body["reason"])
+		}
 	}
 }

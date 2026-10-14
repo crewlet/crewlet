@@ -32,7 +32,7 @@ record says and the rule lives where a record is formed.
 Because a person always comes from a seat, the place they join from is the
 vacant human seat. On the dashboard that is the seat's card, its peek and its
 page in Agents › Org chart, each offering **Invite** and **Create person** to
-`people:manage`. With the CLI and the API, the seat is a required argument.
+an administrator. With the CLI and the API, the seat is a required argument.
 
 ## Why the obvious alternative is wrong
 

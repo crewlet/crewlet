@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -90,36 +91,35 @@ type NodeStatus struct {
 	ProjectionsReady int
 	ProjectionsTotal int
 
-	// GrantCeilingHash is a digest of this node's own resolved
-	// `api.auth.max_grants`.
+	// AdminPosture is this node's own `api.auth.admin`: whether it grants
+	// admin to those who hold it (`serve`) or clamps admin away and keeps
+	// every app (`refuse`).
 	//
 	// # Why a fleet publishes this at all
 	//
-	// Because the ceiling is applied at DECISION time, per node, per
+	// Because the posture is applied at DECISION time, per node, per
 	// request, and nothing is written when it changes. That is what makes
-	// lowering it immediate — no config apply, no migration, no fleet
-	// restart — and it is also what makes a fleet whose nodes disagree a
-	// LEGAL state rather than a broken one: a rolling restart IS that
-	// state, for as long as it runs.
+	// a fleet whose nodes disagree a LEGAL state rather than a broken one —
+	// one node published to colleagues refusing admin, another an
+	// administrator signs in on serving it, or a rolling restart halfway
+	// through a change.
 	//
-	// Legal and invisible is the problem. Without this, a person's
-	// authority depends on which node a load balancer sent them to, and
-	// the symptom is an operator who can revoke a credential on one
-	// request and cannot on the next, with nothing anywhere saying why.
-	// One digest per node turns that into a row on the fleet view.
+	// Legal and invisible is the problem. Without this, whether an
+	// administrator can run the company depends on which node a load
+	// balancer sent them to, and the symptom is a person who can revoke a
+	// credential on one request and cannot on the next, with nothing
+	// anywhere saying why. One word per node turns that into a row on the
+	// fleet view.
 	//
-	// A HASH AND NOT THE LIST, because this rides a presence lease's Meta
-	// and every node in the fleet reads every other node's on every
-	// heartbeat: ten strings per node is a payload that grows with the
-	// fleet to answer one question. Derived from the SORTED, deduplicated
-	// set, so two nodes whose config was assembled by a template in a
-	// different order do not report a disagreement they do not have.
+	// THE VALUE ITSELF AND NOT A DIGEST, which is what the list of grants it
+	// replaced had to publish: two values are one short word, so there is
+	// nothing to compress.
 	//
-	// EMPTY IS A NODE THAT IS NOT SAYING, never a node with an empty
-	// ceiling: a node that serves no API has no ceiling to state and
-	// publishes nothing here, and reading that as "grants nothing" would
-	// draw every such node as locked down.
-	GrantCeilingHash string
+	// EMPTY IS A NODE THAT IS NOT SAYING, never a node that refuses admin:
+	// a node that serves no API has no posture to state and publishes
+	// nothing here, and reading that as "refuses" would draw every such node
+	// as locked down.
+	AdminPosture iam.AdminPosture
 
 	// MCP is what this node's MCP servers did when it last started them,
 	// one row per configured server. Nil is "this node started none": a
@@ -200,12 +200,12 @@ func (s NodeStatus) Meta() map[string]any {
 	if !s.StartedAt.IsZero() {
 		out["started_at"] = s.StartedAt.UTC().Format(time.RFC3339)
 	}
-	if s.GrantCeilingHash != "" {
+	if s.AdminPosture != "" {
 		// OMITTED WHEN UNSET, for [StatusFromMeta]'s reason: a node
-		// that serves no API has no ceiling to state, and an empty
+		// that serves no API has no posture to state, and an empty
 		// string on the wire would make it look like a peer whose
-		// ceiling differs from everybody's.
-		out["grant_ceiling"] = s.GrantCeilingHash
+		// posture differs from everybody's.
+		out["admin"] = string(s.AdminPosture)
 	}
 	if s.ProjectionsTotal > 0 {
 		// OMITTED where the node runs none, so a peer on the vendor
@@ -262,7 +262,7 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 		Posture:          stringFromMeta(raw["posture"]),
 		ProjectionsReady: intFromMeta(raw["projections_ready"]),
 		ProjectionsTotal: intFromMeta(raw["projections_total"]),
-		GrantCeilingHash: stringFromMeta(raw["grant_ceiling"]),
+		AdminPosture:     iam.AdminPosture(stringFromMeta(raw["admin"])),
 	}
 	status.Draining, _ = raw["draining"].(bool)
 	if at, err := time.Parse(time.RFC3339, stringFromMeta(raw["started_at"])); err == nil {

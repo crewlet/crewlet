@@ -45,17 +45,7 @@ const ID = "0b6f5a4e-6a41-4b6e-9d8c-3f1e2d4c5b6a";
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -548,7 +538,7 @@ test("the eye watches and unwatches as the person, and a mute is not a watch", a
 test("the eye is held, with its reason, for a credential bound to no seat", async () => {
   const unbound = {
     login: "svc:docs",
-    grants: ["state:read", "knowledge:write"],
+    grants: ["knowledge"],
     handle: "",
     owner: "svc:docs",
     name: "",

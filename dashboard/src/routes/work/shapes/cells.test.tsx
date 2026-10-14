@@ -32,17 +32,7 @@ class InertWebSocket {
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",

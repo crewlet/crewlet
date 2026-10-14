@@ -6,6 +6,9 @@
 // seat's own tool, the operator MCP and an HTTP route asking about one verb
 // get one answer, because there is one answer to get.
 //
+// THE VOCABULARY IS ADMIN AND ONE PERMISSION PER APP — ADR-0033, whose
+// authority this package is: see "Admin, and one permission per app" below.
+//
 // # What it replaces, and what each of those got wrong
 //
 // Three structs carried authority into the tracker as BOOLS the caller had
@@ -58,8 +61,9 @@
 // session in the company among them. ONE WINDOW, for internal/config's reason:
 // a second, shorter one for some of those gestures sent people to re-prove
 // inside the hour they had already proved in, and what keeps a stolen machine
-// credential from them is a grant no token may carry and the row's own refusal
-// of any request a token presented (see below) — never the age of a proof.
+// credential from them is the row's own refusal of any request a token
+// presented and internal/iamdomain's refusal of an administrative record
+// written through one (see below) — never the age of a proof.
 //
 // IT IS DECIDED HERE, ON THE ROW, and nowhere else. It was a setting nothing
 // read: the sign-in surface could record a proof and no surface outside it ever
@@ -91,9 +95,10 @@
 // revealing a secret's value, changing who may do anything or how somebody
 // proves who they are, and ending sessions that are not the caller's own. A
 // MACHINE TOKEN acts as its owner and is stepped up by construction, so it
-// passes every relation and every window its owner would — and a leaked one
-// that could change its owner's second factor is the first half of taking the
-// account. Two locks keep it off them, and both are this package's:
+// passes every relation and every window its owner would — admin included,
+// which a token may be minted with — and a leaked one that could change its
+// owner's second factor is the first half of taking the account. Two locks
+// keep it off them:
 //
 //   - THE ROW SAYS SO ([Presence], [rule.presence]), and [Decide] refuses a
 //     request that presented a machine token on it ([ReasonTokenRefused],
@@ -103,24 +108,53 @@
 //     anybody else's. It was a refusal each route remembered to make, and the
 //     table admitted the token on the same verb; a route added on that verb
 //     that forgot was a token changing its owner's password.
-//   - EVERY ARM ABOUT ANYBODY BUT THE CALLER asks a grant no token carries
-//     ([iam.PersonPresentGrants]): refused at a token's mint and stripped from
-//     what it carries on every request.
+//   - THE RECORD SAYS SO TOO: internal/iamdomain refuses an administrative
+//     identity record — an enrolment, an invitation, a grant edit, a
+//     removal, ending everybody's sessions — written through a machine
+//     token, whatever the token carries. That lock sits where a record is
+//     formed rather than where a route is, because a record is published by
+//     a CLI, a duty and a migration as well as by the routes this table
+//     guards.
 //
-// Walks hold both, and each derives its set from the table rather than from a
-// list: every row that states a presence refuses a token on exactly the arms
-// it names, every arm only a person-present grant opens states one, and every
-// such arm about anybody else admits nobody without that grant.
+// A walk holds the first: every row that states a presence refuses a token on
+// exactly the arms it names, and a token holding every permission is refused
+// every such gesture about anybody but its owner.
 //
-// A ROW MAY ASK FOR TWO GRANTS AT ONCE ([rule.also]): ending every session in
-// the company is the deployment's to run and the directory's to decide, so it
-// takes both.
 // No TOOL asks for a proof (a walk holds that too): a seat has no keyboard, and
 // the operator's MCP surface is not a step-up surface.
 //
-// # One grant here is host access, and the table does not pretend otherwise
+// # Admin, and one permission per app (ADR-0033)
 //
-// `config:write` is ONE grant over the whole company configuration, and that
+// The vocabulary is three names ([iam.Grant]): `admin`, which runs the company
+// and the engine, and one permission per APP — `tracker` and `knowledge` —
+// which uses it. Every row names at most one app ([rule.app]), and that
+// decides three things at once: a [ClassApp] row admits whoever holds the app;
+// a RELATION row — a person's own record, a container's lead, a comment's
+// author — admits its relation only beside the app, so a lead who does not use
+// the tracker does not reorder a report's queue in it; and an administrator
+// passes every app check through [iam.Expand], so admin is never told it
+// lacks an app.
+//
+// EVERYTHING ELSE IS EVERYBODY'S ([ClassEverybody]): the org chart, the
+// agents' status, spend, schedules, who to ask. A company is a shared place,
+// and a person handed no app still sees what the company is doing — they just
+// cannot use its apps. What runs the company is [ClassAdmin], and nothing in
+// between: a reader of the trail, a manager of people and an operator of the
+// deployment were three grants nobody could tell apart, and they are one.
+//
+// # Seat-only and human-only
+//
+// Two facts about a VERB rather than about anybody's relation to an object,
+// each a field on the row and each checked before the class. [rule.humanOnly]
+// keeps an agent off a person's gesture — purging, archiving a project,
+// writing the chart. [rule.seatOnly] is its mirror: only an agent seat whose
+// role offers the tool takes it — asking a colleague, starting a coding run —
+// with no permission at all, because which seats are offered it is the role's
+// registry's decision and a person has no turn for it to spend.
+//
+// # Admin is host access, and the table does not pretend otherwise
+//
+// `admin` is ONE permission over the whole company configuration, and that
 // configuration runs code: an `mcp_servers` entry is a command every engine
 // host executes, a seat's `mcp_env` and its per-phase model keys (`llm_*`, a
 // `cli-agent` provider among them) choose what a seat's children run and which
@@ -128,19 +162,19 @@
 // agent on the engine host itself, and a seat's worker grants decide which of
 // its tools a worker runs with. So holding it IS running code on every engine
 // host, and whatever a process there can read — the keyring included — is
-// reachable through it. The grant is conferred like host access.
+// reachable through it. It is conferred like host access.
 //
 // THE ORG CHART IS ALSO ITS LEADS' ([ClassSubtree]): a person who leads a unit
-// may change the seats and units inside it without the grant, every field but
-// a credential's — and no field to a `${VAR}`, which the engine resolves from
+// may change the seats and units inside it without admin, every field but a
+// credential's — and no field to a `${VAR}`, which the engine resolves from
 // its own environment wherever one stands — and every place a change reaches
 // held to their own subtree on both sides of the write
-// (internal/api/configapi). What that reaches is
-// stated rather than narrowed: a lead may point a seat in their team at any
-// model chain and any sandbox cell the company's SETTINGS offer — which
-// remain `config:write`'s, so whether a `cli-agent` provider or a host-side
-// sandbox cell exists for a lead to choose is the administrator's decision —
-// and may not name a credential or a variable at all.
+// (internal/api/configapi). What that reaches is stated rather than narrowed:
+// a lead may point a seat in their team at any model chain and any sandbox
+// cell the company's SETTINGS offer — which remain admin's, so whether a
+// `cli-agent` provider or a host-side sandbox cell exists for a lead to choose
+// is the administrator's decision — and may not name a credential or a
+// variable at all.
 package authz
 
 import (
@@ -188,8 +222,8 @@ const (
 	// CALLER, and a view with no owner is shared rather than mine.
 	KindView ObjectKind = "view"
 	// KindCompany is the company itself — its configuration, its
-	// credentials, its integrations, the node it runs on. The operator
-	// surfaces, which name their own grant on the action.
+	// credentials, its integrations, the node it runs on: what the admin
+	// verbs and everybody's overview are about.
 	KindCompany ObjectKind = "company"
 )
 
@@ -243,16 +277,44 @@ type Object struct {
 	// the same question asked about a WRITE nobody has read yet: what the
 	// body changes decides it, so the route admits whoever could lead any
 	// part of the chart and the surface decides again on each change.
+	//
+	// AND BY THE CLASSES WHOSE OBJECT IS A ROW nobody has read yet —
+	// [ClassAppOrAsked] (which open ask names the caller is on the item),
+	// [ClassTidy], [ClassContainer] and [ClassDestructive] (which project or
+	// space the row is filed in, and who wrote it): an object marked
+	// unresolved there, naming no container, is answered [ErrUnresolved] for
+	// a caller the row could still admit — read the row, then decide again on
+	// it — so a surface offering a verb before it has read anything offers it
+	// to whoever the row might let through.
 	Unresolved bool
 
-	// Author is the login that WROTE this, for the one class where
-	// authorship is the authority: a page comment is edited and removed
-	// by whoever left it.
+	// Author is the login or seat that WROTE this, for the classes where
+	// authorship is an authority: a comment is edited and removed by
+	// whoever left it ([ClassAuthored]), and a page's creator or a work
+	// item's reporter tidies it — trashes, restores, renames, removes —
+	// beside its container's lead ([ClassTidy]).
+	//
+	// EMPTY MEANS "NO AUTHOR ARM", never "anybody wrote it": a tidy of a row
+	// whose creator nobody recorded is its container lead's or an
+	// administrator's alone.
 	//
 	// Separate from Owner because they are different relations and the
 	// same login in both fields is a coincidence: a comment on your own
 	// page has one author and no owner at all.
 	Author string
+
+	// Asked is the seat handle an OPEN ask on this work item names — the
+	// person the item's thread is waiting on an answer from — for the one
+	// class where being asked is an authority ([ClassAppOrAsked]): somebody
+	// a colleague put a question to reads the item and answers it without
+	// the tracker app.
+	//
+	// SET ONLY BY A CALLER THAT HAS READ THE ITEM and resolved its asks
+	// (internal/tracker's AskedOn), never from an argument: an asked arm a
+	// caller could fill in for themselves would be the tracker app handed to
+	// anybody who typed their own name. Empty means nobody is asked, or
+	// nobody has looked.
+	Asked string
 
 	// Container is the project a task is filed under, or the container a
 	// page sits in. It is what the container and destructive classes ask
@@ -266,10 +328,10 @@ type Object struct {
 	// or the workspace, and those are four different questions.
 	//
 	// SEPARATE FROM Kind rather than overloading it, because Kind is what
-	// the object IS — [ClassColleagueWrite] picks a write grant from it —
-	// and a view whose Kind said "project" would be a view the colleague
-	// rules read as a project. Empty on every other class, which reads
-	// Kind and never this.
+	// the object IS — the container classes pick a relation from it, and
+	// [AppFor] an app — and a view whose Kind said "project" would be a
+	// view those rules read as a project. Empty on every other class,
+	// which reads Kind and never this.
 	ContainerKind ObjectKind
 }
 
@@ -292,19 +354,19 @@ type Decision struct {
 	// package doc, and [Decision.Unknown].
 	Err error
 
-	// Grants are the capabilities the deciding rule would have admitted
-	// THIS principal on, for THIS object — any one of them is enough, on
-	// every row but the ones that ask for two at once ([rule.also]), where a
-	// refusal names the ones this principal LACKS and every one of them is
-	// needed.
-	// The capability a grant rule asks for, the admin grant a relation
-	// rule is overridden by, both directory grants a directory read
-	// accepts. Empty where no capability could have changed the answer:
-	// the self rule, which has no admin path, an object missing the field
-	// its rule reads before it consults any grant, and the refusals that
-	// are not about capability at all — an enrolment stage, a seat taking
-	// a human-only verb, a machine token taking a verb that needs a person
-	// present, a verb with no rule.
+	// Grants are the MINIMAL permissions that would have admitted THIS
+	// principal, for THIS object: any ONE of them, added to what the
+	// principal holds, admits — and a permission already covered through
+	// [iam.Expand] by a named one is left out, so a refusal names the
+	// smallest thing to ask for. An app row names its app and never "the
+	// app or admin"; a relation refused names admin, its admin path; a lead
+	// who lacks the row's app is told the app; [ClassAnyApp] names every
+	// app. Empty where no permission could have changed the answer: the
+	// self rule, which has no admin path, an object missing the field its
+	// rule reads before it consults any permission, and the refusals that
+	// are not about permission at all — an enrolment stage, a seat taking
+	// a human-only verb, a person taking a seat-only one, a machine token
+	// taking a verb that needs a person present, a verb with no rule.
 	//
 	// ON THE DECISION rather than looked up beside it, because a refusal
 	// that names what would have admitted the caller has to name what the
@@ -340,7 +402,7 @@ func (d Decision) Unknown() bool { return d.Err != nil }
 type Reason string
 
 const (
-	// ReasonGrant is a capability the principal carries.
+	// ReasonGrant is a permission the principal carries.
 	ReasonGrant Reason = "grant"
 	// ReasonSelf is a personal object the principal owns.
 	ReasonSelf Reason = "self"
@@ -348,7 +410,7 @@ const (
 	ReasonAuthor Reason = "author"
 	// ReasonLead is a lead relation the chart answered for.
 	ReasonLead Reason = "lead"
-	// ReasonNoGrant is a refusal: the principal carries no capability
+	// ReasonNoGrant is a refusal: the principal carries no permission
 	// that covers this verb.
 	ReasonNoGrant Reason = "no_grant"
 	// ReasonNotSelf is a refusal: a personal object belonging to somebody
@@ -382,6 +444,16 @@ const (
 	// window the verb asks for ([Decision.Recency]). Confirming who they
 	// are and asking again is the whole remedy — no grant would change it.
 	ReasonStepUp Reason = "step_up"
+	// ReasonEverybody is an admission no permission was asked for: the
+	// verb is part of everybody's overview ([ClassEverybody]).
+	ReasonEverybody Reason = "everybody"
+	// ReasonAsked is an admission on being ASKED: an open ask on the work
+	// item names the caller ([ClassAppOrAsked], [Object.Asked]).
+	ReasonAsked Reason = "asked"
+	// ReasonSeatOnly is a refusal a person or a credential gets and an
+	// agent seat does not: the verb is an agent's own ([rule.seatOnly]).
+	// It names no permission, because none would change it.
+	ReasonSeatOnly Reason = "seat_only"
 )
 
 // Reasons are every one, in declaration order.
@@ -389,27 +461,19 @@ var Reasons = []Reason{
 	ReasonGrant, ReasonSelf, ReasonAuthor, ReasonLead,
 	ReasonNoGrant, ReasonNotSelf, ReasonNotLead, ReasonNotAuthor,
 	ReasonSeatRefused, ReasonTokenRefused, ReasonStage, ReasonUnnamed,
-	ReasonUnknownAction, ReasonStepUp,
+	ReasonUnknownAction, ReasonStepUp, ReasonEverybody, ReasonAsked,
+	ReasonSeatOnly,
 }
 
 // Valid reports whether a reason is one this build knows.
 func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 
-// adminGrant is the capability that overrides every relation-based class but
-// one — the org chart's own subtree, whose admin path is its row's grant
-// ([ClassSubtree]).
+// adminGrant is the permission that overrides every relation-based class: a
+// person's record, a saved view, a container, a tidy, a comment, the org
+// chart's subtree, a directory row.
 //
-// [iam.GrantFleetOperate] rather than a grant of its own, because that is what
-// the closed eleven has for "whoever runs this deployment" and a second admin
-// grant beside it would be a second answer to one question. Its own name here
-// so the rules that use it say ADMIN where they mean it.
-//
-// AND NOT [iam.GrantPeopleManage], although that grant exists and its name
-// reads like the right one for a person's queue. It is authority over PERSON
-// ROWS in the identity estate — who is enrolled and what they carry — and the
-// directory classes are where it is asked. A person's work record, their inbox
-// and their day are the TRACKER's, and the admin path over those is whoever
-// runs the deployment: an administrator who onboards a team has no business
-// reading everybody's inbox by virtue of it, and folding the two would make
-// the grant that can grant also the grant that reads.
-const adminGrant = iam.GrantFleetOperate
+// [iam.GrantAdmin], which runs the company and the engine, and which holds
+// every app through [iam.Expand] — so a relation row that also asks for its
+// app is never refused to an administrator for want of the app. Its own name
+// here so the rules that use it say ADMIN where they mean the admin path.
+const adminGrant = iam.GrantAdmin

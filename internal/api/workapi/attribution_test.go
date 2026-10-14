@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -55,8 +56,7 @@ func TestAWriteThroughAMachineTokenIsRecordedAsTheToken(t *testing.T) {
 	}
 	presented := credential.Token{ID: uuid.Must(uuid.NewV7()).String(),
 		Position: 3, Secret: secret}
-	carried := []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite,
-		iam.GrantKnowledgeWrite}
+	carried := slices.Clone(iam.Apps)
 	arm, err := auth.NewTokens(auth.TokensDeps{
 		Directory: tokenRow{credential.TokenRow{
 			Applied: 10, Found: true, IsToken: true,
@@ -76,7 +76,7 @@ func TestAWriteThroughAMachineTokenIsRecordedAsTheToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b config.Bootstrap
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	guarded := auth.New(&b).WithTokens(arm).Middleware(r.mux)
 	send := func(method, target, body string) int {
 		req := httptest.NewRequest(method, target, strings.NewReader(body))

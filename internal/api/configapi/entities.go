@@ -407,7 +407,7 @@ var entityKinds = map[string]entityAccess{
 }
 
 // inOrgChart reports whether a collection is part of the org chart, whose
-// routes its leads may take as well as the company's grant.
+// routes its leads may take as well as admin.
 func inOrgChart(kind string) bool { return kind == EntityRoles || kind == EntityUnits }
 
 // EntityKinds names every addressable collection, sorted — so a caller can
@@ -486,10 +486,10 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 			s.fail(w, "read the active revision", err)
 			return
 		}
-		// A SEAT OR A UNIT IS READ BY ITS LEAD as well as by the grant
-		// that reads the whole document, decided on where it sits — and
+		// A SEAT OR A UNIT IS READ BY ITS LEAD as well as by the admin
+		// who reads the whole document, decided on where it sits — and
 		// BEFORE it is looked for: an id the revision does not hold is
-		// decided at the root, so only the grant is told it is missing.
+		// decided at the root, so only an admin is told it is missing.
 		if inOrgChart(kind) && !s.mayReach(w, r, authz.ActionOrgRead, company, kind, id) {
 			return
 		}
@@ -563,8 +563,8 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 				})
 			return
 		}
-		// A SEAT OR A UNIT IS WRITTEN BY ITS LEAD as well as by the
-		// company's grant, and decided as a read of it is: where it sits,
+		// A SEAT OR A UNIT IS WRITTEN BY ITS LEAD as well as by an
+		// admin, and decided as a read of it is: where it sits,
 		// BEFORE the id is looked up or the body decoded, so an id outside
 		// the caller's subtree and one the revision does not hold are
 		// refused in the same bytes. Building first answered a body with

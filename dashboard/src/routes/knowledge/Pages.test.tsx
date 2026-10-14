@@ -46,17 +46,7 @@ const CHILD = "33333333-3333-4333-8333-333333333333";
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -332,7 +322,7 @@ test.each([
 test("Create is offered to a credential bound to no seat that the engine serves", async () => {
   mount({
     login: "svc:docs",
-    grants: ["knowledge:write"],
+    grants: ["knowledge"],
     handle: "",
     owner: "svc:docs",
     name: "",

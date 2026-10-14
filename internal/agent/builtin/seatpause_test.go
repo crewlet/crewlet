@@ -236,12 +236,12 @@ func TestAResumeLiftsThePauseAndAnnouncesOnce(t *testing.T) {
 	}
 }
 
-// ONLY AN AGENT SEAT IS PAUSED, and a reason is one line. Asked by the
-// deployment's grant, which is admitted on any name — so what refuses each of
-// these is the tool, not the authority.
+// ONLY AN AGENT SEAT IS PAUSED, and a reason is one line. Asked by an admin,
+// who is admitted on any name — so what refuses each of these is the tool, not
+// the authority.
 func TestAPauseNamesAnAgentSeatAndALine(t *testing.T) {
 	t.Parallel()
-	rig := newPauseRig(t, coordmem.NewFleet(), boundTo("ops", iam.GrantFleetOperate))
+	rig := newPauseRig(t, coordmem.NewFleet(), boundTo("ops", iam.GrantAdmin))
 	for name, tc := range map[string]struct {
 		args map[string]any
 		want tools.Refusal
@@ -282,12 +282,12 @@ func TestAnUnreadablePauseRecordIsUnavailable(t *testing.T) {
 	}
 }
 
-// WHETHER A SEAT WORKS IS ITS LEAD'S TO DECIDE, or the deployment's — and no
-// reader's. Everybody signed in holds a credential, so a rule that asked for
-// one would let any reader of the board stop any seat. And it is decided on
-// the SEAT the handle resolves to, so a lead typing `@agent-cto` is admitted
-// exactly as one typing the handle is.
-func TestAPauseIsTheSeatsLeadsOrTheDeployments(t *testing.T) {
+// WHETHER A SEAT WORKS IS ITS LEAD'S TO DECIDE, or an admin's — and no
+// colleague's. Everybody signed in uses some app, so a rule that asked for one
+// would let anybody on the board stop any seat. And it is decided on the SEAT
+// the handle resolves to, so a lead typing `@agent-cto` is admitted exactly as
+// one typing the handle is.
+func TestAPauseIsTheSeatsLeadsOrAnAdmins(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name    string
@@ -297,12 +297,12 @@ func TestAPauseIsTheSeatsLeadsOrTheDeployments(t *testing.T) {
 	}{
 		{"the seat's lead", boundTo("jane"), "agent-cto", true},
 		{"the lead, typing a mention", boundTo("jane"), "@agent-cto", true},
-		{"the deployment's grant", boundTo("ops", iam.GrantFleetOperate), "agent-cto", true},
-		{"a reader who leads nobody", boundTo("sam", iam.GrantStateRead,
-			iam.GrantWorkWrite), "agent-cto", false},
+		{"an admin", boundTo("ops", iam.GrantAdmin), "agent-cto", true},
+		{"a colleague who leads nobody", boundTo("sam", iam.Apps...),
+			"agent-cto", false},
 		// AND NEVER A SEAT, however it is granted: whether a seat works is
 		// a person's decision about it.
-		{"a seat holding the deployment's grant", iam.Principal{ID: uuid.New(),
+		{"a seat holding admin", iam.Principal{ID: uuid.New(),
 			Kind: iam.KindSeat, Login: "agent-ceo", Seat: "agent-ceo",
 			Stage: iam.StageActive, Grants: iam.AllGrants}, "agent-cto", false},
 	} {

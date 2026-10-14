@@ -130,7 +130,7 @@ func TestAMoveKeepsItsMarkOverATaskFiledBehindItThatItCannotCarry(t *testing.T) 
 	}
 
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore-late", "m-late",
-		"ENG", nil); err != nil {
+		"ENG", false, nil); err != nil {
 		t.Fatalf("restore the task: %v", err)
 	}
 	r.drain()

@@ -222,7 +222,7 @@ describe("the figures", () => {
   });
 
   // A STOPPED SEAT WAITS ON A READER ONLY WHERE THEY CAN TAKE A WAY OUT:
-  // raise the ceiling (a `/config` write — `mayChangeConfig`: `config:write`
+  // raise the ceiling (a `/config` write — `mayChangeConfig`: Admin
   // and, on a managed document, one of its writers — or a seat's own window
   // its lead may raise) or hand the item on (`update_work_item`, and only with
   // an item to hand).

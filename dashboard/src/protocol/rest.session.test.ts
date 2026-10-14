@@ -66,7 +66,7 @@ describe("a refusal and the session", () => {
   // lacks a grant, and sending them to sign in would lose the screen for a
   // credential that is fine.
   test("a 403 on authority leaves the session alone", async () => {
-    answering(403, { error: "unauthorized", grants: ["secrets:read"] });
+    answering(403, { error: "unauthorized", grants: ["admin"] });
     await refusal();
     expect(currentSessionNeed()).toBeNull();
   });

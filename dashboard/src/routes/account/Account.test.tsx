@@ -66,7 +66,7 @@ const PERSON: SessionAnswer = {
   login: "ada.lovelace",
   seat: "ada",
   kind: "person",
-  grants: ["state:read", "work:write"],
+  grants: ["tracker"],
   expires_at: "2026-10-07T00:00:00Z",
   lineage: HERE,
   status: "signed_in",
@@ -76,7 +76,7 @@ const TIER_A: SessionAnswer = {
   person: "t-ops",
   login: "token:ops",
   kind: "machine",
-  grants: ["state:read", "fleet:operate"],
+  grants: ["admin"],
   expires_at: "2026-10-06T02:00:00Z",
   lineage: "0192e7a0-0000-7000-8000-0000000000ff",
   status: "signed_in",
@@ -90,7 +90,7 @@ const ROW = {
   name: "Ada Lovelace",
   email: "ada@example.com",
   seat: "ada",
-  grants: ["state:read", "work:write"],
+  grants: ["tracker"],
 };
 
 const SESSIONS = {
@@ -110,7 +110,7 @@ const TOKEN = {
   method: "token",
   label: "my assistant",
   revoked: false,
-  grants: ["state:read"],
+  grants: [],
 };
 
 interface Sent {
@@ -191,9 +191,10 @@ function engine({
 }
 
 /** The page, over a store holding `org` where the chart is readable. */
-function mount(org?: unknown) {
+function mount(org?: unknown, refused: string | null = null) {
   const store = new Store();
   if (org) store.applyOrg(withDerived(org) as never);
+  if (refused !== null) store.setAccessRefused(refused);
   const socket = new LiveSocket(store);
   render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -645,7 +646,7 @@ describe("personal access tokens", () => {
             id: "c-new",
             person: "p-1",
             token: "cwl_pat_c-new_9_secret",
-            grants: ["state:read"],
+            grants: [],
             expires_at: "2027-01-04T00:00:00Z",
           }),
       },
@@ -659,26 +660,26 @@ describe("personal access tokens", () => {
     for (const box of within(dialog).getAllByRole("checkbox")) {
       expect(box).toHaveProperty("checked", false);
     }
-    // AND A TOKEN CARRYING NO GRANT SAYS WHAT IT REACHES — its owner's own
-    // record, which takes none — rather than reading as one that does nothing.
-    // The CONTROL is the same dialog with a grant ticked, which says nothing.
-    // Mutation: drop the sentence and the first expectation goes red.
-    // And it is what the engine does: KEEPING the record takes no grant and
-    // READING it takes state:read, so it no longer promises the inbox and
-    // queue reads every one of which a token like this was refused.
-    expect(within(dialog).getByText(/only keeps your own record/)).toBeDefined();
+    // AND A TOKEN CARRYING NO ACCESS SAYS WHAT IT REACHES — the overview every
+    // signed-in principal reads — rather than reading as one that does
+    // nothing, and that its owner's own inbox and queue are the tracker's,
+    // which it does not reach. The CONTROL is the same dialog with an app
+    // ticked, which says nothing. Mutation: drop the sentence and the first
+    // expectation goes red.
     expect(
-      within(dialog).getByText(/reads nothing, your own inbox and queue included/),
+      within(dialog).getByText(/With nothing ticked, the token reads the overview/),
     ).toBeDefined();
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: "state:read" }));
-    expect(within(dialog).queryByText(/only keeps your own record/)).toBeNull();
+    expect(within(dialog).getByText(/your own inbox and queue included/)).toBeDefined();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Tracker" }));
+    expect(within(dialog).queryByText(/With nothing ticked/)).toBeNull();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Tracker" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Mint" }));
     expect(await within(dialog).findByText(/This token acts as you/)).toBeDefined();
     const mint = engineIs.writes().find((w) => w.path === "/iam/credentials")!;
     expect(mint.method).toBe("POST");
     // THE OWNER IS THE CALLER: a person's token is theirs alone to mint.
     expect(mint.query.has("person")).toBe(false);
-    expect(mint.body).toEqual({ label: "laptop", grants: ["state:read"] });
+    expect(mint.body).toEqual({ label: "laptop", grants: [] });
   });
 
   // THE ENGINE'S CEILING, said under the field: past it the dialog posted and
@@ -814,16 +815,70 @@ describe("the profile", () => {
     expect(within(seat).getByText("@ada")).toBeDefined();
   });
 
-  // A READER WITHOUT state:read reads no chart, so there is no name to put
-  // beside the handle — it read "cara cara" — and the seat's page is the panel
-  // refusing them the company, so it is no link. The CONTROL is the case
-  // above. Mutation: link it whatever the grants, and this goes red.
+  // A READER THE ENGINE REFUSED THE LIVE SOCKET — a seat taken out of the
+  // chart — has no chart to name the seat by, so it is the handle alone, and
+  // the seat's page is the panel refusing them the company, so it is no link.
+  // The CONTROL is the same reader holding no app and served: every signed-in
+  // principal reads the overview, so the seat links. Mutation: link it
+  // whatever the socket said, and the refused half goes red.
   test("a reader the seat's page does not serve sees the handle alone, unlinked", async () => {
     engine({ session: { ...PERSON, grants: [] } });
-    mount();
+    mount(undefined, "your seat is no longer in the chart");
     const seat = await seatFact();
     expect(seat.textContent).toBe("@ada");
     expect(within(seat).queryByRole("link")).toBeNull();
+    cleanup();
+
+    engine({ session: { ...PERSON, grants: [] } });
+    mount();
+    const served = await seatFact();
+    expect(within(served).getByRole("link", { name: "@ada" }).getAttribute("href")).toBe(
+      href(["agents", "seats", "ada"]),
+    );
+  });
+
+  /** The words each access tag under a term says, in order. */
+  const tagWords = (el: HTMLElement) =>
+    [...el.querySelectorAll(".crewlet-tag")].map((n) => n.textContent);
+
+  // "YOUR ACCESS" IS THE DIRECTORY ROW'S, said in the People list's words:
+  // the apps by name, Admin alone where it is held (it includes every app), and
+  // "Overview only" for none. The row wins over the session because it is what
+  // an administrator changes, and the session's copy is whatever it was when
+  // this browser signed in. Mutations: delete the row and the first half goes
+  // red; read `session.grants` and the second does.
+  test("your access is the directory row's, said as the People list says it", async () => {
+    engine();
+    mount();
+    await screen.findByText("ada@example.com");
+    expect(tagWords(screen.getByText("Your access").nextElementSibling as HTMLElement)).toEqual([
+      "Tracker",
+    ]);
+    cleanup();
+
+    engine({ session: { ...PERSON, grants: ["tracker"] }, row: { ...ROW, grants: [] } });
+    mount();
+    await screen.findByText("ada@example.com");
+    expect(tagWords(screen.getByText("Your access").nextElementSibling as HTMLElement)).toEqual([
+      "Overview only",
+    ]);
+    cleanup();
+
+    engine({ row: { ...ROW, grants: ["admin", "tracker", "knowledge"] } });
+    mount();
+    await screen.findByText("ada@example.com");
+    expect(tagWords(screen.getByText("Your access").nextElementSibling as HTMLElement)).toEqual([
+      "Admin",
+    ]);
+  });
+
+  // A CREDENTIAL THAT IS NOT A PERSON SAYS ITS OWN ACCESS too, from the
+  // session it is — it has no directory row to read it from.
+  test("a Tier A token's session says its access", async () => {
+    engine({ session: TIER_A });
+    mount();
+    const label = await screen.findByText("Its access");
+    expect(tagWords(label.parentElement as HTMLElement)).toEqual(["Admin"]);
   });
 
   // AT THE CARD'S OWN INSET: in a flush card the first fact touched the

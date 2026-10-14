@@ -13,12 +13,24 @@ var ErrNoChart = errors.New("authz: this surface holds no company chart, so " +
 	"a lead relation cannot be decided")
 
 // ErrUnresolved is the one UNKNOWN a caller acts on rather than reports: the
-// object is somebody else's record named by a login nobody has resolved yet
-// ([Object.Unresolved]), and this caller could be admitted to it only as the
-// LEAD of whoever holds that login — which the chart can say only of the seat
-// the login resolves to. So the answer is "resolve it, then decide again on
-// the record", and [Decide] returns it for exactly one principal: one who
-// leads somebody and holds no grant that would admit them outright.
+// object names something nobody has resolved or read yet ([Object.Unresolved]),
+// and only the resolved record could admit this caller. So the answer is
+// "resolve it, then decide again on the record", and [Decide] returns it for
+// a caller holding nothing that admits them outright, in exactly these cases:
+//
+//   - somebody else's record named by a LOGIN, to a caller who leads
+//     somebody — the chart can say whether they lead its holder only of the
+//     seat the login resolves to;
+//   - a work item to a caller without the tracker app ([ClassAppOrAsked]) —
+//     whether an open ask on it names them is on the row;
+//   - a row whose container and author nobody has read ([ClassTidy],
+//     [ClassContainer], [ClassDestructive]) — which project or space it is
+//     filed in, and who wrote it, decide it.
+//
+// A caller the resolved record could never admit is refused before anything
+// is read rather than answered this — a caller who leads nobody on somebody's
+// queue, and a caller without a relation row's app — so what the record says
+// is never theirs to learn.
 //
 // AN UNKNOWN RATHER THAN AN ALLOW, for the direction a caller that forgets to
 // check it fails in: read as an unknown it is a 503 a lead notices, and read

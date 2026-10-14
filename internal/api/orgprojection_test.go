@@ -21,24 +21,27 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// The org projection is read by every `state:read` holder, an audience far
-// wider than the configuration's, so what it carries is a security decision
-// made one field at a time. These tests are what keep it one.
+// The org projection is read by everybody a node resolves — it is the
+// company's overview, a principal holding no permission at all included — an
+// audience far wider than the configuration's, which is an admin's, so what it
+// carries is a security decision made one field at a time. These tests are
+// what keep it one.
 
 // exposure is the decision recorded for one authored field.
 type exposure int
 
 const (
 	// exposurePublic: founder prose and structure, carried by /org to
-	// every `state:read` reader.
+	// every reader.
 	exposurePublic exposure = iota + 1
-	// exposureGuarded: read only through the `config:read` answers.
+	// exposureGuarded: read only through the admin's configuration
+	// answers.
 	exposureGuarded
 	// exposureResolved: read, with others, into the RESOLVED seat field
 	// named by `into`, which carries the labels the value decides (a
 	// provider key, a server name) and never the value's own contents —
-	// and which only a `config:read` audience is handed, because the labels
-	// are read off a seat's runtime settings, which `GET /config` serves to
+	// and which only an admin's audience is handed, because the labels are
+	// read off a seat's runtime settings, which `GET /config` serves to
 	// nobody else.
 	exposureResolved
 )
@@ -66,12 +69,12 @@ var companyFields = map[string]classified{
 	"Knowledge":      {exposure: exposureGuarded, why: "which knowledge backend and container keys"},
 	"SkillVariables": {exposure: exposureGuarded, why: "facts substituted into tool-skill text, routinely hostnames and account names"},
 	"Providers": {exposure: exposureResolved, into: "llm",
-		why: "only the KEYS reach a config:read reader, as each seat's resolved chain; every entry's model, endpoint and credentials stay guarded"},
+		why: "only the KEYS reach an admin, as each seat's resolved chain; every entry's model, endpoint and credentials stay guarded"},
 	"TurnEngine": {exposure: exposureGuarded, why: "an operational setting"},
 	"Learning":   {exposure: exposureGuarded, why: "an operational setting"},
 	"Scheduling": {exposure: exposureGuarded, why: "an operational setting"},
 	"MCPServers": {exposure: exposureResolved, into: "tool_sources",
-		why: "only a granted server's NAME reaches a config:read reader, the label its tools carry in every prompt; its command, URL, env and headers stay guarded"},
+		why: "only a granted server's NAME reaches an admin, the label its tools carry in every prompt; its command, URL, env and headers stay guarded"},
 	"NotificationRateLimit":             {exposure: exposureGuarded, why: "an operational setting"},
 	"NotificationCoalesceWindowSeconds": {exposure: exposureGuarded, why: "an operational setting"},
 	"NotificationCoalesceMaxBatch":      {exposure: exposureGuarded, why: "an operational setting"},
@@ -94,7 +97,7 @@ var projectionOnly = map[string]string{
 // is the reasoning internal/api/setupapi's package doc records for guarding
 // even its reads: what a company has wired up, and to what, is a map of what
 // to attack. They are read with the rest of the integration picture instead,
-// through the `config:read` answers, `config` and `integrations`.
+// through the admin's answers, `config` and `integrations`.
 
 // roleFields classifies every field of config.Role.
 var roleFields = map[string]classified{
@@ -151,7 +154,7 @@ var unitFields = map[string]classified{
 // exactly what the projection carries.
 //
 // A field added to config.Company, config.Role or config.Unit fails the first
-// half until somebody decides whether every `state:read` holder may see it.
+// half until somebody decides whether every reader of /org may see it.
 // Marking it public without adding it to the projection (or the reverse) fails
 // the second half, so the table and the type cannot drift apart. A RESOLVED
 // field must name the api.OrgSeat field it reaches, and every resolved seat
@@ -200,9 +203,9 @@ func TestEveryOrgFieldIsClassified(t *testing.T) {
 				decision, ok := tc.table[field.Name]
 				if !ok {
 					t.Errorf("config.%s.%s is not classified. Decide whether every "+
-						"state:read reader of /org may see it: add it to this test's table as "+
+						"reader of /org may see it: add it to this test's table as "+
 						"public (and to api.%s), resolved (naming the api.OrgSeat field it "+
-						"reaches, which only config:read is handed) or guarded (and read it "+
+						"reaches, which only an admin is handed) or guarded (and read it "+
 						"through the config query)",
 						tc.authored.Name(), field.Name, tc.projection.Name())
 					continue
@@ -238,9 +241,9 @@ func TestEveryOrgFieldIsClassified(t *testing.T) {
 	}
 }
 
-// The two credentials an org reader presents in these cases: one holding every
-// grant, `config:read` among them, and one holding `state:read` alone — the
-// widest audience the projection reaches.
+// The two credentials an org reader presents in these cases: an admin's, and
+// one holding no permission at all — the widest audience the projection
+// reaches, since the overview is everybody's.
 const (
 	orgOpsToken    = "org-ops-token-long-enough-to-pass"
 	orgReaderToken = "org-reader-token-long-enough-to-pass"
@@ -252,7 +255,7 @@ func orgReaders(t *testing.T, company *config.Company) *api.App {
 	b := config.DefaultBootstrap()
 	authorize(&b,
 		config.APIToken{ID: "ops", Token: orgOpsToken},
-		config.APIToken{ID: "reader", Token: orgReaderToken, Grants: []iam.Grant{iam.GrantStateRead}},
+		config.APIToken{ID: "reader", Token: orgReaderToken, Grants: []iam.Grant{}},
 	)
 	return newApp(t, api.Options{
 		Bootstrap: &b,
@@ -279,19 +282,19 @@ func orgBody(t *testing.T, a *api.App, token string) []byte {
 }
 
 // NOTHING GUARDED REACHES ANY READER, and nothing resolved reaches a reader
-// without `config:read` — whatever the company holds.
+// who is not an admin — whatever the company holds.
 //
 // Every guarded field of every seat and unit (and every field of the company
 // outside its charter) is filled, all the way down through pointers, slices
 // and maps, keys included: once with a distinct literal, once with a distinct
 // whole ${VAR} reference. The projection is read the three ways a browser
-// reaches it, by a `state:read` reader and by a `config:read` one, and none may
+// reaches it, by a reader holding no permission and by an admin, and none may
 // contain a fill value, a `${`, or any key outside the public shape. The
 // public fields are filled with distinct prose that MUST appear to both, which
 // is what stops this passing on an empty answer; the labels a seat's chain and
-// tool sources resolve to MUST appear to the `config:read` reader and must not
-// to the other — a label read off a seat's runtime settings is theirs to
-// guard.
+// tool sources resolve to MUST appear to the admin and must not to the other —
+// a label read off a seat's runtime settings is the configuration's, which is
+// an admin's to read.
 //
 // Mutation: hand every audience the whole projection, and the reader's
 // surfaces carry the resolved labels.
@@ -312,14 +315,14 @@ func TestTheOrgProjectionCarriesNothingGuarded(t *testing.T) {
 				audience stream.Audience
 				resolved bool
 			}{
-				{"state:read", orgReaderToken, stream.AudienceOf([]iam.Grant{iam.GrantStateRead}), false},
-				{"config:read", orgOpsToken, stream.AudienceOf(iam.AllGrants), true},
+				{"the overview reader", orgReaderToken, overviewReader, false},
+				{"the admin", orgOpsToken, adminReader, true},
 			} {
 				snapshot, err := json.Marshal(a.Stream().Snapshot(reader.audience)["org"])
 				if err != nil {
 					t.Fatalf("marshal the snapshot's org: %v", err)
 				}
-				push, err := json.Marshal(a.Stream().Org(reader.audience))
+				push, err := json.Marshal(stream.ShapeFor(a.Stream().Org(), reader.audience))
 				if err != nil {
 					t.Fatalf("marshal the org push: %v", err)
 				}
@@ -451,7 +454,7 @@ type filler struct {
 	publicValues  []string
 	// resolvedValues are the labels a seat's resolved fields carry — each
 	// provider key a seat names and the shared server's name — which reach
-	// a `config:read` reader and nobody else.
+	// an admin and nobody else.
 	resolvedValues []string
 	// providerKeys is every provider key a seat was given.
 	providerKeys []string
@@ -738,14 +741,23 @@ func (f *filler) guarded(v reflect.Value, depth int) {
 	}
 }
 
-// configReader is an audience holding every grant, `config:read` among them —
-// the one a seat's resolved fields reach.
-var configReader = stream.AudienceOf(iam.AllGrants)
+// adminReader is an administrator's audience — the one a seat's resolved
+// fields reach.
+var adminReader = stream.NewAudience(iam.Principal{Login: "erin.ng",
+	Kind: iam.KindPerson, Seat: "founder", Stage: iam.StageActive,
+	Grants: []iam.Grant{iam.GrantAdmin}}, nil)
 
-// projectionOf is the org surface as audience reads it, typed.
+// overviewReader is the audience of a person holding no permission at all:
+// the widest the projection reaches, since the overview is everybody's.
+var overviewReader = stream.NewAudience(iam.Principal{Login: "pat.kim",
+	Kind: iam.KindPerson, Seat: "intern", Stage: iam.StageActive,
+	Grants: []iam.Grant{}}, nil)
+
+// projectionOf is the org surface as audience reads it, typed — shaped the
+// one way every surface shapes it ([stream.ShapeFor]).
 func projectionOf(t *testing.T, a *api.App, audience stream.Audience) api.OrgProjection {
 	t.Helper()
-	got := a.Stream().Org(audience)
+	got := stream.ShapeFor(a.Stream().Org(), audience)
 	projection, ok := got.(api.OrgProjection)
 	if !ok {
 		t.Fatalf("the org surface answers %T, want api.OrgProjection", got)
@@ -789,7 +801,7 @@ func TestTheOrgProjectionDoesNotAliasTheCompany(t *testing.T) {
 		Sources: queries.Sources{Company: companySource(t, company)},
 	})
 
-	projection := projectionOf(t, a, configReader)
+	projection := projectionOf(t, a, adminReader)
 	scribble := func(lists ...[]string) {
 		for _, list := range lists {
 			for i := range list {
@@ -819,7 +831,7 @@ func TestTheOrgProjectionDoesNotAliasTheCompany(t *testing.T) {
 	}
 }
 
-// THE COMPANY'S CLOCK IS ON THE `state:read` PROJECTION, AS THE ENGINE RESOLVED
+// THE COMPANY'S CLOCK IS ON THE OVERVIEW'S PROJECTION, AS THE ENGINE RESOLVED
 // IT (ADR-0018).
 //
 // Every date a dashboard reader is shown is cut on it, so a screen without it
@@ -830,7 +842,7 @@ func TestTheOrgProjectionDoesNotAliasTheCompany(t *testing.T) {
 // still answers `{}`.
 func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
 	t.Parallel()
-	reader := stream.AudienceOf([]iam.Grant{iam.GrantStateRead})
+	reader := overviewReader
 	for _, tc := range []struct {
 		name    string
 		company *config.Company
@@ -853,7 +865,7 @@ func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
 	a := newApp(t, api.Options{
 		Sources: queries.Sources{Company: companySource(t, nil)},
 	})
-	body, err := json.Marshal(a.Stream().Org(reader))
+	body, err := json.Marshal(stream.ShapeFor(a.Stream().Org(), reader))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -864,7 +876,7 @@ func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
 }
 
 // WHAT A SEAT RUNS ON AND WHAT IT CAN REACH ARE PUBLISHED AS THE ENGINE
-// RESOLVES THEM — to a `config:read` reader, and to nobody else.
+// RESOLVES THEM — to an admin, and to nobody else.
 //
 // The model chain is every phase's, the way a turn resolves it: a flat
 // llm_<phase> field wins, a phase naming nothing falls to the seat's llm, and a
@@ -874,8 +886,8 @@ func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
 // grant the engine starts a seat's children by. Both are resolved from the
 // seat AS THE CHART HOLDS IT, the composed org. A human seat runs neither. The
 // budgets are the ceilings in force, company and seat alike, a window nobody
-// caps absent rather than zero — and those a `state:read` reader is handed
-// too, where the resolved labels it is not.
+// caps absent rather than zero — and those every reader is handed too, where
+// the resolved labels they are not.
 func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 	t.Parallel()
 	ceiling := func(n int) *int { return &n }
@@ -911,8 +923,8 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 	a := newApp(t, api.Options{
 		Sources: queries.Sources{Company: companySource(t, company)},
 	})
-	// THE FIXTURE CREDENTIAL HOLDS EVERY GRANT, so GET /org is the
-	// config:read shape.
+	// THE FIXTURE CREDENTIAL IS AN ADMIN'S, so GET /org is the admin's
+	// shape.
 	got := orgOf(t, a)
 
 	if got.TokenBudget == nil || got.TokenBudget.Month == nil || *got.TokenBudget.Month != 40_000_000 ||
@@ -981,19 +993,19 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 		t.Errorf("the CTO's chain covers %d phases, want every one of %d", len(cto.LLM), len(phase.All))
 	}
 
-	// A STATE:READ READER IS HANDED THE SAME TREE WITHOUT THEM, at every
-	// depth — and the budgets all the same.
-	reader := projectionOf(t, a, stream.AudienceOf([]iam.Grant{iam.GrantStateRead}))
+	// A READER WHO IS NOT AN ADMIN IS HANDED THE SAME TREE WITHOUT THEM, at
+	// every depth — and the budgets all the same.
+	reader := projectionOf(t, a, overviewReader)
 	for name, seat := range map[string]api.OrgSeat{
 		"CTO": reader.Roles[0], "SRE": reader.Units[0].Roles[0],
 	} {
 		if seat.LLM != nil || seat.ToolSources != nil {
-			t.Errorf("a state:read reader is handed %s's chain %v and tool sources %v",
+			t.Errorf("a reader who is not an admin is handed %s's chain %v and tool sources %v",
 				name, seat.LLM, seat.ToolSources)
 		}
 	}
 	if b := reader.Roles[0].TokenBudget; b == nil || b.Day == nil || *b.Day != 2_000_000 {
-		t.Errorf("a state:read reader is handed the CTO's budget %+v, want its day of 2000000", b)
+		t.Errorf("a reader who is not an admin is handed the CTO's budget %+v, want its day of 2000000", b)
 	}
 
 	// A company with no provider has no chain to show, and says nothing

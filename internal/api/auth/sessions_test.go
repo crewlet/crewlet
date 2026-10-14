@@ -78,7 +78,7 @@ func newSignedIn(t *testing.T) *signedIn {
 			Person: session.PersonRow{
 				Found: true, Epoch: 3, Stage: iam.StageActive,
 				Login: "sarah.chen", Seat: sessionSeat,
-				Grants: []iam.Grant{iam.GrantStateRead, iam.GrantConfigRead},
+				Grants: []iam.Grant{iam.GrantAdmin},
 			},
 		}},
 		chart: &fakeChart{seats: map[string]session.Seat{
@@ -88,15 +88,16 @@ func newSignedIn(t *testing.T) *signedIn {
 }
 
 // guardWithSession is a guard whose Tier A holds one token and whose session
-// arm reads this rig.
-func (s *signedIn) guard(ceiling ...iam.Grant) *auth.Guard {
+// arm reads this rig, on a node serving admin unless posture says otherwise.
+func (s *signedIn) guard(posture ...iam.AdminPosture) *auth.Guard {
 	s.t.Helper()
-	if len(ceiling) == 0 {
-		ceiling = iam.AllGrants
+	admin := iam.AdminServe
+	if len(posture) > 0 {
+		admin = posture[0]
 	}
 	b := config.DefaultBootstrap()
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ci", Token: "a-tier-a-token"}}
-	b.API.Auth.MaxGrants = ceiling
+	b.API.Auth.Admin = admin
 	b.API.ExternalURL = "http://127.0.0.1:8000"
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: s.signer, Directory: s.dir, Applier: s.dir, Chart: s.chart,
@@ -237,8 +238,11 @@ func TestASignedInPersonIsResolvedFromTheirCookie(t *testing.T) {
 	if got.principal.Position != "platform" {
 		t.Errorf("unit %q, want platform", got.principal.Position)
 	}
-	if !got.principal.Can(iam.GrantConfigRead) {
-		t.Errorf("grants %v do not carry the row's own", got.principal.Grants)
+	// THE ROW'S OWN, EXPANDED: admin, and every app it includes.
+	if !slices.Equal(got.principal.Grants, []iam.Grant{iam.GrantAdmin,
+		iam.GrantTracker, iam.GrantKnowledge}) {
+		t.Errorf("grants %v are not the row's own admin, expanded",
+			got.principal.Grants)
 	}
 }
 
@@ -346,27 +350,34 @@ func TestATierATokenIsFreshForTheStepUpWindow(t *testing.T) {
 	}
 }
 
-// THE CEILING APPLIES TO A PERSON EXACTLY AS IT DOES TO A TOKEN.
+// THE ADMIN POSTURE APPLIES TO A PERSON EXACTLY AS IT DOES TO A TOKEN.
 //
-// `api.auth.max_grants` is a decision-time bound, so lowering it on one node
+// `api.auth.admin` is a decision-time bound, so turning one node to `refuse`
 // takes effect on that node's next request. Without this a person's row would
-// be the only credential shape the ceiling did not reach — and the row is the
-// one an administrator edits, which is precisely what the ceiling is there to
-// bound.
-func TestANodesCeilingClampsASignedInPersonsGrants(t *testing.T) {
+// be the only credential shape the posture did not reach — and the row is the
+// one an administrator edits. And the clamp takes admin and NOTHING ELSE: the
+// row's `[admin]` is expanded into every app before admin is clamped away, so
+// an administrator signed in on a refusing node keeps the company's work.
+//
+// Mutation: compose a session's grants as the row's, unclamped, and admin
+// survives; clamp before expanding and the apps are lost.
+func TestANodeRefusingAdminClampsASignedInPersonsAdminAndKeepsTheirApps(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
-	got := rig.call(rig.guard(iam.GrantStateRead), http.MethodGet, "/agents",
+	got := rig.call(rig.guard(iam.AdminRefuse), http.MethodGet, "/agents",
 		rig.withCookie)
 	if got.how != iam.Resolved {
 		t.Fatalf("resolution %v, want resolved", got.how)
 	}
-	if got.principal.Can(iam.GrantConfigRead) {
-		t.Errorf("grants %v survived a ceiling that withholds config:read",
+	if got.principal.Can(iam.GrantAdmin) {
+		t.Errorf("grants %v survived a node that refuses admin",
 			got.principal.Grants)
 	}
-	if !got.principal.Can(iam.GrantStateRead) {
-		t.Errorf("grants %v lost what the ceiling permits", got.principal.Grants)
+	for _, app := range iam.Apps {
+		if !got.principal.Can(app) {
+			t.Errorf("grants %v lost %s, which a node refusing admin keeps",
+				got.principal.Grants, app)
+		}
 	}
 }
 
@@ -681,7 +692,7 @@ func TestOnHTTPSASessionAuthenticatesOnlyUnderItsPrefixedName(t *testing.T) {
 	rig := newSignedIn(t)
 	b := config.DefaultBootstrap()
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ci", Token: "a-tier-a-token"}}
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	b.API.ExternalURL = "https://crewlet.example.com"
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: rig.signer, Directory: rig.dir, Applier: rig.dir, Chart: rig.chart,

@@ -173,9 +173,9 @@ type GateRequest struct {
 	// name recorded every gesture as an operator acting through a
 	// credential named after themselves: a person bound to a seat, or a
 	// machine token acting as its owner, read as a Tier A token of that
-	// name. And the identity estate's writer judges `fleet:operate` on the
-	// party's OWN grants at the record ([registration.NewGate]), which a
-	// name cannot carry.
+	// name. And the identity estate's writer judges admin on the party's
+	// OWN grants at the record ([registration.NewGate]), which a name
+	// cannot carry.
 	By iam.Principal
 
 	// Force evicts a node that still holds a live presence lease — see

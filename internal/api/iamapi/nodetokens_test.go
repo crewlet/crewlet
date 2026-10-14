@@ -144,7 +144,7 @@ func TestNodeTokensNameTheManagedDocumentsWriters(t *testing.T) {
 }
 
 // WHO CAN REACH THIS COMPANY, AND AS WHOM, is the directory's read: an
-// administrator and an auditor are answered, a reader holding neither grant is
+// administrator is answered, and a reader holding every app and not admin is
 // refused — never the labels, which are a map of what to try.
 func TestNodeTokensAreTheDirectorysRead(t *testing.T) {
 	t.Parallel()
@@ -155,9 +155,8 @@ func TestNodeTokensAreTheDirectorysRead(t *testing.T) {
 		p    iam.Principal
 		want int
 	}{
-		"people:manage": {administrator(), http.StatusOK},
-		"audit:read":    {auditor(), http.StatusOK},
-		"neither":       {ordinary(), http.StatusForbidden},
+		"admin":                {administrator(), http.StatusOK},
+		"every app, not admin": {ordinary(), http.StatusForbidden},
 	} {
 		if got := r.as(tc.p, http.MethodGet, "/iam/node-tokens", nil); got.status != tc.want {
 			t.Errorf("%s: GET /iam/node-tokens = %d %v, want %d", name, got.status, got.body, tc.want)

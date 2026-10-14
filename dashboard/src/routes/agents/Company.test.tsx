@@ -129,7 +129,9 @@ async function teams(org: OrgProjection) {
             projects: [{ key: "BE", unit: { key: "backend", name: "Backend", resolved: true } }],
             total: 1,
           }
-        : { login: "", owner: "", acts: [] },
+        : what === "viewer"
+          ? { login: "jane", owner: "jane", grants: ["tracker"], acts: [] }
+          : {},
     );
   render(
     <ClientContext.Provider value={{ store, socket }}>

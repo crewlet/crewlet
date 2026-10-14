@@ -53,6 +53,10 @@ const (
 	ActionOnboardedMark Action = "mark_onboarded"
 
 	// --- a colleague's ordinary work -------------------------------- //
+	//
+	// AN ASK IS AN AGENT'S, and the only one in this block: a seat whose
+	// role offers it puts a question to a colleague seat, spending that
+	// seat's turn — see [rule.seatOnly].
 	ActionColleagueAsk Action = "a2a_ask"
 	ActionWorkCreate   Action = "create_work_item"
 	ActionWorkUpdate   Action = "update_work_item"
@@ -64,6 +68,16 @@ const (
 	// Keeping a file in a project is a colleague's ordinary work, as
 	// filing an item in it is.
 	ActionFileWrite Action = "write_project_file"
+
+	// ActionWorkThread admits a request to post on a work item's THREAD
+	// over HTTP, and decides nothing else: who may actually post — a
+	// tracker holder, or the person an open ask on the item names, and only
+	// their answer — is [ActionWorkComment]'s decision, which the tool makes
+	// once it has read the item. DOTTED because it is no tool: a route has
+	// to admit before the item is read, and admitted on the comment's own
+	// verb a person without the app would be refused at the door to the one
+	// thread they were asked to answer on.
+	ActionWorkThread Action = "work.thread"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead    Action = "get_person"
@@ -93,14 +107,13 @@ const (
 	// tool and the HTTP rank route, which is an adapter over it. No seat
 	// is given it: a seat moves work between lanes with update_work_item
 	// and does not reorder a board it cannot see, which is why its row is
-	// human-only as well as the colleague write.
+	// human-only as well as the tracker's.
 	ActionWorkPlace Action = "place_work_item"
 
 	// --- a container's own policy ----------------------------------- //
 	ActionProjectWrite   Action = "write_project"
 	ActionCatalogueWrite Action = "write_work_catalogue"
 	ActionPageRename     Action = "pages.rename"
-	ActionContainerWrite Action = "pages.container"
 
 	// --- a page every seat is handed ---------------------------------- //
 	//
@@ -154,7 +167,7 @@ const (
 	// resuming one, sending a note to the turn it is running, answering
 	// the question a coding run it launched parked on. Each is decided on
 	// the SEAT the gesture is about, by the owner-or-lead class — the
-	// seat's holder, whoever leads it, or the deployment's grant — and
+	// seat's holder, whoever leads it, or admin — and
 	// each is decided INSIDE its tool, because the seat is never simply
 	// what the arguments state: a typed handle resolves through the org
 	// (`@sre`), a turn names the seat only the node running it can say,
@@ -166,10 +179,10 @@ const (
 
 	// ActionKnowledgeAnswer is a person's question answered from what the
 	// company has written down, by a model, at the company's expense. A
-	// READ in what it discloses — the board and the pages the reader
-	// already holds `state:read` over — and a person's alone, because it
-	// runs on the auxiliary model of the seat the asker is bound to and a
-	// seat has search_knowledge and a model of its own.
+	// READ in what it discloses — the pages and the board, each searched
+	// only for a caller who holds its app — and a person's alone, because
+	// it runs on the auxiliary model of the seat the asker is bound to and
+	// a seat has search_knowledge and a model of its own.
 	ActionKnowledgeAnswer Action = "answer_knowledge"
 
 	// --- the company's own controls --------------------------------- //
@@ -182,29 +195,32 @@ const (
 	ActionSetupConnect Action = "setup.connect"
 	ActionFleetOperate Action = "fleet.operate"
 	// ActionFleetRead is the deployment's own controls READ — the
-	// maintenance window's status and the value a reanchor must echo. The
-	// same grant as [ActionFleetOperate] and its own verb because it asks
+	// maintenance window's status and the value a reanchor must echo.
+	// Admin's as [ActionFleetOperate] is, and its own verb because it asks
 	// for no step-up: a read changes nothing, and a status an operator
 	// cannot see without re-proving who they are is a status they stop
 	// checking.
-	ActionFleetRead  Action = "fleet.read"
-	ActionAuditRead  Action = "audit.read"
+	ActionFleetRead Action = "fleet.read"
+	ActionAuditRead Action = "audit.read"
+	// ActionSandboxRun starts a detached coding run: an agent's, and only
+	// one whose role offers the tool — see [rule.seatOnly].
 	ActionSandboxRun Action = "run_sandbox"
 
 	// --- one seat's own trail, read by somebody else ----------------- //
 	//
-	// A SEAT'S MEMORY AND ITS THREADS, read over the API: what it wrote in
-	// its diary, what it learned, who it has worked with, and what it said
-	// on a chat surface this engine does not own. DOTTED, because no tool
-	// reads another seat's trail — a seat's own memory tools take no
-	// handle at all ([ClassSelf]) — and it is ITS OWN VERB rather than
-	// [ActionAuditRead] because the object is a seat: a question naming
-	// one asks this, and the identity estate's trail asks the other.
+	// A SEAT'S MEMORY, ITS THREADS AND ITS TURNS, read over the API: what
+	// it wrote in its diary, what it learned, who it has worked with, what
+	// it said on a chat surface this engine does not own, and the prompts
+	// and responses of its own turns. DOTTED, because no tool reads another
+	// seat's trail — a seat's own memory tools take no handle at all
+	// ([ClassSelf]) — and it is ITS OWN VERB rather than [ActionAuditRead]
+	// because the object is ONE seat: a question naming one asks this, and
+	// the company-wide trail asks the other.
 	ActionSeatTrailRead Action = "audit.seat.read"
 
 	// --- the identity directory -------------------------------------- //
 	//
-	// SIX VERBS FOR SIXTEEN ROUTES, because the routes differ in what
+	// SEVEN VERBS FOR TWENTY ROUTES, because the routes differ in what
 	// they do and not in how they are decided. What separates them is the
 	// three questions this estate actually asks: is this about a person or
 	// about the directory, does it CHANGE anything, and — for a change to
@@ -212,6 +228,13 @@ const (
 	// it ([Presence]).
 	ActionDirectoryRead  Action = "iam.read"
 	ActionDirectoryWrite Action = "iam.write"
+	// ActionSeatsRead is everybody's read of WHO HOLDS EACH HUMAN SEAT — the
+	// org chart's people, named. Admitted to everybody, because the chart is
+	// everybody's overview and a seat whose holder nobody could see would
+	// draw an org chart of empty boxes; WHAT each caller sees of a holder is
+	// the route's to mask per row (a login and a stage are the holder's and
+	// admin's, an open invitation admin's).
+	ActionSeatsRead Action = "iam.seats.read"
 	// ActionCredentialWrite mints or revokes ONE PERSON's MACHINE TOKEN — a
 	// personal access token, or a service account's.
 	ActionCredentialWrite Action = "iam.credential.write"
@@ -233,11 +256,10 @@ const (
 	ActionSessionEnd      Action = "iam.session.end"
 
 	// ActionSessionInvalidate ends EVERY session in the company at once —
-	// the restore runbook's last step. BOTH hats, the deployment's grant AND
-	// the directory's ([rule.also]), which is why it is a verb of its own
-	// beside the deployment's other controls: it is the one gesture here
-	// that cannot be taken back for anybody, and it signs out the whole
-	// company including the person making it.
+	// the restore runbook's last step. A verb of its own beside the
+	// deployment's other controls because it is the one gesture here that
+	// cannot be taken back for anybody, and it signs out the whole company
+	// including the person making it.
 	ActionSessionInvalidate Action = "iam.invalidate"
 )
 
@@ -275,67 +297,77 @@ var Presences = []Presence{
 // Valid reports whether a presence is one this build knows.
 func (p Presence) Valid() bool { return slices.Contains(Presences, p) }
 
-// rule is one verb's row: which class decides it, and — for [ClassOperator]
-// alone — which capability that class asks for.
+// rule is one verb's row: which class decides it, which app it belongs to,
+// and the facts about the verb itself that every class composes with.
 //
-// ONE TABLE RATHER THAN TWO. A class map beside a grant map is two things
-// that must agree about which verbs are operator surfaces, and the day they
-// disagree one verb is decided by a class that reads a grant nobody set.
+// ONE TABLE RATHER THAN SEVERAL. A class map beside an app map beside a
+// human-only list is several things that must agree about one verb, and the
+// day they disagree one verb is decided by a class that reads a field nobody
+// set.
 type rule struct {
 	class Class
-	// grant is what [ClassOperator] requires, and the admin path of
-	// [ClassSubtree]. Empty on every other class, which decides from the
-	// principal's relation to the object instead — and empty on an operator
-	// row is a gate somebody forgot to fill in, which [granted] refuses.
-	grant iam.Grant
 
-	// also is a SECOND capability a row requires beside whatever else
-	// admits: the row admits only a principal holding it as well. On an
-	// operator row it sits beside grant — the one gesture that belongs to
-	// two parties at once, ending every session in the company, which is
-	// the deployment's to run and the directory's to decide
-	// ([ActionSessionInvalidate]). On a RELATION row it sits beside the
-	// relation: reading somebody's day is the owner-or-lead rule's, and it
-	// is a READ of the company — their notices name its tasks and their
-	// queue lists them — so it takes `state:read` as every other read does
-	// ([ActionInboxRead], [ActionMyWork], [ActionPersonRead]). Without it the
-	// same question had two answers: the query surface asks `state:read`
-	// of every question it registers, so `GET /work/inbox` refused a token
-	// carrying no grant that `POST /operator/act/work_inbox` answered.
+	// app is the app this verb belongs to — [iam.GrantTracker],
+	// [iam.GrantKnowledge] — or empty for a verb that belongs to none. It is
+	// the requirement of [ClassApp] and [ClassAppOrAsked], and it is ANDED
+	// onto every relation class ([withApp]): a project's lead who does not
+	// use the tracker does not set its policy, and a comment's author who no
+	// longer uses the knowledge base does not edit it there. An
+	// administrator holds every app through [iam.Expand], so naming one
+	// never narrows admin's path.
 	//
-	// A FIELD AND NOT A SECOND VERB ASKED FROM INSIDE THE HANDLER, because
-	// the table is what a REST route, a socket question and a walk all read:
-	// a handler that asked the second grant itself would be the one place
-	// the rule was stated, and a walk over the table would certify a row
-	// that admits on one grant alone.
-	also iam.Grant
+	// A FIELD ON THE ROW AND NOT A PER-KIND LOOKUP, because the table is
+	// what a REST route, a socket question, a tool and every walk read: an
+	// app derived from the object's kind would answer one verb differently
+	// on two objects, and a walk over the table would certify a row whose
+	// app was decided somewhere else.
+	app iam.Grant
 
 	// humanOnly marks a verb NO AGENT may take, whatever its class would
 	// allow — purging a task beyond recovery, taking a project out of
-	// circulation. It is a fact about the VERB rather than about anybody's
-	// relation to an object, which is why it is a field beside the class
-	// and not a class of its own: the same fact composes with the
-	// container relation and with the admin grant, and written as two
-	// classes it was already two spellings of one rule.
+	// circulation, writing the chart. It is a fact about the VERB rather
+	// than about anybody's relation to an object, which is why it is a
+	// field beside the class and not a class of its own: the same fact
+	// composes with the container relation and with admin, and written as
+	// two classes it was already two spellings of one rule.
 	//
-	// CHECKED BEFORE THE CLASS, so an agent holding the grant is told it
-	// is a seat rather than that it lacks a capability it plainly has.
+	// CHECKED BEFORE THE CLASS, so an agent holding the permission is told
+	// it is a seat rather than that it lacks a capability it plainly has.
 	humanOnly bool
+
+	// seatOnly is humanOnly's MIRROR: a verb ONLY AN AGENT SEAT may take —
+	// putting a question to a colleague seat, starting a coding run — with
+	// no permission asked at all. Which seats are offered it is the role's
+	// tool registry's decision, which already says which seat runs which
+	// tool; a person has no turn for a colleague's answer to land in and no
+	// executor for a run to resume.
+	//
+	// IT REPLACED TWO PERMISSIONS. Starting a coding run was a permission
+	// of its own that only agents ever held, and asking a colleague rode on
+	// the permission that wrote work — so a role that did not use the
+	// tracker could not ask anybody anything. Neither was a decision anybody
+	// made about a PERSON, which is what a permission is for.
+	//
+	// CHECKED BEFORE THE CLASS, as humanOnly is, so a person holding admin
+	// is told the verb is an agent's ([ReasonSeatOnly]) rather than sent to
+	// ask for a permission that would change nothing. A walk refuses a row
+	// that is both.
+	seatOnly bool
 
 	// presence is which arms need a PERSON at the keyboard — see
 	// [Presence] — refused to a request that presented a machine token.
 	//
-	// A FIELD ON THE ROW AND NOT A CHECK IN EACH ROUTE, for the reason
-	// [rule.also] gives: the table is what every surface and every walk
-	// reads, so a route that refused a token itself was the one place the
-	// rule was stated, a walk over the table certified a row that admitted
-	// the token, and the next route on that verb could forget.
+	// A FIELD ON THE ROW AND NOT A CHECK IN EACH ROUTE: the table is what
+	// every surface and every walk reads, so a route that refused a token
+	// itself was the one place the rule was stated, a walk over the table
+	// certified a row that admitted the token, and the next route on that
+	// verb could forget.
 	//
 	// CHECKED BEFORE THE CLASS where it covers every arm, as
-	// [rule.humanOnly] is — a token told it lacks a grant no token can
-	// carry is sent to ask for the impossible — and AFTER the class where
-	// it spares the self arm, because only the class can say which arm
-	// admitted.
+	// [rule.humanOnly] is — a token told it lacks a permission is sent to
+	// ask for something that would change nothing — and AFTER the class
+	// where it spares the self arm, because only the class can say which
+	// arm admitted.
 	presence Presence
 
 	// recency is how recently the principal must have PROVED who they are
@@ -385,30 +417,152 @@ type rule struct {
 // production one. The alternative — a default class — is exactly how a new
 // verb ships ungated, and it ships looking correct.
 var rules = map[Action]rule{
-	ActionWorkRead:      {class: ClassRead, recency: iam.RecencyAny},
-	ActionWorkList:      {class: ClassRead, recency: iam.RecencyAny},
-	ActionWorkSearch:    {class: ClassRead, recency: iam.RecencyAny},
-	ActionWorkActivity:  {class: ClassRead, recency: iam.RecencyAny},
-	ActionProjectRead:   {class: ClassRead, recency: iam.RecencyAny},
-	ActionProjectList:   {class: ClassRead, recency: iam.RecencyAny},
-	ActionCatalogueRead: {class: ClassRead, recency: iam.RecencyAny},
-	ActionViewList:      {class: ClassRead, recency: iam.RecencyAny},
-	ActionPageRead:      {class: ClassRead, recency: iam.RecencyAny},
-	ActionPageList:      {class: ClassRead, recency: iam.RecencyAny},
-	ActionKnowledgeRead: {class: ClassRead, recency: iam.RecencyAny},
-	ActionColleagueRead: {class: ClassRead, recency: iam.RecencyAny},
-	ActionFileList:      {class: ClassRead, recency: iam.RecencyAny},
-	ActionFileRead:      {class: ClassRead, recency: iam.RecencyAny},
-	// THE READ GRANT, AND A PERSON: what an answer discloses is what the
-	// pages and the board already show a `state:read` holder, and what it
-	// costs is one auxiliary model call on the asker's own seat — which a
-	// seat would be spending on its own behalf, beside the search and the
-	// model it already has. The tool itself refuses a principal no seat
-	// binds — a Tier A token's session or a service account, never a
-	// person, who holds a human seat for as long as they are here
-	// (ADR-0032) — naming why: there is no seat whose model to run on.
-	ActionKnowledgeAnswer: {class: ClassRead, humanOnly: true, recency: iam.RecencyAny},
+	// --- using the tracker ------------------------------------------- //
+	//
+	// THE APP IS THE WHOLE RULE: reading the board, a project, its files,
+	// its views and its catalogue, and filing, updating, merging and
+	// arranging work. A company that hands somebody the tracker is saying
+	// exactly this, and a company that does not hands them the overview.
+	//
+	// READING ONE ITEM IS ALSO THE ASKED PERSON'S. Somebody a colleague put
+	// a question to reads the item the question is on, whether or not they
+	// use the tracker — see [ClassAppOrAsked].
+	ActionWorkRead:      {class: ClassAppOrAsked, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionWorkList:      {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionWorkSearch:    {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionWorkActivity:  {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionProjectRead:   {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionProjectList:   {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionCatalogueRead: {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionViewList:      {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	// A PROJECT'S FILES ARE ITS WORK'S OUTPUT, read and kept on the tracker
+	// as its items are — never on the knowledge base a body of prose might
+	// suggest.
+	ActionFileList:  {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionFileRead:  {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionFileWrite: {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
 
+	ActionWorkCreate: {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionWorkUpdate: {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	// A COMMENT IS THE TRACKER'S, OR THE ANSWER THE ASKED PERSON OWES. The
+	// asked arm admits a person an open ask names — and the tool then takes
+	// only their answer, which the tracker's writer checks again is theirs.
+	ActionWorkComment: {class: ClassAppOrAsked, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionWorkMerge:   {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	// A PLACE IS THE APP ON THE TASK, although the record arbitrates on the
+	// project's ORDER rather than on the task: the order is an object nobody
+	// owns, so the only relation to ask about is none. A person's gesture —
+	// see [ActionWorkPlace].
+	ActionWorkPlace: {class: ClassApp, app: iam.GrantTracker, humanOnly: true,
+		recency: iam.RecencyAny},
+	// THE ROUTE TO AN ITEM'S THREAD ADMITS EVERYBODY and decides nothing:
+	// [ActionWorkComment] decides once the item is read. See
+	// [ActionWorkThread].
+	ActionWorkThread: {class: ClassEverybody, recency: iam.RecencyAny},
+
+	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
+	// what internal/tracker's own tag rule has always said: adding a label
+	// is open to everybody who uses the tracker, and renaming or archiving
+	// one takes the word off everybody's board. So the TOOL takes the app
+	// and the lead-only facets — a rename, an archive, any policy edit —
+	// ask [ActionProjectPolicy] from inside it.
+	ActionProjectWrite:  {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionProjectPolicy: {class: ClassContainer, app: iam.GrantTracker, recency: iam.RecencyAny},
+	// AND RE-ROUTING IS THE LEAD'S for the same reason, asked from inside
+	// `update_work_item`: it decides which team hears about the work, and
+	// which project the task is filed under comes out of the stored row
+	// rather than the arguments.
+	ActionWorkRoute: {class: ClassContainer, app: iam.GrantTracker, recency: iam.RecencyAny},
+	// ARCHIVING A PROJECT TAKES IT OUT OF CIRCULATION for everybody, so it
+	// is the lead's like the rest of the policy AND it is never an agent's:
+	// a project nobody can file into again is a company decision.
+	ActionProjectArchive: {class: ClassContainer, app: iam.GrantTracker, humanOnly: true,
+		recency: iam.RecencyAny},
+
+	// AN ITEM'S REPORTER TIDIES IT, beside its project's lead and admin:
+	// whoever filed a duplicate takes it out again, and puts it back. A
+	// subtree stays the lead's (the tool refuses an author it), and a purge
+	// stays admin's. See [ClassTidy].
+	ActionWorkRemove:  {class: ClassTidy, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionWorkRestore: {class: ClassTidy, app: iam.GrantTracker, recency: iam.RecencyAny},
+	// A MOVE TAKES AN ITEM OUT OF ITS PROJECT, and a file's removal takes a
+	// file out of one: the project's lead or admin, never every colleague
+	// who may add to it.
+	ActionWorkMove:   {class: ClassDestructive, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionFileRemove: {class: ClassDestructive, app: iam.GrantTracker, recency: iam.RecencyAny},
+
+	// A WORK ITEM'S REMARK IS ITS AUTHOR'S, or admin's, and the tracker's:
+	// the class answers "may you touch this remark", and the WRITER refuses
+	// anybody but the author an edit, because an edit puts words in
+	// somebody's mouth where a removal only takes them down.
+	ActionWorkCommentEdit: {class: ClassAuthored, app: iam.GrantTracker, recency: iam.RecencyAny},
+
+	// A VIEW IS NOT A RECORD, because half of them are not personal at
+	// all: omitting the owner SHARES it, which is a tab on somebody's
+	// project, unit or person page. See [ClassSavedView].
+	ActionViewSave: {class: ClassSavedView, app: iam.GrantTracker, recency: iam.RecencyAny},
+
+	// --- somebody's own record, on the tracker ------------------------ //
+	//
+	// READING SOMEBODY'S DAY IS THE LEAD RELATION, and MARKING it is not. A
+	// lead re-orders what their report works on and says what is
+	// important; marking somebody's mail read and rearranging their pinned
+	// views is a gesture nobody asked a lead to make. Every one of them is
+	// the TRACKER's — a person's notices name its tasks and their queue
+	// lists them — so each takes the app beside the relation, and a person
+	// who does not use the tracker has no queue there to keep.
+	ActionPersonRead:    {class: ClassOwnOrLead, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionMyWork:        {class: ClassOwnOrLead, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionInboxRead:     {class: ClassOwnOrLead, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionPrioritiesSet: {class: ClassOwnOrLead, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionInboxMark:     {class: ClassOwnRecord, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionPinsSet:       {class: ClassOwnRecord, app: iam.GrantTracker, recency: iam.RecencyAny},
+
+	// --- using the knowledge base ------------------------------------ //
+	ActionPageRead:      {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
+	ActionPageList:      {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
+	ActionKnowledgeRead: {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
+	// WHERE A PAGE MAY BE CREATED is internal/pages' store's to decide — a
+	// space the company declares — for every author alike; this row decides
+	// only WHO.
+	ActionPageCreate:  {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
+	ActionPageSave:    {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
+	ActionPageComment: {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
+	// A PAGE'S CREATOR TIDIES IT — renames, trashes, restores — beside its
+	// container's lead and admin. See [ClassTidy].
+	ActionPageRename:  {class: ClassTidy, app: iam.GrantKnowledge, recency: iam.RecencyAny},
+	ActionPageTrash:   {class: ClassTidy, app: iam.GrantKnowledge, recency: iam.RecencyAny},
+	ActionPageRestore: {class: ClassTidy, app: iam.GrantKnowledge, recency: iam.RecencyAny},
+	// A REMARK IS ITS AUTHOR'S, as a work item's is; the store refuses
+	// anybody but the author an edit, and takes a moderator's removal.
+	ActionPageCommentEdit:   {class: ClassAuthored, app: iam.GrantKnowledge, recency: iam.RecencyAny},
+	ActionPageCommentRemove: {class: ClassAuthored, app: iam.GrantKnowledge, recency: iam.RecencyAny},
+
+	// A QUESTION ANSWERED FROM WHAT THE COMPANY WROTE DOWN draws on
+	// whichever apps the asker uses: the tool searches the pages only for a
+	// knowledge holder and the board only for a tracker holder, so either
+	// app admits and a caller with neither has nothing it could search. And
+	// a person's alone: it runs on the auxiliary model of the seat the
+	// asker holds, and a seat has search_knowledge and a model of its own.
+	// The tool itself refuses a principal no seat binds — a Tier A token's
+	// session or a service account, never a person, who holds a human seat
+	// for as long as they are here (ADR-0032) — naming why.
+	ActionKnowledgeAnswer: {class: ClassAnyApp, humanOnly: true, recency: iam.RecencyAny},
+
+	// --- everybody's overview ---------------------------------------- //
+	//
+	// WHO TO ASK IS EVERYBODY'S: the colleague lookup answers from the org
+	// chart, which everybody sees. The person-facing question masks the
+	// external contact ids for anybody but admin; a seat's tool keeps them,
+	// because an agent mentions people by them.
+	ActionColleagueRead: {class: ClassEverybody, recency: iam.RecencyAny},
+	// WHO HOLDS EACH HUMAN SEAT is the org chart's people, named — see
+	// [ActionSeatsRead]. The route masks each holder per caller.
+	ActionSeatsRead: {class: ClassEverybody, recency: iam.RecencyAny},
+
+	// --- an agent's own ---------------------------------------------- //
+	//
+	// THE CALLER'S OWN WORKING STATE, no permission and no admin path.
 	ActionSkillUse:      {class: ClassSelf, recency: iam.RecencyAny},
 	ActionSkillLoad:     {class: ClassSelf, recency: iam.RecencyAny},
 	ActionSkillRefine:   {class: ClassSelf, recency: iam.RecencyAny},
@@ -416,59 +570,21 @@ var rules = map[Action]rule{
 	ActionMemoryRefresh: {class: ClassSelf, recency: iam.RecencyAny},
 	ActionMemoryPersist: {class: ClassSelf, recency: iam.RecencyAny},
 	ActionOnboardedMark: {class: ClassSelf, recency: iam.RecencyAny},
+	// AN ASK AND A CODING RUN ARE AN AGENT'S, whichever apps it uses: an
+	// ask spends a colleague seat's turn and a run hands a box the seat's
+	// whole tool surface, and the ROLE decides which seats are offered
+	// either. No person takes them — see [rule.seatOnly].
+	ActionColleagueAsk: {class: ClassEverybody, seatOnly: true, recency: iam.RecencyAny},
+	ActionSandboxRun:   {class: ClassEverybody, seatOnly: true, recency: iam.RecencyAny},
 
-	// AN ASK IS A COLLEAGUE WRITE, and the object is the colleague. It
-	// writes no row, which is why it looks like it belongs nowhere — but
-	// it spends somebody else's TURN and somebody else's budget, so a
-	// credential with no write capability at all must not be able to make
-	// every seat in the company think.
-	ActionColleagueAsk: {class: ClassColleagueWrite, recency: iam.RecencyAny},
-
-	ActionWorkCreate:  {class: ClassColleagueWrite, recency: iam.RecencyAny},
-	ActionWorkUpdate:  {class: ClassColleagueWrite, recency: iam.RecencyAny},
-	ActionWorkComment: {class: ClassColleagueWrite, recency: iam.RecencyAny},
-	ActionWorkMerge:   {class: ClassColleagueWrite, recency: iam.RecencyAny},
-	// A PLACE IS A COLLEAGUE WRITE ON THE TASK, although the record
-	// arbitrates on the project's ORDER rather than on the task: the order
-	// is an object nobody owns, so the only relation to ask about is none,
-	// and the capability that files work is the one that arranges it. A
-	// person's gesture — see [ActionWorkPlace].
-	ActionWorkPlace:   {class: ClassColleagueWrite, humanOnly: true, recency: iam.RecencyAny},
-	ActionPageCreate:  {class: ClassColleagueWrite, recency: iam.RecencyAny},
-	ActionPageSave:    {class: ClassColleagueWrite, recency: iam.RecencyAny},
-	ActionPageComment: {class: ClassColleagueWrite, recency: iam.RecencyAny},
-	// A FILE IS WRITTEN AS AN ITEM IS FILED: the colleague write, over the
-	// project it is kept in — so `work:write`, which [writeGrantFor] reads
-	// off the project kind, and never the page grant a body of prose might
-	// suggest. The bytes and the row are one gesture to the person making
-	// it.
-	ActionFileWrite: {class: ClassColleagueWrite, recency: iam.RecencyAny},
-
-	// READING SOMEBODY'S DAY IS THE LEAD RELATION, and MARKING it is not.
-	// A lead re-orders what their report works on and says what is
-	// important; marking somebody's mail read and rearranging their
-	// pinned views is a gesture nobody asked a lead to make. And reading it
-	// takes the read grant beside the relation ([rule.also]) — a person's
-	// own record is the company's tasks and notices about them — while
-	// keeping it (marks, pins, the order they mean to work in) takes none.
-	ActionPersonRead: {class: ClassOwnOrLead, also: iam.GrantStateRead,
-		recency: iam.RecencyAny},
-	ActionMyWork: {class: ClassOwnOrLead, also: iam.GrantStateRead,
-		recency: iam.RecencyAny},
-	ActionInboxRead: {class: ClassOwnOrLead, also: iam.GrantStateRead,
-		recency: iam.RecencyAny},
-	ActionPrioritiesSet: {class: ClassOwnOrLead, recency: iam.RecencyAny},
-	ActionInboxMark:     {class: ClassOwnRecord, recency: iam.RecencyAny},
-	ActionPinsSet:       {class: ClassOwnRecord, recency: iam.RecencyAny},
-
-	// WHETHER A SEAT WORKS IS ITS LEAD'S TO DECIDE, or the deployment's,
-	// exactly as what it works on is ([ActionPrioritiesSet]) — and never
-	// any reader's. Everybody signed in holds a credential, so "any
-	// operator" would let every reader of the board stop any seat in the
-	// company, end the turn it is on, or put words in it. HUMAN-ONLY on
-	// top: a seat that could pause a colleague, resume itself, steer
-	// another's turn or answer its own run's question would be overruling
-	// the people who run it. No proof window, as no tool row asks one.
+	// --- whether a seat works, and what its turn is doing ------------- //
+	//
+	// WHETHER A SEAT WORKS IS ITS LEAD'S TO DECIDE, or admin's, exactly as
+	// what it works on is ([ActionPrioritiesSet]) — and never any reader's.
+	// HUMAN-ONLY on top: a seat that could pause a colleague, resume
+	// itself, steer another's turn or answer its own run's question would
+	// be overruling the people who run it. No app: a lead who uses neither
+	// app still runs their team.
 	ActionSeatPause:  {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny},
 	ActionSeatResume: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny},
 	ActionTurnSteer:  {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny},
@@ -479,143 +595,89 @@ var rules = map[Action]rule{
 	// asks them, and nobody who merely leads them does.
 	ActionRunAnswer: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny},
 
-	// A VIEW IS NOT A RECORD, because half of them are not personal at
-	// all: omitting the owner SHARES it, which is a tab on somebody's
-	// project, unit or person page. See [ClassSavedView].
-	ActionViewSave: {class: ClassSavedView, recency: iam.RecencyAny},
+	// A SEAT'S TRAIL IS ITS LEAD'S TO READ, and admin's: its diary, its
+	// episodes, its threads and its own turns' prompts and responses. A lead
+	// steers, pauses and answers for their agents, and could do none of it
+	// well without reading what those agents did; somebody who merely
+	// shares the company does not read every prompt an agent was given.
+	// The COMPANY-WIDE trail — every event, every turn, every channel, the
+	// identity estate's audit — stays admin's ([ActionAuditRead]).
+	ActionSeatTrailRead: {class: ClassOwnOrLead, recency: iam.RecencyAny},
 
-	ActionPageRename: {class: ClassContainer, recency: iam.RecencyAny},
-
-	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which
-	// is what internal/tracker's own tag rule has always said: adding a
-	// label is open to every colleague, and renaming or archiving one
-	// takes the word off everybody's board. So the TOOL takes the
-	// colleague write and the lead-only facets — a rename, an archive,
-	// any policy edit — ask [ActionProjectPolicy] from inside it. Gating
-	// the whole tool as the container's refused a colleague the one facet
-	// the domain grants them.
-	ActionProjectWrite:  {class: ClassColleagueWrite, recency: iam.RecencyAny},
-	ActionProjectPolicy: {class: ClassContainer, recency: iam.RecencyAny},
-
-	// AND RE-ROUTING IS THE LEAD'S for the same reason, asked from inside
-	// `update_work_item`: it decides which team hears about the work, and
-	// which project the task is filed under comes out of the stored row
-	// rather than the arguments.
-	ActionWorkRoute:      {class: ClassContainer, recency: iam.RecencyAny},
-	ActionContainerWrite: {class: ClassContainer, recency: iam.RecencyAny},
-
-	// A TOOL SKILL IS CONFIGURATION WRITTEN AS A PAGE. The skills container's
-	// pages are injected into a phase of EVERY seat's turn as instructions,
-	// so writing one rewrites the prompt the whole company runs under — the
-	// same reach as editing the company document, and it takes the grant
-	// that edits that document rather than the colleague write that
-	// authors an ordinary page. `knowledge:write` alone must not be a way
-	// to put words in every agent's mouth.
+	// --- running the company ------------------------------------------ //
 	//
-	// AND NEVER AN AGENT'S, which internal/pages' store also refuses: a
-	// seat writing the instructions every seat obeys is a model editing
-	// the rules it is judged by. Marked here too, so a seat is told it is
-	// a seat rather than that it lacks a grant.
-	ActionSkillPageWrite: {class: ClassOperator, grant: iam.GrantConfigWrite,
-		humanOnly: true, recency: iam.RecencyAny},
-
+	// A TOOL SKILL IS CONFIGURATION WRITTEN AS A PAGE. The skills
+	// container's pages are injected into a phase of EVERY seat's turn as
+	// instructions, so writing one rewrites the prompt the whole company
+	// runs under — the same reach as editing the company document, and it
+	// takes admin rather than the knowledge app that authors an ordinary
+	// page. AND NEVER AN AGENT'S, which internal/pages' store also refuses:
+	// a seat writing the instructions every seat obeys is a model editing
+	// the rules it is judged by.
+	ActionSkillPageWrite: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyAny},
 	// THE CATALOGUE IS THE COMPANY'S, NOT A CONTAINER'S. Task types and
 	// custom fields are declared once for the whole workspace — the tool
-	// names no project and could not, so a container class asked about an
-	// empty key and refused everybody but the admin. It is configuration,
-	// and it takes the grant that edits the company's own document.
-	ActionCatalogueWrite: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyAny},
+	// names no project and could not. It is configuration, and admin's.
+	ActionCatalogueWrite: {class: ClassAdmin, recency: iam.RecencyAny},
 
-	ActionWorkRemove:  {class: ClassDestructive, recency: iam.RecencyAny},
-	ActionWorkRestore: {class: ClassDestructive, recency: iam.RecencyAny},
-	ActionWorkMove:    {class: ClassDestructive, recency: iam.RecencyAny},
-	ActionPageTrash:   {class: ClassDestructive, recency: iam.RecencyAny},
-	ActionPageRestore: {class: ClassDestructive, recency: iam.RecencyAny},
-	// A FILE'S REMOVAL IS AN ITEM'S, on the project the file is kept in:
-	// its lead or the admin path, never every colleague who may add one.
-	ActionFileRemove: {class: ClassDestructive, recency: iam.RecencyAny},
+	// --- beyond recovery --------------------------------------------- //
+	//
+	// A PURGE IS ADMIN'S, A PERSON'S, AND A RECENT PROOF'S. Nothing undoes
+	// it, so it is the one tidy an author does not take for themselves —
+	// trash and restore are theirs — and it asks the step-up window as
+	// every other irreversible gesture does.
+	ActionWorkPurge: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp},
+	ActionPagePurge: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp},
 
-	ActionWorkPurge: {class: ClassOperator, grant: iam.GrantFleetOperate,
-		humanOnly: true, recency: iam.RecencyAny},
-	ActionPagePurge: {class: ClassOperator, grant: iam.GrantFleetOperate,
-		humanOnly: true, recency: iam.RecencyAny},
-
-	// ARCHIVING A PROJECT TAKES IT OUT OF CIRCULATION for everybody, so
-	// it is the lead's like the rest of the policy AND it is never an
-	// agent's: a project nobody can file into again is a company decision.
-	// internal/tracker has always said so — it asked for a principal that
-	// was not a seat — and this is that rule where every other one lives.
-	ActionProjectArchive: {class: ClassContainer, humanOnly: true, recency: iam.RecencyAny},
-
-	ActionPageCommentEdit:   {class: ClassAuthored, recency: iam.RecencyAny},
-	ActionPageCommentRemove: {class: ClassAuthored, recency: iam.RecencyAny},
-	// A WORK ITEM'S REMARK IS AUTHORED THE SAME WAY a page's is, and the
-	// class admits the deployment grant beside the author for the same
-	// reason — but the WRITER refuses anybody but the author, exactly as
-	// internal/pages does, because an edit puts words in somebody's mouth
-	// where a removal only takes them down. The class answers "may you
-	// touch this remark"; the writer answers "may you rewrite it".
-	ActionWorkCommentEdit: {class: ClassAuthored, recency: iam.RecencyAny},
-
-	// THE ORG CHART IS ITS LEADS' AS WELL AS THE COMPANY'S. The row's grant
-	// is the admin path, and a lead writes what lies inside the units they
-	// lead — see [ClassSubtree]. HUMAN-ONLY and at the step-up window, as
-	// every other write of the company document is: a seat rewriting the
-	// org it runs inside is a model choosing its own team.
-	ActionOrgWrite: {class: ClassSubtree, grant: iam.GrantConfigWrite,
-		humanOnly: true, recency: iam.RecencyStepUp},
+	// --- the org chart ------------------------------------------------- //
+	//
+	// THE ORG CHART IS ITS LEADS' AS WELL AS ADMIN'S. A lead writes what
+	// lies inside the units they lead — see [ClassSubtree]. HUMAN-ONLY and
+	// at the step-up window, as every other write of the company document
+	// is: a seat rewriting the org it runs inside is a model choosing its
+	// own team.
+	ActionOrgWrite: {class: ClassSubtree, humanOnly: true, recency: iam.RecencyStepUp},
 	// AND A LEAD READS WHAT THEY MAY WRITE: one seat or one unit of their
-	// subtree, masked as every read of the document is, without the grant
-	// that reads the whole document.
-	ActionOrgRead: {class: ClassSubtree, grant: iam.GrantConfigRead,
-		recency: iam.RecencyAny},
+	// subtree, masked as every read of the document is, without admin.
+	ActionOrgRead: {class: ClassSubtree, recency: iam.RecencyAny},
 
-	ActionConfigRead:  {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
-	ActionConfigWrite: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
-	ActionSecretList:  {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
+	// --- the company's own controls ------------------------------------ //
+	ActionConfigRead:  {class: ClassAdmin, recency: iam.RecencyAny},
+	ActionConfigWrite: {class: ClassAdmin, recency: iam.RecencyStepUp},
+	ActionSecretList:  {class: ClassAdmin, recency: iam.RecencyAny},
 	// A REVEAL HANDS OVER A CREDENTIAL'S VALUE, which is a person's to read
-	// and never a pipeline's: no token carries the grant, and the row
-	// refuses one besides.
-	ActionSecretReveal: {class: ClassOperator, grant: iam.GrantSecretRead,
-		recency: iam.RecencyStepUp, presence: PresenceRequired},
-	ActionSecretWrite:  {class: ClassOperator, grant: iam.GrantSecretWrite, recency: iam.RecencyStepUp},
-	ActionSetupRead:    {class: ClassOperator, grant: iam.GrantConfigRead, recency: iam.RecencyAny},
-	ActionSetupConnect: {class: ClassOperator, grant: iam.GrantConfigWrite, recency: iam.RecencyStepUp},
-	ActionFleetOperate: {class: ClassOperator, grant: iam.GrantFleetOperate, recency: iam.RecencyStepUp},
-	ActionFleetRead:    {class: ClassOperator, grant: iam.GrantFleetOperate, recency: iam.RecencyAny},
-	ActionAuditRead:    {class: ClassOperator, grant: iam.GrantAuditRead, recency: iam.RecencyAny},
-	ActionSandboxRun:   {class: ClassOperator, grant: iam.GrantSandboxRun, recency: iam.RecencyAny},
+	// and never a pipeline's: the row refuses any request a token presented.
+	ActionSecretReveal: {class: ClassAdmin, recency: iam.RecencyStepUp,
+		presence: PresenceRequired},
+	ActionSecretWrite:  {class: ClassAdmin, recency: iam.RecencyStepUp},
+	ActionSetupRead:    {class: ClassAdmin, recency: iam.RecencyAny},
+	ActionSetupConnect: {class: ClassAdmin, recency: iam.RecencyStepUp},
+	ActionFleetOperate: {class: ClassAdmin, recency: iam.RecencyStepUp},
+	ActionFleetRead:    {class: ClassAdmin, recency: iam.RecencyAny},
+	// THE COMPANY-WIDE TRAIL — every event, turn and phase, every agent-to-
+	// agent channel, the identity estate's own audit. Admin's: one seat's
+	// trail is its lead's too ([ActionSeatTrailRead]); everybody's is not.
+	ActionAuditRead: {class: ClassAdmin, recency: iam.RecencyAny},
 
-	// A SEAT'S TRAIL IS THE AUDIT READ, whoever's seat it is, and NOT the
-	// owner-or-lead rule a person's queue takes. Its diary carries what its
-	// prompts decided and its threads what it said on the company's behalf
-	// — the record of what happened, which is exactly what `audit:read`
-	// opens on `/events` for every seat at once. Decided by the lead
-	// relation instead, an auditor holding that grant was refused one
-	// seat's threads while reading every phase record the seat ever wrote;
-	// and a lead holding only `state:read` would have read a trail the
-	// grant that governs it was never given to them.
-	ActionSeatTrailRead: {class: ClassOperator, grant: iam.GrantAuditRead, recency: iam.RecencyAny},
-
-	// A DIRECTORY READ IS THREE PARTIES' — the person it is about, the
-	// party that writes it, and the party that audits it. The class holds
-	// all three; see its own doc for why an auditor is in and why the
-	// object is an id.
-	ActionDirectoryRead: {class: ClassDirectoryRead, recency: iam.RecencyAny},
-	// AND A DIRECTORY WRITE IS ONE PARTY'S, with NO self path at all.
-	// Editing your own grants is the escalation this estate exists to
-	// close, so "it is my own row" must not be a way in — the record layer
-	// refuses conferring what the caller does not hold, and this refuses
-	// the gesture before it gets there.
+	// --- the identity directory ---------------------------------------- //
+	//
+	// A DIRECTORY READ IS THE PERSON IT IS ABOUT, OR ADMIN — see
+	// [ClassDirectory] for why the object is an id.
+	ActionDirectoryRead: {class: ClassDirectory, recency: iam.RecencyAny},
+	// AND A DIRECTORY WRITE IS ADMIN'S, with NO self path at all. Editing
+	// your own permissions is the escalation this estate exists to close,
+	// so "it is my own row" must not be a way in — the record layer refuses
+	// conferring what the caller does not hold, and this refuses the
+	// gesture before it gets there.
 	//
 	// EVERY ONE OF THEM — enrolling somebody, inviting them, editing their
 	// row, resetting their second factor, removing them — asks the step-up
-	// window and `people:manage`, and needs a person present: what keeps a
-	// week-old cookie away is the window, and what keeps a stolen pipeline
-	// credential away is the row's own refusal of a token and a grant no
-	// token may carry.
-	ActionDirectoryWrite: {class: ClassOperator, grant: iam.GrantPeopleManage,
-		recency: iam.RecencyStepUp, presence: PresenceRequired},
+	// window, and needs a person present: what keeps a week-old cookie away
+	// is the window, and what keeps a stolen pipeline credential away is the
+	// row's own refusal of a token and internal/iamdomain's refusal of an
+	// administrative record written through one.
+	ActionDirectoryWrite: {class: ClassAdmin, recency: iam.RecencyStepUp,
+		presence: PresenceRequired},
 	// MINTING AND REVOKING A MACHINE TOKEN, CHANGING HOW SOMEBODY PROVES
 	// WHO THEY ARE, and ENDING SESSIONS are the gestures a person
 	// legitimately makes about themselves — a personal access token, a
@@ -627,41 +689,33 @@ var rules = map[Action]rule{
 	// tells these three apart ([rule.presence]). A token may revoke a token,
 	// itself included, which is what somebody who finds one leaked reaches
 	// for wherever they found it; it may never change how its owner proves
-	// who they are; and about anybody else it may do none of them, which
-	// its missing `people:manage` refuses as well.
-	ActionCredentialWrite: {class: ClassDirectorySelf, recency: iam.RecencyStepUp,
+	// who they are; and about anybody else it may do none of them.
+	ActionCredentialWrite: {class: ClassDirectory, recency: iam.RecencyStepUp,
 		presence: PresenceRequiredForOthers},
-	ActionCredentialProof: {class: ClassDirectorySelf, recency: iam.RecencyStepUp,
+	ActionCredentialProof: {class: ClassDirectory, recency: iam.RecencyStepUp,
 		presence: PresenceRequired},
-	// ENDING SESSIONS ASKS OPPOSITE PROOFS OF ITS TWO ARMS ([rule.selfRecency]).
-	// The person themselves asks for NONE: it is the first thing somebody
-	// does on finding somebody else in their account — and it ends every
-	// machine token they hold as well — and a gesture that makes them
-	// re-prove a password the intruder may also hold makes the fastest
-	// response to a compromise the slowest, which is the reason
-	// internal/iamdomain's own revocation takes no grant at all. An
+	// ENDING SESSIONS ASKS OPPOSITE PROOFS OF ITS TWO ARMS
+	// ([rule.selfRecency]). The person themselves asks for NONE: it is the
+	// first thing somebody does on finding somebody else in their account —
+	// and it ends every machine token they hold as well — and a gesture
+	// that makes them re-prove a password the intruder may also hold makes
+	// the fastest response to a compromise the slowest, which is the reason
+	// internal/iamdomain's own revocation takes no permission at all. An
 	// administrator ending SOMEBODY ELSE's asks `step_up`, as every other
 	// directory write does, and a person present: it signs a colleague out
 	// of everything and stops every pipeline they run, and a week-old
 	// cookie — or a token — looping over the directory would do it to the
-	// whole company. The self arm stays open to a token for the revocation's
-	// reason above: what it ends includes the token.
-	ActionSessionEnd: {class: ClassDirectorySelf, recency: iam.RecencyStepUp,
+	// whole company. The self arm stays open to a token for the
+	// revocation's reason above: what it ends includes the token.
+	ActionSessionEnd: {class: ClassDirectory, recency: iam.RecencyStepUp,
 		selfRecency: iam.RecencyAny, presence: PresenceRequiredForOthers},
-	// ENDING EVERY SESSION IN THE COMPANY takes BOTH HATS — the design's
-	// rule, and the one internal/iamdomain's own record holds too: the
-	// deployment's grant, because a restore is run by whoever runs the
-	// deployment, AND the directory's, because it ends every person's
-	// authority at once, every machine token included. Admitted on the
-	// deployment's grant alone, the route promised an SRE a gesture the
-	// record then refused them. Its own verb beside the deployment's other
-	// controls because it is irreversible for everybody at once, and it
-	// needs a person present. A Tier A token holds both grants, is its own
-	// credential rather than a machine token and is fresh by construction,
-	// so the restore runbook's CLI step still runs on the day nobody can
-	// sign in.
-	ActionSessionInvalidate: {class: ClassOperator, grant: iam.GrantFleetOperate,
-		also: iam.GrantPeopleManage, recency: iam.RecencyStepUp,
+	// ENDING EVERY SESSION IN THE COMPANY is admin's, a person's, and a
+	// recent proof's: it ends every person's authority at once, every
+	// machine token included, and cannot be taken back. A Tier A token holds
+	// admin, is its own credential rather than a machine token and is fresh
+	// by construction, so the restore runbook's CLI step still runs on the
+	// day nobody can sign in.
+	ActionSessionInvalidate: {class: ClassAdmin, recency: iam.RecencyStepUp,
 		presence: PresenceRequired},
 }
 
@@ -696,38 +750,44 @@ func PresenceOf(a Action) (Presence, bool) {
 	return r.presence, ok
 }
 
+// AppOf reports the app a verb belongs to, and whether the table knows the
+// verb at all.
+//
+// EMPTY WITH ok IS A REAL ANSWER: a verb that belongs to no app — everybody's
+// overview, an agent's own, running the company, the directory. The pair is
+// what lets a walk tell "this verb belongs to no app" from "nobody has written
+// a rule for this verb", which are the two answers a single empty string folds
+// together.
+//
+// EXPORTED FOR THE WALKS, on [RecencyOf]'s terms — a caller that read this
+// and decided for itself would be the second implementation this package
+// exists to remove. Use [Decide].
+func AppOf(a Action) (iam.Grant, bool) {
+	r, ok := rules[a]
+	return r.app, ok
+}
+
+// HumanOnlyOf reports whether NO AGENT may take a verb — see [rule.humanOnly]
+// — and whether the table knows the verb at all.
+//
+// EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
+func HumanOnlyOf(a Action) (bool, bool) {
+	r, ok := rules[a]
+	return r.humanOnly, ok
+}
+
+// SeatOnlyOf reports whether ONLY AN AGENT SEAT may take a verb — see
+// [rule.seatOnly] — and whether the table knows the verb at all.
+//
+// EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
+func SeatOnlyOf(a Action) (bool, bool) {
+	r, ok := rules[a]
+	return r.seatOnly, ok
+}
+
 // Actions is every verb this build authorizes, sorted, for the walks that ask
 // whether a surface covered all of them.
 func Actions() []Action { return slices.Sorted(maps.Keys(rules)) }
-
-// GrantOf reports the capability a verb requires, and whether the table knows
-// the verb at all.
-//
-// EMPTY WITH ok IS A REAL ANSWER: every class but [ClassOperator] and
-// [ClassSubtree] decides from the principal's relation to the object alone
-// and asks for no capability. The
-// pair is what lets a walk tell "this verb needs nothing" from "nobody has
-// written a rule for this verb", which are the two answers a single empty
-// string folds together.
-//
-// EXPORTED FOR THE WALKS, on [ClassOf]'s own terms — a caller that read this
-// and decided for itself would be the second implementation this package
-// exists to remove. Use [Decide].
-func GrantOf(a Action) (iam.Grant, bool) {
-	r, ok := rules[a]
-	return r.grant, ok
-}
-
-// AlsoGrantOf reports the SECOND capability a row asks for beside what else
-// admits — a two-party operator row's beside [GrantOf]'s, a relation row's
-// beside the relation — and empty for every row that asks none — see
-// [rule.also].
-//
-// EXPORTED FOR THE WALKS, on [GrantOf]'s terms. Use [Decide].
-func AlsoGrantOf(a Action) (iam.Grant, bool) {
-	r, ok := rules[a]
-	return r.also, ok
-}
 
 // ClassOf reports which rule governs a verb.
 //

@@ -379,18 +379,17 @@ func TestEachProjectFacetTakesItsOwnAnswer(t *testing.T) {
 	}
 
 	// AND THE REFUSAL STILL NAMES BOTH WAYS IN, for the caller that is
-	// neither: "ask the lead" is the useful answer, and so is the grant that
-	// overrides the relation — fleet:operate, the table's admin path. It
-	// named "a person's own" credential once, which is a way in this build
-	// does not have: being a person is no authority over a project here.
+	// neither: "ask the lead" is the useful answer, and so is the permission
+	// that overrides the relation — admin, the table's admin path. It named
+	// "a person's own" credential once, which is a way in this build does
+	// not have: being a person is no authority over a project here.
 	_, err := r.writer.WriteProject(t.Context(), "op-seat", "ENG", edit,
 		tracker.ProjectAuthority{})
 	if err == nil {
-		t.Fatal("a caller that neither leads ENG nor holds fleet:operate set " +
-			"its policy")
+		t.Fatal("a caller that neither leads ENG nor holds admin set its policy")
 	}
 	if !strings.Contains(err.Error(), "lead") ||
-		!strings.Contains(err.Error(), "fleet:operate") {
+		!strings.Contains(err.Error(), "an admin") {
 		t.Errorf("the refusal does not name both ways in: %v", err)
 	}
 }

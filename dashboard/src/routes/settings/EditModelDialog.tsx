@@ -5,7 +5,7 @@
  *
  * A NEW CONFIGURATION REVISION, not an act: a model is a `providers.llm`
  * entry, so the write is the entity PUT at `/config/llm-providers/{id}`
- * through `protocol/configWrite.ts`, guarded by the `config:write` grant
+ * through `protocol/configWrite.ts`, guarded by Admin
  * (`useConfigWriteAccess`). It states the revision it was read from, so a
  * colleague's save in between is a conflict to re-read rather than an
  * overwrite.

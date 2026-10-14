@@ -1,6 +1,7 @@
 package iamapi_test
 
 import (
+	"errors"
 	"maps"
 	"net/http"
 	"reflect"
@@ -15,19 +16,23 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
+	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
-// THE DASHBOARD OFFERS EXACTLY THE ENGINE'S GRANTS, in its order, and withholds
-// from a token exactly the grants the engine never lets one carry.
+// THE DASHBOARD OFFERS EXACTLY THE ENGINE'S PERMISSIONS, in its order, and
+// treats as apps exactly the engine's apps.
 //
-// People & access confers grants — an invitation, an edit, a service account,
-// a token — by ticking them off `GRANTS`, and greys out of a token's mint the
-// ones in `TOKEN_WITHHELD_GRANTS`. A grant the engine grew that the list lacks
-// is one no administrator can confer from the dashboard, and one the list kept
-// that the engine dropped is a box every write refuses.
+// People & access confers access — an invitation, an edit, a service account,
+// a token — by ticking it off `GRANTS`, and the access picker ticks and locks
+// `APPS` when Admin is ticked, because admin includes every app ([iam.Expand]).
+// A permission the engine grew that the list lacks is one no administrator can
+// confer from the dashboard; one the list kept that the engine dropped is a box
+// every write refuses; and an app the picker does not lock under Admin is one
+// a person reads as withheld from an administrator who holds it.
 //
-// Mutation: drop a grant from either list, or reorder `GRANTS`, and this fails.
+// Mutation: drop a name from either list, reorder `GRANTS`, or add admin to
+// `APPS`, and this fails.
 func TestTheDashboardOffersExactlyTheEnginesGrants(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)
@@ -36,7 +41,7 @@ func TestTheDashboardOffersExactlyTheEnginesGrants(t *testing.T) {
 		want []iam.Grant
 	}{
 		{"GRANTS", iam.AllGrants},
-		{"TOKEN_WITHHELD_GRANTS", iam.PersonPresentGrants},
+		{"APPS", iam.Apps},
 	} {
 		body, err := clientsource.Literal(tree, tc.name)
 		if err != nil {
@@ -206,23 +211,53 @@ func TestTheDashboardWordsEveryFindingKindInTheEnginesOrder(t *testing.T) {
 // holder and its invitation — and a key renamed on the engine's side alone
 // would draw an invited seat as vacant on every one of them, with nothing
 // failing. So each is held to the answer itself, from a fixture that fills
-// every half — a held seat, an invited one whose address opens, an invited
-// one whose address does not, and a vacant one — in both directions: every
-// member is sent by some row, a REQUIRED member by every row, and every key a
-// row sends is declared. And a field the engine OMITS when empty is optional in
-// the declaration, read off the struct, because a required member the wire can
-// leave out promises every screen a value that is not there.
+// every half — a seat held by somebody whose name opens and one by somebody
+// whose name does not, an invited one whose address opens, an invited one
+// whose address does not, and a vacant one — read as an ADMIN, the one reader
+// sent every member, in both directions: every member is sent by some row, a
+// REQUIRED member by every row, and every key a row sends is declared. And a
+// field the engine OMITS when empty is optional in the declaration, read off
+// the struct, because a required member the wire can leave out promises every
+// screen a value that is not there — which, since a holder's account reaches
+// only an admin and the holder, is every member of it but the kind.
 //
 // Mutation: rename a JSON key on [iamapi.SeatInvitation] or
 // [iamapi.SeatHolding], drop a member from a declaration, or mark the
-// holder's login required, and this fails.
+// holder's login or name required, and this fails.
 func TestTheSeatSurfacesReadWhatTheSeatListingSends(t *testing.T) {
 	t.Parallel()
-	r := seatsRig(t)
-	r.directory.seatInvites = append(r.directory.seatInvites,
-		iamdomain.SeatInvitation{Invitation: "inv-foreign", Seat: "sales",
-			Sealed: "foreign", CreatedAt: at, ExpiresAt: at.Add(time.Hour)})
-	got := r.as(administrator(), http.MethodGet, "/iam/seats", nil)
+	r := newRig(t, func(o *iamapi.Options) {
+		o.Seats = fakeSeats{seats: []session.Seat{
+			{Handle: "founder", Name: "Founder", Kind: "human"},
+			{Handle: "ops-lead", Name: "Ops Lead", Kind: "human", Unit: "ops"},
+			{Handle: "support", Name: "Support", Kind: "human", Unit: "ops"},
+			{Handle: "sales", Name: "Sales", Kind: "human"},
+			{Handle: "vacant", Name: "Vacant", Kind: "human"},
+		}}
+		// BOB'S NAME DOES NOT OPEN, so a holder is sent `sealed` as well
+		// as one sent the name itself.
+		o.Opener = failingOpener{person: bob.String(),
+			err: errors.New("sealed under a key this keyring does not hold")}
+	})
+	r.directory.bindings = []iamdomain.SeatBinding{
+		{Person: alice.String(), Login: "alice.admin", Kind: iam.KindPerson,
+			NameSealed: []byte("sealed-name"), Seat: "founder",
+			Stage: iam.StageActive},
+		{Person: bob.String(), Login: "bob.sre", Kind: iam.KindPerson,
+			NameSealed: []byte("sealed-name"), Seat: "ops-lead",
+			Stage: iam.StageSuspended},
+	}
+	r.directory.seatInvites = []iamdomain.SeatInvitation{
+		{Invitation: "inv-open", Seat: "support", Sealed: "sealed",
+			InvitedBy: "founder", CreatedAt: at.Add(-time.Hour),
+			ExpiresAt: at.Add(time.Hour)},
+		{Invitation: "inv-foreign", Seat: "sales", Sealed: "foreign",
+			CreatedAt: at, ExpiresAt: at.Add(time.Hour)},
+	}
+	admin := proved(iam.Principal{ID: alice, Login: "alice.admin",
+		Kind: iam.KindPerson, Stage: iam.StageActive, Seat: "founder",
+		Grants: []iam.Grant{iam.GrantAdmin}})
+	got := r.as(admin, http.MethodGet, "/iam/seats", nil)
 	if got.status != http.StatusOK {
 		t.Fatalf("GET /iam/seats = %d: %v", got.status, got.body)
 	}

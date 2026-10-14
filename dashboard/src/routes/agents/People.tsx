@@ -32,6 +32,9 @@ import { UsersGlyph } from "@crewlethq/icons/glyphs";
 import { Segmented } from "~/ui/primitives.tsx";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { TRACKER } from "~/lib/access.ts";
+import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
   activityOf,
@@ -68,7 +71,13 @@ type Grouping = (typeof GROUPINGS)[number];
  * absolute number that is "full".
  */
 function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
-  const answer = useQuery("work_workload", undefined, { pollMs: 60_000 });
+  // THE TRACKER'S QUESTION, asked only of a reader holding Tracker: who holds
+  // how much open work is the tracker's to say.
+  const viewer = useViewer();
+  const answer = useQuery("work_workload", undefined, {
+    pollMs: 60_000,
+    enabled: viewer.tracker,
+  });
   // THE BAR'S "FIND A SEAT" NARROWS THIS VIEW TOO, by the fields a load row
   // has: who it is and where they sit. The bar stays the same field whichever
   // view is open, so it has to mean something on both.
@@ -87,6 +96,11 @@ function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
   // rather than per row, so every track on the table is drawn against the
   // same number.
   const heaviest = useMemo(() => rows.reduce((n, load) => Math.max(n, load.open), 0), [rows]);
+  if (!viewer.loading && !viewer.tracker) {
+    return (
+      <GrantRequired what="Workload" grants={[TRACKER]} reader={viewer.login} size="compact" />
+    );
+  }
   return (
     <QueryState
       error={answer.error}

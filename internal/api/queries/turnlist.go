@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -25,6 +27,9 @@ import (
 // THE CURSOR IS ON THE TURN, not on an event, because that is what the listing
 // is ordered by — and it is exactly the defect the browser-side fold had: a
 // keyset on any one event pages a turn twice. It is OPAQUE ([turnCursor]).
+//
+// ONE SEAT'S TURNS ARE ITS TRAIL, and every seat's are the company's — see
+// [Sources.trailOf], which decides both before anything is read.
 func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 	q := store.TurnQuery{
 		SinceDays: p.Int("days", 0),
@@ -67,7 +72,7 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 	// rows — which link here with `seat=<handle>` — landed on every seat's
 	// turns, and a role name could not tell apart two unit seats stamped
 	// from one template. See [Sources.seatAgentID].
-	agentID, err := s.seatParam(p)
+	agentID, principal, err := s.trailOf(ctx, "turns", p)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +82,16 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 	item, err := workItemParam(p)
 	if err != nil {
 		return nil, err
+	}
+	// AND ONLY FOR WHOEVER THE TRACKER SHOWS A TASK TO. [turnsFor] withholds
+	// the item each turn was charged to from anybody else, and a filter by
+	// that item would hand it straight back: which of an agent's turns were
+	// on ENG-42 is the tracker's fact, asked of the trail. Refused naming the
+	// tracker rather than dropped, because the unfiltered page answers a
+	// different question from the one that was asked.
+	if item != "" && !authz.Shows(principal, authz.KindTask) {
+		return nil, &Refusal{What: "turns on a work item", Reason: authz.ReasonNoGrant,
+			Grants: []iam.Grant{authz.AppFor(authz.KindTask)}}
 	}
 	q.WorkItem = item
 	// THE WINDOW AS TWO INSTANTS ON THE TURN'S START, or as whole days back
@@ -121,7 +136,8 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]any{"turns": page.Turns, "next": nil, "coverage": coverage}
+	out := map[string]any{"turns": turnsFor(page.Turns, principal), "next": nil,
+		"coverage": coverage}
 	if page.Next != nil {
 		// THE CURSOR THE CALLER RESUMES FROM, echoed rather than left for
 		// a client to assemble — the same rule the event list follows,
@@ -134,6 +150,64 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 		out["next"] = encodeTurnCursor(*page.Next)
 	}
 	return out, nil
+}
+
+// trailOf is the seat a TRAIL LISTING — `turns`, `phases` — is narrowed to by
+// `seat=`, as the agent id its rows are filed under, decided before anything
+// is read; and the principal the answer is shown to.
+//
+// # One seat's, or the company's
+//
+// ONE SEAT'S TURNS AND PHASES ARE ITS TRAIL — the prompts it was sent, the
+// responses it gave, what woke it — and are read by whoever reads that seat's
+// trail ([authz.ActionSeatTrailRead]: an admin, or the seat's lead, who
+// steers, pauses and answers for the agents they run and could do none of it
+// well without reading what those agents did). EVERY SEAT'S AT ONCE is the
+// company-wide trail ([authz.ActionAuditRead], an admin's), which no lead's
+// relation reaches: a listing naming no seat is every seat in the company.
+//
+// DECIDED BEFORE THE HANDLE IS RESOLVED, so a seat the caller may not read is
+// refused in the same words whether or not it is an agent's.
+func (s Sources) trailOf(ctx context.Context, what string, p Params) (string, iam.Principal, error) {
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return "", principal, unresolved(ctx, what)
+	}
+	handle := strings.TrimSpace(p.String("seat"))
+	if handle == "" {
+		d := authz.Decide(ctx, principal, authz.ActionAuditRead,
+			authz.Object{Kind: authz.KindCompany}, s.Chart, s.clock())
+		switch {
+		case d.Unknown():
+			return "", principal, fmt.Errorf("%w: this node cannot decide %s yet: %w",
+				ErrUnavailable, authz.ActionAuditRead, d.Err)
+		case !d.Allowed:
+			return "", principal, refused(what, d)
+		}
+		return "", principal, nil
+	}
+	if err := s.mayRead(ctx, principal, authz.ActionSeatTrailRead, handle); err != nil {
+		return "", principal, err
+	}
+	agentID, err := s.seatAgentID(handle)
+	return agentID, principal, err
+}
+
+// turnsFor is a page of turns as p is shown it: each turn's work item — the
+// task it was charged to — only where [authz.Shows] shows p a task (ADR-0033).
+// A lead reads their agents' trail whether or not they use the tracker, and
+// their agents' turns are not a way into it. A COPY wherever it changes
+// anything.
+func turnsFor(turns []store.Turn, p iam.Principal) []store.Turn {
+	if turns == nil || authz.Shows(p, authz.KindTask) {
+		return turns
+	}
+	out := make([]store.Turn, len(turns))
+	for i, turn := range turns {
+		turn.WorkItem = nil
+		out[i] = turn
+	}
+	return out
 }
 
 // A PAGE OF TURNS RESUMES FROM AN OPAQUE CURSOR: `next` is a token, and `before`

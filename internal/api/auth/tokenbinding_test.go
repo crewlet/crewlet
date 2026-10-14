@@ -55,8 +55,8 @@ func tokenGuard(t *testing.T, bindings auth.SeatBindings) *auth.Guard {
 	t.Helper()
 	b := config.DefaultBootstrap()
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: opsToken,
-		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite}}}
-	b.API.Auth.MaxGrants = iam.AllGrants
+		Grants: []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}}}
+	b.API.Auth.Admin = iam.AdminServe
 	return auth.New(&b).BindSeats(bindings)
 }
 
@@ -104,7 +104,7 @@ func TestABoundTokenActsAsTheSeatTheChartHolds(t *testing.T) {
 	if p.Login != opsLogin {
 		t.Errorf("login %q, want the token's own %q", p.Login, opsLogin)
 	}
-	if len(p.Grants) != 2 || p.Can(iam.GrantPeopleManage) {
+	if len(p.Grants) != 2 || p.Can(iam.GrantAdmin) {
 		t.Errorf("grants %v, want exactly what Tier A declared", p.Grants)
 	}
 }

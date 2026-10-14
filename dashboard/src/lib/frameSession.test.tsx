@@ -1,11 +1,11 @@
 /**
- * The frame's one session read: who this browser is, and whether it may read
- * the company — asked again on a clock only while it may not.
+ * The frame's one session read: who this browser is — asked once, whatever it
+ * holds, because every session is dialled and the socket says the rest.
  */
 
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { NO_ACCESS_RECHECK_MS, SessionReading, useFrameSession } from "./frameSession.ts";
+import { SessionReading, useFrameSession } from "./frameSession.ts";
 import { currentReader } from "./reader.ts";
 import { page } from "./session.ts";
 import { STORAGE_KEYS } from "./storage.ts";
@@ -50,12 +50,12 @@ function Probe() {
 
 const reads = () => vi.mocked(fetch).mock.calls.length;
 
-// NOTHING ELSE CAN TELL A TAB WITH NO ACCESS THAT IT HAS SOME NOW: the identity
-// move naming its person is pushed over the socket it does not have. So it asks
-// again on a clock, and stops once an answer holds the grant. The CONTROL is
-// the clock after that answer, which asks nothing more. Mutation: drop the
-// clock, or keep it running for a session with access, and a count is wrong.
-test("a session without state:read is asked again on a clock, and one with it is not", async () => {
+// A SESSION WITH NO APP IS READ ONCE, LIKE ANY OTHER: the socket admits every
+// principal the engine resolves and serves them the overview, so access given
+// later reaches the tab by the engine closing its socket to reconnect — never
+// by the frame asking again on a clock. Mutation: put a clock back for a
+// session holding nothing and the count moves.
+test("a session holding no app is read once, and never again on a clock", async () => {
   render(
     <SessionReading>
       <Probe />
@@ -65,19 +65,12 @@ test("a session without state:read is asked again on a clock, and one with it is
     await vi.advanceTimersByTimeAsync(0);
   });
   expect(reads()).toBe(1);
-  expect(seen?.noAccess).toBe(true);
-
-  grants = ["state:read"];
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(NO_ACCESS_RECHECK_MS);
-  });
-  expect(reads()).toBe(2);
-  expect(seen?.noAccess).toBe(false);
+  expect(seen?.answer?.grants).toEqual([]);
 
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(NO_ACCESS_RECHECK_MS * 10);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
   });
-  expect(reads()).toBe(2);
+  expect(reads()).toBe(1);
 });
 
 test("outside the frame's reading it refuses, rather than asking for itself", () => {
@@ -96,7 +89,7 @@ test("outside the frame's reading it refuses, rather than asking for itself", ()
 // tab read by the same person and a tab nobody has recorded, which carry on
 // and adopt. Mutation: adopt rather than take the session and nothing reloads.
 test("a session somebody else's sign-in left hands the tab to them", async () => {
-  grants = ["state:read"];
+  grants = [];
   for (const [reader, reloaded] of [
     ["p-0", true],
     ["p-1", false],

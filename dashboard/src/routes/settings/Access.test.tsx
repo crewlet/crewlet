@@ -33,8 +33,8 @@ class InertWebSocket {
   close(): void {}
 }
 
-/** An auditor: reads the directory, and the company document beside it. */
-const AUDITOR = { login: "ana.diaz", owner: "jane", grants: ["audit:read", "config:read"] };
+/** An administrator: reads the directory, and the company document beside it. */
+const ADMIN = { login: "ana.diaz", owner: "jane", grants: ["admin"] };
 
 const PAGE_ONE = {
   people: [
@@ -45,7 +45,7 @@ const PAGE_ONE = {
       login: "ana.diaz",
       name: "Ana Diaz",
       seat: "jane",
-      grants: ["audit:read", "config:read"],
+      grants: ["admin"],
     },
     { id: "p-sealed", kind: "person", stage: "active", login: "bo.lang", sealed: true },
   ],
@@ -91,13 +91,13 @@ const CHECK = {
       detail: "the seat removed-seat is not in the org chart",
     },
   ],
-  people_with_people_manage: 1,
+  people_with_admin: 1,
   bindings_unchecked: 0,
 };
 
 const OPEN_INVITATIONS = {
   invitations: [
-    { id: "inv-1", email: "sam@example.com", seat: "sam", grants: ["state:read"], state: "open" },
+    { id: "inv-1", email: "sam@example.com", seat: "sam", grants: [], state: "open" },
     { id: "inv-2", sealed: true, grants: [], state: "open" },
   ],
   next: "",
@@ -168,7 +168,7 @@ function stubIam(override: (url: URL) => Response | null = () => null) {
   return asked;
 }
 
-function mount(viewer: Record<string, unknown> = AUDITOR) {
+function mount(viewer: Record<string, unknown> = ADMIN) {
   const store = new Store();
   store.applyOrg(CHART_ORG);
   const socket = new LiveSocket(store);
@@ -258,6 +258,14 @@ test("a seat names who holds it and a token the seat its row binds", async () =>
   expect(within(deploy).getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
   const spare = screen.getByText("token:spare").closest(".grid-row") as HTMLElement;
   expect(within(spare).getByText(TOKEN_ROW_WORDS.none!.label)).toBeTruthy();
+  // The row's hint is the command that binds it, whole: the CLI refuses a
+  // service account's create naming no `-grants`, so without it the command
+  // fails as pasted.
+  expect(
+    within(spare)
+      .getByTitle(/crewlet iam create/)
+      .getAttribute("title"),
+  ).toContain("crewlet iam create -kind machine -login token:<id> -seat <seat> -grants none");
   expect(within(spare).getByText("Bound to no seat")).toBeTruthy();
   const tokensTile = screen
     .getByText("API tokens on this node", {
@@ -367,27 +375,30 @@ test("a refused reader sees the refusal and its grants, and no tiles", async () 
           error: "unauthorized",
           message: "you may not",
           reason: "directory",
-          grants: ["people:manage", "audit:read"],
+          grants: ["admin"],
         })
       : null,
   );
-  mount({ login: "dee", owner: "dee", grants: ["state:read"] });
-  const banner = await screen.findByText(/You may not read this/);
-  expect(banner.textContent).toMatch(/people:manage/);
-  expect(banner.textContent).toMatch(/audit:read/);
+  mount({ login: "dee", owner: "dee", grants: [] });
+  const [banner] = await screen.findAllByText(/^This answer needs Admin access\./);
+  expect(banner!.closest(".crewlet-callout")?.textContent).toMatch(/Refused as directory/);
   expect(screen.queryByText("People")).toBeNull();
   expect(screen.queryByText("Nobody is in the directory yet")).toBeNull();
 });
 
 // THE CONTACT IDENTITIES ARE THE COMPANY DOCUMENT'S: a reader without
-// `config:read` is never put the question, and each seat says what it takes.
-test("a reader without config:read is told what reading a seat's surfaces needs", async () => {
+// Admin is never put the question, and each seat says what it takes.
+test("a reader without Admin is told what reading a seat's surfaces needs", async () => {
   stubIam();
-  const { queried } = mount({ login: "ana.diaz", owner: "jane", grants: ["audit:read"] });
+  const { queried } = mount({
+    login: "ana.diaz",
+    owner: "jane",
+    grants: ["tracker", "knowledge"],
+  });
   // ONE SENTENCE PER SEAT, every seat refused alike.
   expect(
     await screen.findAllByText(
-      "Reading where a seat is reached needs config:read, which the credential you presented does not carry.",
+      "Reading where a seat is reached needs Admin access. An admin can give it to you.",
     ),
   ).toHaveLength(3);
   expect(queried).not.toContain("config");
@@ -448,7 +459,7 @@ test("no grid beside or inside the person peek floors a flexible column at zero"
     expect([...tracks(wrap).values()].filter((t) => t === "minmax(0, 1fr)")).toEqual([]);
   }
   expect(tracks(people).get("Seat")).toBe("minmax(8rem, 1fr)");
-  expect(tracks(people).get("Grants")).toBe("minmax(8rem, 1fr)");
+  expect(tracks(people).get("Access")).toBe("minmax(8rem, 1fr)");
   expect(tracks(credentials).get("Credential")).toBe("minmax(8rem, 1fr)");
   expect(tracks(credentials).get("State")).toBe("max-content");
   expect(tracks(sessions).get("Session")).toBe("max-content");
@@ -614,11 +625,11 @@ test("a reset link its person used reads used, one withdrawn reads revoked", asy
   expect(screen.getAllByText("Revoked")).toHaveLength(1);
 });
 
-// A RESET LINK CARRIES NO GRANT: it sets a password once and signs nobody in,
-// and the panel said it carried "Its holder's grants". The CONTROL is a
+// A RESET LINK CARRIES NO ACCESS: it sets a password once and signs nobody
+// in, and the panel said it carried "Its holder's grants". The CONTROL is a
 // password, which signs its holder in with what they hold. Mutation: give the
 // link the password's words and the first expectation goes red.
-test("a reset link says it sets a password, never that it carries grants", async () => {
+test("a reset link says it sets a password, never that it carries access", async () => {
   location.hash = "#/settings/people?peek=person:p-ana";
   stubIam((url) =>
     url.pathname === "/iam/credentials"
@@ -633,9 +644,9 @@ test("a reset link says it sets a password, never that it carries grants", async
   mount();
   const link = (await screen.findByText("Password reset link")).closest(".grid-row") as HTMLElement;
   expect(within(link).getByText("Sets a password once")).toBeTruthy();
-  expect(within(link).queryByText("Its holder's grants")).toBeNull();
+  expect(within(link).queryByText("Its holder's access")).toBeNull();
   const password = screen.getByText("Password").closest(".grid-row") as HTMLElement;
-  expect(within(password).getByText("Its holder's grants")).toBeTruthy();
+  expect(within(password).getByText("Its holder's access")).toBeTruthy();
 });
 
 // AN ENDED CREDENTIAL DRAWS NO DEADLINE IT WILL NEVER REACH. A used reset

@@ -32,7 +32,8 @@ export interface QueryResult<T> {
   data: T | null;
   /** True only before the FIRST answer. A poll keeps the last answer on
    *  screen — replacing a rendered table with a skeleton every 30 seconds is
-   *  how a polled screen becomes unreadable. */
+   *  how a polled screen becomes unreadable. True too for a question that has
+   *  just been ENABLED and not yet sent: see the hook's return. */
   loading: boolean;
   /** The engine's machine-readable code (`unauthorized`, `unavailable`,
    *  `timeout`, …), or null. Typed as the contract's own union, so a screen
@@ -41,10 +42,10 @@ export interface QueryResult<T> {
   error: QueryErrorCode | null;
   /**
    * What the engine said beyond the code, or null: on a refusal on AUTHORITY,
-   * the rule and the grants any one of which would have admitted the reader;
+   * the rule and the access any one of which would have admitted the reader;
    * on `unavailable`, the state log's refusal behind it and whether asking
    * this node again can change the answer. What `QueryState` renders a
-   * refusal FROM, so a screen says "this needs audit:read" rather than "not
+   * refusal FROM, so a screen says "this needs Admin access" rather than "not
    * allowed".
    */
   refusal: QueryRefusal | LogRefusal | null;
@@ -142,7 +143,14 @@ export function useQuery<K extends QueryName>(
     error: QueryErrorCode | null;
     refusal: QueryRefusal | LogRefusal | null;
     detail?: string;
-  }>({ data: null, loading: enabled, error: null, refusal: null });
+    /**
+     * Whether this state was written for the question ENABLED — by the first
+     * render, or by an effect that sent it. Never "data is null": an engine
+     * may answer null (the company document, where none is active), and that
+     * answer is not a question still to be sent.
+     */
+    sent: boolean;
+  }>({ data: null, loading: enabled, error: null, refusal: null, sent: enabled });
 
   // The params object is a fresh literal on every render, so it cannot be a
   // dependency. Its serialisation can.
@@ -161,7 +169,7 @@ export function useQuery<K extends QueryName>(
 
   useEffect(() => {
     if (!enabled) {
-      setState({ data: null, loading: false, error: null, refusal: null });
+      setState({ data: null, loading: false, error: null, refusal: null, sent: false });
       return;
     }
     const mine = ++generation.current;
@@ -172,7 +180,7 @@ export function useQuery<K extends QueryName>(
       try {
         const data = await socket.query(what, withFloor(what, key));
         if (generation.current !== mine) return;
-        setState({ data, loading: false, error: null, refusal: null });
+        setState({ data, loading: false, error: null, refusal: null, sent: true });
       } catch (err) {
         if (generation.current !== mine) return;
         // A socket rejection always carries a code; anything else that
@@ -190,6 +198,7 @@ export function useQuery<K extends QueryName>(
           error: code,
           refusal,
           ...(detail ? { detail } : {}),
+          sent: true,
         }));
       } finally {
         // THE SOONER OF THE TWO. A poll keeps its own cadence; a refusal
@@ -203,7 +212,7 @@ export function useQuery<K extends QueryName>(
       }
     };
 
-    setState((prev) => ({ ...prev, loading: prev.data === null }));
+    setState((prev) => ({ ...prev, loading: prev.data === null, sent: true }));
     void run();
 
     return () => {
@@ -261,7 +270,15 @@ export function useQuery<K extends QueryName>(
     });
   }, [store, enabled, refetchOnInboxOf, refetch]);
 
-  return { ...state, refetch };
+  // A QUESTION ENABLED AND NOT YET SENT IS LOADING, whatever the effect has
+  // had the chance to write: a read gated on the viewer's answer turns
+  // `enabled` on in a render whose state was written while it was off
+  // (loading false, no data), and for that one render the screen drew the
+  // question as answered with nothing — a run's page mounted its live output
+  // and asked for it, then went back to its skeleton when the effect caught
+  // up, and asked again. `sent` and not "no data", because null is an answer.
+  const { sent, ...result } = state;
+  return { ...result, loading: state.loading || (enabled && !sent), refetch };
 }
 
 /** The keys that already say how fresh an answer must be. */

@@ -49,10 +49,11 @@ func TestAWriteNobodyCanConfirmIsNeitherAnsweredNorAnnounced(t *testing.T) {
 		{"minting a token", "mint", http.MethodPost,
 			"/iam/credentials?person=" + alice.String(), map[string]any{"label": "ci"}},
 		{"inviting somebody", "invite", http.MethodPost, "/iam/invitations",
-			map[string]any{"email": "dana@example.com", "seat": "sre"}},
+			map[string]any{"email": "dana@example.com", "seat": "sre",
+				"grants": iam.Apps}},
 		{"creating a person", "create", http.MethodPost, "/iam/people",
 			map[string]any{"login": "dana.sre", "email": "dana@example.com",
-				"seat": "sre"}},
+				"seat": "sre", "grants": iam.Apps}},
 		{"invalidating every session", "invalidate", http.MethodPost,
 			"/iam/invalidate-all", nil},
 	} {
@@ -62,9 +63,7 @@ func TestAWriteNobodyCanConfirmIsNeitherAnsweredNorAnnounced(t *testing.T) {
 			r.writer.outcomes = map[string]statelog.Outcome{
 				tc.call: statelog.OutcomeUnknown,
 			}
-			caller := administrator()
-			caller.Grants = append(caller.Grants, iam.GrantFleetOperate)
-			got := r.as(caller, tc.method, tc.target, tc.body)
+			got := r.as(administrator(), tc.method, tc.target, tc.body)
 			if got.status != http.StatusServiceUnavailable ||
 				got.header.Get("Retry-After") != "2" {
 				t.Fatalf("answered %d with Retry-After %q (%v), want 503 carrying 2",
@@ -112,7 +111,7 @@ func TestACreateNobodyCanConfirmHandsOutNoLink(t *testing.T) {
 			r.writer.unvouched = map[string]bool{"create": unvouched}
 			got := r.as(administrator(), http.MethodPost, "/iam/people",
 				map[string]any{"login": "dana.sre", "email": "dana@example.com",
-					"seat": "founder"})
+					"seat": "founder", "grants": iam.Apps})
 			if got.status != http.StatusServiceUnavailable {
 				t.Fatalf("answered %d (%v), want 503", got.status, got.body)
 			}
@@ -153,10 +152,10 @@ func TestACreateRetriedUnderItsKeyNamesWhatItsFirstAttemptCreated(t *testing.T) 
 	}{
 		{"a person", "create", "/iam/people",
 			map[string]any{"login": "dana.sre", "email": "dana@example.com",
-				"seat": "sre"},
+				"seat": "sre", "grants": iam.Apps},
 			func(r *rig, _ answered) string { return r.writer.created.PersonID }},
 		{"an invitation", "invite", "/iam/invitations",
-			map[string]any{"email": "dana@example.com", "seat": "sre"},
+			map[string]any{"email": "dana@example.com", "seat": "sre", "grants": iam.Apps},
 			func(_ *rig, answer answered) string {
 				id, _ := answer.body["id"].(string)
 				return id
@@ -216,7 +215,7 @@ func TestACreatesKeyThatIsNoUUID7IsRefused(t *testing.T) {
 	for _, target := range []string{"/iam/people", "/iam/invitations"} {
 		got := r.asWith(administrator(), http.MethodPost, target,
 			map[string]any{"login": "dana.sre", "email": "dana@example.com",
-				"seat": "sre"},
+				"seat": "sre", "grants": iam.Apps},
 			http.Header{opkey.Header: {"retry-1"}})
 		if got.status != http.StatusBadRequest {
 			t.Errorf("%s under the key retry-1 answered %d, want 400", target,
@@ -265,7 +264,7 @@ func TestAnEditStopsAtAStepNobodyCanConfirm(t *testing.T) {
 	stage := iam.StageSuspended
 	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(),
 		map[string]any{"seat": "platform", "stage": stage,
-			"grants": []iam.Grant{iam.GrantStateRead}})
+			"grants": []iam.Grant{iam.GrantTracker}})
 	if got.status != http.StatusServiceUnavailable {
 		t.Fatalf("answered %d (%v), want 503", got.status, got.body)
 	}
@@ -363,9 +362,9 @@ func TestALinkWithNoExternalURLIsAFault(t *testing.T) {
 		body         map[string]any
 	}{
 		{"an invitation", "/iam/invitations",
-			map[string]any{"email": "dana@example.com", "seat": "sre"}},
+			map[string]any{"email": "dana@example.com", "seat": "sre", "grants": iam.Apps}},
 		{"a person's create", "/iam/people",
-			map[string]any{"email": "dana@example.com", "seat": "sre"}},
+			map[string]any{"email": "dana@example.com", "seat": "sre", "grants": iam.Apps}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -384,7 +383,8 @@ func TestALinkWithNoExternalURLIsAFault(t *testing.T) {
 	}
 	r := newRig(t, func(o *iamapi.Options) { o.ExternalBase = "" })
 	if got := r.as(administrator(), http.MethodPost, "/iam/people",
-		map[string]any{"kind": "machine", "login": "ci:release"}); got.status != http.StatusCreated {
+		map[string]any{"kind": "machine", "login": "ci:release",
+			"grants": []iam.Grant{}}); got.status != http.StatusCreated {
 		t.Errorf("a service account's create answered %d (%v) on a node with no "+
 			"external URL, want 201", got.status, got.body)
 	}
@@ -405,7 +405,7 @@ func TestACreatesRetryHandsBackTheSameFirstLink(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	key := statelog.NewOpID(time.Now(), "")
-	body := map[string]any{"email": "dana@example.com", "seat": "sre"}
+	body := map[string]any{"email": "dana@example.com", "seat": "sre", "grants": iam.Apps}
 	first := r.asWith(administrator(), http.MethodPost, "/iam/people", body,
 		http.Header{opkey.Header: {key}})
 	if first.status != http.StatusCreated || first.body["url"] == nil {

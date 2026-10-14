@@ -28,14 +28,15 @@
  * carries the block. `{}`, the answer of a node running no company, carries
  * neither half and indexes as an empty company, as does an org not read yet.
  *
- * THE GUARDED HALF IS NOT HERE EITHER. `/org` is the `state:read` projection,
- * so it carries a charter, a tree and the budgets as written — and, to a
- * reader holding `config:read`, each agent seat's RESOLVED model chain and
- * tool sources ([resolvedAbsence] says what their absence means to everybody
- * else). Nothing else: a seat's email, authored `llm` fields, contact
- * identities, tool credentials, integrations and schedules are read from the
- * company document through the `config` query, which takes `config:read` and
- * is what [seatSettings] and [unitSettings] below are for.
+ * THE GUARDED HALF IS NOT HERE EITHER. `/org` is the overview's projection,
+ * which every signed-in reader is sent, so it carries a charter, a tree, each
+ * human seat's holder and the budgets as written — and, to an admin, each
+ * agent seat's RESOLVED model chain and tool sources ([resolvedAbsence] says
+ * what their absence means to everybody else). Nothing else: a seat's email,
+ * authored `llm` fields, contact identities, tool credentials, integrations
+ * and schedules are read from the company document through the `config`
+ * query, which takes Admin and is what [seatSettings] and [unitSettings]
+ * below are for.
  *
  * Resolved ONCE, into an index, and screens consume seats. Doing it per screen
  * is how the previous dashboard ended up walking the whole roster once per
@@ -48,7 +49,7 @@ import type { AvatarStatus } from "@crewlethq/ui";
 import { avatarOf, type AgentAvatar } from "./avatar.ts";
 import { parseUTC, plural } from "./format.ts";
 import { useLeadScope } from "./leadScope.ts";
-import { needsSentence } from "./refusal.ts";
+import { ADMIN, holds, needsWords } from "./access.ts";
 import { useQuery } from "./useQuery.ts";
 import { useRest } from "./useRest.ts";
 import { useOrg } from "./store-hooks.ts";
@@ -664,8 +665,8 @@ export type SeatSettings =
 /**
  * WHAT THIS READER CAN SAY ABOUT A SEAT'S GUARDED HALF.
  *
- * FIVE OUTCOMES, NOT A NULLABLE ROLE. The company document takes
- * `config:read`, so "this seat is not in the active revision", "you may not
+ * FIVE OUTCOMES, NOT A NULLABLE ROLE. The company document takes Admin, so
+ * "this seat is not in the active revision", "you may not
  * read it", "nobody asked, because you may not", "the read has not come back
  * yet" and "here it is" are five different facts — and a `ConfigRole | null`
  * collapses the first four into one. Every screen that did that printed the
@@ -676,22 +677,22 @@ export type SeatSettings =
  *
  * THE ERROR IS CHECKED FIRST, and that order is the whole of it. `useQuery`
  * keeps its last good answer through a failed ask — which suits a poll and is
- * exactly wrong for a guarded read: once a grant is withdrawn, the document it
+ * exactly wrong for a guarded read: once Admin is withdrawn, the document it
  * had been allowed to read is still in hand, so a reading that looked at the
  * answer first would keep printing a revoked reader's model, budget and
- * schedules beside a banner saying the answer needs a grant.
+ * schedules beside a banner saying the answer needs Admin.
  */
 export type SeatReading =
   | { state: "read"; role: ConfigRole; unit: ConfigUnit | null }
   /** The revision answered and names no seat by this handle. */
   | { state: "absent" }
-  /** The engine refused the read: this reader does not hold `config:read`. */
+  /** The engine refused the read: this reader does not hold Admin. */
   | { state: "refused" }
   /**
    * NEVER ASKED, because the answer was known before the question: the viewer
-   * has answered, holds no `config:read` and leads no unit over the seat, so
-   * the engine would refuse it ([useSeatSetup]). A claim about the READER —
-   * which grant reads the seat's half — and never one about the company.
+   * has answered, is no admin and leads no unit over the seat, so the engine
+   * would refuse it ([useSeatSetup]). A claim about the READER — which access
+   * reads the seat's half — and never one about the company.
    */
   | { state: "withheld" }
   /**
@@ -722,19 +723,18 @@ export function seatReading(
 }
 
 /**
- * The grant the company document is read under, and the org projection a
+ * The access the company document is read under, and the org projection a
  * seat's RESOLVED setup under: its model chain and its tool sources are
  * derived from the document's own half, so they follow its rule.
  */
-export const RUNTIME_GRANT = "config:read";
+export const RUNTIME_GRANT = ADMIN;
 
 /**
  * What it means that the org projection carried no model chain (`llm`) or no
  * tool sources (`tool_sources`) for an agent seat — which depends on WHO is
- * reading, because the engine strips both for every audience without
- * `config:read`:
+ * reading, because the engine strips both for every audience but an admin:
  *
- *   - `none` — the reader holds the grant, so the engine would have sent the
+ *   - `none` — the reader is an admin, so the engine would have sent the
  *     value, and its absence is the seat's own: no provider, no tools;
  *   - `withheld` — the reader does not, so the absence says nothing about the
  *     seat at all. Read as `none`, every such reader was told "No provider
@@ -748,18 +748,17 @@ export function resolvedAbsence(viewer: {
   readonly grants: readonly string[];
   readonly loading: boolean;
 }): ResolvedAbsence {
-  if (viewer.grants.includes(RUNTIME_GRANT)) return "none";
+  if (holds(viewer.grants, RUNTIME_GRANT)) return "none";
   return viewer.loading ? "unknown" : "withheld";
 }
 
 /**
- * The sentence a reader without `config:read` reads where a resolved value
- * would be — `what` is the value, "its model chain" — naming the grant that
- * would show it rather than an empty value nobody could tell from a seat that
- * has none.
+ * The sentence a reader without Admin reads where a resolved value would be —
+ * `what` is the value, "its model chain" — naming the access that would show
+ * it rather than an empty value nobody could tell from a seat that has none.
  */
 export function resolvedWithheld(what: string): string {
-  return needsSentence(`Reading ${what}`, [RUNTIME_GRANT]);
+  return needsWords(`Reading ${what}`, [RUNTIME_GRANT]);
 }
 
 /**
@@ -787,15 +786,15 @@ export interface SeatSetup {
  * The guarded half of one seat, for any screen that draws it: the company
  * document's entry for the seat and the five-state reading of it.
  *
- * ONE READ, ONE ORDER. The document takes `config:read`, and every screen
- * that read it on its own either forgot the refusal-first order
- * [seatReading] exists for — and printed a revoked reader's model beside a
- * banner saying the answer needs a grant — or collapsed "absent", "refused"
+ * ONE READ, ONE ORDER. The document takes Admin, and every screen that read
+ * it on its own either forgot the refusal-first order [seatReading] exists
+ * for — and printed a revoked reader's model beside a banner saying the
+ * answer needs Admin — or collapsed "absent", "refused"
  * and "not read yet" into one sentence. The seat is resolved by handle, or by
  * name for a link built from a document entry that declares no handle, which
  * is how [seatPath] addresses one.
  *
- * A reader without the grant is never asked: see the query below. A LEAD of
+ * A reader without Admin is never asked: see the query below. A LEAD of
  * the seat's unit is, through the reads the engine admits them instead — the
  * seat and its unit (`GET /config/roles/{handle}`, `GET /config/units/{key}`,
  * `lib/leadScope.ts`) — composed into the small document [seatSettings]
@@ -807,13 +806,13 @@ export function useSeatSetup(handle: string): SeatSetup {
   const scope = useLeadScope();
   const index = useMemo(() => indexOrg(org), [org]);
   const seat = handle ? (index.byHandle.get(handle) ?? index.byName.get(handle)) : undefined;
-  // NOT ASKED WITHOUT THE GRANT. The document takes `config:read`, so a reader
-  // without it is refused on every ask — the answer is known before the
-  // question, and asking only puts a refusal on the wire and a `refused`
-  // banner over a page that never had a chance. Such a reader is `withheld`
-  // once the viewer has answered — a claim about the reader, which the screen
-  // says by naming the grant — and `unread`, claiming nothing, until it has.
-  const granted = viewer.grants.includes(RUNTIME_GRANT);
+  // NOT ASKED WITHOUT ADMIN. The document takes it, so a reader without it is
+  // refused on every ask — the answer is known before the question, and
+  // asking only puts a refusal on the wire and a `refused` banner over a page
+  // that never had a chance. Such a reader is `withheld` once the viewer has
+  // answered — a claim about the reader, which the screen says by naming the
+  // access — and `unread`, claiming nothing, until it has.
+  const granted = holds(viewer.grants, RUNTIME_GRANT);
   const config = useQuery("config", undefined, { enabled: !!seat && granted });
   const led = !granted && !!seat?.handle && scope.seats.has(seat.handle) ? seat : null;
   const asked = !!seat && (granted || led !== null);
@@ -894,7 +893,7 @@ export function documentUnits(doc: CompanyDocument | null | undefined): ConfigUn
  *
  * Contact identities, email, the model chain, the token budget, schedules, the
  * seat's integration blocks and its tool credential names are not on the
- * `state:read` projection, so every screen that shows one reads it here.
+ * overview's projection, so every screen that shows one reads it here.
  *
  * The seat is found by HANDLE, which is the identity the document itself
  * addresses a seat by: the engine mints one for every seat it stores and
@@ -925,7 +924,7 @@ export function seatSettings(doc: CompanyDocument | null | undefined, seat: Seat
  * and knowledge container it owns, and the credentials its members inherit.
  *
  * Guarded for the reasons `internal/api/orgprojection_test.go` records against
- * each field, so it is null without `config:read` — never an empty value,
+ * each field, so it is null without Admin — never an empty value,
  * which would read as a unit that owns nothing.
  */
 export function unitSettings(
@@ -1455,7 +1454,9 @@ const PHASE_DOING: Record<string, { alone: string; on: string }> = {
  */
 export function delegatedWorkers(call: LiveCall | null | undefined): number {
   const running = call?.running_call;
-  if (!running || running.name !== DELEGATE_TOOL) return 0;
+  // A WITHHELD BODY carries no arguments, so the workers are not counted
+  // rather than guessed: the call is still `delegate`, and says so.
+  if (!running || running.name !== DELEGATE_TOOL || running.arguments === undefined) return 0;
   try {
     const args: unknown = JSON.parse(running.arguments);
     const tasks = (args as Record<string, unknown> | null)?.[DELEGATE_TASKS];

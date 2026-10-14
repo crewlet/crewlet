@@ -394,11 +394,12 @@ func (w WorkWriter) RemoveTask(ctx context.Context, opID, id, project string, su
 	return out, err
 }
 
-// RestoreTask brings a task back out of the trash.
+// RestoreTask brings a task back out of the trash — alone, refused with
+// [tracker.ErrRestoresOthers] when its removal took others, if alone is set.
 func (w WorkWriter) RestoreTask(ctx context.Context, opID, id, project string,
-	notify *tracker.Notify) (tracker.WriteResult, error) {
+	alone bool, notify *tracker.Notify) (tracker.WriteResult, error) {
 	out, err := call(ctx, w.r, opRestoreTask, &w.actor, restoreTaskArgs{
-		OpID: opID, ID: id, Project: project, Notify: notify,
+		OpID: opID, ID: id, Project: project, Alone: alone, Notify: notify,
 	})
 	w.settled(out.Result)
 	return out, err

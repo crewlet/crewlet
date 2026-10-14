@@ -23,11 +23,10 @@ import (
 // the same route (`POST /operator/act/{tool}`), so a pause from a terminal and
 // one from the profile screen are one gesture with one record. The credential
 // is CREWLET_API_TOKEN and nothing else, and the node decides the gesture on
-// the principal it resolves to — the seat's holder, whoever leads it, or a
-// `fleet:operate` holder — and records it under that principal's own name, its
-// kind and the credential, as every other write is recorded. Nobody is refused
-// for being bound to no seat: a token with the authority acts under its own
-// login.
+// the principal it resolves to — the seat's holder, whoever leads it, or an
+// admin — and records it under that principal's own name, its kind and the
+// credential, as every other write is recorded. Nobody is refused for being
+// bound to no seat: a token with the authority acts under its own login.
 //
 // # A retry is the same operation
 //

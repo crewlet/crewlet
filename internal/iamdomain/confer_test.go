@@ -2,7 +2,6 @@ package iamdomain_test
 
 import (
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,119 +13,117 @@ import (
 
 // WHAT AN ENROLMENT MAY CONFER, AND ON WHOSE AUTHORITY.
 //
-// An enrolment is a grant change from nothing to what it carries, and it was
-// held to nothing: a party holding people:manage alone could enrol somebody
-// carrying secrets:read — or a colleague holding every grant, and then sign in
-// as them. [iamdomain.Writer.UpdatePerson] already refused conferring what the
-// writer does not hold; these cases hold the enrolment and the invitation to
-// the same rule, and hold the two enrolments that are NOT the writer's to
-// authorise — the first person and a redemption — to the basis each names.
+// An enrolment is a permission change from nothing to what it carries, and it
+// was held to nothing: a party allowed to enrol could enrol a colleague holding
+// everything and then sign in as them. [iamdomain.Writer.UpdatePerson] already
+// refused conferring what the writer does not hold; these cases hold the
+// enrolment and the invitation to the same rule, read through [iam.Expand], and
+// hold the two enrolments that are NOT the writer's to authorise — the first
+// person and a redemption — to the basis each names.
 
-// nodeWriter is a running node's own writer: the grants `internal/engine`
+// nodeWriter is a running node's own writer: the permissions `internal/engine`
 // gives it and nothing else, and — because it is built rather than derived
 // from a principal — no credential, which is what keeps the sign-in surface's
 // records at the base record version and off every token's name.
 func nodeWriter(rig *writeRig) *iamdomain.Writer { return rig.node }
 
-// narrowAdmin manages people and holds nothing else.
-func narrowAdmin(rig *writeRig) *iamdomain.Writer {
+// anAdmin is a person holding admin and nothing else written on their row.
+func anAdmin(rig *writeRig) *iamdomain.Writer {
 	return rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
-		[]iam.Grant{iamdomain.AdminGrant}))
+		[]iam.Grant{iam.GrantAdmin}))
 }
 
+// AN ENROLMENT NEEDS ADMIN, AND CONFERS ONLY NAMES THIS BUILD KNOWS.
+//
+// Somebody using every app, and no more, enrols nobody — an enrolment decides
+// who may do anything at all — and is refused before anything is claimed, so
+// the refusal leaves no residue. An administrator may confer any permission,
+// admin included, and never a name this build cannot read, which would ride a
+// new row for good. Mutation: let MayConfer accept an unknown name and the
+// second case lands.
 func TestAnEnrolmentConfersOnlyWhatItsWriterHolds(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	enrol := func(w *iamdomain.Writer, op, login string, grants []iam.Grant) error {
+	enrol := func(w *iamdomain.Writer, login string, grants []iam.Grant) error {
 		return rig.draining(func() error {
 			_, err := w.Create(rig.t.Context(), iamdomain.Creation{
 				PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindMachine,
 				Stage: iam.StageActive, Login: login, Grants: grants,
-				OpID: op, Reason: "a pipeline",
+				OpID: operationKey(), Reason: "a pipeline",
 			})
 			return err
 		})
 	}
-	if err := enrol(narrowAdmin(rig), "op-widen", "ci:widen",
-		[]iam.Grant{iam.GrantConfigWrite}); !errors.Is(err, iamdomain.ErrRefused) {
-		t.Errorf("a party holding only %s enrolled somebody carrying "+
-			"config:write (%v)", iamdomain.AdminGrant, err)
+	user := rig.writer.As(principalNamed("ana.user", iam.KindPerson, iam.Apps))
+	if err := enrol(user, "ci:widen", []iam.Grant{iam.GrantTracker}); !errors.Is(err,
+		iamdomain.ErrRefused) {
+		t.Errorf("a party using every app enrolled somebody (%v)", err)
+	}
+	if err := enrol(anAdmin(rig), "ci:future", []iam.Grant{iam.GrantTracker,
+		"swarm"}); !errors.Is(err, iamdomain.ErrRefused) {
+		t.Errorf("an administrator conferred a name this build does not know (%v)", err)
 	}
 	// REFUSED BEFORE THE FIRST CLAIM, so the refusal leaves nothing behind:
-	// the writer's own grants need no read, and a claimed login behind a
+	// the writer's own permissions need no read, and a claimed login behind a
 	// refusal that was knowable up front is residue for nothing.
 	rig.drain()
 	if got := rig.column(`SELECT id FROM iam_people`); len(got) != 0 {
 		t.Errorf("a refused enrolment left rows behind: %v", got)
 	}
-	// AND THE CONTROL: what the writer holds, it may confer.
-	reader := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
-		[]iam.Grant{iamdomain.AdminGrant, iam.GrantStateRead}))
-	if err := enrol(reader, "op-within", "ci:within",
-		[]iam.Grant{iam.GrantStateRead}); err != nil {
-		t.Errorf("a party holding state:read was refused conferring it: %v", err)
+	// AND THE CONTROL: an administrator confers what admin includes.
+	if err := enrol(anAdmin(rig), "ci:within", []iam.Grant{iam.GrantAdmin}); err != nil {
+		t.Errorf("an administrator was refused conferring admin: %v", err)
 	}
 }
 
-// A MACHINE HOLDS NO GRANT A TOKEN NEVER CARRIES.
+// A SERVICE ACCOUNT MAY HOLD ADMIN.
 //
-// A machine has no password and no session: it acts only through tokens, and
-// a token drops `secrets:read` and `people:manage` on every request — so a
-// service account created holding either listed a grant it could never
-// exercise. An enrolment is refused it, and so is an edit that ADDS one. The
-// CONTROLS: a person may hold both, and a machine may hold the rest.
-// Mutation: drop the check from the enrolment, or from the edit, and its case
-// lands.
-func TestAMachineHoldsNoGrantATokenNeverCarries(t *testing.T) {
+// A machine acts only through tokens, and a token may carry admin: what keeps
+// it off the gestures that need a person present is the authority table's
+// presence on their rows and this domain's refusal of an administrative record
+// written through one — never a permission it cannot hold. So a service
+// account is enrolled holding admin, and an edit may add admin to one; it used
+// to be refused the two grants a token could not carry, which no longer
+// exist. Mutation: refuse admin to a machine at the enrolment and the first
+// case goes red.
+func TestAServiceAccountMayHoldAdmin(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	enrol := func(kind iam.Kind, login, email string, grants []iam.Grant) (string, error) {
-		id := uuid.Must(uuid.NewV7()).String()
-		in := iamdomain.Creation{
-			PersonID: id, Kind: kind, Stage: iam.StageActive, Login: login,
-			Email: email, Grants: grants, OpID: operationKey(), Reason: "test",
-		}
-		if kind == iam.KindPerson {
-			in.Seat = rig.vacantSeat(strings.ReplaceAll(login, ".", "-"))
-			in.LinkExpiresAt = firstLinkExpiry
-		}
-		return id, rig.draining(func() error {
-			_, err := rig.writer.Create(rig.t.Context(), in)
-			return err
+	machine := uuid.Must(uuid.NewV7()).String()
+	if err := rig.draining(func() error {
+		_, err := rig.writer.Create(rig.t.Context(), iamdomain.Creation{
+			PersonID: machine, Kind: iam.KindMachine, Stage: iam.StageActive,
+			Login: "ci:release", Grants: []iam.Grant{iam.GrantAdmin},
+			OpID: operationKey(), Reason: "a deploy pipeline",
 		})
+		return err
+	}); err != nil {
+		t.Fatalf("a service account was refused admin: %v", err)
 	}
-	for _, g := range iam.PersonPresentGrants {
-		if _, err := enrol(iam.KindMachine, "ci:"+strings.ReplaceAll(string(g), ":", "-"), "",
-			[]iam.Grant{iam.GrantStateRead, g}); !errors.Is(err, iamdomain.ErrInvalid) {
-			t.Errorf("a machine was enrolled holding %s (%v)", g, err)
-		}
-	}
-	if _, err := enrol(iam.KindPerson, "dana.ops", "dana@example.com",
-		iam.PersonPresentGrants); err != nil {
-		t.Errorf("a person was refused the grants a token never carries: %v", err)
-	}
-	machine, err := enrol(iam.KindMachine, "ci:release", "",
-		[]iam.Grant{iam.GrantStateRead})
-	if err != nil {
-		t.Fatalf("a machine holding state:read was refused: %v", err)
-	}
-	update := func(grants []iam.Grant) error {
-		return rig.draining(func() error {
-			_, err := rig.writer.UpdatePerson(rig.t.Context(), iamdomain.PersonUpdate{
-				PersonID: machine, OpID: operationKey(), Reason: "test",
-				Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
-					p.Grants = grants
-					return p, nil
-				},
-			})
-			return err
+	rig.drain()
+	other := uuid.Must(uuid.NewV7()).String()
+	if err := rig.draining(func() error {
+		_, err := rig.writer.Create(rig.t.Context(), iamdomain.Creation{
+			PersonID: other, Kind: iam.KindMachine, Stage: iam.StageActive,
+			Login: "ci:files", Grants: []iam.Grant{iam.GrantTracker},
+			OpID: operationKey(), Reason: "a pipeline",
 		})
+		return err
+	}); err != nil {
+		t.Fatalf("a service account holding the tracker was refused: %v", err)
 	}
-	if err := update([]iam.Grant{iam.GrantStateRead, iam.GrantPeopleManage}); !errors.Is(err, iamdomain.ErrInvalid) {
-		t.Errorf("an edit gave a machine people:manage (%v)", err)
-	}
-	if err := update([]iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite}); err != nil {
-		t.Errorf("an edit giving a machine work:write was refused: %v", err)
+	rig.drain()
+	if err := rig.draining(func() error {
+		_, err := rig.writer.UpdatePerson(rig.t.Context(), iamdomain.PersonUpdate{
+			PersonID: other, OpID: operationKey(), Reason: "promoted",
+			Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
+				p.Grants = append(p.Grants, iam.GrantAdmin)
+				return p, nil
+			},
+		})
+		return err
+	}); err != nil {
+		t.Errorf("an edit adding admin to a service account was refused: %v", err)
 	}
 }
 
@@ -144,14 +141,19 @@ func TestAnInvitationConfersOnlyWhatItsIssuerHolds(t *testing.T) {
 			return err
 		})
 	}
-	if err := invite(narrowAdmin(rig), "sarah@example.com",
-		[]iam.Grant{iam.GrantConfigWrite}); !errors.Is(err, iamdomain.ErrRefused) {
-		t.Errorf("a party holding only %s issued an invitation conferring "+
-			"config:write (%v) — the redemption would hand out what the "+
-			"issuer never held", iamdomain.AdminGrant, err)
+	user := rig.writer.As(principalNamed("ana.user", iam.KindPerson, iam.Apps))
+	if err := invite(user, "sarah@example.com",
+		[]iam.Grant{iam.GrantTracker}); !errors.Is(err, iamdomain.ErrRefused) {
+		t.Errorf("a party using every app issued an invitation (%v) — an "+
+			"invitation decides who may do anything at all", err)
 	}
-	if err := invite(narrowAdmin(rig), "ravi@example.com",
-		[]iam.Grant{iamdomain.AdminGrant}); err != nil {
+	if err := invite(anAdmin(rig), "kim@example.com",
+		[]iam.Grant{"swarm"}); !errors.Is(err, iamdomain.ErrRefused) {
+		t.Errorf("an invitation conferred a name this build does not know (%v) "+
+			"— the redemption would hand out what nobody here can read", err)
+	}
+	if err := invite(anAdmin(rig), "ravi@example.com",
+		[]iam.Grant{iam.GrantAdmin}); err != nil {
 		t.Errorf("an invitation conferring what the issuer holds was "+
 			"refused: %v", err)
 	}
@@ -162,7 +164,7 @@ func TestAnInvitationConfersOnlyWhatItsIssuerHolds(t *testing.T) {
 func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	offered := []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite}
+	offered := []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}
 	// THE LINK'S SECRET AND THE SEAT, per invitation: a redemption presents
 	// the one and binds the other, and these cases are about what the
 	// invitation confers.
@@ -207,8 +209,7 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 	sarah := issue("sarah@example.com")
 	if err := redeem(sarah, "sarah@example.com", offered); err != nil {
 		t.Fatalf("redeeming exactly what was offered was refused: %v — the "+
-			"node's writer holds none of it, and the invitation is the "+
-			"authority", err)
+			"invitation is the authority", err)
 	}
 
 	for _, refused := range []struct {
@@ -217,8 +218,8 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 		grants  []iam.Grant
 		other   string
 	}{
-		{"a grant the invitation did not carry", "a1@example.com",
-			[]iam.Grant{iam.GrantStateRead, iam.GrantSecretRead}, ""},
+		{"a permission the invitation did not carry", "a1@example.com",
+			[]iam.Grant{iam.GrantTracker, iam.GrantAdmin}, ""},
 		{"an address the invitation was not issued to", "a3@example.com",
 			offered, "someone-else@example.com"},
 	} {
@@ -265,21 +266,26 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 			"person once the first had gone (%v)", err)
 	}
 
-	// AND WITHOUT AN INVITATION BEHIND IT the node writer is only itself —
-	// an administrator's create — and holds neither state:read nor
-	// work:write, so it may confer neither.
+	// AN INVITATION OFFERING ADMIN OFFERS EVERY APP WITH IT, read through
+	// [iam.Expand]: the redemption may spell the apps out beside admin, as a
+	// picker that ticks and locks them does.
+	admin := rig.vacantSeat(seatOf("boss@example.com"))
+	var bossInvite iamdomain.InviteIssued
 	if err := rig.draining(func() error {
-		_, err := nodeWriter(rig).Create(rig.t.Context(), iamdomain.Creation{
-			PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindPerson,
-			Stage: iam.StageActive, Name: "Unnamed", Email: "unnamed@example.com",
-			Login: "un.named", Grants: offered, Seat: rig.vacantSeat("unnamed"),
-			LinkExpiresAt: firstLinkExpiry, OpID: operationKey(),
-			Reason: "no invitation",
+		var err error
+		bossInvite, err = rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
+			Email: "boss@example.com", Grants: []iam.Grant{iam.GrantAdmin},
+			Seat: admin, ExpiresAt: brokerAt.Add(168 * time.Hour),
+			OpID: operationKey(), Reason: "onboarding",
 		})
 		return err
-	}); !errors.Is(err, iamdomain.ErrRefused) {
-		t.Errorf("the node's own writer conferred grants it does not hold "+
-			"with no invitation behind them (%v)", err)
+	}); err != nil {
+		t.Fatalf("invite an administrator: %v", err)
+	}
+	rig.drain()
+	secrets[bossInvite.ID], seats[bossInvite.ID] = bossInvite.Secret, admin
+	if err := redeem(bossInvite.ID, "boss@example.com", iam.AllGrants); err != nil {
+		t.Errorf("redeeming admin and the apps it includes was refused: %v", err)
 	}
 }
 
@@ -294,8 +300,7 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 // ever enter.
 //
 // Mutation: hold the invitation to an enrolled issuer and the first issue is
-// refused; confer the node writer's own grants at the redemption and the
-// founder is refused the ceiling.
+// refused.
 func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -332,9 +337,8 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 		})
 		return err
 	}); err != nil {
-		t.Fatalf("the first person was refused the grants their invitation "+
-			"carried: %v — the node's writer could never confer them on its "+
-			"own, and the invitation is the authority", err)
+		t.Fatalf("the first person was refused the permissions their "+
+			"invitation carried: %v — the invitation is the authority", err)
 	}
 	rig.drain()
 	held, err := rig.reader(t).PersonByLogin(rig.t.Context(), "the.founder")
@@ -342,28 +346,12 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(held.Grants) != len(iam.AllGrants) {
-		t.Errorf("the first person carries %v, want every grant the token "+
-			"conferred", held.Grants)
+		t.Errorf("the first person carries %v, want every permission the "+
+			"token conferred", held.Grants)
 	}
 	if anybody, err := rig.anybody(t); err != nil || !anybody {
 		t.Errorf("the estate still reads as empty once the first person is "+
 			"in (%v, %v)", anybody, err)
-	}
-
-	// AND WITHOUT AN INVITATION the node writer confers only what it holds.
-	nobody := uuid.Must(uuid.NewV7()).String()
-	if err := rig.draining(func() error {
-		_, err := nodeWriter(rig).Create(rig.t.Context(), iamdomain.Creation{
-			PersonID: nobody, Kind: iam.KindPerson, Stage: iam.StageActive,
-			Name: "Nobody", Email: "nobody@example.com", Login: "nobody.here",
-			Grants: iam.AllGrants, Seat: rig.vacantSeat("nobody-here"),
-			LinkExpiresAt: firstLinkExpiry,
-			OpID:          "op-nobasis", Reason: "no basis",
-		})
-		return err
-	}); !errors.Is(err, iamdomain.ErrRefused) {
-		t.Errorf("the node's own writer conferred the whole ceiling with no "+
-			"invitation behind it (%v)", err)
 	}
 }
 

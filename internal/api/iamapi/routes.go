@@ -79,8 +79,8 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("POST /iam/people", at(authz.ActionDirectoryWrite), s.PostPeople)
 	mount("GET /iam/people/{id}", about(authz.ActionDirectoryRead), s.GetPerson)
 	// AN EDIT OF AN ENROLLED PERSON — what they may do or how they sign in
-	// — is an ordinary directory write: `people:manage`, a `step_up` proof
-	// and a person present, as creating, removing and inviting are.
+	// — is an ordinary directory write: admin, a `step_up` proof and a
+	// person present, as creating, removing and inviting are.
 	mount("PATCH /iam/people/{id}", at(authz.ActionDirectoryWrite), s.PatchPerson)
 	mount("DELETE /iam/people/{id}", at(authz.ActionDirectoryWrite), s.DeletePerson)
 	// AN INVITATION IS ADDRESSED TO AN ADDRESS AND HOLDS A SEAT, not a
@@ -122,23 +122,28 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// present.
 	mount("DELETE /iam/credentials/{id}",
 		ofSubject(authz.ActionCredentialWrite), s.DeleteCredential)
-	// BOTH HATS, the deployment's grant and the directory's — sessions.go
-	// argues it — which is why it is its own verb beside the deployment's
-	// other controls: it signs out everybody, irreversibly.
+	// ITS OWN VERB beside the directory's writes, and admin's like them:
+	// it signs out everybody, irreversibly, so it asks a person present and
+	// a recent proof whoever holds admin.
 	mount("POST /iam/invalidate-all",
 		at(authz.ActionSessionInvalidate), s.PostInvalidateAll)
 	mount("GET /iam/check", at(authz.ActionDirectoryRead), s.GetCheck)
 	// WHO SITS WHERE: every human seat of the running company and who
-	// holds it. A listing, read like the directory — see seats.go.
-	mount("GET /iam/seats", at(authz.ActionDirectoryRead), s.GetSeats)
+	// holds it. EVERYBODY's, as the org chart it draws onto is (ADR-0033):
+	// the route admits every resolved principal (`iam.seats.read`) and the
+	// handler masks each row for its reader — a holder's name to
+	// everybody, their login and stage to an admin and to themselves, an
+	// open invitation and the `?unheld=true` helper to an admin alone. See
+	// seats.go.
+	mount("GET /iam/seats", at(authz.ActionSeatsRead), s.GetSeats)
 	// THIS NODE'S Tier A labels, joined to the rows their logins name: the
 	// one binding question no directory read can reach, since the labels
 	// are a node's configuration. See nodetokens.go.
 	mount("GET /iam/node-tokens", at(authz.ActionDirectoryRead), s.GetNodeTokens)
 	// THE AUDIT VERB IT ALREADY HAS. `/iam/audit` and `/events` are the
 	// same question read from two tables — what did this company do, and
-	// who asked it to — so a grant of its own here would be a second
-	// answer to one question.
+	// who asked it to — so a verb of its own here would be a second
+	// answer to one question. Admin's, as the company-wide trail is.
 	mount("GET /iam/audit", at(authz.ActionAuditRead), s.GetAudit)
 	return errors.Join(failures...)
 }
@@ -165,8 +170,9 @@ func (s *Service) subjectOf(r *http.Request) string {
 // node could not resolve is UNKNOWN, never the zero principal — is written
 // once there rather than once per surface.
 //
-// NO CHART SEAM. Not one rule this surface mounts asks the chart — the two
-// directory classes decide from the person's own id and two capabilities — so
+// NO CHART SEAM. Not one rule this surface mounts asks the chart — the
+// directory class decides from the person's own id and admin, and the seat
+// listing admits everybody — so
 // handing one would be wiring a dependency nothing reads, and [authz.NoChart]
 // says exactly that where a nil would have looked like an omission.
 var guard = authz.ContextGuard(authz.NoChart{})
@@ -411,6 +417,11 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 //
 // # Refusals, each a different thing to do next
 //
+//   - A MACHINE TOKEN, [iamdomain.ErrTokenRefused]: 403 `token_refused`, the
+//     code the authority table's presence rows answer the same request with
+//     at the route — an administrative identity record needs a person
+//     present, and the remedy is to sign in rather than to be granted
+//     anything. Before the authority arm it wraps.
 //   - AUTHORITY, [iamdomain.ErrRefused]: 403, and it will never land however
 //     often it is retried.
 //   - SOMEBODY ELSE HOLDS IT, [iamdomain.ErrTaken]: an address, a login or a
@@ -481,6 +492,14 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		httpjson.FailWithFields(w, status, code, fields)
 	}
 	switch {
+	case errors.Is(err, iamdomain.ErrTokenRefused):
+		// THE RECORD LAYER'S LOCK, answered as the route's own would be:
+		// the table's reason and no permission, since none would admit a
+		// token — a person signs in.
+		fields := authz.RefusalDetail(authz.ReasonTokenRefused, nil)
+		fields["detail"] = err.Error()
+		refuse(http.StatusForbidden, httpjson.CodeTokenRefused, fields)
+		return
 	case errors.Is(err, iamdomain.ErrRefused):
 		refuse(http.StatusForbidden, httpjson.CodeUnauthorized,
 			httpjson.Detail{"detail": err.Error()})

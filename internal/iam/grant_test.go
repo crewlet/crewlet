@@ -2,67 +2,113 @@ package iam
 
 import (
 	"slices"
-	"strings"
 	"testing"
+	"unicode"
 )
 
-// TestEveryGrantIsClassifiedInBothDirections keeps the access table and the
-// closed set in step. A grant with no class answers the zero Access, which is
-// invalid — so a new capability added without a reader deciding what it opens
-// would be refused by every gate at once, and this is what catches that in a
-// diff rather than in production.
-func TestEveryGrantIsClassifiedInBothDirections(t *testing.T) {
-	for _, g := range AllGrants {
-		access := g.Access()
-		if !access.Valid() {
-			t.Errorf("%q has no access class — decide whether it reads or writes", g)
+// THE VOCABULARY IS ADMIN AND ONE PERMISSION PER APP, AND ADMIN IS NO APP.
+//
+// [AllGrants] is exactly admin followed by [Apps], in that order: an app added
+// to the vocabulary and not to the list of apps would be a permission no
+// picker ticks under Admin and no administrator holds through [Expand], and
+// admin listed among the apps would make every agent seat — which holds the
+// apps — an administrator. Mutation: put admin in Apps and both assertions go
+// red; drop an app from AllGrants and the first does.
+func TestEveryAppIsAGrantAndAdminIsNot(t *testing.T) {
+	t.Parallel()
+	want := append([]Grant{GrantAdmin}, Apps...)
+	if !slices.Equal(AllGrants, want) {
+		t.Errorf("AllGrants = %v, want admin followed by every app: %v", AllGrants, want)
+	}
+	if slices.Contains(Apps, GrantAdmin) || GrantAdmin.IsApp() {
+		t.Error("admin is listed as an app, so every seat that holds the apps " +
+			"runs the company")
+	}
+	if len(Apps) == 0 {
+		t.Fatal("no app is declared, so every assertion about apps certifies nothing")
+	}
+	for _, app := range Apps {
+		if !app.Valid() || !app.IsApp() {
+			t.Errorf("%q is declared an app and does not validate as one", app)
 		}
 	}
-	for g := range grantAccess {
-		if !slices.Contains(AllGrants, g) {
-			t.Errorf("the access table classifies %q, which is not in AllGrants", g)
-		}
-	}
-	if got := Grant("swarm:conscript").Access(); got.Valid() {
-		t.Errorf("an unknown grant classified as %q; this build cannot know what it opens", got)
+	if Grant("swarm").IsApp() || Grant("").IsApp() {
+		t.Error("a name this build does not know reads as an app")
 	}
 }
 
-// TestTheReadGrantsAreTheOnesAnOpenPostureCouldEverOpen states which four they
-// are, because that is a security decision and not an implementation detail:
-// allow_anonymous_read opens reads and only reads, and which grants are reads
-// is the list it is reading from.
-func TestTheReadGrantsAreTheOnesAnOpenPostureCouldEverOpen(t *testing.T) {
-	var reads, writes []Grant
-	for _, g := range AllGrants {
-		switch g.Access() {
-		case AccessRead:
-			reads = append(reads, g)
-		case AccessWrite:
-			writes = append(writes, g)
-		}
-	}
-	wantReads := []Grant{GrantStateRead, GrantAuditRead, GrantConfigRead, GrantSecretRead}
-	if !slices.Equal(reads, wantReads) {
-		t.Errorf("the read grants are %v, want %v", reads, wantReads)
-	}
-	if len(writes) != len(AllGrants)-len(wantReads) {
-		t.Errorf("%d grants are writes, want %d", len(writes), len(AllGrants)-len(wantReads))
+// EXPAND ADDS EVERY APP EXACTLY WHEN ADMIN IS HELD, AND NOTHING ELSE.
+//
+// It is the one rule every comparison of permissions goes through, so each of
+// its promises is a property somebody relies on: the answer never aliases the
+// row it was handed (a caller appending to it must not edit the row), an
+// unknown name rides through untouched (it is kept in the row and ignored), an
+// app already held is not added twice, nothing is added without admin, and a
+// second expansion changes nothing. Mutation: skip one app in the loop and the
+// admin case goes red; append even without admin and the control does.
+func TestExpandAddsEveryAppExactlyWhenAdminIsHeld(t *testing.T) {
+	t.Parallel()
+	const future = Grant("swarm")
+	for _, c := range []struct {
+		name string
+		in   []Grant
+		want []Grant
+	}{
+		{"nothing", nil, []Grant{}},
+		{"admin alone", []Grant{GrantAdmin},
+			append([]Grant{GrantAdmin}, Apps...)},
+		{"admin beside an app it already includes",
+			[]Grant{GrantKnowledge, GrantAdmin},
+			[]Grant{GrantKnowledge, GrantAdmin, GrantTracker}},
+		{"an unknown name is carried through", []Grant{future, GrantAdmin},
+			[]Grant{future, GrantAdmin, GrantTracker, GrantKnowledge}},
+		{"duplicates in the row stay as given", []Grant{GrantTracker, GrantTracker},
+			[]Grant{GrantTracker, GrantTracker}},
+		// THE CONTROL: no admin, nothing added.
+		{"an app alone", []Grant{GrantTracker}, []Grant{GrantTracker}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			in := slices.Clone(c.in)
+			got := Expand(in)
+			if !slices.Equal(got, c.want) || got == nil {
+				t.Fatalf("Expand(%v) = %#v, want %#v", c.in, got, c.want)
+			}
+			if !slices.Equal(in, c.in) {
+				t.Errorf("Expand edited the row it was handed: %v, was %v", in, c.in)
+			}
+			if again := Expand(got); !slices.Equal(again, got) {
+				t.Errorf("Expand is not idempotent: %v, then %v", got, again)
+			}
+			if len(in) > 0 && len(got) > 0 {
+				got[0] = "edited"
+				if in[0] == "edited" {
+					t.Error("the answer aliases the row: a caller appending to it " +
+						"edits what it read")
+				}
+			}
+		})
 	}
 }
 
-// TestAGrantNamesItsDomainAndItsVerb pins the wire spelling. These strings
-// land in rows and in config, so a typo'd one is a capability nobody can grant
-// and nobody can see is missing.
-func TestAGrantNamesItsDomainAndItsVerb(t *testing.T) {
+// EVERY PERMISSION IS ONE LOWERCASE WORD.
+//
+// These strings land in rows, in Tier A files and on the dashboard's picker,
+// so a stray capital or separator is a permission nobody can type and nobody
+// can see is missing — and a `domain:verb` spelling would be the eleven-grant
+// vocabulary creeping back one name at a time.
+func TestEveryGrantIsOneLowercaseWord(t *testing.T) {
+	t.Parallel()
 	for _, g := range AllGrants {
-		domain, verb, found := strings.Cut(string(g), ":")
-		if !found || domain == "" || verb == "" {
-			t.Errorf("%q is not spelled <domain>:<verb>", g)
+		if g == "" {
+			t.Error("the zero is declared as a permission")
 			continue
 		}
-		if strings.ToLower(string(g)) != string(g) || strings.Contains(verb, ":") {
-			t.Errorf("%q is not one lowercase domain and one verb", g)
+		for _, r := range string(g) {
+			if !unicode.IsLower(r) {
+				t.Errorf("%q is not one lowercase word", g)
+				break
+			}
 		}
 	}
 }

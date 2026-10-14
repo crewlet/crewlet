@@ -245,7 +245,7 @@ test("the trash restores each of two removed tasks under one key as itself", asy
     decisions: { handle: "jane", items: [], total: 0, capped: false },
     viewer: {
       login: "U0FOUNDER",
-      grants: ["state:read", "work:write"],
+      grants: ["tracker"],
       handle: "jane",
       owner: "jane",
       name: "Jane Founder",

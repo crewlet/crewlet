@@ -30,27 +30,32 @@ import { withDerived } from "~/test/org.ts";
 /** Nobody signed in, as the `viewer` question answers it. */
 const NOBODY = { login: "", owner: "", grants: [] };
 
-/** Somebody signed in who holds neither configuration grant. */
-const READER = { login: "reader", owner: "reader", grants: ["state:read"] };
+/** Somebody signed in who holds no Admin. */
+const READER = { login: "reader", owner: "reader", grants: [] };
 
 /**
- * Somebody bound to a seat who may read the configuration, holds no
- * `config:write` and leads no unit — so the builder drafts the whole company.
+ * Somebody bound to a seat whom the `viewer` question answers as holding
+ * Admin — on a node that serves it.
  */
-const BOUND_READER = { ...READER, handle: "reader", grants: ["config:read"] };
+const BOUND_ADMIN = { ...EDITOR, handle: "ops" };
 
 /**
- * What the engine answers [BOUND_READER]'s check of the draft as it was read:
- * the route admits anybody bound to a seat until it has read the write, and
- * the admission then refuses every part of it, starting with the unchanged
- * document.
+ * What a node whose `api.auth.admin` is `refuse` answers [BOUND_ADMIN]'s check
+ * of the whole company. The posture is each node's, applied per request, so a
+ * fleet mid-rollout legally disagrees about it, and a reader the `viewer`
+ * answer called an admin can have a check land where admin is clamped away:
+ * the route admits anybody bound to a seat until it has read what the write
+ * changes, and the admission then refuses every part of it, starting with the
+ * unchanged document, naming Admin. It is the one refusal for want of Admin a
+ * whole-company draft meets, since a reader holding no Admin and leading no
+ * unit is refused the configuration's read before any check is sent.
  */
-const refusedWhole = () =>
+const refusedByANodeRefusingAdmin = () =>
   json(
     {
       error: "unauthorized",
       reason: "no_grant",
-      grants: ["config:write"],
+      grants: ["admin"],
       refused: [{ kind: "document", id: "", place: "", why: "unchanged", reason: "no_grant" }],
     },
     403,
@@ -144,7 +149,7 @@ describe("the posture table", () => {
     const engine = new Engine(company());
     engine.script = () => json({ error: "unauthorized" }, 403);
     mountBuilder({ engine, viewer: () => READER });
-    expect(await screen.findByText("Reading the configuration needs config:read.")).toBeDefined();
+    expect(await screen.findByText("Reading the configuration needs Admin access.")).toBeDefined();
     expect(screen.getByRole("button", { name: "Sign in as somebody else" })).toBeDefined();
   });
 
@@ -189,14 +194,16 @@ describe("the posture table", () => {
   // unavailable.
   //
   // Driven through `guarded`, which is now the halting check state this is
-  // about. `readonly` was the other one, and it went with the 503
+  // about, as a whole-company draft meets it: a check landing on a node that
+  // refuses admin. `readonly` was the other one, and it went with the 503
   // `no_control_plane` that was its only producer: no process serves the API
   // without the coordination store that refusal described.
   test("a halted builder marks the toolbar's add entries unavailable", async () => {
     const engine = new Engine(company());
-    engine.script = (r) => (r.query.get("dry_run") === "true" ? refusedWhole() : null);
-    mountBuilder({ engine, viewer: () => BOUND_READER });
-    expect(await screen.findByText("Needs config:write")).toBeDefined();
+    engine.script = (r) =>
+      r.query.get("dry_run") === "true" ? refusedByANodeRefusingAdmin() : null;
+    mountBuilder({ engine, viewer: () => BOUND_ADMIN });
+    expect(await screen.findByText("Needs Admin access")).toBeDefined();
 
     // An edit is refused before it reaches the log, and says why.
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
@@ -749,15 +756,16 @@ describe("somebody else signing in mid-edit", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
 
-    // Reads are served, writes and dry runs are refused: the reader lacks the
-    // grant to write, which only the check can find out.
+    // The new reader holds Admin as the node answering `viewer` and the read
+    // serves it, while their checks land on a node that refuses admin — a
+    // fleet mid-rollout, which legally disagrees about the posture — so only
+    // the check finds out, and the configuration still reads.
+    const second = { ...BOUND_ADMIN, login: "second", owner: "second", handle: "second" };
     engine.script = (r) =>
-      r.query.get("dry_run") === "true" && who !== EDITOR
-        ? json({ error: "forbidden" }, 403)
-        : null;
-    who = { ...READER, grants: ["config:read"] };
+      r.query.get("dry_run") === "true" && who === second ? refusedByANodeRefusingAdmin() : null;
+    who = second;
     reconnect(store);
-    expect(await screen.findByText("Needs config:write")).toBeDefined();
+    expect(await screen.findByText("Needs Admin access")).toBeDefined();
     expect(screen.getByText("read only")).toBeDefined();
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more");
   });
@@ -781,7 +789,7 @@ describe("somebody else signing in mid-edit", () => {
     expect(screen.getByText("read only")).toBeDefined();
     // The status names what is missing: nobody is signed in, not a grant.
     expect(await screen.findByText("Needs sign-in")).toBeDefined();
-    expect(screen.queryByText("Needs config:write")).toBeNull();
+    expect(screen.queryByText("Needs Admin access")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() =>
       expect(liveRegion().textContent).toBe("Editing is paused. Nobody is signed in."),
@@ -819,7 +827,7 @@ describe("a step-up the person declined", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
 
     expect(await screen.findByText("Needs confirmation")).toBeDefined();
-    expect(screen.queryByText("Needs config:write")).toBeNull();
+    expect(screen.queryByText("Needs Admin access")).toBeNull();
     expect(screen.getByText(`${ACT_ERRORS.step_up_required} Your draft is kept.`)).toBeDefined();
     expect(screen.queryByRole("button", { name: "Sign in as somebody else" })).toBeNull();
     // The same person declining is not the tab changing hands.
@@ -843,14 +851,15 @@ describe("a step-up the person declined", () => {
     expect(screen.getByText("editable")).toBeDefined();
   });
 
-  // THE CONTROL: a refusal of the grant itself still names it — for a reader
-  // bound to a seat, whose refusal the engine words part by part, as for one
-  // bound to none.
-  test("a refusal of the grant still names config:write", async () => {
+  // THE CONTROL: a refusal of the grant itself still names it — a check
+  // landing on a node that refuses admin, which the engine words part by part
+  // for a reader bound to a seat.
+  test("a refusal of the grant still names Admin", async () => {
     const engine = new Engine(company());
-    engine.script = (r) => (r.query.get("dry_run") === "true" ? refusedWhole() : null);
-    mountBuilder({ engine, viewer: () => BOUND_READER });
-    expect(await screen.findByText("Needs config:write")).toBeDefined();
+    engine.script = (r) =>
+      r.query.get("dry_run") === "true" ? refusedByANodeRefusingAdmin() : null;
+    mountBuilder({ engine, viewer: () => BOUND_ADMIN });
+    expect(await screen.findByText("Needs Admin access")).toBeDefined();
     expect(screen.queryByText("1 problem")).toBeNull();
     expect(screen.getByText("read only")).toBeDefined();
     expect(screen.getByRole("button", { name: "Sign in as somebody else" })).toBeDefined();
@@ -928,7 +937,7 @@ describe("a document another system manages", () => {
   // AND THE ENGINE'S OWN REFUSAL DECIDES THE SAME WAY, when a check is
   // answered `config_managed` before the viewer has said anything: it halts,
   // and it is not mistaken for a grant the reader lacks — whose banner would
-  // send somebody holding config:write to an administrator for nothing.
+  // send somebody holding Admin to an administrator for nothing.
   test("a check answered config_managed halts as managed, not as a missing grant", async () => {
     const engine = new Engine(company());
     engine.script = (r) =>
@@ -940,7 +949,7 @@ describe("a document another system manages", () => {
         : null;
     mountBuilder({ engine });
     expect(await screen.findByText("Managed by another system")).toBeDefined();
-    expect(screen.queryByText("Needs config:write")).toBeNull();
+    expect(screen.queryByText("Needs Admin access")).toBeNull();
     expect(screen.queryByText("Refused")).toBeNull();
     expect(screen.getByText(/Managed by gitops\. Change it there\./)).toBeDefined();
     const checks = engine.checks().length;

@@ -81,11 +81,11 @@ test("for nobody signed in, the guarded banner offers the sign-in", async () => 
 });
 
 test("for a reader without the grant, the banner names it and offers no sign-in", async () => {
-  refusing(403, ["config:read"]);
-  mount({ login: "jane.doe", owner: "jane.doe", grants: ["state:read"] });
+  refusing(403, ["admin"]);
+  mount({ login: "jane.doe", owner: "jane.doe", grants: [] });
 
   expect(
-    await screen.findByText(/Reading the integrations' setup state needs config:read/),
+    await screen.findByText(/Reading the integrations' setup state needs Admin/),
   ).toBeDefined();
   expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
 });

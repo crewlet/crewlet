@@ -82,6 +82,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { ADMIN, KNOWLEDGE, accessNames, needsWords } from "~/lib/access.ts";
 import type {
   KnowledgeAnswer,
   KnowledgeHit,
@@ -636,7 +637,14 @@ function ForTheAgents() {
     { skills: true, status: "published", limit: 1 },
     { pollMs: LANDING_POLL_MS },
   );
-  const memory = useQuery("memory_overview", undefined, { pollMs: LANDING_POLL_MS });
+  // THE AGENTS' DIARIES ARE THEIR TRAIL, and Diaries is an admin's screen:
+  // the overview is asked only of an admin, and the row says what opens it to
+  // anybody else rather than counting the few seats a lead would be answered.
+  const viewer = useViewer();
+  const memory = useQuery("memory_overview", undefined, {
+    pollMs: LANDING_POLL_MS,
+    enabled: viewer.admin,
+  });
   const seats = memory.data?.seats ?? [];
   // THE NEWEST THING AN AGENT KEPT: the last reflection any seat wrote.
   const newest = seats
@@ -662,7 +670,9 @@ function ForTheAgents() {
           href={href(["knowledge", "diaries"])}
           leading={<BrainGlyph size="sm" />}
           trailing={
-            memory.data ? (
+            !viewer.loading && !viewer.admin ? (
+              <span className="knowledge-tile-meta">{`Needs ${accessNames([ADMIN])} access`}</span>
+            ) : memory.data ? (
               <span className="knowledge-tile-meta">
                 {plural(seats.length, "agent")}
                 {newest ? ` · newest ${relTime(newest, now)}` : ""}
@@ -831,6 +841,15 @@ function PageHead({
  */
 export function Unavailable({ answer }: { answer: KnowledgeAnswer }) {
   const building = answer.reason === "building";
+  if (answer.reason === "no_access") {
+    // THE READER'S ACCESS, not the company's search: said in the words every
+    // lock uses, with nothing to configure.
+    return (
+      <Callout variant="neutral" icon={<BookOpenGlyph size="md" />}>
+        <span>{needsWords("Search", [KNOWLEDGE])}</span>
+      </Callout>
+    );
+  }
   return (
     <Callout
       variant={building ? "warning" : "neutral"}

@@ -291,7 +291,7 @@ function mount(answers: Record<string, unknown>) {
     if (what === "viewer") {
       return Promise.resolve({
         login: "ada",
-        grants: ["state:read", "work:write", "config:read", "config:write"],
+        grants: ["tracker", "admin"],
         handle: "ada",
         owner: "ada",
         name: "Ada",

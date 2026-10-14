@@ -337,7 +337,7 @@ func (s *Service) Ingest(env livestate.Envelope) {
 	}
 	s.pushAgents(change, now)
 	if change.Sandboxes {
-		s.hub.Broadcast(Push(KindSandboxes, s.state.ActiveSandboxes(), now))
+		s.hub.Broadcast(Push(KindSandboxes, SandboxRows(s.state.ActiveSandboxes()), now))
 	}
 	if change.Tokens {
 		// MARKED, NOT SENT. Aggregating here would run inside the
@@ -363,7 +363,7 @@ func (s *Service) ReconcileSandboxes(records []livestate.SandboxRecord, asOf tim
 	change := s.state.ReconcileSandboxes(records, asOf)
 	now := s.now()
 	if change.Sandboxes {
-		s.hub.Broadcast(Push(KindSandboxes, s.state.ActiveSandboxes(), now))
+		s.hub.Broadcast(Push(KindSandboxes, SandboxRows(s.state.ActiveSandboxes()), now))
 	}
 	s.pushAgents(change, now)
 }
@@ -383,6 +383,15 @@ func (s *Service) ReconcileSandboxes(records []livestate.SandboxRecord, asOf tim
 // frame: what is left out is decided against what the previous push said,
 // so two pushes built side by side could each leave out a field the other
 // was the one to carry. Broadcast never blocks, so nothing waits long here.
+//
+// LEFT OUT ONCE, THEN MASKED PER AUDIENCE. What a push leaves out is decided
+// once per broadcast and shared by every reader, because the bookkeeping it
+// is decided against is per SEAT; the rows then travel as [AgentRows], which
+// the hub masks for each audience variant ([livestate.MaskRow]) — a reader
+// the seat's trail is not open to receives its status and no body, whichever
+// heavy fields this push carried. Masked first, each variant would need its
+// own bookkeeping, and two variants would each leave out a field the other
+// was the one to carry.
 func (s *Service) pushAgents(change livestate.Change, now time.Time) {
 	if len(change.Agents) == 0 {
 		return
@@ -400,7 +409,7 @@ func (s *Service) pushAgents(change livestate.Change, now time.Time) {
 	for _, row := range rows {
 		s.leaveOutWhatIsHeld(row)
 	}
-	s.hub.Broadcast(Push(KindAgents, rows, now))
+	s.hub.Broadcast(Push(KindAgents, AgentRows(rows), now))
 }
 
 // pushedCall is what an `agents` push said about one seat's live call.
@@ -460,7 +469,10 @@ func (s *Service) RefreshPlacement() {
 // thirty-day scan per tab, and would lose any call mid-flight while it did.
 //
 // It is the snapshot FOR ONE AUDIENCE, and carries only the keys whose push
-// that audience may receive (see [needs]).
+// that audience may receive (see [needs]), each SHAPED for it exactly as its
+// push is ([Shaped]): the seats' live calls masked to their status where the
+// audience may not read their trail, the coding runs likewise, and the org
+// tree in the variant the audience reads.
 //
 // The one read it makes is the seat leases ([Service.RefreshPlacement]),
 // because no event says which seats a node holds and a connecting tab must not
@@ -472,10 +484,9 @@ func (s *Service) Snapshot(audience Audience) map[string]any {
 		// THE STATIC ROSTER FIRST, with the live overlay merged onto it.
 		// MergeAgents walks what it is GIVEN, so passing nil here — which
 		// it did — produced an empty list whatever the projection held.
-		"agents": s.state.MergeAgents(s.currentRoster()),
-		// SHAPED FOR THE AUDIENCE, as its push is: see [Shaped].
-		"org":   s.Org(audience),
-		"tools": s.currentTools(),
+		"agents": AgentRows(s.state.MergeAgents(s.currentRoster())),
+		"org":    s.currentOrg(),
+		"tools":  s.currentTools(),
 		// THE CONFIGURED ROWS, not the dispatch ledger. The screen renders
 		// its table from this slice and fetches the ledger itself, so
 		// without it the table stayed on its skeleton for ever — the
@@ -483,19 +494,20 @@ func (s *Service) Snapshot(audience Audience) map[string]any {
 		// true.
 		"schedules": s.currentSchedules(),
 		"events":    s.state.RecentEvents(livestate.EventFeedLimit),
-		"sandboxes": s.state.ActiveSandboxes(),
+		"sandboxes": SandboxRows(s.state.ActiveSandboxes()),
 		"tokens":    s.TokenRollup(),
 		"budget":    s.state.Budget(),
 	}
 	// EACH KEY IS WHAT ITS PUSH WOULD CARRY, so a reader receives in the
-	// handshake exactly what it would receive afterwards: an audience
-	// without `audit:read` gets no `events` key rather than an empty one,
-	// which the client reads as "nothing here yet" rather than as "the
-	// company has done nothing".
+	// handshake exactly what it would receive afterwards: an audience that
+	// is not an admin gets no `events` key rather than an empty one, which
+	// the client reads as "nothing here yet" rather than as "the company
+	// has done nothing" — and every key it does get in the shape its push
+	// hands it.
 	out := make(map[string]any, len(full))
 	for key, value := range full {
 		if audience.Receives(snapshotKinds[key]) {
-			out[key] = value
+			_, out[key] = shapeFor(value, audience)
 		}
 	}
 	return out
@@ -519,23 +531,66 @@ var snapshotKinds = map[string]Kind{
 	"budget":    KindBudget,
 }
 
-// Roster is the company's seat list as the `seats` push carries it.
+// Roster is the company's seat list as the `seats` push carries it: [Shaped],
+// so each reader is handed it masked to their reach over each seat — through
+// the hub on a push, through [ShapeFor] on its REST mirror.
 //
 // Exported because a config apply has to re-send it: the client's own doc
 // says a merge cannot express a deletion, so a revision that removed a role
 // would leave its card on screen until someone reloaded the page.
-func (s *Service) Roster() []map[string]any {
+func (s *Service) Roster() AgentRows {
 	s.RefreshPlacement()
-	return s.state.MergeAgents(s.currentRoster())
+	return AgentRows(s.state.MergeAgents(s.currentRoster()))
 }
 
-// Org is the company's role and unit tree as one audience may read it — the
-// same shape the `org` push hands that audience ([Shaped]) — for a REST read
-// of the tree.
-func (s *Service) Org(audience Audience) any {
-	_, data := shapeFor(s.currentOrg(), audience)
-	return data
+// AudienceFor is what principal p may receive on this node: [NewAudience] over
+// the agent seats whose trail p may read, each decided by the authority
+// table's own `audit.seat.read` ([authz.ActionSeatTrailRead]) — its lead, or
+// an admin — against the chart this node runs.
+//
+// THE TABLE'S ROW AND NOT A SECOND COPY OF IT, so who reads a seat's body over
+// the socket is exactly who reads its turns, its memory and its conversations
+// through the questions beside it, and moving the rule moves both.
+//
+// AN UNDECIDABLE SEAT IS NOT BODY: a chart this node cannot read withholds a
+// transcript rather than serving one, and the reader still sees the seat's
+// status. An admin reads every body and is decided without the walk.
+func (s *Service) AudienceFor(ctx context.Context, p iam.Principal) Audience {
+	if p.Can(iam.GrantAdmin) {
+		return NewAudience(p, nil)
+	}
+	now := s.now()
+	var body []string
+	undecided := 0
+	for key, seat := range s.seats() {
+		// THE AGENT SEATS, by their agent id: a human seat's key is
+		// [tokens.PersonKey] of its handle, and a person has no trail
+		// here.
+		if seat.Handle == "" || key == tokens.PersonKey(seat.Handle) {
+			continue
+		}
+		d := authz.Decide(ctx, p, authz.ActionSeatTrailRead, authz.Object{
+			Kind: authz.KindPerson, Owner: seat.Handle}, s.chart, now)
+		switch {
+		case d.Allowed:
+			body = append(body, key)
+		case d.Unknown():
+			undecided++
+		}
+	}
+	if undecided > 0 {
+		log.InfoContext(ctx, "stream_audience_undecided", "login", p.Login,
+			"seats", undecided,
+			"hint", "the chart could not say whether this reader leads those "+
+				"seats; they are shown their status and not their trail until "+
+				"the socket is opened again")
+	}
+	return NewAudience(p, body)
 }
+
+// Org is the company's role and unit tree, [Shaped] — what the `org` push
+// carries, and what its REST mirror hands each reader through [ShapeFor].
+func (s *Service) Org() any { return s.currentOrg() }
 
 // Tools is this node's catalogue, for the same re-send. It changes on an
 // apply too — a revision that adds an MCP server adds its tools.

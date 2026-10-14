@@ -806,9 +806,9 @@ api:
   port: 80       # 0 (the default) disables the embedded API
   external_url: "https://crewlet.example.com"   # REQUIRED once port is set
   auth:
-    max_grants: [...]        # THE CEILING, required once port is set
+    admin: serve             # serve | refuse, required once port is set
     tokens: [{id: founder, token: "${CREWLET_API_TOKEN_FOUNDER}",
-              grants: [...]}]   # at least one
+              grants: [admin]}]   # at least one
 secrets:
   active_key_id: k1          # REQUIRED on EVERY node, serving or not
   keys: [{id: k1, material: "${CREWLET_SECRET_KEY_K1}"}]
@@ -819,7 +819,7 @@ API: every record on every state log is signed and verified under the keyring,
 the company document a node fetches from its peers is authenticated by its
 seal, and — once a port is set — it signs every session cookie and per-run
 token too. **Three more settings stop being optional the moment `api.port` is
-non-zero** — `api.external_url`, `api.auth.max_grants` and at least one
+non-zero** — `api.external_url`, `api.auth.admin` and at least one
 `api.auth.tokens` entry. `crewlet validate` refuses each by name, so a
 deployment finds out on a laptop rather than at bind time. See
 [the Tier A example](../getting-started/configuration.md#tier-a) and

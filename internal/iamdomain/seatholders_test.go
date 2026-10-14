@@ -3,6 +3,7 @@ package iamdomain_test
 import (
 	"database/sql"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -308,7 +309,7 @@ func TestSeatClaimsIsEveryBindingAndEveryOpenInvitation(t *testing.T) {
 		if row.Seat == "" {
 			continue
 		}
-		if b := got[row.ID]; b != row.Binding() {
+		if b := got[row.ID]; !reflect.DeepEqual(b, row.Binding()) {
 			t.Errorf("person %s: the claims read says %+v, the directory page %+v",
 				row.ID, b, row.Binding())
 		}
@@ -360,7 +361,7 @@ func issueOnto(t *testing.T, rig *writeRig, address, seat string,
 	if err := rig.during(func() error {
 		var err error
 		issued, err = rig.writer.Invite(t.Context(), iamdomain.InviteMint{
-			Email: address, Grants: []iam.Grant{iam.GrantStateRead},
+			Email: address, Grants: []iam.Grant{iam.GrantTracker},
 			Seat: rig.vacantSeat(seat), ExpiresAt: expires,
 			OpID: operationKey(), Reason: "onboarding",
 		})
@@ -589,5 +590,60 @@ func TestABindWithNoSeatLookupIsUnavailable(t *testing.T) {
 	if got := rig.column(`SELECT seat_id FROM iam_people WHERE id = ?`,
 		person); len(got) != 1 || got[0] != "sarah-chen" {
 		t.Errorf("after the control sarah holds %v, want sarah-chen", got)
+	}
+}
+
+// A SEAT BINDING CARRIES ITS HOLDER'S SEALED NAME.
+//
+// The seat listing names who holds each human seat to everybody — the org
+// chart is everybody's overview — and a holder shown by login alone would hand
+// every colleague a sign-in name the overview has no business disclosing. So
+// the binding carries the holder's DISPLAY name, sealed as their row seals it
+// (the same column), for the surface to open on its own keyring; and a
+// principal whose row carries no name carries none here. Mutation: drop the
+// column from the claims read and the name never opens.
+func TestASeatBindingCarriesTheHoldersSealedName(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	person := uuid.Must(uuid.NewV7()).String()
+	if err := rig.enrol(iamdomain.Creation{
+		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Sarah Chen", Email: "sarah@example.com", Login: "sarah.chen",
+		Seat: rig.vacantSeat("sarah-chen"), LinkExpiresAt: firstLinkExpiry,
+		OpID: operationKey(), Reason: "a hire",
+	}); err != nil {
+		t.Fatalf("enrol: %v", err)
+	}
+	machine := uuid.Must(uuid.NewV7()).String()
+	if err := rig.enrol(iamdomain.Creation{
+		PersonID: machine, Kind: iam.KindMachine, Stage: iam.StageActive,
+		Login: "svc:release", Seat: rig.vacantSeat("release-desk"),
+		OpID: operationKey(), Reason: "the pipeline",
+	}); err != nil {
+		t.Fatalf("enrol the pipeline: %v", err)
+	}
+	rig.drain()
+	claims, err := rig.reader(t).SeatClaims(t.Context(), brokerAt)
+	if err != nil {
+		t.Fatalf("SeatClaims: %v", err)
+	}
+	named := map[string][]byte{}
+	for _, b := range claims.Bindings {
+		named[b.Person] = b.NameSealed
+	}
+	sealed, ok := named[person]
+	if !ok || len(sealed) == 0 {
+		t.Fatalf("the person's binding carries no sealed name: %v", claims.Bindings)
+	}
+	if opened, err := rig.sealer.Open(person, iamdomain.FieldName,
+		string(sealed)); err != nil || opened != "Sarah Chen" {
+		t.Errorf("the binding's name opens to %q (%v), want the holder's", opened, err)
+	}
+	// A principal with no name still carries its column as the writer sealed
+	// it — an empty name sealed like any other, so the seats listing opens it
+	// the one way it opens every row — and it opens to nothing.
+	if opened, err := rig.sealer.Open(machine, iamdomain.FieldName,
+		string(named[machine])); err != nil || opened != "" {
+		t.Errorf("a principal with no name opens to %q (%v), want nothing", opened, err)
 	}
 }

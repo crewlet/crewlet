@@ -164,17 +164,7 @@ const DOCUMENT: CompanyDocument = {
 
 const OPERATOR = {
   login: "ops",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -196,7 +186,15 @@ type Answer = unknown | ((params: Record<string, unknown>) => unknown);
  * reading a malformed answer.
  */
 const DEFAULTS: Record<string, unknown> = {
-  viewer: { login: "", grants: [], handle: "", owner: "", acts: [] },
+  // AN ADMIN BOUND TO NO SEAT — a deployment's own token — so a case about a
+  // card reads the card whole; a case about a lock names the reader it means.
+  viewer: {
+    login: "token:ops",
+    grants: ["admin", "tracker", "knowledge"],
+    handle: "",
+    owner: "",
+    acts: [],
+  },
   work_items: { items: [], total_hint: 0 },
   seat_activity: { since: "", until: "", days: 7, seats: [], quantile_resolution: 0.06 },
   agent_memory: {
@@ -1200,13 +1198,17 @@ test("the setup card reads the chart's model and tools, and the document's own r
 });
 
 test("without the document the setup card says whose read it is, not that nothing is set", async () => {
-  mount("#/agents/seats/swe");
+  mount("#/agents/seats/swe", {
+    answers: {
+      viewer: { login: "jane.doe", grants: ["tracker"], handle: "jane", owner: "jane", acts: [] },
+    },
+  });
   await settle();
   const setup = screen.getByText("Setup").closest(".crewlet-card") as HTMLElement;
   // THE PUBLIC HALF STILL DRAWS.
   expect(setup.textContent).toContain("anthropic-main");
   expect(setup.textContent).toContain(
-    "Needs config:read to see its sandbox, placement and workers.",
+    "Seeing its sandbox, placement and workers needs Admin access. An admin can give it to you.",
   );
   expect(setup.textContent).not.toContain("not offered");
 });
@@ -1215,13 +1217,30 @@ test("without the document the setup card says whose read it is, not that nothin
 // A person's day
 // ---------------------------------------------------------------------------
 
+// A COLLEAGUE'S DAY IS THEIRS, and the reason a reader is not shown it depends
+// on what they hold: with Tracker it is whose the record is (their lead and an
+// admin read it too); without, it is the app their whole day is kept in.
 test("a colleague's day is withheld with the reason, and never asked for", async () => {
+  mount("#/agents/seats/jane", {
+    answers: {
+      viewer: { login: "t-cto", grants: ["tracker"], handle: "cto", owner: "cto", acts: [] },
+    },
+  });
+  await settle();
+  expect(screen.getByText("Their day")).toBeTruthy();
+  expect(
+    screen.getByText("Their day is theirs: their lead and an admin read it too."),
+  ).toBeTruthy();
+  expect(askedFor("work_person")).toEqual([]);
+  cleanup();
+  asked = [];
   mount("#/agents/seats/jane", {
     answers: { viewer: { login: "t-cto", grants: [], handle: "cto", owner: "cto", acts: [] } },
   });
   await settle();
-  expect(screen.getByText("Their day")).toBeTruthy();
-  expect(screen.getByText(/needs fleet:operate, or leading them/)).toBeTruthy();
+  expect(
+    screen.getByText("Their day needs Tracker access. An admin can give it to you."),
+  ).toBeTruthy();
   expect(askedFor("work_person")).toEqual([]);
 });
 
@@ -1258,7 +1277,7 @@ const JANE_QUEUE = {
 test("a person's Priorities tile counts what is still open, as the Work tab does", async () => {
   mount("#/agents/seats/jane", {
     answers: {
-      viewer: { login: "jane-token", handle: "jane", owner: "jane", acts: [] },
+      viewer: { login: "jane-token", grants: ["tracker"], handle: "jane", owner: "jane", acts: [] },
       work_person: {
         handle: "jane",
         priorities: ["t1", "t2", "t-done"],
@@ -1305,6 +1324,7 @@ test("your own day's Unread is the sidebar badge's count, and the day is yours",
     answers: {
       viewer: {
         login: "jane-token",
+        grants: ["tracker"],
         handle: "jane",
         owner: "jane",
         name: "Jane Founder",
@@ -1360,17 +1380,7 @@ test("an operator reading a colleague's day asks that colleague's inbox", async 
     answers: {
       viewer: {
         login: "ops",
-        grants: [
-          "config:read",
-          "config:write",
-          "secrets:write",
-          "fleet:operate",
-          "people:manage",
-          "audit:read",
-          "state:read",
-          "work:write",
-          "knowledge:write",
-        ],
+        grants: ["admin", "tracker", "knowledge"],
         handle: "cto",
         owner: "cto",
         acts: [],
@@ -2290,7 +2300,7 @@ test("the settings tab asks for the company document once", async () => {
 });
 
 // A READ NOBODY SENT IS NOT A COMPANY WITH NO CONFIGURATION. The document is
-// never asked of a reader without config:read who leads no unit over the seat,
+// never asked of a reader without Admin who leads no unit over the seat,
 // and the tab read "no document, not loading" as an answer — telling a person
 // on their own seat "No company configuration is active" while a company ran.
 // It names the grant instead, and where the seat sits in a unit, that its lead
@@ -2301,7 +2311,7 @@ test("the settings tab asks for the company document once", async () => {
 test("a reader the document is not asked for is told the grant, never that none is active", async () => {
   const reader = {
     login: "jane.doe",
-    grants: ["state:read", "work:write"],
+    grants: ["tracker"],
     handle: "jane",
     owner: "jane",
     acts: [],
@@ -2310,7 +2320,7 @@ test("a reader the document is not asked for is told the grant, never that none 
   const identity = (await screen.findByText(/Reading this seat's settings needs/)).closest(
     ".crewlet-card",
   ) as HTMLElement;
-  expect(identity.textContent).toContain("config:read");
+  expect(identity.textContent).toContain("Admin");
   expect(identity.textContent).toContain("jane.doe");
   // ABOVE EVERY UNIT, so no lead reads it either.
   expect(identity.textContent).not.toContain("leads");

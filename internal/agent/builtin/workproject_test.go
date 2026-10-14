@@ -403,7 +403,7 @@ func TestARefusedWriteDeclaresNoLabel(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			// A COLLEAGUE OVER A CHART THAT SAYS THEY LEAD NOTHING, never
-			// [everyGrant]: the deployment grant admits a re-route before
+			// [everyGrant]: admin admits a re-route before
 			// the chart is asked, and a case run as it asserts nothing
 			// about the one refusal that turns on who leads the project.
 			trk := newFakeTracker()

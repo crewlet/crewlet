@@ -28,8 +28,8 @@ import (
 //
 // So absent is an ERROR here. [authz.Decide] turns it into an UNKNOWN
 // decision, which a surface answers 503 to rather than 403, and the admin
-// path is checked before the chart is asked at all — an operator holding the
-// deployment's own grant is never told "I cannot tell".
+// path is checked before the chart is asked at all — an admin is never told
+// "I cannot tell".
 //
 // PER CALL, which is the one thing the old seam got right: the writer outlives
 // a revision, and a chart captured once would answer for a company that has

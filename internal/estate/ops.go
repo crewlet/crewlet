@@ -118,7 +118,7 @@ type TrackerWriter interface {
 		ifMatch *uint64, authority tracker.PersonAuthority) (tracker.WriteResult, error)
 	RemoveTask(ctx context.Context, opID, id, project string, subtree bool,
 		notify *tracker.Notify) (tracker.WriteResult, error)
-	RestoreTask(ctx context.Context, opID, id, project string,
+	RestoreTask(ctx context.Context, opID, id, project string, alone bool,
 		notify *tracker.Notify) (tracker.WriteResult, error)
 	PurgeTask(ctx context.Context, opID, id, project, reason string) (tracker.WriteResult, error)
 }
@@ -1103,6 +1103,7 @@ type restoreTaskArgs struct {
 	OpID    string
 	ID      string
 	Project string
+	Alone   bool
 	Notify  *tracker.Notify
 }
 
@@ -1112,7 +1113,7 @@ var opRestoreTask = define("tracker.restore_task", opIdempotentWrite, trackerDom
 		if err != nil {
 			return tracker.WriteResult{}, err
 		}
-		return w.RestoreTask(ctx, a.OpID, a.ID, a.Project, a.Notify)
+		return w.RestoreTask(ctx, a.OpID, a.ID, a.Project, a.Alone, a.Notify)
 	})
 
 type purgeTaskArgs struct {

@@ -202,17 +202,7 @@ const status: McpServersStatusAnswer = {
 
 const OPERATOR = {
   login: "U0FOUNDER",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane",
@@ -258,9 +248,7 @@ function mount(
     if (what === "mcp_servers_status") {
       // REFUSED AS THE ENGINE REFUSES IT: the rule and the grant that would admit.
       return refuse
-        ? Promise.reject(
-            new QueryError("unauthorized", { reason: "no_grant", grants: ["config:read"] }),
-          )
+        ? Promise.reject(new QueryError("unauthorized", { reason: "no_grant", grants: ["admin"] }))
         : Promise.resolve(answer);
     }
     return new Promise(() => {});
@@ -452,7 +440,9 @@ test("a refused reader sees the refusal where the servers were, and every tool",
   await settle();
   expect(screen.queryByText("Partly failing")).toBeNull();
   // THE REFUSAL NAMES THE GRANT the engine said would admit the reader.
-  expect(screen.getByText("config:read")).toBeDefined();
+  expect(
+    screen.getByText(/This answer needs Admin access\. An admin can give it to you\./),
+  ).toBeDefined();
   expect(screen.getByText("Open an issue on a repository")).toBeDefined();
   // The add is drawn, and disabled with the reason.
   const add = screen.getByRole("button", { name: /Add an MCP server/ });

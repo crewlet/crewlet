@@ -17,10 +17,10 @@ import (
 // `crewlet run` serves. A contact id may be a `${VAR}`, and the one here is set
 // in no process — only in the environment the engine was handed — so a read
 // surface wired to the process environment instead finds nobody by it: the
-// exact-id tier of `colleague` answers a reader holding the configuration grant
-// with no candidate at all, while every delivery to that person is routed by
-// the id the node resolved. [serveAPI]'s sources are where an engine meets the
-// API, so it is held here, where a test boots an engine and serves it.
+// exact-id tier of `colleague` answers an admin with no candidate at all,
+// while every delivery to that person is routed by the id the node resolved.
+// [serveAPI]'s sources are where an engine meets the API, so it is held here,
+// where a test boots an engine and serves it.
 // Mutation: drop `Env` from the read surface's sources and the id names nobody.
 func TestAContactIDResolvesThroughTheNodesOwnChain(t *testing.T) {
 	t.Parallel()

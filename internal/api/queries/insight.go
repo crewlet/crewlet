@@ -10,7 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
@@ -204,6 +207,11 @@ func (s Sources) attemptsOf(ctx context.Context, id string,
 // its own answer rather than `events?type=agent_phase_completed`: a phase
 // record without its payload has no prompts, no response, no tool calls and no
 // decision, which is everything a reader came for.
+//
+// AND SO IT IS A TRAIL, decided as `turns` is ([Sources.trailOf]): one seat's
+// to whoever reads that seat's, and the company's to an admin. A row's tags
+// naming the work item it was charged to are the tracker's
+// ([maskHistory]).
 func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 	var before *store.Cursor
 	if id := p.String("before_id"); id != "" {
@@ -218,7 +226,7 @@ func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 	// took a role name, which two unit seats stamped from one template
 	// share, so Live's `seat=` narrowed "this seat's rounds" to every such
 	// seat's.
-	agentID, err := s.seatParam(p)
+	agentID, principal, err := s.trailOf(ctx, "phases", p)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +234,11 @@ func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	records := listing.Rows
+	// THE BODY WAS DECIDED ABOVE, and only the tracker's half is left to
+	// withhold: a lead reads their agents' prompts whether or not they use
+	// the tracker.
+	records := maskHistory(listing.Rows, livestate.Reach{Body: true,
+		Tracker: authz.Shows(principal, authz.KindTask)})
 	// The cursor is the LAST row's key, echoed rather than left for a client
 	// to assemble: (time, id) is the table's key, and a client rebuilding it
 	// from a rendered timestamp would lose the sub-second precision the
@@ -378,6 +390,17 @@ func (s Sources) a2aChannels(ctx context.Context, p Params) (any, error) {
 // [knowledge.Outcome]. A mode this build does not know is refused rather than
 // run as the default, because that would answer a different question — and so
 // is a phrase past [knowledge.MaxQueryBytes] ([searchTextRefusal]).
+//
+// # Who is searched for
+//
+// EVERYBODY MAY ASK, and only a holder of the knowledge base is searched for
+// (ADR-0033): the search reads pages and nothing else — a hit is a page — so a
+// caller without the knowledge base has no half of it they may see. The
+// tracker's holder is answered `available: false` with [KnowledgeNoAccess]
+// and the search never runs, so the screen they ask from can say that their
+// access leaves the pages out rather than that the company wrote nothing
+// down; a caller holding neither app is refused naming both, because nothing
+// this question could search is theirs.
 func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	text := p.String("q")
 	if text == "" {
@@ -389,6 +412,13 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	}
 	if err := searchTextRefusal(text); err != nil {
 		return nil, err
+	}
+	// AFTER THE REQUEST IS JUDGED, so a malformed one is told what to
+	// change whoever sent it, and BEFORE ANYTHING IS READ.
+	pagesShown := shows(ctx, authz.KindPage)
+	if !pagesShown && !shows(ctx, authz.KindTask) {
+		return nil, &Refusal{What: "knowledge", Reason: authz.ReasonNoGrant,
+			Grants: slices.Clone(iam.Apps)}
 	}
 	organization := s.organization()
 	out := map[string]any{
@@ -406,6 +436,10 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 		out["reason"] = string(reason)
 		out["note"] = note
 		return out, nil
+	}
+	if !pagesShown {
+		return unavailable(KnowledgeNoAccess, "your access does not include "+
+			"Knowledge, so no page was searched — an admin can give it to you")
 	}
 	if organization == nil {
 		return unavailable(KnowledgeNoCompany, "no company configuration is active")
@@ -565,6 +599,16 @@ const (
 	// vendor search has nothing to build — so it is read through an
 	// optional interface rather than added to [knowledge.Searcher].
 	KnowledgeBuilding KnowledgeReason = "building"
+
+	// KnowledgeNoAccess — the caller holds the tracker and not the
+	// knowledge base, so no page was searched for them (ADR-0033).
+	//
+	// ITS OWN STATE, NOT AN EMPTY RESULT AND NOT A REFUSAL: an empty
+	// result says the company wrote nothing that matches, which nobody
+	// here can know, and a refusal of somebody who may ask the question
+	// would read as the question being broken. The remedy is a permission,
+	// which none of the other reasons' remedies is.
+	KnowledgeNoAccess KnowledgeReason = "no_access"
 )
 
 // Valid reports whether r is a reason this package emits, so an unknown value
@@ -572,7 +616,7 @@ const (
 func (r KnowledgeReason) Valid() bool {
 	switch r {
 	case KnowledgeRan, KnowledgeNoCompany, KnowledgeNoBackend, KnowledgeNoScope,
-		KnowledgeBuilding:
+		KnowledgeBuilding, KnowledgeNoAccess:
 		return true
 	}
 	return false

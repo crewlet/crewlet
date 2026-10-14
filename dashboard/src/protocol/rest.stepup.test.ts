@@ -186,7 +186,7 @@ describe("a refused gesture, not confirmed", () => {
   test("a refusal on authority is not a step-up", async () => {
     const sent = engine({
       status: 403,
-      body: { error: "unauthorized", grants: ["secrets:write"] },
+      body: { error: "unauthorized", grants: ["admin"] },
     });
     const confirmer = confirming(true);
     await rest.post("/secrets/A", {}).catch(() => {});

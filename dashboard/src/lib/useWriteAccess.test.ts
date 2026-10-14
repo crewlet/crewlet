@@ -25,8 +25,10 @@ import { managedSentence } from "~/protocol/configAnswer.ts";
 
 const BOUND: ViewerState = {
   login: "jane.founder",
-  grants: ["work:write", "knowledge:write"],
-  operatesFleet: false,
+  grants: ["tracker", "knowledge"],
+  admin: false,
+  tracker: true,
+  knowledge: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -72,19 +74,47 @@ test.each([
   expect(access).toEqual({ can: false, block, reason: WRITE_REASONS[block] });
 });
 
+// THE APP FIRST, WHERE THE READER LACKS IT: a change the engine does not offer
+// a reader who holds no Tracker is said as the access to ask an admin for —
+// while one it does offer them without it (answering an ask they were asked)
+// is never held for it, and a change that is no app's still says it is not
+// served. Mutation: drop the app's arm and the first reads `not_served`.
+test("a change in an app the reader lacks names that app", () => {
+  const noTracker: ViewerState = { ...BOUND, grants: ["knowledge"], tracker: false, acts: [] };
+  expect(writeAccess("update_work_item", noTracker, "open")).toEqual({
+    can: false,
+    block: "no_access",
+    reason: "This change needs Tracker access. An admin can give it to you.",
+  });
+  expect(
+    writeAccess("comment_on_work_item", { ...noTracker, acts: ["comment_on_work_item"] }, "open"),
+  ).toMatchObject({ can: true });
+  expect(writeAccess("pause_seat", noTracker, "open")).toMatchObject({ block: "not_served" });
+  expect(
+    writeAccess(
+      "write_page",
+      { ...BOUND, grants: ["tracker"], knowledge: false, acts: [] },
+      "open",
+    ),
+  ).toMatchObject({ block: "no_access", reason: expect.stringContaining("Knowledge access") });
+});
+
 // A QUEUED WRITE IS ONE THE PERSON WALKED AWAY FROM believing it happened:
 // offline outranks every other reason, including a reader who could act.
 test("offline outranks everything, a bound person included", () => {
   expect(writeAccess("set_pins", BOUND, "offline")).toMatchObject({ can: false, block: "offline" });
 });
 
-// A BROWSER THE ENGINE REFUSES IS NOT OFFLINE. A session without state:read is
-// never dialled, so its socket is down — and "reconnect to make changes" sent
-// a person invited with no grants, online and refused, looking for a network
-// fault. The refusal outranks offline, and the viewer that never answers such
-// a session. Mutation: rank offline first and the first two go red.
+// A BROWSER THE ENGINE REFUSES IS NOT OFFLINE. A refused socket stops
+// dialling, so it is down — and "reconnect to make changes" sent a person
+// online and refused looking for a network fault. The refusal outranks
+// offline, and the viewer that never answers such a session. Mutation: rank
+// offline first and the first two go red.
 test("a browser the engine refuses is told so, never that it is offline", () => {
-  const refused = linkOf({ connected: false, accessRefused: "grant withdrawn: state:read" });
+  const refused = linkOf({
+    connected: false,
+    accessRefused: "your seat is no longer in the chart",
+  });
   expect(refused).toBe("refused");
   expect(writeAccess("set_pins", { ...BOUND, loading: true }, refused)).toEqual({
     can: false,
@@ -170,18 +200,18 @@ describe("changing the company's configuration", () => {
     ...UNBOUND,
     login: "ops.lead",
     owner: "ops.lead",
-    grants: ["config:read", "config:write"],
+    grants: ["admin"],
     ...over,
   });
 
-  // THE GRANT, NOT A BINDING: `/config` is decided by `config:write`, so a
-  // person bound to no seat who holds it may change a ceiling, and a bound
-  // person without it may not.
-  test("is the config:write grant, not the seat binding", () => {
+  // ADMIN, NOT A BINDING: `/config` is decided by Admin, so a principal bound
+  // to no seat who holds it may change a ceiling, and a bound person holding
+  // every app but Admin may not.
+  test("is Admin, not the seat binding", () => {
     expect(configWriteAccess(viewer({ unbound: true }), "open")).toEqual({ can: true });
     expect(
       configWriteAccess(
-        viewer({ grants: ["config:read"], handle: "jane", owner: "jane", unbound: false }),
+        viewer({ grants: ["tracker", "knowledge"], handle: "jane", owner: "jane", unbound: false }),
         "open",
       ),
     ).toEqual({
@@ -222,7 +252,7 @@ describe("changing the company's configuration", () => {
     });
     // The grant ranks first: a reader who could not write anyway is told
     // what they lack, which is the thing they can clear.
-    expect(configWriteAccess({ ...managed, grants: ["config:read"] }, "open")).toMatchObject({
+    expect(configWriteAccess({ ...managed, grants: ["tracker"] }, "open")).toMatchObject({
       block: "no_grant",
     });
     expect(
@@ -237,7 +267,7 @@ describe("changing the company's configuration", () => {
   // and ignores what only this moment decides — the socket, a screen's hold.
   test("whether the reader may change the configuration at all is the grant and the writers", () => {
     expect(mayChangeConfig(viewer({}))).toBe(true);
-    expect(mayChangeConfig(viewer({ grants: ["config:read"] }))).toBe(false);
+    expect(mayChangeConfig(viewer({ grants: ["tracker", "knowledge"] }))).toBe(false);
     expect(mayChangeConfig(viewer({ configWriter: false, configManagedBy: ["gitops"] }))).toBe(
       false,
     );
@@ -245,18 +275,17 @@ describe("changing the company's configuration", () => {
   });
 });
 
-// THE COMPANY'S GRANT, OR A LEAD INSIDE THEIR SUBTREE: the engine admits a
-// write by a person without config:write when everything it changes is inside
-// a unit they lead, so a control about one of their seats or units is open to
-// them, and one outside says which units they do lead rather than that a
-// grant is missing.
+// ADMIN, OR A LEAD INSIDE THEIR SUBTREE: the engine admits a write by a
+// person without Admin when everything it changes is inside a unit they lead,
+// so a control about one of their seats or units is open to them, and one
+// outside says which units they do lead rather than that access is missing.
 describe("changing one part of the org chart", () => {
   const lead: ViewerState = {
     ...BOUND,
     login: "cto.person",
     handle: "cto",
     owner: "cto",
-    grants: ["work:write"],
+    grants: ["tracker"],
   };
   const scope = leadScope(CHART_ORG, "cto");
 
@@ -267,7 +296,7 @@ describe("changing one part of the org chart", () => {
     expect(orgWriteAccess(lead, "open", scope, { seat: "pm" })).toEqual({
       can: false,
       block: "outside_scope",
-      reason: "You lead Core, and this is outside it: changing it takes the config:write grant.",
+      reason: "You lead Core, and this is outside it: changing it takes Admin access.",
     });
     expect(
       orgWriteAccess(lead, "open", leadScope(CHART_ORG, "pm"), { unit: "core" }),
@@ -276,7 +305,7 @@ describe("changing one part of the org chart", () => {
     });
   });
 
-  test("a person who leads nothing is told about the grant, and every earlier reason still ranks first", () => {
+  test("a person who leads nothing is told about Admin, and every earlier reason still ranks first", () => {
     expect(orgWriteAccess(lead, "open", NO_SCOPE, { seat: "swe" })).toMatchObject({
       block: "no_grant",
     });
@@ -286,8 +315,8 @@ describe("changing one part of the org chart", () => {
     expect(orgWriteAccess(lead, "open", scope, { seat: "swe" }, "these are Rui's")).toMatchObject({
       block: "held",
     });
-    // The grant reaches everything, a lead's scope or not.
-    const admin = { ...lead, grants: ["config:read", "config:write"] };
+    // Admin reaches everything, a lead's scope or not.
+    const admin = { ...lead, grants: ["admin"] };
     expect(orgWriteAccess(admin, "open", scope, { seat: "pm" })).toEqual({ can: true });
   });
 

@@ -497,16 +497,16 @@ func (s *Service) clearSession(w http.ResponseWriter) {
 // [authz.ActionSessionEnd] — the verb `DELETE /iam/people/{id}/sessions` is
 // mounted on, so ending one session and ending all of somebody's are one
 // rule: their own, on no proof at all (the first thing somebody does on
-// finding an intruder), or anybody else's on `people:manage`, a `step_up`
-// and a person present.
+// finding an intruder), or anybody else's on admin, a `step_up` and a person
+// present.
 //
-// It used to be decided here, by a check of its own that admitted
-// `fleet:operate` for anybody's session with no step-up — a grant a machine
-// token may carry — so a leaked pipeline token, or a week-old cookie, could
-// end any session whose lineage it knew while the table, its walks and the
-// docs all said that took the directory's grant and a person present. An SRE
-// who finds a stolen laptop asks whoever holds `people:manage`, or uses the
-// Tier A token, which holds it and is fresh by construction.
+// It used to be decided here, by a check of its own that admitted the
+// deployment's operating permission for anybody's session with no step-up —
+// one a machine token may carry — so a leaked pipeline token, or a week-old
+// cookie, could end any session whose lineage it knew while the table, its
+// walks and the docs all said that took an administrator and a person present.
+// An SRE who finds a stolen laptop asks an admin, or uses a Tier A token
+// holding admin, which is fresh by construction.
 func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	principal, resolution := iam.From(r.Context())
 	switch resolution {

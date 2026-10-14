@@ -235,9 +235,10 @@ type writeSeams struct {
 //
 // THE PRINCIPAL WHOLE, not a name: each log's record carries the author, the
 // kind of party and the credential ([iam.ActorFor]), and the identity
-// estate's writer judges the gesture's authority — `fleet:operate` — on the
-// party's own grants, at the record rather than only at the route, because a gate record can be published by a CLI, a test and a
-// duty as well as through one.
+// estate's writer judges the gesture's authority — admin — on the party's
+// own grants, at the record rather than only at the route, because a gate
+// record can be published by a CLI, a test and a duty as well as through
+// one.
 type gateWrite func(ctx context.Context, by iam.Principal, opID, node string,
 	readmit bool) (statelog.Result, error)
 
@@ -462,7 +463,7 @@ func register() []registration {
 					readmit bool) (statelog.Result, error) {
 
 					// AS THE PRINCIPAL, whose grants the domain asks
-					// `fleet:operate` of at the record.
+					// admin of at the record.
 					as := w.As(by)
 					if readmit {
 						return as.ReadmitNode(ctx, opID, node)

@@ -60,7 +60,7 @@ func TestTheIdentityDomainIsACertifiedDomain(t *testing.T) {
 func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	w, err := iamdomain.NewWriter(iamdomain.WriterDeps{
 		Publisher: pub, DB: db, Actor: "suite", ActorKind: iam.KindMachine,
-		Grants: []iam.Grant{iam.GrantFleetOperate},
+		Grants: []iam.Grant{iam.GrantAdmin},
 	})
 	if err != nil {
 		return err
@@ -121,7 +121,7 @@ func TestTheIdentityGateReaderKeepsTheSharedRule(t *testing.T) {
 			Write: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(iamdomain.PersonSubject(id), iamdomain.OpUpdate,
 					id, writer, opID, iamdomain.PeopleScope(id),
-					gateSuitePerson([]iam.Grant{iam.GrantStateRead}))
+					gateSuitePerson([]iam.Grant{iam.GrantTracker}))
 			},
 			// A REMOVAL IS THE PURGE: the one record here with no inverse,
 			// and the one that writes the tombstone every later record
@@ -251,7 +251,7 @@ func suitePayload(kind iamdomain.ObjectKind, id string) (
 				V: iamdomain.DocumentVersion, Kind: iam.KindPerson,
 				Stage:      iam.StageActive,
 				NameSealed: "sealed:name", EmailSealed: "sealed:email",
-				Grants: []iam.Grant{iam.GrantPeopleManage},
+				Grants: []iam.Grant{iam.GrantAdmin},
 			},
 			Holds: iamdomain.Identifiers{EmailBlind: "blind-" + id,
 				Login: id + ".suite"},
@@ -261,7 +261,7 @@ func suitePayload(kind iamdomain.ObjectKind, id string) (
 			V: iamdomain.DocumentVersion, Kind: iam.KindPerson,
 			Stage:      iam.StageActive,
 			NameSealed: "sealed:renamed", EmailSealed: "sealed:email",
-			Grants: []iam.Grant{iam.GrantStateRead},
+			Grants: []iam.Grant{iam.GrantTracker},
 		}, iamdomain.PeopleScope(id)
 	case iamdomain.KindSession:
 		return iamdomain.OpOpen, suitePerson, iamdomain.Session{

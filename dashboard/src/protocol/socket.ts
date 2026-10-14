@@ -308,10 +308,10 @@ export class LiveSocket {
    * Dial for the session the frame has just read (`app/Shell.tsx`), unless a
    * dial is already open or under way.
    *
-   * IT LIFTS WHAT AN EARLIER SESSION LATCHED: the frame calls this for an
-   * answer that holds the grant the socket needs — after a sign-in, or once an
-   * administrator has given it — and a refusal or a sign-out recorded under
-   * the last one no longer describes the browser.
+   * IT LIFTS WHAT AN EARLIER SESSION LATCHED: the frame calls this for every
+   * session it reads — after a sign-in, or once an admin has put a refusal
+   * right — and a refusal or a sign-out recorded under the last one no longer
+   * describes the browser.
    */
   start(): void {
     this.lift();
@@ -681,9 +681,8 @@ export class LiveSocket {
    * by the same decision every thirty seconds for as long as the tab stayed
    * open, and a page that says "reconnecting" to somebody whose access was
    * withdrawn is telling them to wait for something that will not happen.
-   * `reconnect()` is the way back, once an administrator has restored it —
-   * or `start()`, which the frame calls once the session it reads again
-   * holds the grant the socket needs.
+   * `reconnect()` is the way back, once an admin has put it right — or
+   * `start()`, which the frame calls once it reads the session again.
    */
   private accessRefused(reason: string): void {
     this.stopDialling();

@@ -110,6 +110,7 @@ import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
 import { PromptRecord } from "~/components/PromptDoc.tsx";
+import { WITHHELD_WHY, WITHHELD_WORDS } from "~/lib/access.ts";
 
 /**
  * A call's two records, formatted.
@@ -758,6 +759,14 @@ export function PhaseCard({
             record.failed && record.error && <Callout variant="danger">{record.error}</Callout>
           )}
           {record.notes && <Callout variant="neutral">{record.notes}</Callout>}
+
+          {/* A WITHHELD BODY IS SAID, never drawn as a phase that was told
+              nothing and answered nothing: the engine sent this reader the
+              phase's status alone (`bodyWithheld`), and every section below
+              that is body is absent for that reason, not empty. */}
+          {record.bodyWithheld && (
+            <Callout variant="neutral">{`${WITHHELD_WORDS}. ${WITHHELD_WHY}`}</Callout>
+          )}
 
           {(record.systemPrompt || record.userPrompt) && (
             // A REAL SECTION OF THIS CARD, so it keeps uilet's default heading

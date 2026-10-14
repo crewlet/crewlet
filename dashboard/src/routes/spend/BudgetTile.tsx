@@ -28,8 +28,8 @@ export function BudgetTile({
   budget: OrgBudget | null;
   /**
    * Whether the reader may set a ceiling: `mayChangeConfig` — they hold
-   * `config:write`, the grant every ceiling write takes (a grant check, never
-   * "is this an operator", which every signed-in person now is), and on a
+   * Admin, the access every ceiling write takes (an access check, never "is
+   * this an operator", which every signed-in person now is), and on a
    * managed document they are one of its writers.
    */
   mayConfigure: boolean;

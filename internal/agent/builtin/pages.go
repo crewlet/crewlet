@@ -87,7 +87,7 @@ type PageDeps struct {
 	// A FUNCTION because the key is Tier B and moves on an apply, while the
 	// deps outlive the epoch they were built in. NIL IS NOT "NO SKILLS"
 	// BY ACCIDENT: a surface that wired none serves a company whose
-	// skills container would then be written on the colleague grant alone,
+	// skills container would then be written on the knowledge base alone,
 	// which is exactly the hole this closes — so every surface that builds
 	// these deps over a live company sets it.
 	SkillsContainer func() string
@@ -207,11 +207,11 @@ func (d PageDeps) actor(ctx context.Context, turn *turnctx.Turn) (pages.Actor, e
 //
 // # Why a page write asks a second question here
 //
-// A page is ordinarily a colleague's to write — `knowledge:write` — and the
+// A page is ordinarily anybody's to write who uses the knowledge base, and the
 // skills container's pages are pages. But they are also the instructions the
 // engine injects into a phase of every seat's turn, so writing one rewrites
 // the prompt the whole company runs under, and a credential holding only the
-// colleague grant could do it: internal/pages refuses an AGENT every write
+// knowledge base could do it: internal/pages refuses an AGENT every write
 // there, and exempts every person, because whether a person may is a matter of
 // capability and the store holds no grants. This is where that capability is
 // asked, once the container is known — from the arguments on a create, and
@@ -234,6 +234,20 @@ func (d PageDeps) SkillPage(container string) (authz.Object, bool) {
 		return authz.Object{}, false
 	}
 	return authz.Object{Kind: authz.KindContainer, Container: key}, true
+}
+
+// PageObject is a stored page as the verbs that tidy it are decided on
+// ([authz.ClassTidy]): the container it lives in, whose lead tidies every page
+// there, and the person or seat that CREATED it, who tidies their own. The
+// author is set by the create and never by a save, so a page's last editor is
+// not handed its address.
+//
+// EXPORTED for the surface that renames, trashes and restores pages without a
+// tool — the HTTP routes — so the object is formed once however the verb
+// arrives.
+func PageObject(page pages.Page) authz.Object {
+	return authz.Object{Kind: authz.KindPage, Container: page.Container,
+		Author: page.Author}
 }
 
 // maySkillPage asks [authz.ActionSkillPageWrite] for a write into container,
@@ -676,17 +690,17 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		return *refused, nil
 	}
 
-	// A RENAME IS THE CONTAINER LEAD'S, however it is asked for. The tool's
-	// own gate decided the SAVE, which is any colleague's; an address change
-	// is [authz.ActionPageRename] and the container it is decided on is the
-	// stored page's, so it is asked here — and BEFORE the save, so a caller
-	// who may not rename lands nothing rather than half of what they sent.
-	// Without it a `title` on this tool was a way round the rule the rename
-	// verb itself is held to.
+	// A RENAME IS THE CONTAINER LEAD'S OR THE PAGE'S CREATOR'S, however it
+	// is asked for. The tool's own gate decided the SAVE, which is anybody's
+	// who uses the knowledge base; an address change is
+	// [authz.ActionPageRename], decided on the stored page — the container
+	// it is in and who created it — so it is asked here, and BEFORE the save,
+	// so a caller who may not rename lands nothing rather than half of what
+	// they sent. Without it a `title` on this tool was a way round the rule
+	// the rename verb itself is held to.
 	if _, renaming := args["title"]; renaming {
-		if refused := t.deps.mayWrite(ctx, authz.ActionPageRename, authz.Object{
-			Kind: authz.KindPage, Container: detail.Page.Container,
-		}); refused != nil {
+		if refused := t.deps.mayWrite(ctx, authz.ActionPageRename,
+			PageObject(detail.Page)); refused != nil {
 			return *refused, nil
 		}
 	}

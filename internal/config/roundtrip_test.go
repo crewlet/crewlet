@@ -186,8 +186,8 @@ api:
   port: 8000
   external_url: "http://127.0.0.1:8000"
   auth:
-    max_grants: [state:read, config:write]
-    tokens: [{id: founder, token: a-token-long-enough-to-pass, grants: [config:write]}]
+    admin: serve
+    tokens: [{id: founder, token: a-token-long-enough-to-pass, grants: [admin]}]
 secrets:
   active_key_id: k1
   keys: [{id: k1, material: "`+TestKeyMaterial+`"}]

@@ -53,7 +53,7 @@ func TestARefusalWithNothingBesideTheCodeIsLeftAlone(t *testing.T) {
 //
 // The node client answered a 401 and a 403 alike with "the node refused the
 // token: check it against the api.auth.tokens entry you meant to use", so an
-// operator whose token works and lacks `fleet:operate` went looking for a typo
+// operator whose token works and lacks `admin` went looking for a typo
 // in it; the other three rendered the 403 as a bare code or a bare reason,
 // with the grants — the one fact that says whom to ask for what — dropped. Each
 // client is asked, so a fifth renderer that skipped the shared one would have
@@ -61,8 +61,8 @@ func TestARefusalWithNothingBesideTheCodeIsLeftAlone(t *testing.T) {
 func TestEveryClientNamesTheGrantANodeRefusedATokenFor(t *testing.T) {
 	t.Parallel()
 	refused := []byte(`{"error":"unauthorized","message":"The credential you ` +
-		`presented does not carry the grant this request needs.",` +
-		`"reason":"no_grant","grants":["fleet:operate"]}`)
+		`presented does not carry the access (Admin, Tracker or Knowledge) ` +
+		`this request needs.","reason":"no_grant","grants":["admin"]}`)
 	config := &configClient{base: "http://node"}
 	secrets := &secretsClient{base: "http://node"}
 	clients := map[string]func(status int, raw []byte) error{
@@ -82,7 +82,7 @@ func TestEveryClientNamesTheGrantANodeRefusedATokenFor(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			err := refusal(http.StatusForbidden, refused)
-			if err == nil || !strings.Contains(err.Error(), "fleet:operate") ||
+			if err == nil || !strings.Contains(err.Error(), "admin") ||
 				!strings.Contains(err.Error(), "accepted the token") {
 				t.Errorf("a token lacking a grant reads %v, want the grant it "+
 					"needs and that the token itself was accepted", err)
@@ -103,7 +103,7 @@ func TestAForbiddenThatNamesNoGrantIsNotReadAsOne(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{
 		`{"error":"seat_unavailable","seat":"cto"}`,
-		`{"error":"unauthorized","detail":"fleet:operate cannot be minted onto a token"}`,
+		`{"error":"unauthorized","detail":"a machine token may not mint another token"}`,
 		`not json`,
 	} {
 		if msg, ok := credentialRefusal(http.StatusForbidden, []byte(raw), true); ok {

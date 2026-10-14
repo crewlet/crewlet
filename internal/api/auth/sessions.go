@@ -464,7 +464,7 @@ type sessionAnswer struct {
 // resolve turns a cookie into an answer, or reports that this request carries
 // none.
 //
-// ceiling and proof are the guard's own `api.auth.max_grants` and step-up
+// admin and proof are the guard's own `api.auth.admin` posture and step-up
 // window, applied to a person as they are to a token.
 //
 // tokens is the guard's Tier A entries by login, for a session exchanged from
@@ -473,7 +473,7 @@ type sessionAnswer struct {
 // open is whether the cookie is the one an OPEN CONNECTION was opened with —
 // see [Guard.ResolveOpen] — which sets its idle deadline aside.
 func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
-	ceiling []iam.Grant, proof proofWindow,
+	admin iam.AdminPosture, proof proofWindow,
 	tokens func(login string) (config.APIToken, bool), open bool) sessionAnswer {
 
 	cookie := s.cookieOf(r)
@@ -590,7 +590,7 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		s.reissue(w, v)
 	}
 	return sessionAnswer{
-		principal: s.principal(v, binding, ceiling, proof), how: iam.Resolved,
+		principal: s.principal(v, binding, admin, proof), how: iam.Resolved,
 		refusal: refusal, presented: true, lifetime: v.Bearer.AbsoluteExpiresAt,
 	}
 }
@@ -769,11 +769,11 @@ func (d tierASubjects) Resolve(ctx context.Context, lineage, person string) (
 
 // principal composes who the holder of a validated bearer is.
 //
-// THE CEILING IS APPLIED HERE, exactly as it is for a Tier A token and for the
-// same reason: `api.auth.max_grants` is a decision-time bound, so a node whose
-// ceiling was lowered enforces it on its next request rather than on a row
-// somebody has to rewrite. A mixed fleet mid-rollout is a LEGAL state, which
-// is why each node publishes a hash of its own ceiling.
+// THE ADMIN POSTURE IS APPLIED HERE, exactly as it is for a Tier A token and
+// for the same reason: `api.auth.admin` is a decision-time bound, so a node
+// turned to `refuse` clamps admin away on its next request rather than on a
+// row somebody has to rewrite. A mixed fleet mid-rollout is a LEGAL state,
+// which is why each node publishes its own posture.
 //
 // AND SO IS THE STEP-UP WINDOW, for the same reason: `api.auth.session.step_up`
 // is this node's own setting, and the session row states only WHEN its holder
@@ -784,7 +784,7 @@ func (d tierASubjects) Resolve(ctx context.Context, lineage, person string) (
 // token's exchanged cookie never reaches here: the guard composes it from the
 // entry, exactly as it composes the token's bearer.
 func (s *Sessions) principal(v session.Validation, binding session.Binding,
-	ceiling []iam.Grant, proof proofWindow) iam.Principal {
+	admin iam.AdminPosture, proof proofWindow) iam.Principal {
 
 	person := v.Person
 	p := iam.Principal{
@@ -799,11 +799,13 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 		// alone says neither.
 		Seat:     binding.Handle(),
 		Position: binding.Seat.Unit,
-		// WHAT THE PERSON WAS GIVEN HERE, clamped to this node's
-		// ceiling. A session carries no authority of its own: the grants
-		// are the person's row's, so an administrator's edit reaches
-		// every session they hold on its next request.
-		Grants: intersect(person.Grants, ceiling),
+		// WHAT THE PERSON WAS GIVEN, under this node's admin posture:
+		// admin expanded into every app and then served or clamped
+		// away, and a name this build does not know dropped. A session
+		// carries no authority of its own: the grants are the person's
+		// row's, so an administrator's edit reaches every session they
+		// hold on its next request.
+		Grants: admin.Effective(person.Grants),
 		Stage:  person.Stage,
 		// AND THROUGH WHAT: this session, by its lineage. The person is
 		// the author of what they write, and the operator column beside
@@ -823,8 +825,8 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 
 // proofWindow is this node's step-up window, `api.auth.session.step_up`.
 //
-// THE NODE'S OWN, applied when a principal is composed, for the ceiling's
-// reason: a session row states only WHEN its holder proved who they are, so a
+// THE NODE'S OWN, applied when a principal is composed, for the admin
+// posture's reason: a session row states only WHEN its holder proved who they are, so a
 // shortened window takes effect on this node's next request with nothing
 // rewritten, and a fleet mid-rollout legally disagrees about it.
 type proofWindow time.Duration

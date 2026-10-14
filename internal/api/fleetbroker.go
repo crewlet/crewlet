@@ -139,10 +139,10 @@ func RenderBrokerRefusal(err error) (BrokerRefusal, bool) {
 
 // mountFleetBroker registers the two removals, through the mount
 // [App.mountDeployment] hands it — which is what decides the grant: a removal
-// changes the quorum every election runs on, so it is the deployment's
-// `fleet:operate` and asks for a recent proof. The listing is a named read
-// route over the `fleet_broker` question, so the socket's query channel and
-// REST answer it from one implementation — see rest.go.
+// changes the quorum every election runs on, so it is `admin`'s and asks for a
+// recent proof. The listing is a named read route over the `fleet_broker`
+// question, so the socket's query channel and REST answer it from one
+// implementation — see rest.go.
 func (a *App) mountFleetBroker(mount func(string, http.HandlerFunc)) {
 	mount("POST /fleet/broker/remove/{node}", func(w http.ResponseWriter, r *http.Request) {
 		a.serveBrokerRemove(w, r, voterByNode, r.PathValue("node"))

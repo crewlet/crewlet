@@ -254,11 +254,12 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 //
 // A VALUE RATHER THAN A BOOL for [tracker.PersonAuthority]'s reason, and it
 // states the DECISION: the caller asks [authz.ActionPageCommentRemove] and
-// passes what came back, because this package holds no chart and no grants.
+// passes what came back, because this package holds no chart and no
+// permissions.
 type CommentAuthority struct {
 	// Moderate reports a caller authorized to take down a remark they did
-	// not write, which [authz.ClassAuthored] admits on the DEPLOYMENT
-	// GRANT alone — not on any relation to the page. A lead is not
+	// not write, which [authz.ClassAuthored] admits on ADMIN alone — not
+	// on any relation to the page. A lead is not
 	// automatically a moderator of what is said on their team's pages,
 	// and making them one is a decision the table would have to state.
 	//
@@ -323,8 +324,8 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 				if !authority.Moderate && held.Author != actor.Name() {
 					return statelog.Decision{}, invalid("comment",
 						"comment %s was written by %s — a remark is taken down by "+
-							"whoever made it, and by nobody else without the "+
-							"deployment grant", commentID,
+							"whoever made it, and by nobody else but an "+
+							"admin", commentID,
 						held.Author)
 				}
 				scope := ScopeSet{Subject: true, Container: head.Container}

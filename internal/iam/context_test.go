@@ -15,7 +15,7 @@ import (
 func TestFromIsThreeValued(t *testing.T) {
 	resolved := Principal{
 		ID: uuid.New(), Login: "jane.doe", Kind: KindPerson,
-		Stage: StageActive, Grants: []Grant{GrantStateRead},
+		Stage: StageActive, Grants: []Grant{GrantTracker},
 	}
 	storeDown := errors.New("coordination store unreachable")
 
@@ -95,7 +95,7 @@ func TestFromIsThreeValued(t *testing.T) {
 		context.Background(),
 	} {
 		who, _ := From(ctx)
-		if who.Can(GrantStateRead) || len(who.Grants) != 0 {
+		if who.Can(GrantTracker) || len(who.Grants) != 0 {
 			t.Errorf("an unresolved principal carries grants: %+v", who)
 		}
 	}
@@ -107,11 +107,11 @@ func TestFromIsThreeValued(t *testing.T) {
 func TestAResolutionCannotBeForgedFromOutside(t *testing.T) {
 	type otherKey struct{}
 	ctx := context.WithValue(context.Background(), otherKey{}, resolution{
-		principal: Principal{ID: uuid.New(), Grants: []Grant{GrantSecretRead}},
+		principal: Principal{ID: uuid.New(), Grants: []Grant{GrantAdmin}},
 		how:       Resolved,
 	})
 	who, how := From(ctx)
-	if how != Unknown || who.Can(GrantSecretRead) {
+	if how != Unknown || who.Can(GrantAdmin) {
 		t.Fatalf("From = (%+v, %q) for a value stored under a foreign key, want an unknown with no grants", who, how)
 	}
 }
@@ -121,14 +121,14 @@ func TestAResolutionCannotBeForgedFromOutside(t *testing.T) {
 // to believe whatever principal came with it.
 func TestAnUnreadableResolutionIsUnknown(t *testing.T) {
 	ctx := context.WithValue(context.Background(), principalKey{}, resolution{
-		principal: Principal{ID: uuid.New(), Grants: []Grant{GrantFleetOperate}},
+		principal: Principal{ID: uuid.New(), Grants: []Grant{GrantAdmin}},
 		how:       Resolution("attested"),
 	})
 	who, how := From(ctx)
 	if how != Unknown {
 		t.Fatalf("From = %q for an unreadable resolution, want %q", how, Unknown)
 	}
-	if who.Can(GrantFleetOperate) {
+	if who.Can(GrantAdmin) {
 		t.Fatal("an unreadable resolution handed its grants through")
 	}
 	if !errors.Is(Reason(ctx), ErrUnresolved) {

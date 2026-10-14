@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -24,6 +25,15 @@ type fixedRuns []sandbox.PendingRun
 
 func (f fixedRuns) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return f, nil
+}
+
+func (f fixedRuns) Get(_ context.Context, turnID string) (sandbox.PendingRun, bool, error) {
+	for _, run := range f {
+		if run.TurnID == turnID {
+			return run, true, nil
+		}
+	}
+	return sandbox.PendingRun{}, false, nil
 }
 
 // WHAT WAITS ON A PERSON IS THEIR OPEN ASKS AND THE RUNS PARKED ON A QUESTION
@@ -98,7 +108,7 @@ func TestDecisionsNeedsARecord(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, viewerSources(t, work))
 	nobody := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead}}
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
 	_, err := r.Answer(iam.WithPrincipal(t.Context(), nobody), "decisions", nil)
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a caller with no record naming nobody = %v, want bad params", err)
@@ -109,13 +119,13 @@ func TestDecisionsNeedsARecord(t *testing.T) {
 }
 
 // AND SOMEBODY ELSE'S DECISIONS TAKE THE PERSON-READ RULE: theirs, whoever
-// leads them, or the deployment's admin grant — the rule `work_my_work`
+// leads them, or an admin, each with the tracker — the rule `work_my_work`
 // takes, because what waits on somebody is their queue.
 func TestSomebodyElsesDecisionsTakeTheLeadRelation(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
 	if _, err := askHolding(t, viewerSources(t, work), "ana", "decisions",
-		map[string]any{"handle": "bo"}, iam.GrantStateRead); !errors.Is(err,
+		map[string]any{"handle": "bo"}, iam.GrantTracker); !errors.Is(err,
 		queries.ErrUnauthorized) {
 		t.Errorf("a colleague read bo's decisions = %v, want unauthorized", err)
 	}
@@ -126,7 +136,7 @@ func TestSomebodyElsesDecisionsTakeTheLeadRelation(t *testing.T) {
 	s := viewerSources(t, work)
 	s.Chart = leadsChart{lead: "ana", report: "bo"}
 	if _, err := askHolding(t, s, "ana", "decisions",
-		map[string]any{"handle": "bo"}, iam.GrantStateRead); err != nil {
+		map[string]any{"handle": "bo"}, iam.GrantTracker); err != nil {
 		t.Fatalf("bo's lead was refused his decisions: %v", err)
 	}
 	if work.decisionsQuery.Handle != "bo" {
@@ -266,5 +276,142 @@ func TestTheFeedFoldsASchedulesRunsAndLeavesItsSkippedTicksOut(t *testing.T) {
 			t.Errorf("kinds=%q read the schedule as %+v, want one row of six runs since "+
 				"the oldest fire, and no skipped tick", kinds, runs)
 		}
+	}
+}
+
+// EACH FEED ROW IS SHOWN BY ITS APP (ADR-0033): the work the tracker records
+// to whoever holds the tracker, the pages to whoever holds the knowledge base,
+// and the schedules' runs — the company's own machinery — to everybody, an
+// admin holding all three. A kind the caller may not see is DROPPED rather than
+// refused, named in `kinds=` or not, and its source is never read: a refusal of
+// `kinds=page` would confirm the pages exist to somebody who may not see them.
+//
+// Mutation: skip the kind filter in [queries.Sources.companyFeed] and the
+// overview-only caller is shown a completion and a page save.
+func TestTheFeedShowsOnlyTheAppsTheCallerHolds(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)
+	db := openStore(t)
+	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		at := base.Add(-30 * time.Minute)
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO usage_schedule_runs
+				(day, node, scope_type, scope_id, name, fired_at, target,
+				 outcome, trace_id, turn_id, version)
+			VALUES (?, 'n1', 'role', 'pm', 'standup', ?, 'pm', 'fired', '', '', 1)`,
+			at.Format("2006-01-02"), store.EncodeTime(at))
+		return err
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	for _, c := range []struct {
+		name    string
+		holding []iam.Grant
+		params  map[string]any
+		want    []queries.FeedKind
+	}{
+		// NEWEST FIRST: the completion, the schedule's run half an hour
+		// before it, the page save an hour before.
+		{"an admin", []iam.Grant{iam.GrantAdmin}, nil,
+			[]queries.FeedKind{queries.FeedCompleted, queries.FeedSchedule, queries.FeedPage}},
+		{"the tracker", []iam.Grant{iam.GrantTracker}, nil,
+			[]queries.FeedKind{queries.FeedCompleted, queries.FeedSchedule}},
+		{"the knowledge base", []iam.Grant{iam.GrantKnowledge}, nil,
+			[]queries.FeedKind{queries.FeedSchedule, queries.FeedPage}},
+		{"nothing", nil, nil, []queries.FeedKind{queries.FeedSchedule}},
+		{"the tracker, naming the pages", []iam.Grant{iam.GrantTracker},
+			map[string]any{"kinds": "page"}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			work := &stubWork{feed: tracker.FeedPage{Rows: []tracker.FeedRow{
+				{Task: "a", Kind: tracker.FeedCompleted, At: base,
+					Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
+			}, Complete: true}}
+			pageStore := &stubPages{changes: []pages.PageChange{
+				{ID: "h-1", PageID: "p", Kind: pages.ChangeSaved,
+					At: base.Add(-time.Hour), LogSeq: 4},
+			}}
+			r := queries.NewRegistry()
+			queries.Register(r, queries.Sources{Work: work, Pages: pageStore,
+				Usage: db.Replicated()})
+			got, err := r.Answer(asGrants(t, "", c.holding...), "company_feed", c.params)
+			if err != nil {
+				t.Fatalf("company_feed: %v", err)
+			}
+			var kinds []queries.FeedKind
+			for _, row := range got.(map[string]any)["rows"].([]queries.FeedEntry) {
+				kinds = append(kinds, row.Kind)
+			}
+			if !slices.Equal(kinds, c.want) {
+				t.Errorf("the feed showed %v, want %v", kinds, c.want)
+			}
+			if !slices.Contains(c.want, queries.FeedCompleted) && len(work.feedQuery.Kinds) != 0 {
+				t.Errorf("the tracker was read for %v, a caller it is not shown to",
+					work.feedQuery.Kinds)
+			}
+			if !slices.Contains(c.want, queries.FeedPage) && len(pageStore.activity.Kinds) != 0 {
+				t.Errorf("the pages were read for %v, a caller they are not shown to",
+					pageStore.activity.Kinds)
+			}
+		})
+	}
+}
+
+// YOUR OWN ASKS NEED NO TRACKER (ADR-0033): a person kept off the tracker is
+// still asked things, may read the item an open ask names them on and post the
+// answer without it — so the list of what waits on them is theirs to read
+// whatever they hold. A parked coding run's question put to them is shown, and
+// the task behind it, its seat's trail, is not.
+//
+// Somebody else's list is still the tracker's: a lead without it reads no
+// report's, and is told the tracker would admit them.
+//
+// Mutation: register `decisions` as the tracker's, or decide the caller's own
+// record by the person-read rule, and the first half goes red.
+func TestYourOwnAsksNeedNoTracker(t *testing.T) {
+	t.Parallel()
+	work := &stubWork{decisions: tracker.DecisionsAnswer{Asks: []tracker.AskRow{
+		{Comment: "c-1", AskedAt: time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)},
+	}, Total: tracker.ClaimTotal{Total: 1}}}
+	s := viewerSources(t, work)
+	s.Sandbox = fixedRuns{parkedRun()}
+	got, err := askHolding(t, s, "ana", "decisions", nil)
+	if err != nil {
+		t.Fatalf("ana's own decisions, holding nothing: %v", err)
+	}
+	if work.decisionsQuery.Handle != "ana" {
+		t.Errorf("the asks were read for %q, want ana", work.decisionsQuery.Handle)
+	}
+	items := got.(map[string]any)["items"].([]queries.DecisionItem)
+	var ask, run *queries.DecisionItem
+	for i := range items {
+		switch items[i].Kind {
+		case "ask":
+			ask = &items[i]
+		case "run":
+			run = &items[i]
+		}
+	}
+	if ask == nil || ask.Ask.Comment != "c-1" {
+		t.Errorf("the ask put to ana is not listed: %+v", items)
+	}
+	if run == nil || run.Run["question"] != "which branch?" {
+		t.Fatalf("the run's question put to ana is not listed: %+v", items)
+	}
+	if _, shown := run.Run["task_description"]; shown {
+		t.Error("ana was shown the run's task, which is its seat's trail")
+	}
+	if _, shown := run.Run["work_item"]; shown {
+		t.Error("ana, holding no tracker, was shown the run's work item")
+	}
+
+	lead := viewerSources(t, &stubWork{})
+	lead.Chart = leadsChart{lead: "ana", report: "bo"}
+	_, err = askHolding(t, lead, "ana", "decisions", map[string]any{"handle": "bo"})
+	var refusal *queries.Refusal
+	if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantTracker}) {
+		t.Errorf("a lead without the tracker reading a report's decisions = %v, "+
+			"want a refusal naming [tracker]", err)
 	}
 }

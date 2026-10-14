@@ -129,15 +129,14 @@ func gated(deps builtin.Deps) builtin.Deps {
 // for.
 func everyGrant() context.Context { return callerHolding(iam.AllGrants...) }
 
-// colleagueCaller is the caller a case about AUTHORITY acts as: a seat holding the
-// ordinary write grants and NOT fleet:operate.
+// colleagueCaller is the caller a case about AUTHORITY acts as: a seat holding
+// every app — which is what a seat always holds — and NOT admin.
 //
-// THE ADMIN GRANT IS THE WHOLE POINT of the distinction. Every relation class
-// checks it before it asks the chart, so a case using [everyGrant] against a
-// chart that refuses everything is allowed anyway and asserts nothing at all.
+// ADMIN IS THE WHOLE POINT of the distinction. Every relation class checks it
+// before it asks the chart, so a case using [everyGrant] against a chart that
+// refuses everything is allowed anyway and asserts nothing at all.
 func colleagueCaller() context.Context {
-	return callerHolding(iam.GrantStateRead, iam.GrantWorkWrite,
-		iam.GrantKnowledgeWrite)
+	return callerHolding(iam.Apps...)
 }
 
 // personHolding is a context carrying a HUMAN, for the cases about a bar an

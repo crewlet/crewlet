@@ -2,10 +2,11 @@
  * What is on a seat's plate — an agent's or a person's.
  *
  * TWO HALVES, AND THEY ARE NOT THE SAME READ. The list is `work_items
- * {assignee}`, which is ungated: every reader of this page gets it, and it is
- * the floor. The blocks under it are `work_my_work`, which the engine answers
- * to the record's owner, to whoever leads them and to `fleet:operate`, so they
- * are asked for those readers ([mayReadRecord]). One tab, because the question a
+ * {assignee}`, which every Tracker holder gets — the tab is drawn only for
+ * one (`Seat.tsx`) — and it is the floor. The blocks under it are
+ * `work_my_work`, which the engine answers to the record's owner, to whoever
+ * leads them and to an admin, so they are asked for those readers
+ * ([mayReadRecord]). One tab, because the question a
  * reader has is "what is this seat doing", and the answer is simply fuller
  * when they are entitled to more of it.
  *
@@ -51,9 +52,8 @@ export function Work({
   const handle = seat.handle;
   const viewer = useViewer();
   // THE SEVEN CLAIMS, and only where the reader may have them — the rule the
-  // person record follows: its owner, whoever leads them, and `fleet:operate`,
-  // the admin path of the owner-or-lead rule (never `people:manage`, which
-  // opens directory rows and nobody's work).
+  // person record follows: its owner, whoever leads them, and an admin, the
+  // admin path of the owner-or-lead rule.
   const mayRead = mayReadRecord(viewer, index, handle);
   // ON THE READER'S OWN SEAT THE TAB SPEAKS TO THEM, as the Overview does.
   const self = isOwnSeat(viewer, handle);
@@ -156,9 +156,7 @@ export function Work({
           />
         </>
       ) : (
-        <p className="t-caption">
-          Their queue is theirs. Seeing it needs fleet:operate, or leading them.
-        </p>
+        <p className="t-caption">Their queue is theirs: their lead and an admin read it too.</p>
       )}
     </div>
   );

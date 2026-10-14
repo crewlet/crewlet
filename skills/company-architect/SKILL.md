@@ -159,7 +159,10 @@ live-editable, so the first version does not need to be the last.
 
    Give each unit a `project` and a `space` in the first pass regardless:
    on the default backends that is the whole setup, and it is what gives
-   a team somewhere to file work and write things down.
+   a team somewhere to file work and write things down — the native
+   knowledge base creates a page only in a declared space (a unit's or a
+   seat's `space`, `knowledge.root_space`, or the tool-skills container),
+   exactly as the tracker files work only in a declared project.
 5. **What model, and what budget?** One `providers.llm` entry is enough
    to start. Ask whether they want a cost ceiling, and on which window:
    `token_budget` is a mapping of `day`, `week` and `month` ceilings on the
@@ -436,14 +439,16 @@ crewlet run crewlet.yaml -company company.yaml
 
 5. How they join it. Nobody holds a password until they are put on a
    seat, and the API token is what puts the first person on theirs — so
-   its `grants` must list `people:manage` and everything the founder is to
-   hold. Sign in at the dashboard with the API token, open **Agents › Org
+   its `grants` must list `admin` (`grants: [admin]`), which runs the
+   company and includes both apps, and the node's `api.auth.admin` must be
+   `serve`. Sign in at the dashboard with the API token, open **Agents › Org
    chart**, open the founder's seat (drawn **Vacant**) and press
    **Invite**, then open the link it shows once and choose a login and a
    password — or, from a shell, `crewlet iam invite <address> -seat
-   jane-founder -grants …` with `CREWLET_API_TOKEN` set. Every teammate
+   jane-founder -grants admin` with `CREWLET_API_TOKEN` set. Every teammate
    after them is invited or created from their own vacant seat the same
-   way, by whoever holds `people:manage`. See [How the first person
+   way, by an administrator — with both apps (Tracker, Knowledge) ticked by
+   default, and Admin only for the people who run the company. See [How the first person
    exists](https://docs.crewlet.ai/engine/latest/concepts/identity-and-access/#how-the-first-person-exists).
 
 Full field reference:

@@ -27,17 +27,23 @@ import (
 // Tier A token, and that token is the credential a company has before it has
 // anybody: `crewlet iam invite` under it issues an ordinary invitation onto the
 // human seat the company declares for its first person, which confers only
-// what its writer holds — the token's grants cut to this node's ceiling — and
-// the invited person redeems the link like anybody else, taking the seat. What
+// what its writer holds — the token's grants as this node's admin posture lets
+// it carry them — and the invited person redeems the link like anybody else,
+// taking the seat. What
 // only a real node can say is that the pieces compose on an estate with
 // NOBODY in it: that nothing on the way requires somebody to be enrolled
 // already, that the invitation carries the grants and the seat the founder
 // needs, and that the person it creates can sign in afterwards with the
 // password they chose, acting as that seat.
 //
+// `-grants admin` STORES EVERY APP BESIDE IT, as the dashboard's picker does,
+// so the founder's row lists admin, tracker and knowledge — and taking admin
+// away from them later leaves them the apps.
+//
 // Mutation: make the directory write require an enrolled administrator rather
 // than the grant, and the invitation is refused; drop a grant from what the
-// redemption confers, and the person's own session lacks it; drop the seat
+// redemption confers, and the person's own session lacks it; send `admin`
+// without the apps, and the founder's row lists admin alone; drop the seat
 // from what the command sends, and the invitation is refused naming it.
 func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	// NOT PARALLEL: the command reads its credential from the environment,
@@ -56,16 +62,12 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 
 	// THE COMMAND, as an operator types it on a fresh install: the
 	// deployment's own Tier A token, the seat the company declares for its
-	// founder, and every grant the founder will carry.
+	// founder, and admin.
 	tierA := bootstrapWithKeyring(t, "k1")
 	appendFile(t, tierA, "api:\n  external_url: "+base+"\n")
-	var grants []string
-	for _, g := range iam.AllGrants {
-		grants = append(grants, string(g))
-	}
 	var out, errs bytes.Buffer
 	if err := runIAM(tokenEnviron(cliFixtureToken), []string{"invite", "jane@example.com", "-seat", "founder",
-		"-grants", strings.Join(grants, ","),
+		"-grants", string(iam.GrantAdmin),
 		"-config", tierA, "-api", base}, nil, &out, &errs); err != nil {
 		t.Fatalf("iam invite under a Tier A token on an empty estate: %v\n%s",
 			err, errs.String())
@@ -85,7 +87,7 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	}
 
 	// THE PERSON EXISTS, active, on the seat the invitation named, carrying
-	// what it conferred.
+	// what it conferred: admin, and every app stored beside it.
 	held, err := e.IAM().PersonByLogin(t.Context(), "jane.founder")
 	if err != nil {
 		t.Fatalf("read the founder back: %v", err)
@@ -97,10 +99,10 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 		t.Errorf("the founder holds the seat %q, want founder — the one the "+
 			"invitation named", held.Seat)
 	}
-	for _, g := range iam.AllGrants {
-		if !slices.Contains(held.Grants, g) {
-			t.Errorf("the founder does not carry %s: %v", g, held.Grants)
-		}
+	if got := slices.Sorted(slices.Values(held.Grants)); !slices.Equal(got,
+		slices.Sorted(slices.Values(iam.AllGrants))) {
+		t.Errorf("the founder's row lists %v, want admin and every app: %v",
+			held.Grants, iam.AllGrants)
 	}
 
 	// AND THEY CAN SIGN IN with the password they chose, and the session
@@ -111,9 +113,9 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 		t.Errorf("the session is %s as %q on %q, want %s as jane.founder on "+
 			"founder", who.Person, who.Login, who.Seat, held.ID)
 	}
-	if !slices.Contains(who.Grants, iam.GrantPeopleManage) {
-		t.Errorf("the founder's session carries %v — without people:manage "+
-			"they cannot invite anybody after them", who.Grants)
+	if !slices.Contains(who.Grants, iam.GrantAdmin) {
+		t.Errorf("the founder's session carries %v — without admin they "+
+			"cannot invite anybody after them", who.Grants)
 	}
 
 	if got := getJSON(t, base+"/health")["identity"]; got != api.IdentityReady {
@@ -134,11 +136,13 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 // screen says "choose your password", not "a new one"), sets the password the
 // person chose, signs nobody in, and is spent by it — and that the person then
 // signs in with that password, acting as their seat. The login is left to the
-// node, which proposes it from the address.
+// node, which proposes it from the address, and so is -grants, which on a
+// person's create is every app and not admin.
 //
 // Mutation: drop the link block from what `iam create` prints, and no link is
 // found; drop the seat from what it sends, and the create is refused naming
-// it; let the link be spent twice, and the second spend answers 200.
+// it; send no grants when -grants is left out, and the node refuses the
+// create; let the link be spent twice, and the second spend answers 200.
 func TestAPersonCreatedOnASeatSetsTheirFirstPasswordThroughTheLink(t *testing.T) {
 	// NOT PARALLEL, for the first person's case's reason.
 	port := freePort(t)
@@ -152,8 +156,6 @@ func TestAPersonCreatedOnASeatSetsTheirFirstPasswordThroughTheLink(t *testing.T)
 	var out, errs bytes.Buffer
 	if err := runIAM(tokenEnviron(cliFixtureToken), []string{"create", "-email", "jane.founder@example.com",
 		"-seat", "founder", "-name", "Jane Founder",
-		"-grants", strings.Join([]string{string(iam.GrantStateRead),
-			string(iam.GrantPeopleManage)}, ","),
 		"-config", tierA, "-api", base}, nil, &out, &errs); err != nil {
 		t.Fatalf("iam create on a seat: %v\n%s", err, errs.String())
 	}
@@ -174,6 +176,11 @@ func TestAPersonCreatedOnASeatSetsTheirFirstPasswordThroughTheLink(t *testing.T)
 	if held.Kind != iam.KindPerson || held.Stage != iam.StageActive ||
 		held.Seat != "founder" {
 		t.Fatalf("the create left %+v, want an active person on founder", held)
+	}
+	if got := slices.Sorted(slices.Values(held.Grants)); !slices.Equal(got,
+		slices.Sorted(slices.Values(iam.Apps))) {
+		t.Errorf("a create naming no -grants left %v, want every app and not "+
+			"admin: %v", held.Grants, iam.Apps)
 	}
 
 	// THE SCREEN THE LINK OPENS says it sets their FIRST password.

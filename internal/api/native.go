@@ -275,6 +275,19 @@ func (l liveWork) TurnPlaces(ctx context.Context, runs []string,
 	return r.TurnPlaces(ctx, runs, fresh)
 }
 
+// Thread is the read `work_item` asks [tracker.AskedOn] through — whether an
+// open ask on an item names somebody without the tracker — routed like every
+// other tracker read, so the probe and the comment that would answer the ask
+// are resolved by one data node's rows under the same session floors.
+func (l liveWork) Thread(ctx context.Context, q tracker.ThreadQuery,
+	fresh statelog.Freshness) (tracker.ResolvedThread, error) {
+	r, err := l.reader()
+	if err != nil {
+		return tracker.ResolvedThread{}, err
+	}
+	return r.Thread(ctx, q, fresh)
+}
+
 // livePages is the knowledge base's read side, resolved per question.
 type livePages struct{ engine *engine.Engine }
 

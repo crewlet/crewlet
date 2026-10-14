@@ -134,7 +134,7 @@ func (e *TagsFull) sentence() string {
 // history [ProjectAuthority] records.
 type TagAuthority struct {
 	// Policy reports a caller authorized to RENAME or ARCHIVE a tag of
-	// this project: its lead, or the deployment grant. Adding one is open
+	// this project: its lead, or an admin. Adding one is open
 	// to every colleague and takes nothing — a zero value is what an
 	// inline declare passes, and it cannot reach the gate below.
 	Policy bool

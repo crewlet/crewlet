@@ -10,7 +10,7 @@ import (
 
 // A REMARK IS REWRITTEN BY WHOEVER MADE IT AND BY NOBODY ELSE.
 //
-// The authority table admits the deployment grant beside the author on a
+// The authority table admits an admin beside the author on a
 // comment, because it answers removal and edit alike; the WRITE is narrower,
 // for internal/pages' reason — a remark somebody else can rewrite is a remark
 // attributed to a person who did not make it, quoted in the wake it sends. So

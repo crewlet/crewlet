@@ -116,11 +116,11 @@ func (e *ErrTaken) Error() string {
 //
 // # What it may confer, and on whose authority
 //
-// An enrolment is a grant change from nothing to what it carries, so it is
-// held to [Writer.UpdatePerson]'s rule: a caller may not confer a grant they
-// do not hold. It used to be held to nothing, so a party holding people:manage
-// and no other grant could enrol somebody carrying secrets:read — or enrol a
-// colleague holding everything and sign in as them.
+// An enrolment is a permission change from nothing to what it carries, so it
+// is held to [Writer.UpdatePerson]'s rule: a caller may not confer a
+// permission they do not hold, read through [iam.Expand]. It used to be held
+// to nothing, so a party allowed to enrol anybody could enrol a colleague
+// holding everything and sign in as them.
 //
 // A REDEMPTION IS NOT THE WRITER'S TO AUTHORISE, and it names what is: it
 // confers what the INVITATION's author conferred when they issued it, and was
@@ -128,15 +128,15 @@ func (e *ErrTaken) Error() string {
 // invitation in its own snapshot and refuses anything it does not cover — more
 // grants, a different address, another seat, a link already spent or aged
 // out — so the node that processes a redemption decides nothing a second
-// time. The node's own writer holds fleet:operate and people:manage and
-// nothing else, so on its own authority it may confer those two; everything a
-// redemption hands out comes from the invitation it names.
+// time. The node's own writer holds admin, so on its own authority it may
+// confer anything; what a redemption hands out is bounded by the invitation
+// it names, and nothing else.
 //
 // THERE IS NO EXEMPTION FOR THE FIRST PERSON. A company with nobody in it
 // still holds the Tier A token every serving node requires, and that token is
-// a party like any other: its invitation or its create is held to its grants
-// exactly as an administrator's is, so the first person is enrolled, and
-// bounded, the way everybody after them is.
+// a party like any other: its invitation or its create is held to its
+// permissions exactly as an administrator's is, so the first person is
+// enrolled, and bounded, the way everybody after them is.
 //
 // # A seat is the running company's
 //
@@ -954,29 +954,7 @@ func validateEnrolment(e enrolment) error {
 			"and are recorded under, and without one they would be recorded "+
 			"as nobody", ErrInvalidLogin)
 	}
-	if err := machineHolds(e.kind, e.grants); err != nil {
-		return err
-	}
 	return loginFits(e.kind, e.login)
-}
-
-// machineHolds refuses a MACHINE a grant it could never exercise: one a
-// token never carries ([iam.PersonPresentGrants]). A machine has no password
-// and no session — it acts only through tokens minted on it, which drop those
-// grants on every request, and a Tier A token's row is no account at all — so
-// a service account created holding `people:manage` listed a grant nothing it
-// can present would ever carry.
-func machineHolds[G ~string](kind iam.Kind, grants []G) error {
-	if kind != iam.KindMachine {
-		return nil
-	}
-	for _, g := range grants {
-		if slices.Contains(iam.PersonPresentGrants, iam.Grant(g)) {
-			return fmt.Errorf("%w: a machine acts only through tokens, and a "+
-				"token never carries %s — it needs a person present", ErrInvalid, g)
-		}
-	}
-	return nil
 }
 
 // redeemable refuses an enrolment its invitation does not cover, read inside
@@ -1042,8 +1020,13 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 		return "", fmt.Errorf("%w: invitation %s has aged out", ErrRefused,
 			e.invitation)
 	}
+	// WHAT WAS OFFERED, READ THROUGH [iam.Expand]: an invitation offering
+	// admin offers every app with it, and an invitation carrying a name
+	// this build does not know — a newer peer's — stays redeemable, the
+	// name kept and ignored rather than refusing the link it rides on.
+	offered := iam.Expand(invitation.Grants)
 	for _, g := range e.grants {
-		if !g.Valid() || !slices.Contains(invitation.Grants, g) {
+		if !slices.Contains(offered, g) {
 			return "", fmt.Errorf("%w: redeeming invitation %s confers %v, and "+
 				"%s is not among them — a redemption hands out what was "+
 				"offered and nothing more", ErrRefused, e.invitation,
@@ -1353,13 +1336,11 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 // Ending EVERYBODY's sessions is a company-wide act with no self-service
 // reading at all.
 //
-// BOTH HATS: [AdminGrant], because it ends every person's authority at once,
-// AND fleet:operate, because a restore is run by whoever runs the deployment.
-// It asked the first alone while the route admitted on the second alone, so
-// the two disagreed about who may make it and an operator holding the route's
-// grant was refused here; internal/authz's row now asks both as well, and a
-// machine token can carry neither half that matters — people:manage is never
-// minted onto one.
+// ADMIN'S, AND NEVER THROUGH A MACHINE TOKEN ([Writer.mayAdminister]): it ends
+// every person's authority at once, and internal/authz's row asks admin, a
+// person present and a recent proof of the same gesture. A Tier A token holds
+// admin and is its own credential rather than a machine token, so the restore
+// runbook's CLI step still runs on the day nobody can sign in.
 //
 // WHAT IT IS FOR, stated where somebody will reach for it: the last step of a
 // restore. A restore rolls this estate back to an artefact's own instant, so a
@@ -1378,9 +1359,6 @@ func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 	statelog.Result, error) {
 
 	if err := w.mayAdminister(OpInvalidate); err != nil {
-		return statelog.Result{}, err
-	}
-	if err := w.mayOperate(OpInvalidate); err != nil {
 		return statelog.Result{}, err
 	}
 	if opID == "" {
@@ -2047,8 +2025,8 @@ type CredentialSet struct {
 //
 // # Why it is its own gesture rather than a CredentialSet
 //
-// What a token may carry is a fact about its owner NOW: a subset of the grants
-// they hold, and the revocation epoch they are at. A caller reading those first and handing in a finished credential would
+// What a token may carry is a fact about its owner NOW: a subset of the
+// permissions they hold, and the revocation epoch they are at. A caller reading those first and handing in a finished credential would
 // be stating a read from another transaction — the pairing the write authority
 // forbids — so a demotion landing between the two would mint a token carrying
 // what its owner no longer holds. Minted on the owner's own subject, the mint
@@ -2056,19 +2034,19 @@ type CredentialSet struct {
 //
 // # What it refuses, and whose rule each is
 //
-//   - A grant the owner does not hold: a token NARROWS its owner and never
-//     widens them.
-//   - secrets:read and people:manage, WHATEVER the owner holds: both are
-//     gestures that need a person present — revealing a credential and
-//     changing who may — and a token is what an attacker holding a pipeline's
-//     environment already has.
-//   - A grant the MINTING PARTY does not hold, for [Writer.MayConfer]'s rule:
-//     whoever mints a token sees its value once, so minting one for somebody
-//     else is holding their grants oneself.
+//   - A permission the owner does not hold, read through [iam.Expand]: a
+//     token NARROWS its owner and never widens them. ADMIN IS MINTABLE, as
+//     every permission the owner holds is: what keeps a token off the
+//     gestures that need a person present is internal/authz's `presence` on
+//     their rows and [Writer.mayAdminister]'s refusal of an administrative
+//     record written through one — never a permission a token cannot carry.
+//   - A permission the MINTING PARTY does not hold, for [Writer.MayConfer]'s
+//     rule: whoever mints a token sees its value once, so minting one for
+//     somebody else is holding their permissions oneself.
 //   - A PERSON's token minted by anybody but that person, and a service
-//     account's minted without `people:manage` — [Writer.mayMintFor]: the
-//     token acts as its owner, so minting one on a person's account is
-//     holding a credential that acts as them.
+//     account's minted without admin — [Writer.mayMintFor]: the token acts as
+//     its owner, so minting one on a person's account is holding a credential
+//     that acts as them.
 //   - An owner who may not act, a kind that is neither a person nor a
 //     machine, and a machine row that binds a Tier A token to a seat — that
 //     row IS the deployment's credential's place in the directory, not an
@@ -2085,10 +2063,10 @@ type CredentialSet struct {
 // restore runbook's invalidate-all, the one gesture that ends a credential a
 // restore brought back unrevoked without knowing which one it was.
 //
-// NIL GRANTS MEAN "AS MUCH AS MAY BE CARRIED": every grant the owner holds
-// that a token may carry — resolved here, in the snapshot, and stated on the
-// record, so what the token carries is never re-derived by a node applying
-// it.
+// NIL GRANTS MEAN "EVERYTHING THE OWNER HOLDS": every permission this build
+// knows that the owner holds, admin included, expanded and in [iam.AllGrants]
+// order — resolved here, in the snapshot, and stated on the record, so what
+// the token carries is never re-derived by a node applying it.
 func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, error) {
 	switch {
 	case in.PersonID == "" || in.ID == "" || in.OpID == "":
@@ -2259,29 +2237,26 @@ const MaxTokenLabel = 128
 var ErrInvalidToken = errors.New("iamdomain: that token cannot be minted as asked")
 
 // tokenGrants resolves what a token carries and refuses what it may not.
+//
+// OMITTED, IT IS EVERYTHING THE OWNER HOLDS: [iam.AdminServe]'s effective set
+// over the owner's row, which is every permission this build knows that the
+// owner holds through [iam.Expand], admin included, in [iam.AllGrants] order.
+// The posture is used here only as the form that clamps nothing; the node a
+// token is presented to applies its own on every request.
+//
+// ASKED, every name must be one this build knows that the owner holds through
+// [iam.Expand]: a token minted [tracker] by an administrator whose row says
+// only [admin] carries the app they hold through admin, and a name nobody can
+// read is refused rather than minted onto a credential that would carry it
+// for a year.
 func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 	grants := asked
 	if grants == nil {
-		grants = make([]iam.Grant, 0, len(owner))
-		for _, g := range owner {
-			// NEVER THE TWO THAT NEED A PERSON PRESENT: see
-			// [iam.PersonPresentGrants]. And `config:write` IS minted
-			// when the owner holds it, deliberately — it is host
-			// access, and applying a configuration from a pipeline is
-			// what a token is for; that list says why it is not there.
-			if g.Valid() && !slices.Contains(iam.PersonPresentGrants, g) {
-				grants = append(grants, g)
-			}
-		}
+		grants = iam.AdminServe.Effective(owner)
 	}
+	holds := iam.Expand(owner)
 	for _, g := range grants {
-		switch {
-		case slices.Contains(iam.PersonPresentGrants, g):
-			return nil, fmt.Errorf("%w: %s cannot be minted onto a token — it "+
-				"is a gesture that needs a person present, and a token is what "+
-				"an attacker holding a pipeline's environment already has",
-				ErrRefused, g)
-		case !g.Valid() || !slices.Contains(owner, g):
+		if !g.Valid() || !slices.Contains(holds, g) {
 			return nil, fmt.Errorf("%w: a token carries a subset of what its "+
 				"owner carries, and %s is not among %v", ErrRefused, g, owner)
 		}
@@ -2311,14 +2286,14 @@ func tokenOwnable(personID string, owner Person) error {
 // A PERSON'S TOKEN IS MINTED BY THAT PERSON ALONE. Whoever mints a token is
 // shown its value once, and the token acts as its owner — so one minted on
 // somebody else's account is a credential that acts as them in the hands of
-// somebody who is not them. `people:manage` was enough to do it, which let any
-// administrator act as anybody, leaving no trail but the mint. The grant
+// somebody who is not them. Administering people was enough to do it, which
+// let any administrator act as anybody, leaving no trail but the mint. Admin
 // covers the one kind of account that has nobody behind it to mint for itself.
 // Compared by ID and never by name, because a login is something a rename
 // moves between people.
 //
-// A SERVICE ACCOUNT'S IS MINTED BY WHOEVER HOLDS `people:manage`: it has no
-// login page, so nobody could ever mint for it as itself.
+// A SERVICE ACCOUNT'S IS MINTED BY WHOEVER HOLDS ADMIN: it has no login page,
+// so nobody could ever mint for it as itself.
 //
 // WHO IS MINTING IS THE WRITER'S PARTY ([Writer.Principal]), never a field of
 // the call: a rule decided on a value the caller states is exactly as strong
@@ -2348,11 +2323,11 @@ func (w *Writer) mayMintFor(in TokenMint, owner Person) error {
 				ErrRefused, in.PersonID)
 		}
 	case iam.KindMachine:
-		if !w.Can(iam.GrantPeopleManage) {
+		if !w.Can(iam.GrantAdmin) {
 			return fmt.Errorf("%w: minting a token for the service account %s "+
 				"takes %s — it has no login page, so the token is minted "+
-				"for it by whoever manages people", ErrRefused, in.PersonID,
-				iam.GrantPeopleManage)
+				"for it by an administrator", ErrRefused, in.PersonID,
+				iam.GrantAdmin)
 		}
 	}
 	return nil
@@ -3051,19 +3026,22 @@ type PasswordSet struct {
 // somebody else's" have the same answer and splitting them is how one of the
 // two arms comes to be checked and the other not.
 //
-// # A grant gained revokes every outstanding reset link
+// # A permission gained revokes every outstanding reset link
 //
-// A reset link is issued only for somebody whose every grant its issuer holds,
-// judged at the issue — and the issuer is shown the link and can spend it. A
-// grant the person gains while it is outstanding was judged against nobody
-// holding the link, so spending it would hand that grant to a party that may
-// never have held it: an administrator holding people:manage would act with
-// secrets:read because somebody else granted it to the person they issued a
-// link for. So the record that adds a grant revokes the link, in the snapshot
-// the grant lands in, and the next link is judged against the new set. This
-// is the one write that grows an existing person's grants, so it is the one
-// place the rule needs stating; taking a grant away revokes nothing, since a
-// link that now reaches less was judged against more.
+// A reset link is issued only for somebody whose every permission its issuer
+// holds, judged at the issue — and the issuer is shown the link and can spend
+// it. A permission the person gains while it is outstanding was judged against
+// nobody holding the link, so spending it would hand that permission to a
+// party that may never have held it: somebody who could issue the link for a
+// person using one app would act as an administrator because somebody else
+// made the person one. So the record that adds a permission revokes the link,
+// in the snapshot it lands in, and the next link is judged against the new
+// set. "Added" is read through [iam.Expand] on both sides ([grantDelta]), so
+// spelling out an app an administrator already holds through admin adds
+// nothing. This is the one write that grows an existing person's
+// permissions, so it is the one place the rule needs stating; taking one away
+// revokes nothing, since a link that now reaches less was judged against
+// more.
 //
 // # It changes what a person holds, never what they are
 //
@@ -3130,11 +3108,6 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 			return err
 		}
 		added, _ := grantDelta(person.Grants, updated.Grants)
-		// ONLY WHAT IS ADDED, as MayConfer judges: a row already holding
-		// such a grant can still be edited, and is where it is taken away.
-		if err = machineHolds(person.Kind, added); err != nil {
-			return err
-		}
 		counters, err := countersOf(ctx, tx, in.PersonID)
 		if err != nil {
 			return err
@@ -3187,9 +3160,8 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 // # A kind never changes
 //
 // A row is a person or a service account from its enrolment to its removal:
-// the login grammar, the address requirement, the seat a person must hold and
-// the grants a machine may never carry ([machineHolds]) were all judged for
-// the kind it was created as. The applier writes whatever kind a document
+// the login grammar, the address requirement and the seat a person must hold
+// were all judged for the kind it was created as. The applier writes whatever kind a document
 // states, so an [PersonUpdate.Apply] that flipped one made a service account
 // into a person holding no seat and a coloned login no person may have — the
 // state every other write here refuses to produce. The remedy is a removal and
@@ -3219,13 +3191,19 @@ func keepsStanding(held, updated Person) error {
 // hold.
 //
 // ONLY THE ADDITIONS ARE CHECKED, which is the difference between a rule and
-// an obstruction: taking a grant AWAY from somebody is always allowed —
-// nobody escalates by narrowing — and an administrator who cannot hold
-// secrets:reveal must still be able to withdraw it from a leaver.
+// an obstruction: taking a permission AWAY from somebody is always allowed —
+// nobody escalates by narrowing — and anybody who may edit a row must still be
+// able to withdraw what a leaver held.
 //
-// AN UNKNOWN GRANT IS REFUSED for [iam.Principal.Can]'s reason: a spelling a
-// newer peer wrote that this build cannot name answers false, and a denylist
-// would have admitted it.
+// THROUGH [iam.Expand], as every comparison of permissions is: a name already
+// held through admin — an app spelled out beside it — adds nothing, and admin
+// confers every app with it.
+//
+// AN UNKNOWN NAME MAY BE KEPT AND REMOVED, AND NEVER ADDED. One a newer peer
+// wrote rides in the row it came in — `before` holds it, so keeping it is no
+// addition — and taking it away is always allowed; adding one is refused for
+// [iam.Principal.Can]'s reason, since this build cannot know what it would
+// open on a peer that reads it.
 //
 // EXPORTED for the surface that asks it before an edit's first record: an edit
 // that moves a seat or a login before it changes grants asks it first, so a
@@ -3233,9 +3211,15 @@ func keepsStanding(held, updated Person) error {
 // own decide asks again in the snapshot the grants land from, and that answer
 // is the authority — the early one is read from rows that may be a moment old.
 func (w *Writer) MayConfer(before, after []iam.Grant) error {
+	held := iam.Expand(before)
 	for _, g := range after {
-		if slices.Contains(before, g) || w.Can(g) {
+		if slices.Contains(held, g) || w.Can(g) {
 			continue
+		}
+		if !g.Valid() {
+			return fmt.Errorf("%w: %q is not a permission this build knows, so "+
+				"it cannot be added — one already on the row is kept, and may "+
+				"be removed. The set is %v", ErrRefused, g, iam.AllGrants)
 		}
 		return fmt.Errorf("%w: conferring %s needs the same grant, and this "+
 			"party holds %v — a caller may not hand out what they do not "+

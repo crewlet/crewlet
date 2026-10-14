@@ -12,8 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE DIRECTORY READS: what an administrator, an auditor and a person looking
-// at their own row actually ask for.
+// THE DIRECTORY READS: what an administrator and a person looking at their
+// own row actually ask for.
 //
 // read.go holds the lookups the REQUEST PATH takes — one person, one session,
 // resolved before anything can be decided — and they are deliberately narrow:
@@ -785,14 +785,23 @@ func (r *Reader) PositionAt(ctx context.Context, at time.Time) (uint64, error) {
 
 // SeatBinding is one person's seat binding — the columns the request path's
 // seat table reads (internal/iam/session's PersonRow), the kind beside them,
-// and nothing sealed.
+// and the holder's sealed display name.
 //
 // ITS OWN TYPE rather than a [PersonRow] with most fields left zero: a row
-// type whose document, grants and sealed values were silently absent would be
-// one a later caller read as a person with no grants.
+// type whose document, grants and sealed address were silently absent would
+// be one a later caller read as a person with no grants.
 type SeatBinding struct {
 	// Person is the directory id, Login the name the dashboard prints.
 	Person, Login string
+
+	// NameSealed is the bound principal's display name, sealed under the
+	// fleet keyring exactly as [PersonRow.NameSealed] is — the same column —
+	// for a surface that names who holds each seat to everybody: the org
+	// chart is everybody's overview, and a seat's holder shown only by a
+	// login would hand every colleague a sign-in name the overview has no
+	// business disclosing. Opened by the surface on its own keyring, never
+	// here; nil where the row carries none.
+	NameSealed []byte
 
 	// Kind is a person or a service account, which is what a remedy for a
 	// binding names: a person is MOVED to another seat or removed, and a
@@ -809,7 +818,8 @@ type SeatBinding struct {
 // Binding is the row's seat binding.
 func (p PersonRow) Binding() SeatBinding {
 	return SeatBinding{
-		Person: p.ID, Login: p.Login, Kind: p.Kind, Seat: p.Seat, Stage: p.Stage,
+		Person: p.ID, Login: p.Login, NameSealed: p.NameSealed, Kind: p.Kind,
+		Seat: p.Seat, Stage: p.Stage,
 	}
 }
 
@@ -872,7 +882,7 @@ func (r *Reader) SeatClaims(ctx context.Context, now time.Time) (SeatClaims, err
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		out = SeatClaims{}
 		rows, err := tx.QueryContext(ctx, `
-			SELECT id, kind, login, stage, seat_id
+			SELECT id, kind, login, name_sealed, stage, seat_id
 			  FROM iam_people
 			 WHERE seat_id != ''
 			 ORDER BY seat_id, id`)
@@ -882,8 +892,8 @@ func (r *Reader) SeatClaims(ctx context.Context, now time.Time) (SeatClaims, err
 		for rows.Next() {
 			var b SeatBinding
 			var kind, stage string
-			if err = rows.Scan(&b.Person, &kind, &b.Login, &stage,
-				&b.Seat); err != nil {
+			if err = rows.Scan(&b.Person, &kind, &b.Login, &b.NameSealed,
+				&stage, &b.Seat); err != nil {
 				_ = rows.Close()
 				return fmt.Errorf("iamdomain: read a seat binding: %w", err)
 			}

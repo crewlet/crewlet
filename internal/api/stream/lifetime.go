@@ -22,7 +22,7 @@ import (
 // A REST request is decided once and is over. A socket is decided at its
 // handshake and then stays open for as long as the tab does — hours, often a
 // day. Decided only at the handshake, a session revoked, a person suspended, a
-// seat taken away or a grant narrowed would change nothing for a socket
+// seat taken away or a permission taken away would change nothing for a socket
 // already open. So an open socket is ended, or decided again, by the event
 // that could have changed its answer, and at no other time — there is no
 // periodic re-check:
@@ -50,13 +50,17 @@ import (
 //     the store's one reserved identity connection at once, ahead of every
 //     request's own authentication.
 //   - A PUBLISHED COMPANY ([Service.CompanyPublished]): the org chart a seat
-//     binding resolves through and a watch is decided by may have moved. It
-//     is decided IN MEMORY against the company just published, with no
-//     identity read: a socket whose principal acts as a seat that company no
-//     longer holds as a human seat closes [CloseUnauthorized]; one whose seat
-//     it has never seen that company hold closes [CloseUndecided], so its
-//     handshake resolves the binding afresh; and every watch is decided again
-//     ([watching.recheck]).
+//     binding resolves through, a watch is decided by and whose seats' trail
+//     a lead reads may have moved. It is decided IN MEMORY against the company
+//     just published, with no identity read: a socket whose principal acts as
+//     a seat that company no longer holds as a human seat closes
+//     [CloseUnauthorized]; one whose seat it has never seen that company hold
+//     closes [CloseUndecided], so its handshake resolves the binding afresh;
+//     one whose AUDIENCE the company changes — a lead moved onto or off a
+//     team, an agent seat added under one, so the seats whose body it reads
+//     are others ([Service.AudienceFor]) — closes [CloseUndecided] too, so
+//     its reconnect is built for the audience it has now; and every watch is
+//     decided again ([watching.recheck]).
 //   - ITS CREDENTIAL ENDS ON ITS OWN ([auth.Lifetime]): a session's absolute
 //     deadline, a machine token's expiry. No record is written at that
 //     instant, so a timer per socket notices it, and decides the credential
@@ -69,10 +73,12 @@ import (
 // # What a decision by the guard does
 //
 //   - RESOLVED AS WHO THE SOCKET ALREADY ACTS AS — the same login, seat and
-//     grants: the socket carries on, later questions are asked as the
+//     permissions: the socket carries on, later questions are asked as the
 //     principal just resolved, and the watch is decided again.
 //   - RESOLVED AS SOMEBODY ELSE — a rename, a person moved to another seat,
-//     a service account bound or unbound, a grant given or taken: closed
+//     a service account bound or unbound, a permission given or taken
+//     (admin or an app — which is also every change this node's admin
+//     posture makes to what the principal carries): closed
 //     [CloseUndecided], and the reconnect's handshake builds everything for
 //     whoever it is now. The tab's own answer to "who am I" (the `viewer`
 //     question, asked again on every reconnect) is what moves with it: kept
@@ -81,9 +87,12 @@ import (
 //     just been moved off — until a reload. And
 //     a snapshot sent in place, which a changed audience used to get, moved
 //     the pushes and left that answer behind.
-//   - A SEAT REFUSAL (the seat is gone), or a principal that no longer holds
-//     `state:read`: closed [CloseUnauthorized], because the credential is fine
-//     and what it may do is not.
+//   - A SEAT REFUSAL (the seat is gone), or a session that may only enrol a
+//     second factor: closed [CloseUnauthorized], because the credential is
+//     fine and what it may do is not. There is no permission an open socket
+//     needs (ADR-0033) — what it carries is the overview, which is
+//     everybody's — so no permission taken away closes one 4403; it is a
+//     principal that moved, and closes [CloseUndecided] above.
 //   - ANONYMOUS (the session ended, expired or was revoked; the token is no
 //     longer accepted): closed [CloseUnauthenticated].
 //   - UNKNOWN (this node could not read what decides it): closed
@@ -345,7 +354,9 @@ func (s *Service) CredentialsMoved(m Moved) {
 // until ctx ends or the socket is closed. See the file head.
 //
 // rewatch decides the watched seat again, as whoever is asking now. seatOf is
-// the published company's word on a seat. now is the service's clock, which
+// the published company's word on a seat. audienceMoved reports whether the
+// principal's audience on the company now published differs from the one the
+// socket was opened with ([Service.AudienceFor]); nil asks nothing. now is the service's clock, which
 // the credential's end is measured against — the one the guard deciding it
 // reads, rather than a second, private reading of the wall clock: a node whose
 // guard was handed a clock this timer did not read re-decided every socket
@@ -353,6 +364,7 @@ func (s *Service) CredentialsMoved(m Moved) {
 // other.
 func keepDecided(ctx context.Context, conn *websocket.Conn, l *listener,
 	cred credential, seatOf SeatOfFunc, now func() time.Time,
+	audienceMoved func(context.Context, iam.Principal) bool,
 	rewatch func(context.Context)) {
 
 	// ONE TIMER, ARMED AT THE HANDSHAKE'S READING: a credential's own end is
@@ -398,6 +410,18 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, l *listener,
 			return
 		case <-l.published:
 			if !keepSeated(ctx, conn, cred.who, seatOf, &seen) {
+				return
+			}
+			if audienceMoved != nil && audienceMoved(ctx, cred.who.current()) {
+				// WHOSE TRAIL THIS READER READS MOVED with the company:
+				// the reconnect builds the audience it has now, its
+				// snapshot included, rather than this socket pushing a
+				// lead's new team's bodies into a tab built without them
+				// — or the old team's into one that may no longer read
+				// them.
+				log.InfoContext(ctx, "stream_closed_audience_moved",
+					"login", cred.who.current().Login)
+				_ = conn.Close(CloseUndecided, "what this socket may read moved")
 				return
 			}
 			if rewatch != nil {
@@ -499,20 +523,11 @@ func decideOnce(ctx context.Context, conn *websocket.Conn, who *asking,
 		log.InfoContext(ctx, "stream_closed_credential_ended")
 		_ = conn.Close(CloseUnauthenticated, "credential no longer accepted")
 		return false
-	case !principal.Can(iam.GrantStateRead):
-		// RESOLVED, AND MAY NO LONGER READ what this socket carries. 4403
-		// rather than 4401, because signing in again reaches the same
-		// person with the same grants.
-		log.InfoContext(ctx, "stream_closed_grant_withdrawn",
-			"login", principal.Login, "grant", string(iam.GrantStateRead))
-		_ = conn.Close(CloseUnauthorized, "grant withdrawn: "+
-			string(iam.GrantStateRead))
-		return false
 	}
 	if before := who.current(); !sameActor(before, principal) {
 		// SOMEBODY ELSE NOW — see the file head. The reconnect's handshake
-		// decides the new principal, builds the snapshot for its grants and
-		// is asked "who am I" again.
+		// decides the new principal, builds the snapshot for its audience
+		// and is asked "who am I" again.
 		log.InfoContext(ctx, "stream_closed_principal_moved",
 			"login", principal.Login, "was", before.Login,
 			"seat", principal.Seat, "seat_was", before.Seat)
@@ -528,9 +543,14 @@ func decideOnce(ctx context.Context, conn *websocket.Conn, who *asking,
 }
 
 // sameActor reports whether two resolutions of one credential act as the same
-// principal, as a tab knows it: the same login, seat and grants. The rest — a
-// step-up deadline, the credential's own name — moves under a socket without
-// changing who it is.
+// principal, as a tab knows it: the same login, seat and permissions. The
+// rest — a step-up deadline, the credential's own name — moves under a socket
+// without changing who it is.
+//
+// THE PERMISSIONS AS CARRIED, which the guard composed under this node's admin
+// posture ([iam.AdminPosture.Effective]): admin expanded into every app and
+// served or clamped, so two resolutions carrying the same effective set are
+// the same reader whatever their rows spelled.
 func sameActor(a, b iam.Principal) bool {
 	ga, gb := slices.Clone(a.Grants), slices.Clone(b.Grants)
 	slices.Sort(ga)

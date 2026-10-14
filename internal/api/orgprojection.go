@@ -6,7 +6,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -17,10 +16,10 @@ import (
 //
 // # An explicit type, never a marshal of the config's own structs
 //
-// These three surfaces answer every principal holding `state:read` — the
-// READER's grant, which a colleague who may change nothing about the
-// deployment holds — while the only surface that shows the whole document,
-// /config, asks `config:read`. Every route and socket is authenticated; there
+// These three surfaces answer EVERYBODY — every principal the guard resolves,
+// a colleague holding no permission at all included, since the org chart is
+// the overview (ADR-0033) — while the only surface that shows the whole
+// document, /config, is admin's. Every route and socket is authenticated; there
 // is no anonymous reader any more (`api.auth.allow_anonymous_read` is a named
 // refusal in internal/config), but the audience here is still far wider than
 // the configuration's. The projection used to marshal config.Role and
@@ -34,8 +33,8 @@ import (
 // none of them because none of them is a credential in the narrow sense.
 //
 // So the reader's shape is spelled out here field by field, and a field
-// reaches a `state:read` holder only by being written into one of these types
-// on purpose. Everything else stays behind the `config:read` answers, which is
+// reaches everybody only by being written into one of these types on purpose.
+// Everything else stays behind the admin's configuration answers, which is
 // where the dashboard reads it. Configured work that has a read surface of its
 // own is not repeated here either: schedules are described by /schedules. A
 // token budget IS carried, as the ceilings in force, beside the /budgets
@@ -88,14 +87,13 @@ import (
 // credentials are already layered under its agent members — never from the
 // authored role.
 //
-// NEITHER REACHES A `state:read` READER. A provider key names a model entry
-// and a server name names a tool server, and both are read off a seat's
-// RUNTIME settings, which `GET /config` serves only to a `config:read` holder;
-// a label derived from them follows the same rule, or the projection would be
-// a way round that guard. So the projection is
-// [stream.Shaped]: a `config:read` audience is handed the resolved fields, and
-// every other audience the same tree without them — on the push, the snapshot
-// and GET /org alike. What they never carry, for any audience, is anything a
+// NEITHER REACHES THE OVERVIEW. A provider key names a model entry and a
+// server name names a tool server, and both are read off a seat's RUNTIME
+// settings, which `GET /config` serves only to an admin; a label derived from
+// them follows the same rule, or the projection would be a way round that
+// guard. So the projection is [stream.Shaped]: an admin audience is handed the
+// resolved fields, and every other audience the same tree without them — on
+// the push, the snapshot and GET /org alike. What they never carry, for any audience, is anything a
 // reader could act with: the entries they name, and every credential under
 // `mcp_env`, stay guarded.
 //
@@ -106,7 +104,8 @@ import (
 // nothing a reader could dial — and a seat drawn one way for one reader and
 // another way for the next would be two seats.
 
-// OrgProjection is the reader's view of a company: what `state:read` sees.
+// OrgProjection is the reader's view of a company: the overview everybody
+// sees, and an admin with the resolved fields beside it.
 //
 // Every field is omitted when empty, so a node with no active company answers
 // `{}`, which is the shape the dashboard already reads as "nothing loaded".
@@ -119,7 +118,7 @@ type OrgProjection struct {
 	// Timezone is the company's ONE clock (ADR-0018) as the engine resolves
 	// it: the IANA name the settings write, or `UTC` where they write none.
 	//
-	// A `state:read` FIELD, because every date a reader is shown is cut on
+	// AN OVERVIEW FIELD, because every date a reader is shown is cut on
 	// it — "today", "this week", a due band, an overdue mark — and a screen
 	// that cut them on the browser's own zone would put a task under a
 	// different day from the one the engine's own answer beside it names.
@@ -129,7 +128,7 @@ type OrgProjection struct {
 
 	// TokenBudget is the company's own ceiling per calendar window, as the
 	// settings write it: the windows it caps and nothing for the ones it
-	// leaves open. A `state:read` field for the reason the package doc
+	// leaves open. An overview field for the reason the package doc
 	// gives; how much of each window is spent is the /budgets answer.
 	TokenBudget *OrgTokenBudget `json:"token_budget,omitempty"`
 
@@ -147,8 +146,9 @@ type OrgProjection struct {
 	// The fields above stay as WRITTEN, so a reader can still tell a
 	// declared lead from an inherited one.
 	//
-	// WITHOUT PATHS, which is the one difference from the `config:read`
-	// answers: a reader is given no document to point into, and membership
+	// WITHOUT PATHS, which is the one difference from the admin's
+	// configuration answers: a reader is given no document to point into,
+	// and membership
 	// is in each unit's seats. Nothing else here is a fact the fields above
 	// do not already carry, so it needs no classification of its own beyond
 	// this: it is those values, resolved.
@@ -181,23 +181,23 @@ type OrgSeat struct {
 	// them; a window it does not name is capped only by the company's.
 	TokenBudget *OrgTokenBudget `json:"token_budget,omitempty"`
 
-	// LLM is RESOLVED, and only a `config:read` audience is handed it (see
+	// LLM is RESOLVED, and only an admin audience is handed it (see
 	// the package doc): each phase's provider chain, keyed by the phase's
 	// wire name, the first key the model it runs on and every later one a
 	// fallback in the order they are tried. Every phase is present on an
 	// agent seat of a company with a provider, and the field is absent on a
 	// human seat, which runs no model, on a company that configures none,
-	// and for every reader without `config:read`.
+	// and for every reader who is not an admin.
 	LLM map[string][]string `json:"llm,omitempty"`
 
-	// ToolSources is RESOLVED, and only a `config:read` audience is handed it
+	// ToolSources is RESOLVED, and only an admin audience is handed it
 	// (see the package doc): where this seat's tools come from, in the
 	// registry's own origin grammar — `builtin` first, then `mcp:<server>`
 	// for each server it is granted, in the order the company declares them.
 	// What the seat is GRANTED, not what is running: a server that failed to
 	// start is still listed, and the node heartbeat's MCP report is what says
-	// it failed. Absent on a human seat and for every reader without
-	// `config:read`.
+	// it failed. Absent on a human seat and for every reader who is not an
+	// admin.
 	ToolSources []string `json:"tool_sources,omitempty"`
 }
 
@@ -452,20 +452,21 @@ func (b orgBuilder) units(units []*org.Unit) []OrgUnit {
 	return out
 }
 
-// For is the projection as audience may read it: whole for a `config:read`
-// holder, and without any seat's resolved model chain or tool sources for
-// everybody else — see the package doc. Every other field is the reader's.
+// For is the projection as audience may read it: whole for an admin, and
+// without any seat's resolved model chain or tool sources for everybody else —
+// see the package doc. Every other field is the reader's. The variant is named
+// after which of the two it is, `admin` or `overview`.
 //
 // A COPY, never the projection edited in place: one projection is handed to
 // every client of a broadcast, each in its own shape.
 func (p OrgProjection) For(audience stream.Audience) (string, any) {
-	if audience.Holds(iam.GrantConfigRead) {
-		return "config:read", p
+	if audience.Admin() {
+		return "admin", p
 	}
 	narrow := p
 	narrow.Roles = withoutResolved(p.Roles)
 	narrow.Units = unitsWithoutResolved(p.Units)
-	return "state:read", narrow
+	return "overview", narrow
 }
 
 // withoutResolved is seats with their resolved fields removed.

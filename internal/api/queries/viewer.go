@@ -66,7 +66,11 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 	out := map[string]any{
 		"login": principal.Login,
 		// WHAT THIS CALLER MAY ASK, answered once so a screen can draw a
-		// locked row rather than discovering the refusal per question.
+		// locked row rather than discovering the refusal per question —
+		// the EFFECTIVE set the guard composed on this node (ADR-0033):
+		// every app an admin holds is listed beside `admin`, and admin is
+		// left out where this node's `api.auth.admin` refuses it, so a
+		// screen reads what it may do here without expanding anything.
 		"grants": grantNames(principal),
 		// THE SEAT'S OWN FIELDS, empty for a credential that holds none.
 		// `kind` is the SEAT's — human or agent — and never the
@@ -105,9 +109,9 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		// through ([iam.ActorFor]'s operator id), by
 		// [config.APIAuth.MayWriteCompany] — the one reading the config
 		// surface refuses a write with — so this answer and that refusal
-		// cannot disagree. It says nothing about AUTHORITY: the
-		// `config:write` grant, or a lead's subtree, still decides whether
-		// this caller may write at all.
+		// cannot disagree. It says nothing about AUTHORITY: admin, or a
+		// lead's subtree, still decides whether this caller may write at
+		// all.
 		//
 		// THE WRITERS ARE NAMED TO EVERY CALLER, which is what the config
 		// surface already does: its refusal names them to anybody whose
@@ -159,7 +163,7 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 	return out, nil
 }
 
-// grantNames renders a principal's capabilities for the screen.
+// grantNames renders a principal's permissions for the screen.
 func grantNames(p iam.Principal) []string {
 	out := make([]string, 0, len(p.Grants))
 	for _, g := range p.Grants {
@@ -203,7 +207,7 @@ func seatOf(organization *org.Organization, p iam.Principal) *org.Role {
 // about a seat: asked about a login, a lead was refused the report they lead.
 //
 // BUT THE DIRECTORY IS ASKED ONLY ONCE THE AUTHORITY IS DECIDED AS FAR AS IT
-// CAN BE WITHOUT THE RECORD ([Sources.mayLook]): the admin grant passes, a
+// CAN BE WITHOUT THE RECORD ([Sources.mayLook]): an admin passes, a
 // caller who could be admitted only as the lead of whoever holds the login
 // passes, and everybody else is refused exactly as they would be on a seat
 // they do not lead, before anything is looked up. The directory's answers
@@ -212,19 +216,20 @@ func seatOf(organization *org.Organization, p iam.Principal) *org.Role {
 // one this node could not resolve answered 503, so a caller with no authority
 // over anybody read which logins exist off the difference. A login that names
 // nobody is then decided on the name as typed — which nobody leads, so only
-// the admin grant passes — and only then answered as naming no record: "not
+// an admin passes — and only then answered as naming no record: "not
 // found" before "you may not" would make it a roster.
 //
 // THE SCOPE RULE IS THE AUTHORITY TABLE'S, asked with the question's OWN verb:
 // `work_inbox` asks [authz.ActionInboxRead], `work_my_work`
 // [authz.ActionMyWork], `work_person` and `decisions` [authz.ActionPersonRead]
-// — somebody's queue, which is theirs, their lead's, or the deployment's admin
-// grant's — and a seat's trail ([Sources.trailSeat]) asks
-// [authz.ActionSeatTrailRead], which is the audit read. It used to decide every one of them as a person's record,
-// so an auditor holding `audit:read` was refused the one seat's threads while
-// reading every phase record it had ever written; and before that it was "any
-// operator credential for anybody else's", which made every token in Tier A a
-// reader of every seat's inbox.
+// — somebody's queue, which is theirs, their lead's, or an admin's, each with
+// the tracker — and a seat's trail ([Sources.trailSeat]) asks
+// [authz.ActionSeatTrailRead] — the seat's, its lead's or an admin's, with no
+// app, since a seat's trail belongs to none. It used to decide every one of
+// them as a person's record, so a reader of the whole audit trail was refused
+// one seat's threads while reading every phase record it had ever written; and
+// before that it was "any operator credential for anybody else's", which made
+// every token in Tier A a reader of every seat's inbox.
 //
 // Returns the handle to read and an error to refuse with.
 func (s Sources) recordHandle(ctx context.Context, action authz.Action,

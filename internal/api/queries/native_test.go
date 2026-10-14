@@ -85,7 +85,27 @@ type stubWork struct {
 	// expandErr is what expanding a view's parameters fails with.
 	expandErr error
 
+	// asks is the thread the asked probe reads: the comment an OPEN ask
+	// addressed to each author's handle would be answered as, absent for
+	// one nobody asked; threadErr is what that read fails with, and
+	// threadAsked every query it was handed.
+	asks        map[string]string
+	threadErr   error
+	threadAsked []tracker.ThreadQuery
+
 	err error
+}
+
+// Thread answers the asked probe from [stubWork.asks], as the tracker's own
+// inference would: the one open ask addressed to the author, or none.
+func (s *stubWork) Thread(_ context.Context, q tracker.ThreadQuery,
+	_ statelog.Freshness) (tracker.ResolvedThread, error) {
+
+	s.threadAsked = append(s.threadAsked, q)
+	if s.threadErr != nil {
+		return tracker.ResolvedThread{}, s.threadErr
+	}
+	return tracker.ResolvedThread{Answers: s.asks[q.Author]}, nil
 }
 
 func (s *stubWork) Projects(_ context.Context, q tracker.ProjectQuery) (
@@ -317,34 +337,31 @@ var personalQuestions = map[string]bool{
 // askNative runs one question against a registry built from these sources,
 // returning the error rather than failing on it: every case here is about a
 // refusal, which the shared `ask` helper turns into a Fatalf.
-// askNative asks as the ORDINARY DASHBOARD READER: a credential holding
-// `state:read` and nothing else, which is the reader that replaced the
-// anonymous posture.
+// askNative asks as somebody who USES THE COMPANY: a credential holding every
+// app and not admin.
 //
 // It is that rather than a credential holding everything, deliberately: these
 // cases are about the board and the wiki, and asking them with the narrowest
-// credential that may see either is what keeps a question quietly gaining a
-// wider grant from going unnoticed here.
+// credential that may use both is what keeps a question quietly becoming
+// admin's from going unnoticed here.
 func askNative(t *testing.T, s queries.Sources, what string, params map[string]any) (any, error) {
 	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	return r.Answer(asGrants(t, "", iam.GrantStateRead), what, params)
+	return r.Answer(asGrants(t, "", iam.Apps...), what, params)
 }
 
 // askTranscripts is askNative for the questions that serve what a turn SAID:
 // prompts, tool arguments, diary entries, a seat's notes on who it has worked
-// with. They carry their own grant because the ordinary board reader must not
-// reach them — that is the whole of what splitting `state:read` from
-// `audit:read` buys.
+// with. Every seat's at once is the company-wide trail, which is admin's —
+// somebody who uses the company's apps must not reach it (ADR-0033).
 func askTranscripts(t *testing.T, s queries.Sources, what string,
 	params map[string]any) (any, error) {
 
 	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	return r.Answer(asGrants(t, "", iam.GrantStateRead, iam.GrantAuditRead),
-		what, params)
+	return r.Answer(asGrants(t, "", iam.GrantAdmin), what, params)
 }
 
 // askAsOperator is askNative for the questions that describe the DEPLOYMENT
@@ -381,9 +398,9 @@ func askAsSeat(t *testing.T, s queries.Sources, handle, what string,
 }
 
 // askHolding is [askAsSeat] for a case about AUTHORITY, which states the
-// grants rather than taking every one: [iam.AllGrants] carries fleet:operate,
-// which every personal class admits before it asks the chart — so a case using
-// it against a chart that reports no relation is allowed anyway and asserts
+// grants rather than taking every one: [iam.AllGrants] carries admin, which
+// every personal class admits before it asks the chart — so a case using it
+// against a chart that reports no relation is allowed anyway and asserts
 // nothing.
 func askHolding(t *testing.T, s queries.Sources, handle, what string,
 	params map[string]any, grants ...iam.Grant) (any, error) {
@@ -816,7 +833,7 @@ func TestAReadThisNodeCannotServeYetIsUnavailableRatherThanFailed(t *testing.T) 
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items", map[string]any{})
+	_, err := r.Answer(asGrants(t, "", iam.GrantTracker), "work_items", map[string]any{})
 	if !errors.Is(err, queries.ErrUnavailable) {
 		t.Fatalf("a node that is behind answered %v — a read refusal that "+
 			"reaches a client as a plain failure is rendered as a broken "+
@@ -861,7 +878,7 @@ func TestAFloorOnAnotherLogIsBadParamsAndARebuiltStreamIsNot(t *testing.T) {
 			t.Parallel()
 			r := queries.NewRegistry()
 			queries.Register(r, queries.Sources{Work: &stubWork{err: tc.err}})
-			_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items",
+			_, err := r.Answer(asGrants(t, "", iam.GrantTracker), "work_items",
 				map[string]any{})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("answered %v, want %v", err, tc.want)
@@ -947,7 +964,7 @@ func TestARefusalWaitingCannotClearIsUnavailableWithNoHint(t *testing.T) {
 			r := queries.NewRegistry()
 			queries.Register(r, queries.Sources{Work: &stubWork{err: refused}})
 
-			_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items",
+			_, err := r.Answer(asGrants(t, "", iam.GrantTracker), "work_items",
 				map[string]any{})
 			if !errors.Is(err, queries.ErrUnavailable) {
 				t.Fatalf("a read refused %s answered %v, want %v — it is this "+
@@ -972,7 +989,7 @@ func TestARefusalAboutTheRequestIsNeverReclassifiedAsUnavailable(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(asGrants(t, "", iam.GrantStateRead), "work_items", map[string]any{})
+	_, err := r.Answer(asGrants(t, "", iam.GrantTracker), "work_items", map[string]any{})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Fatalf("err = %v, want ErrBadParams", err)
 	}
@@ -1269,7 +1286,7 @@ func TestPinnedCountsReachTheReaderOnlyForARecord(t *testing.T) {
 
 	w = &stubWork{}
 	nobody := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead}}
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: w})
 	if _, err := r.Answer(iam.WithPrincipal(t.Context(), nobody), "work_views",
@@ -1897,7 +1914,7 @@ func TestEverySavedViewIsTheCallersAndCountedOnlyForARecord(t *testing.T) {
 
 	w = &stubWork{}
 	nobody := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead}}
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: w})
 	if _, err := r.Answer(iam.WithPrincipal(t.Context(), nobody), "work_saved_views",
@@ -1907,5 +1924,92 @@ func TestEverySavedViewIsTheCallersAndCountedOnlyForARecord(t *testing.T) {
 	}
 	if w.every.Counts {
 		t.Error("the refused counts reached the reader")
+	}
+}
+
+// AN ASKED PERSON READS THE ITEM WITHOUT THE TRACKER, and nobody else does
+// (ADR-0033, `get_work_item`'s asked arm). A person kept off the tracker may
+// read the one item an OPEN ask on it names them on — so they can read what
+// they were asked and answer it — and only the item says whether one does: it
+// is read, the ask resolved through the same thread read the answer they
+// would post is resolved by, and the item decided again. A tracker holder is
+// decided before anything is read, and never asks the thread.
+//
+// A MISSING ITEM IS THE SAME REFUSAL as one they were not asked on, to
+// somebody without the tracker, so the refusal is no oracle for which keys
+// exist; and a thread this node cannot read is unavailable, never "you were not
+// asked".
+//
+// Mutation: answer the detail on the first ErrUnresolved without the probe, and
+// bo reads ana's item; return ErrNotFound for a missing item before deciding,
+// and the two refusals differ.
+func TestAnAskedPersonReadsTheItemWithoutTheTracker(t *testing.T) {
+	t.Parallel()
+	item := tracker.TaskDetail{Task: tracker.Task{ID: "task-1", Key: "ENG-1", Project: "ENG"}}
+	ask := func(work *stubWork, ctx context.Context) (any, error) {
+		t.Helper()
+		r := queries.NewRegistry()
+		queries.Register(r, queries.Sources{Work: work, Chart: flatChart{}})
+		return r.Answer(ctx, "work_item", map[string]any{"id": "ENG-1"})
+	}
+	refusalOf := func(err error) queries.Refusal {
+		t.Helper()
+		var refusal *queries.Refusal
+		if !errors.As(err, &refusal) {
+			t.Fatalf("answered %v, want a refusal", err)
+		}
+		return *refusal
+	}
+
+	// A TRACKER HOLDER, decided before the item is read.
+	holder := &stubWork{detail: item, asks: map[string]string{}}
+	if _, err := ask(holder, asSeat(t, "bo", iam.GrantTracker)); err != nil {
+		t.Fatalf("a tracker holder was refused: %v", err)
+	}
+	if len(holder.threadAsked) != 0 {
+		t.Errorf("a tracker holder's read asked the thread %v", holder.threadAsked)
+	}
+
+	// THE PERSON THE OPEN ASK NAMES, holding nothing.
+	asked := &stubWork{detail: item, asks: map[string]string{"ana": "c-7"}}
+	got, err := ask(asked, asSeat(t, "ana"))
+	if err != nil {
+		t.Fatalf("the person asked was refused the item: %v", err)
+	}
+	if detail, _ := got.(tracker.TaskDetail); detail.Task.Key != "ENG-1" {
+		t.Errorf("the person asked was answered %v, want the item", got)
+	}
+	if len(asked.threadAsked) != 1 || asked.threadAsked[0].Task != "task-1" ||
+		asked.threadAsked[0].Author != "ana" {
+		t.Errorf("the thread was asked %v, want task-1 by ana", asked.threadAsked)
+	}
+
+	// SOMEBODY ELSE, holding nothing, and a missing item: one refusal.
+	notAsked := refusalOf(func() error {
+		_, err := ask(&stubWork{detail: item, asks: map[string]string{"ana": "c-7"}},
+			asSeat(t, "bo"))
+		return err
+	}())
+	missing := refusalOf(func() error {
+		_, err := ask(&stubWork{err: tracker.ErrNoTask}, asSeat(t, "bo"))
+		return err
+	}())
+	if !slices.Equal(notAsked.Grants, []iam.Grant{iam.GrantTracker}) {
+		t.Errorf("a person not asked was refused naming %v, want [tracker]", notAsked.Grants)
+	}
+	if missing.What != notAsked.What || missing.Reason != notAsked.Reason ||
+		!slices.Equal(missing.Grants, notAsked.Grants) {
+		t.Errorf("a missing item was refused %+v and an item not asked on %+v — "+
+			"the difference says which keys exist", missing, notAsked)
+	}
+	if _, err := ask(&stubWork{err: tracker.ErrNoTask}, asSeat(t, "bo", iam.GrantTracker)); !errors.Is(
+		err, queries.ErrNotFound) {
+		t.Errorf("a missing item asked by a tracker holder = %v, want not found", err)
+	}
+
+	// A THREAD THIS NODE CANNOT READ says nothing about who was asked.
+	blind := &stubWork{detail: item, threadErr: errors.New("the tracker's applier is behind")}
+	if _, err := ask(blind, asSeat(t, "ana")); !errors.Is(err, queries.ErrUnavailable) {
+		t.Errorf("an unreadable thread = %v, want unavailable", err)
 	}
 }

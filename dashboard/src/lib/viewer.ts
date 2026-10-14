@@ -43,28 +43,35 @@
 import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
 import { useQuery } from "./useQuery.ts";
 import { useFrameSession } from "./frameSession.ts";
+import { ADMIN, KNOWLEDGE, TRACKER, holds } from "./access.ts";
 import type { SessionAnswer, Viewer } from "~/protocol/index.ts";
 
 export interface ViewerState {
   /** The login the engine resolved this browser to, or "". */
   login: string;
-  /** The capabilities this caller carries, as the engine reports them. */
+  /**
+   * The access this caller carries, as the engine reports it — already the
+   * effective set on the node that answered (an admin's every app included,
+   * admin itself dropped where the node refuses it).
+   */
   grants: string[];
   /**
-   * Whether this caller holds `fleet:operate` — the deployment's own grant,
-   * and the ADMIN PATH of the engine's owner-or-lead rule: it reads anybody's
-   * work record (their queue, their inbox, their day) where otherwise only
-   * the owner and whoever leads them may. A lead reads their reports' too,
-   * which this screen cannot know; the engine decides, and a screen that asks
-   * on a lead's behalf renders the refusal it gets.
-   *
-   * NOT `people:manage`, which is what this read. That grant is authority over
-   * PERSON ROWS in the identity directory — who is enrolled and what they
-   * carry — and opens nobody's work record: a screen gating on it asked for a
-   * colleague's queue on behalf of an administrator the engine refused, and
-   * hid it from the operator the engine would have answered.
+   * Whether this caller holds `admin` — the company and the engine, and the
+   * ADMIN PATH of every relation rule: it reads anybody's work record (their
+   * queue, their inbox, their day) and every seat's transcript, where
+   * otherwise only the owner and whoever leads them may. A lead reads their
+   * reports' too, which this screen cannot know; the engine decides, and a
+   * screen that asks on a lead's behalf renders the refusal it gets.
    */
-  operatesFleet: boolean;
+  admin: boolean;
+  /**
+   * Whether this caller holds the TRACKER — every work item, project, view,
+   * inbox and queue question. A surface that reads the tracker asks nothing
+   * without it, and says what would open it rather than drawing a refusal.
+   */
+  tracker: boolean;
+  /** Whether this caller holds the KNOWLEDGE base — every page question. */
+  knowledge: boolean;
   /** The seat the directory binds this caller to, or "" — see the note above. */
   handle: string;
   /**
@@ -147,7 +154,9 @@ function useViewerRead(): ViewerState {
   return {
     login,
     grants,
-    operatesFleet: grants.includes("fleet:operate"),
+    admin: holds(grants, ADMIN),
+    tracker: holds(grants, TRACKER),
+    knowledge: holds(grants, KNOWLEDGE),
     handle,
     owner: data?.owner ?? "",
     name: data?.name ?? "",
@@ -246,13 +255,11 @@ export interface HeldReading {
  * THE VIEWER'S ANSWER once it has answered, and otherwise what the frame's
  * `GET /auth/session` answered ([useFrameSession]), which every session gets
  * whatever else the engine refuses it. The viewer is asked over the live
- * socket, and a session without `state:read` never dials one, so its viewer
- * never answers: read alone, as Settings' column read it, a person holding
- * nothing was drawn every company section unlocked while the sidebar, reading
- * the session, locked them — two answers to one reader. And a session the
- * frame KNOWS has no access is read off the session even where an earlier
- * socket's viewer answered, because the refusal that closed that socket is
- * exactly a grant the viewer still lists.
+ * socket, which answers nothing before its handshake and never for a session
+ * the engine refuses it to: read alone, as Settings' column once read it, the
+ * frame drew no lock at all until the socket answered — while the sidebar,
+ * reading the session, locked the same sections. One reading, two sources,
+ * in that order.
  *
  * THE LOGIN COMES FROM THE SAME SOURCE AS THE GRANTS. A refusal decided on the
  * session's grants while the viewer was still out — the moment between the
@@ -265,13 +272,11 @@ export interface HeldReading {
  */
 export function useHeldReading(): HeldReading | null {
   const viewer = useViewer();
-  const { answer, noAccess } = useFrameSession();
+  const { answer } = useFrameSession();
   return useMemo(() => {
-    const session = answer ? { login: answer.login, grants: answer.grants ?? NO_GRANTS } : null;
-    if (noAccess && session) return session;
     if (!viewer.loading) return { login: viewer.login, grants: viewer.grants };
-    return session;
-  }, [answer, noAccess, viewer.loading, viewer.login, viewer.grants]);
+    return answer ? { login: answer.login, grants: answer.grants ?? NO_GRANTS } : null;
+  }, [answer, viewer.loading, viewer.login, viewer.grants]);
 }
 
 /** What the reader holds, off [useHeldReading] — the locks' half of it. */

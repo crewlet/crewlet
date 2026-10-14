@@ -38,19 +38,21 @@
  *
  * A ROW IS LOCKED ONLY WHEN NOTHING IN ITS WORKSPACE IS OPEN to the reader
  * (`nav.ts`'s `workspaceOpen`, over the one rule `sectionOpen`), and stays: a
- * row that vanished when a grant is absent is indistinguishable from one that
- * does not exist. Its title names what would open it — what a reader would
- * ask somebody for. A workspace only PART of which is closed is not locked as
- * a whole: Settings draws its locks per section, in its column. Settings
+ * row that vanished when access is absent is indistinguishable from one that
+ * does not exist. Its title names what would open it — the access a reader
+ * would ask an admin for: Inbox, My work and Work say Tracker, Knowledge says
+ * Knowledge. A workspace only PART of which is closed is not locked as a
+ * whole: Settings draws its locks per section, in its column. Settings
  * carried a key for any closed section, so a person holding nothing but
  * their own Account was told Settings was closed to them — while its first
  * group, You, needs nothing at all. That group is why the Settings row is
  * never locked.
  *
- * So for a reader with no access yet — a session without `state:read`, which
- * every company screen reads the company through (`lib/frameSession.ts`) —
- * every row but Settings carries the lock: offered unmarked, each led to the
- * same refusal panel with nothing beside it saying so.
+ * AND WHAT A LOCKED ROW WOULD SHOW IS NOT ASKED FOR: the Inbox's badge, My
+ * work's count and the pinned views are tracker answers, so a reader without
+ * Tracker asks none of them (`lib/useInboxCounts.ts`, `lib/useQueueCount.ts`,
+ * [PinnedSection]) — a figure beside a lock would be a refusal drawn as a
+ * number.
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -67,18 +69,16 @@ import { ActivityGlyph, KeyGlyph, PinGlyph, StarGlyph } from "@crewlethq/icons/g
 import { href, samePath, useRoute } from "~/app/router.tsx";
 import {
   WORKSPACES,
-  grantWords,
   sectionOpen,
   workspaceMissing,
   workspaceOf,
   workspaceRow,
-  type Grant,
   type WorkspaceRow,
 } from "~/app/nav.ts";
+import { accessNames, type Grant } from "~/lib/access.ts";
 import { glyphFor } from "~/ui/glyph.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useHeldGrants, useViewer } from "~/lib/viewer.ts";
-import { useFrameSession } from "~/lib/frameSession.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { activityOf, indexOrg, statusOf, turnItemKey } from "~/lib/seats.ts";
@@ -101,7 +101,6 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const route = useRoute();
   // THE FRAME'S READINGS, not the sidebar's own: see `FrameReadings`.
   const viewer = useViewer();
-  const { noAccess } = useFrameSession();
   // WHAT THE READER HOLDS, for the locks — the frame's one reading of it
   // (`useHeldGrants`), which Settings' column and the route's own refusal read
   // too. Null while nobody has said: a lock drawn on no answer claims a
@@ -128,12 +127,10 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const agents = useAgents();
   const health = useEngineHealth();
   const { connected, authRejected, accessRefused, lostAt, everConnected } = useConnection();
-  // THE ENGINE SERVES THIS BROWSER NO COMPANY — no access yet, or refused —
-  // and nothing of one is offered: the rows are locked, and the live
-  // sections, whose answers an earlier socket may have left behind, are not
-  // drawn. `noAccess` as well as the store's refusal, because the
-  // frame records the first in the second only once it has rendered.
-  const unserved = noAccess || accessRefused !== null;
+  // THE ENGINE REFUSED THIS BROWSER (a seat taken out of the chart) and
+  // nothing of the company is offered: the live sections, whose answers an
+  // earlier socket may have left behind, are not drawn.
+  const unserved = accessRefused !== null;
   const inbox = useInboxCounts();
   const here = workspaceOf(route.path);
   const at = route.path.join("/");
@@ -208,7 +205,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
         key={ws.key}
         label={
           needs.length > 0 ? (
-            <Locked label={ws.label} needs={needs} said="needs a grant you do not hold" />
+            <Locked label={ws.label} needs={needs} said={`needs ${accessNames(needs)} access`} />
           ) : (
             ws.label
           )
@@ -255,7 +252,6 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
                 connected,
                 authRejected,
                 accessRefused,
-                noAccess,
                 lostAt,
                 everConnected,
                 health,
@@ -295,7 +291,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
         {/* EACH LIVE SECTION HAS ITS OWN BOUNDARY: they draw rows the
             engine or the browser's storage sent, and a malformed one must
             cost that list and never the navigation above it. */}
-        {!unserved && (
+        {!unserved && viewer.tracker && (
           <RailBoundary label="Pinned" resetKey={at}>
             <PinnedSection
               path={route.path}
@@ -322,7 +318,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
  */
 function Locked({ label, needs, said }: { label: string; needs: readonly Grant[]; said: string }) {
   return (
-    <span className="side-locked" title={`Needs ${grantWords(needs)}`}>
+    <span className="side-locked" title={`Needs ${accessNames(needs)} access`}>
       {label}
       <KeyGlyph size="xs" aria-hidden="true" />
       <span className="sr-only">, {said}</span>
@@ -379,7 +375,8 @@ function NavRow({ label, icon, glyph, lead, path, query, current, badge, count }
  * pins of whoever asks — a `viewer=` that named anybody else was a free choice
  * of whose personal views to read, and the engine takes none — so the section
  * asks only once the reader has a record to keep pins under (`owner`), and
- * asks nothing of a reader with none.
+ * asks nothing of a reader with none. A saved view is the tracker's, so the
+ * section is mounted only for a reader holding Tracker.
  *
  * AND ACROSS EVERY CONTAINER (`work_saved_views`), never the workspace strip: a
  * view pinned from a project board lives in that project, and read from the

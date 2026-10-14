@@ -98,14 +98,14 @@ test("a download fetches the bytes over the session, and a refusal is said on th
 test("a download refused on authority says which grant would admit the reader", async () => {
   serving({ "": { project: "ENG", files: [file("a.md")], complete: true } });
   vi.spyOn(rest, "blob").mockRejectedValueOnce(
-    new RestError(403, { error: "unauthorized", reason: "no_grant", grants: ["state:read"] }),
+    new RestError(403, { error: "unauthorized", reason: "no_grant", grants: ["tracker"] }),
   );
   mount();
   fireEvent.click(await screen.findByText("Download"));
   await waitFor(() =>
     expect(
       screen.getByText(
-        /Not downloaded: Downloading a project's file needs state:read, which the credential you presented does not carry\./,
+        /Not downloaded: Downloading a project's file needs Tracker access\. An admin can give it to you\./,
       ),
     ).toBeTruthy(),
   );

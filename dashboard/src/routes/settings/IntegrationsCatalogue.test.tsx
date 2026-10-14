@@ -131,7 +131,7 @@ beforeEach(() => {
 const OPERATOR = {
   login: "ops",
   owner: "ops",
-  grants: ["config:read", "config:write", "secrets:write"],
+  grants: ["admin"],
 };
 
 afterEach(() => {
@@ -235,14 +235,14 @@ test("the filter shows what the company has, or what it could have", async () =>
 test("a reader refused /setup sees every form action disabled with the grants it takes", async () => {
   stubFetch({
     status: 403,
-    body: { error: "unauthorized", reason: "config", grants: ["config:read"] },
+    body: { error: "unauthorized", reason: "config", grants: ["admin"] },
   });
-  mount({ login: "dee", owner: "dee", grants: ["state:read"] });
+  mount({ login: "dee", owner: "dee", grants: [] });
   const connect = await screen.findByRole("button", { name: "Connect Slack" });
   expect(connect.getAttribute("aria-disabled")).toBe("true");
   expect(connect.getAttribute("aria-describedby")).toBeTruthy();
   expect(document.body.textContent).toContain(
-    "Setting up integrations needs config:read to see what they need, and config:write and secrets:write to connect them.",
+    "Setting up integrations needs Admin access. An admin can give it to you.",
   );
   fireEvent.click(connect);
   expect(screen.queryByRole("dialog")).toBeNull();

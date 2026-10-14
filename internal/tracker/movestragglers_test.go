@@ -125,7 +125,7 @@ func TestAStragglerInTheTrashIsCarriedAfterItsRestore(t *testing.T) {
 	}
 
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore-late", "m-late", "ENG",
-		nil); err != nil {
+		false, nil); err != nil {
 		t.Fatalf("restore the straggler: %v", err)
 	}
 	r.drain()

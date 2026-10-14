@@ -192,17 +192,7 @@ async function mount(
 const ANONYMOUS = { login: "", owner: "", acts: [] };
 const OPERATOR = {
   login: "ops",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -248,12 +238,12 @@ test("the peek asks at most three questions", async () => {
   expect(asked).not.toContain("config");
 });
 
-// A HUMAN SEAT SAYS WHAT HOLDS IT, for a reader the directory answers, and is
-// asked ONE more read — the directory — never for an agent's seat, whose
-// holder is the engine. The CONTROLS: the operator's agent-seat peek above
-// asks no directory at all, and a reader holding neither grant is asked
-// nothing and shown no fact. Mutation: read the directory for every seat, or
-// for every reader, and a count here goes red.
+// A HUMAN SEAT SAYS WHAT HOLDS IT, for every signed-in reader, and is asked
+// ONE more read — the directory, which the engine masks per reader — never for
+// an agent's seat, whose holder is the engine. The CONTROLS: the operator's
+// agent-seat peek above asks no directory at all, and a browser nobody signed
+// in on is asked nothing and shown no fact. Mutation: read the directory for
+// every seat, or for an anonymous reader, and a count here goes red.
 //
 // THE VALUE DOES NOT REPEAT ITS TERM: the card's line begins "Held by", and
 // drawn under the term it read "Held by / Held by jane.doe (suspended)".
@@ -275,22 +265,30 @@ test.each([
   expect(new Set(asked).size).toBeLessThanOrEqual(3);
 });
 
-test("an agent's seat and a reader the directory refuses ask it nothing", async () => {
+test("an agent's seat and an anonymous reader ask it nothing, and every signed-in reader asks once", async () => {
   const paths = directory(VACANT);
   await mount(OPERATOR);
   expect(paths).toEqual([]);
   expect(screen.queryByText("Held by")).toBeNull();
   cleanup();
-  const again = directory(VACANT);
-  await mount({ ...OPERATOR, grants: ["state:read", "work:write"] }, { handle: "jane" });
-  expect(again).toEqual([]);
+  const anonymous = directory(VACANT);
+  await mount(ANONYMOUS, { handle: "jane" });
+  expect(anonymous).toEqual([]);
   expect(screen.queryByText("Held by")).toBeNull();
+  cleanup();
+  const tracker = directory(VACANT);
+  await mount({ ...OPERATOR, grants: ["tracker"] }, { handle: "jane" });
+  await act(async () => {});
+  expect(tracker.filter((p) => p === "/iam/seats")).toHaveLength(1);
+  expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe(
+    "Nobody — the seat is vacant",
+  );
 });
 
 // THE PEEK FILLS A SEAT TOO — on a phone it is where those gestures are —
-// for `people:manage` alone: an auditor reads the fact with no control. A
+// for Admin alone: a reader without it reads the fact with no control. A
 // vacant seat offers Invite and Create, an invited one its cancellation, a
-// held one nothing. Mutation: drop the grant check and the auditor is
+// held one nothing. Mutation: drop the grant check and that reader is
 // offered both.
 test("a vacant human seat's peek offers Invite and Create to an administrator alone", async () => {
   directory(VACANT);
@@ -303,7 +301,7 @@ test("a vacant human seat's peek offers Invite and Create to an administrator al
   cleanup();
 
   directory(VACANT);
-  await mount({ ...OPERATOR, grants: ["state:read", "audit:read"] }, { handle: "jane" });
+  await mount({ ...OPERATOR, grants: ["tracker", "knowledge"] }, { handle: "jane" });
   await act(async () => {});
   expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe(
     "Nobody — the seat is vacant",
@@ -414,7 +412,7 @@ test("Message is pressable for a reader who can file", async () => {
 test("your own seat's peek holds Message and points to your Account, and a colleague's does not", async () => {
   const jane = {
     login: "jane.doe",
-    grants: ["state:read", "work:write"],
+    grants: ["tracker"],
     handle: "jane",
     owner: "jane",
     acts: ["create_work_item"],

@@ -133,7 +133,7 @@ export function RetentionStatus({
   onTakeBackup,
 }: {
   retention: QueryResult<RetentionReport>;
-  /** Opens this page's backup dialog, offered to a reader holding fleet:operate. */
+  /** Opens this page's backup dialog, offered to an admin. */
   onTakeBackup?: () => void;
 }) {
   const now = useNow();

@@ -1,7 +1,7 @@
 /**
  * Spend › Budgets: every scope's day, week and month — what it has spent, the
  * ceiling it is held to, and whether the gate is refusing it — with each
- * ceiling editable in place by a reader holding `config:write`.
+ * ceiling editable in place by an admin.
  *
  * # Its own screen, because it answers a different question from spend
  *
@@ -35,7 +35,7 @@
  * a turn, and the check says so before it is saved), stored as a revision,
  * and applied by every node (`components/budgetWrite.tsx`). The editor is
  * drawn for every reader and disabled with the reason for one without
- * `config:write`.
+ * Admin.
  *
  * # The counter is the FLEET's, and unreadable is not zero
  *

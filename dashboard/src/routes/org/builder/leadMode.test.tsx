@@ -1,5 +1,5 @@
 /**
- * A lead's draft: a person without `config:write` who leads a unit edits that
+ * A lead's draft: a person without Admin who leads a unit edits that
  * unit in the builder, read and written at its own address.
  *
  * What these protect: a lead's builder never reads the company document,
@@ -69,8 +69,8 @@ function leadOrg(): OrgProjection {
   };
 }
 
-/** Dev, signed in, bound to the seat that leads Engineering and Ops, holding no configuration grant. */
-const LEAD = { login: "dev.person", owner: "dev", handle: "dev", grants: ["state:read"] };
+/** Dev, signed in, bound to the seat that leads Engineering and Ops, holding no Admin. */
+const LEAD = { login: "dev.person", owner: "dev", handle: "dev", grants: [] };
 
 const isDryRun = (r: SentRequest) => r.query.get("dry_run") === "true";
 /** The goal a dry run of Engineering sends for its seat at `index`. */
@@ -143,13 +143,13 @@ describe("a lead's draft", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
     expect(
       await screen.findByText(
-        "The company's charter and settings are not part of Engineering: changing them takes the config:write grant.",
+        "The company's charter and settings are not part of Engineering: changing them takes Admin access.",
       ),
     ).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Add an analyst" }));
     expect(
       await screen.findByText(
-        "Only Engineering and what is inside it can be changed here: the company's top level takes the config:write grant.",
+        "Only Engineering and what is inside it can be changed here: the company's top level takes Admin access.",
       ),
     ).toBeDefined();
     // The unit as it stands is the one check sent.
@@ -405,7 +405,7 @@ describe("a lead's draft", () => {
       org: leadOrg(),
       viewer: () => ({ ...LEAD, owner: "seller", handle: "seller" }),
     });
-    expect(await screen.findByText("Reading the configuration needs config:read.")).toBeDefined();
+    expect(await screen.findByText("Reading the configuration needs Admin access.")).toBeDefined();
     expect(
       screen.getByText(
         "The configuration is guarded, reads included. A unit's lead edits the units they lead here without it.",

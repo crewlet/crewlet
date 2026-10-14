@@ -42,7 +42,7 @@ func (d directory) PersonByLoginVouched(_ context.Context, login string) (iamdom
 		ID: "p-1", Kind: iam.KindPerson, Stage: iam.StageActive, Login: "jane.doe", Seat: "jane",
 		Credentials: []iamdomain.Credential{{ID: "c-1", Method: iamdomain.MethodPassword,
 			Verifier: verifier}},
-		Grants: []iam.Grant{iam.GrantPeopleManage},
+		Grants: []iam.Grant{iam.GrantAdmin},
 	}, d.vouch, nil
 }
 
@@ -86,7 +86,7 @@ func TestABindingCrossesWithoutItsCredentials(t *testing.T) {
 	if err != nil || why != "" || rep.Err != nil || rep.Unserved != "" {
 		t.Fatalf("the binding was answered (%+v, %q, %v)", rep, why, err)
 	}
-	for _, leaked := range []string{verifier, string(iam.GrantPeopleManage), "Credentials", "Grants"} {
+	for _, leaked := range []string{verifier, string(iam.GrantAdmin), "Credentials", "Grants"} {
 		if strings.Contains(string(rep.Result), leaked) {
 			t.Errorf("the binding's answer carries %q: %s", leaked, rep.Result)
 		}

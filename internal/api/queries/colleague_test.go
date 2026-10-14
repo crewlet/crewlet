@@ -54,8 +54,9 @@ func resolveAs(t *testing.T, s queries.Sources, q string, grants ...iam.Grant) m
 	return asMap(t, got)
 }
 
-// reader is the board's read alone, which is what `colleague` asks.
-var reader = []iam.Grant{iam.GrantStateRead}
+// reader holds no permission at all: `colleague` is the overview's, which
+// everybody reads (ADR-0033).
+var reader []iam.Grant
 
 func handlesOf(t *testing.T, answer map[string]any) []string {
 	t.Helper()
@@ -123,21 +124,25 @@ func TestColleagueNothingMatchedIsAnEmptyListNotNull(t *testing.T) {
 	}
 }
 
-// A CHAT ID IS READ ON THE CONFIGURATION GRANT. A seat's contact identities
-// are read only through the grant the company document is read under, so a
-// caller holding the board's read alone pasting one must not learn whose it is
-// — while a caller holding `config:read` resolves it exactly as the agent's own
-// lookup does.
-func TestColleagueMatchesAChatIdOnlyOnTheConfigurationRead(t *testing.T) {
+// A CHAT ID IS RESOLVED FOR AN ADMIN ALONE. A seat's contact identities are
+// read only by whoever reads the company document, so a caller pasting one —
+// holding nothing, or every app — must not learn whose it is; an admin resolves
+// it exactly as the agent's own lookup does.
+//
+// Mutation: drop the admin check in [queries.Sources.colleague] and every app
+// holder resolves ana by her chat id.
+func TestTheColleagueQuestionMasksContactsExceptToAdmin(t *testing.T) {
 	t.Parallel()
-	if got := resolveAs(t, colleagueSources(t), "U07XK2PQ", reader...); got["match"] != nil ||
-		len(handlesOf(t, got)) != 0 {
-		t.Errorf("a caller without config:read resolved a chat id: %v", got)
+	for _, holding := range [][]iam.Grant{reader, iam.Apps} {
+		if got := resolveAs(t, colleagueSources(t), "U07XK2PQ", holding...); got["match"] != nil ||
+			len(handlesOf(t, got)) != 0 {
+			t.Errorf("a caller holding %v resolved a chat id: %v", holding, got)
+		}
 	}
-	got := resolveAs(t, colleagueSources(t), "U07XK2PQ", iam.GrantStateRead, iam.GrantConfigRead)
+	got := resolveAs(t, colleagueSources(t), "U07XK2PQ", iam.GrantAdmin)
 	match, _ := got["match"].(map[string]any)
 	if match["handle"] != "ana" || match["why"] != "chat id matches exactly" {
-		t.Errorf("a caller holding config:read got %v, want ana by her chat id", got)
+		t.Errorf("an admin got %v, want ana by her chat id", got)
 	}
 }
 
@@ -153,7 +158,7 @@ func TestColleagueWithholdsWhatTheDirectoryWithholds(t *testing.T) {
 	s.WithheldContacts = func() func(string) bool {
 		return func(handle string) bool { return handle == "ana" }
 	}
-	got := resolveAs(t, s, "U07XK2PQ", iam.GrantStateRead, iam.GrantConfigRead)
+	got := resolveAs(t, s, "U07XK2PQ", iam.GrantAdmin)
 	if got["match"] != nil || len(handlesOf(t, got)) != 0 {
 		t.Errorf("a withheld person was matched by her chat id: %v", got)
 	}

@@ -84,8 +84,8 @@ func (s *Service) onFiles(h servedHandler) http.HandlerFunc {
 // fileRoutes mounts the byte routes.
 //
 // THE PROJECT IS IN THE PATH, so each route is decided there on it: the read
-// on [authz.ActionFileRead], the upload on [authz.ActionFileWrite] — the work
-// grant, as filing an item into the project is — and the removal on
+// on [authz.ActionFileRead], the upload on [authz.ActionFileWrite] — the
+// tracker, as filing an item into the project is — and the removal on
 // [authz.ActionFileRemove], which asks the chart who leads the project. The
 // file tools ask the same rows of the same object.
 func (s *Service) fileRoutes(mount mounter) {

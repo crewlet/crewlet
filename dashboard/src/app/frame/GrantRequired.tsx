@@ -1,5 +1,5 @@
 /**
- * The one thing a section says to a reader who holds none of its grants.
+ * The one thing a section says to a reader who holds none of its access.
  *
  * DRAWN BY THE FRAME, IN PLACE OF THE SCREEN, once the engine has SAID this
  * reader holds none of what the section needs (`useHeldReading` — the
@@ -11,16 +11,16 @@
  * the Settings column beside it said 1 node. A refused read is UNKNOWN, and a
  * screen that draws unknown as zero is the failure this engine's whole
  * three-valued doctrine exists to prevent. So nothing is drawn but what is
- * true: this section needs a grant, this reader does not hold it, and here is
+ * true: this section needs access this reader does not hold, and here is
  * the one thing that changes that from this browser.
  *
- * A GRANT, NOT A CREDENTIAL. This used to say "needs an operator credential"
+ * ACCESS, NOT A CREDENTIAL. This used to say "needs an operator credential"
  * and offer to set a token, which was the whole of authority while a Tier A
  * token was the only credential. A person signs in now, and what a signed-in
- * reader lacks is a grant: the way to one from here is to sign in as somebody
- * who holds it. Granting it is somebody else's change — whoever holds
- * `people:manage` — and the sentence names the grant so the person can ask
- * for it by name.
+ * reader lacks is ACCESS — Admin, or an app's (`lib/access.ts`): "Work needs
+ * Tracker access. An admin can give it to you." Giving it is somebody else's
+ * change, an admin's, and the sentence names the access by the word People &
+ * access uses for it, so the person can ask for it by name.
  *
  * WHO THE READER IS COMES WITH THE REFUSAL, from the one reading it was
  * decided on (`reader`) — never from the viewer beside it. Decided on the
@@ -28,11 +28,11 @@
  * refusal read the viewer's empty login and told a person signed in that
  * nobody was, on every cold load of a section closed to them.
  *
- * THE BUTTON SAYS WHAT IT DOES, and the grant is said once, above it. It
- * repeated the grants — "Sign in as somebody holding people:manage or
- * audit:read" — which a button cannot wrap, so on a phone it ran past both
- * edges of the screen; the words are the product's own everywhere else
- * (the palette, the org builder).
+ * THE BUTTON SAYS WHAT IT DOES, and the access is said once, above it. It
+ * once repeated what the section needed — "Sign in as somebody holding …" —
+ * which a button cannot wrap, so on a phone it ran past both edges of the
+ * screen; the words are the product's own everywhere else (the palette, the
+ * org builder).
  *
  * A VIEWER NOBODY HAS ANSWERED FOR YET IS NOT REFUSED. `loading` covers a
  * viewer read that failed as well as one in flight, and treating either as
@@ -43,7 +43,7 @@
  *
  * AND A PANEL THAT NEVER ASKS says the same thing in the same words, at the
  * panel's size (`compact`): a seat's Settings tab sends no read of the
- * company document to a reader without `config:read`, and said nothing true
+ * company document to a reader without Admin, and said nothing true
  * in its place until it drew this. `also` is the one sentence such a panel
  * adds — another way to the same answer, as leading the seat's unit is.
  */
@@ -52,7 +52,7 @@ import type { ReactNode } from "react";
 import { Button, EmptyState, InlineCode } from "@crewlethq/ui";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { goSignIn } from "~/lib/session.ts";
-import { grantWords, type Grant } from "../nav.ts";
+import { accessNames, type Grant } from "~/lib/access.ts";
 
 export function GrantRequired({
   what,
@@ -73,18 +73,15 @@ export function GrantRequired({
   /** One more sentence after the remedy: another way to the same answer. */
   also?: ReactNode;
 }) {
-  const needs = grantWords(grants);
   return (
     <EmptyState
       {...(size ? { size } : {})}
       icon={<KeyGlyph />}
-      title={`${what} needs ${needs}`}
+      title={`${what} needs ${accessNames(grants)} access`}
       description={
         reader ? (
           <>
-            You are signed in as <InlineCode>{reader}</InlineCode>, which holds{" "}
-            {grants.length > 1 ? "none of them" : "no such grant"}. Somebody holding{" "}
-            <InlineCode>people:manage</InlineCode> can grant it to you.
+            You are signed in as <InlineCode>{reader}</InlineCode>. An admin can give it to you.
             {also ? <> {also}</> : null}
           </>
         ) : (

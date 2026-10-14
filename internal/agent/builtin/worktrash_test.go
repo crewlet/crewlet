@@ -32,6 +32,10 @@ import (
 type trashSpy struct {
 	removed, restored []string
 	answers           []error
+
+	// subtree and alone are what the last removal and the last restore were
+	// asked for: the items below with it, and the item by itself.
+	subtree, alone bool
 }
 
 func (s *trashSpy) next() error {
@@ -43,17 +47,17 @@ func (s *trashSpy) next() error {
 	return err
 }
 
-func (s *trashSpy) RemoveTask(_ context.Context, _, id, _ string, _ bool,
+func (s *trashSpy) RemoveTask(_ context.Context, _, id, _ string, subtree bool,
 	_ *tracker.Notify) (tracker.WriteResult, error) {
 
-	s.removed = append(s.removed, id)
+	s.removed, s.subtree = append(s.removed, id), subtree
 	return trashReceipt(), s.next()
 }
 
-func (s *trashSpy) RestoreTask(_ context.Context, _, id, _ string,
+func (s *trashSpy) RestoreTask(_ context.Context, _, id, _ string, alone bool,
 	_ *tracker.Notify) (tracker.WriteResult, error) {
 
-	s.restored = append(s.restored, id)
+	s.restored, s.alone = append(s.restored, id), alone
 	return trashReceipt(), s.next()
 }
 
@@ -91,20 +95,21 @@ func trashSurface(t *testing.T, spy *trashSpy) *tools.Registry {
 // Taking an item out of circulation is its PROJECT's lead's, and which project
 // an item is filed under is a stored row rather than an argument — so the
 // registration gate cannot form the object and these tools ask themselves.
-// Decided at the gate on the empty object it had, every caller but the holder
-// of the admin grant was refused as naming no project, and a project's own
-// lead could not clear their own board.
+// Decided at the gate on the empty object it had, every caller but an admin
+// was refused as naming no project, and a project's own lead could not clear
+// their own board.
 //
 // Both halves, because the gate stepping aside is only safe if the tool then
-// asks: the lead is admitted, and a colleague holding the ordinary write grant
-// but leading nothing is refused with the authority's own answer. Delete the
+// asks: the lead is admitted, and a colleague holding the tracker but leading
+// nothing — and who did not file the item — is refused with the authority's
+// own answer. Delete the
 // ask from either tool and the second half goes red.
 func TestARowDecidedToolAsksAfterItReads(t *testing.T) {
 	t.Parallel()
 	lead := iam.WithPrincipal(context.Background(), iam.Principal{
 		ID: uuid.New(), Kind: iam.KindPerson, Login: "cto.lead", Seat: "cto",
 		Stage:  iam.StageActive,
-		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
+		Grants: []iam.Grant{iam.GrantTracker},
 	})
 	for _, c := range []struct {
 		name    string

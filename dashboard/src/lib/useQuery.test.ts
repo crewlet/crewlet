@@ -127,3 +127,41 @@ test("a write from this tab asks the questions it moved again, and no others", a
     { read_level: "session", min_position: "CREWLET_TRACKER_LOG@1:5" },
   ]);
 });
+
+// A QUESTION JUST ENABLED IS LOADING FROM ITS FIRST RENDER, before its effect
+// has sent it. A read gated on the viewer's answer turns on in a render whose
+// state still says it was off, and every render of that frame read "not
+// loading, no data" — which a screen draws as answered with nothing. The
+// CONTROL is the same question still disabled, which is not loading.
+// Mutation: return the effect's state as it stands and the first render after
+// enabling reads `loading: false`.
+test("a question just enabled is loading before it is sent", () => {
+  asked();
+  const seen: boolean[] = [];
+  const { rerender } = renderHook(
+    ({ on }: { on: boolean }) => {
+      const result = useQuery("integrations", undefined, { enabled: on });
+      seen.push(result.loading);
+      return result;
+    },
+    { initialProps: { on: false } },
+  );
+  expect(seen.at(-1)).toBe(false);
+  const before = seen.length;
+  rerender({ on: true });
+  expect(seen[before]).toBe(true);
+});
+
+// AND AN ANSWER OF NULL IS AN ANSWER: the company document is null where no
+// company is active, and a question that answered it is not still loading —
+// read off "no data" instead, a node with no company drew a skeleton for ever.
+// Mutation: decide "not yet sent" from the data and this never settles.
+test("a question answered null is not loading", async () => {
+  const query = vi.fn().mockResolvedValue(null);
+  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
+  const { result } = renderHook(() => useQuery("config"));
+  expect(result.current.loading).toBe(true);
+  await vi.waitFor(() => expect(result.current.loading).toBe(false));
+  expect(result.current.data).toBeNull();
+});

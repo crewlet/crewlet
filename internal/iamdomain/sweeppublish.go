@@ -310,11 +310,11 @@ func bucketDue(ctx context.Context, tx *sql.Tx, b Bucket, changes, sessions uint
 
 // Sweep plans one tick and publishes a record for every bucket that is due.
 //
-// THE DEPLOYMENT'S GESTURE, and it takes the deployment's grant: a sweep
-// deletes the authentication trail, and the party that decides how long that
-// trail is kept is whoever runs the deployment — `api.audit` is Tier A for the
-// same reason. The node's own writer holds it; no person's does unless they
-// were given the whole of `fleet:operate`.
+// THE DEPLOYMENT'S GESTURE, and it takes admin: a sweep deletes the
+// authentication trail, and the party that decides how long that trail is
+// kept is whoever runs the deployment — `api.audit` is Tier A for the same
+// reason. The node's own writer holds it; no person's does unless they are an
+// administrator.
 //
 // EVERY BUCKET IS ATTEMPTED even when one fails, for the maintenance sweep's
 // reason: the buckets are independent, and one unreachable round must not stop
@@ -381,15 +381,18 @@ func (w *Writer) sweepBucket(ctx context.Context, plan SweepPlan, b Bucket) (
 	return w.publish(ctx, w.request(ctx, &rec, opID, statelog.PatternArbitrated, nil))
 }
 
-// mayOperate refuses a record only the deployment may publish.
+// mayOperate refuses a record only the deployment may publish: a sweep, an
+// eviction, a readmission.
 //
-// `fleet:operate` AND NOT [AdminGrant], because what these records decide is
-// how long the estate keeps its own history — a fact about the deployment, set
-// in Tier A, which administering people confers no say over.
+// ADMIN, AND UNLIKE [Writer.mayAdminister] IT TAKES A MACHINE TOKEN: these
+// records decide how long the estate keeps its own history and which nodes may
+// write it — facts about the deployment, not decisions about who may do
+// anything — and evicting a node from a pipeline, through a token its
+// operator minted, is the gesture an automation is for.
 func (w *Writer) mayOperate(op OpKind) error {
-	if w.Can(iam.GrantFleetOperate) {
+	if w.Can(iam.GrantAdmin) {
 		return nil
 	}
 	return fmt.Errorf("%w: %s requires %s, and this party holds %v", ErrRefused,
-		op, iam.GrantFleetOperate, w.Grants)
+		op, iam.GrantAdmin, w.Grants)
 }

@@ -669,3 +669,58 @@ func TestAFailureIsStampedOnTheFrameAndOnTheFeedRow(t *testing.T) {
 		t.Error("an ordinary event is marked failed")
 	}
 }
+
+// WHO A PARKED QUESTION IS PUT TO ARRIVES WITH THE RECORD, AND STAYS THE
+// PROJECTION'S.
+//
+// The audience is kept on the durable run record and nowhere else, and it is
+// what shows a parked question to the people it is put to whatever their reach
+// to the seat that asked — so a reconcile whose only news is the audience is
+// news, and pushes the run set: unpushed, the person asked would go on being
+// shown that the run's body was withheld from them. An empty audience is the
+// same as none, so a record read twice does not push twice. And the set handed
+// out is a copy: a reader masking or editing what it was handed must never
+// change who the projection shows the question to next.
+//
+// Mutation: compare entries without their audience, count an empty audience as
+// a change, or hand out the projection's own slice, and this fails.
+func TestAReconcileCarriesWhoAParkedQuestionIsPutTo(t *testing.T) {
+	t.Parallel()
+	s := sandboxState(t)
+	parked := func(turnID string, audience []string) livestate.SandboxRecord {
+		rec := codingRun(turnID, "Coder", livestate.SandboxAwaiting, fixtureNow.Add(-time.Hour))
+		rec.Entry.Question, rec.Entry.Audience = "which branch?", "dana"
+		rec.Entry.AudienceHandles = audience
+		return rec
+	}
+	// Two runs, so each side of the comparison meets an empty audience
+	// against none: tn-1 is held with none and read with an empty one,
+	// tn-2 the other way round.
+	if !s.ReconcileSandboxes([]livestate.SandboxRecord{parked("tn-1", nil),
+		parked("tn-2", []string{})}, fixtureNow).Sandboxes {
+		t.Fatal("the first reading of the runs did not move the set")
+	}
+	if s.ReconcileSandboxes([]livestate.SandboxRecord{parked("tn-1", []string{}),
+		parked("tn-2", nil)}, fixtureNow.Add(time.Second)).Sandboxes {
+		t.Error("an empty audience was read as news where the run had none, or " +
+			"none where it had an empty one")
+	}
+	if !s.ReconcileSandboxes([]livestate.SandboxRecord{parked("tn-1", []string{"dana"}),
+		parked("tn-2", nil)}, fixtureNow.Add(2*time.Second)).Sandboxes {
+		t.Error("a reconcile whose only news is who the question is put to did " +
+			"not push the run set")
+	}
+	runs := s.ActiveSandboxes()
+	i := slices.IndexFunc(runs, func(e livestate.SandboxEntry) bool { return e.TurnID == "tn-1" })
+	if i < 0 || !slices.Equal(runs[i].AudienceHandles, []string{"dana"}) {
+		t.Fatalf("the set holds %+v, want tn-1 put to dana", runs)
+	}
+	runs[i].AudienceHandles[0] = "mallory"
+	again := s.ActiveSandboxes()
+	if j := slices.IndexFunc(again, func(e livestate.SandboxEntry) bool {
+		return e.TurnID == "tn-1"
+	}); again[j].AudienceHandles[0] != "dana" {
+		t.Errorf("editing the set handed out changed who the projection puts the "+
+			"question to: %v", again[j].AudienceHandles)
+	}
+}

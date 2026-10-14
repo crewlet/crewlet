@@ -15,7 +15,8 @@
  *
  * # Four questions, and the rest is pushes
  *
- * `work_flow` (the tracker's history replayed backward from today's census),
+ * `work_flow` (the tracker's history replayed backward from today's census,
+ * asked only with Tracker),
  * `token_series` (the spend over the window, by team), `company_feed` (one merged feed with one cursor) and `decisions` (what
  * waits on this person). Who is working, the budget meter and the fleet are
  * the pushes every screen already holds, so nothing here polls for them.
@@ -93,10 +94,13 @@ export function Home() {
     enabled: viewer.owner !== "",
     pollMs: DECISIONS_POLL_MS,
   });
+  // THE TRACKER'S HISTORY, asked only of a reader holding Tracker: the
+  // engine refuses it to anybody else, and the tiles and chart it feeds say
+  // what would open them rather than drawing a refusal as a broken read.
   const flow = useQuery(
     "work_flow",
     { bucket: "day", points: flowPoints(range) },
-    { pollMs: SLOW_POLL_MS },
+    { pollMs: SLOW_POLL_MS, enabled: viewer.tracker },
   );
   const spend = useQuery(
     "token_series",
@@ -221,7 +225,7 @@ export function Home() {
       </div>
 
       <div className="home-row home-row-three">
-        <CompletedChart flow={flow} />
+        <CompletedChart flow={flow} locked={!viewer.loading && !viewer.tracker} />
         <TokensByTeam spend={spend} range={range} />
         <Projects />
       </div>

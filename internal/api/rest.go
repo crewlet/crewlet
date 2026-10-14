@@ -8,7 +8,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // The named read routes — the public REST API.
@@ -170,14 +169,17 @@ func (a *App) mountReads(mux httpjson.Router) {
 	// socket builds them from these same functions for its handshake —
 	// so a browser that cannot upgrade sees what one that could sees.
 	//
-	// EACH ONE IS DECIDED BY ITS PUSH KIND'S GRANT, the same table the
-	// socket reads (stream's [stream.Audience]), so a fact is not reachable
-	// over REST by a caller the socket would refuse it to — they used to be
-	// served to any resolved caller at all.
+	// EACH ONE IS DECIDED BY ITS PUSH KIND'S NEED AND SHAPED AS ITS PUSH
+	// IS, from the same tables the socket reads (stream's
+	// [stream.Audience]), so a fact is not reachable over REST by a caller
+	// the socket would withhold it from: all four are the overview and
+	// everybody's, and a seat's live call reaches a reader the seat's
+	// trail is not open to as its status alone, exactly as the push hands
+	// it to them.
 	mux.Handle("GET /agents", a.serveFrom(stream.KindAgents,
 		func(stream.Audience) any { return a.stream.Roster() }))
 	mux.Handle("GET /org", a.serveFrom(stream.KindOrg,
-		func(audience stream.Audience) any { return a.stream.Org(audience) }))
+		func(stream.Audience) any { return a.stream.Org() }))
 	mux.Handle("GET /tools", a.serveFrom(stream.KindTools,
 		func(stream.Audience) any { return a.stream.Tools() }))
 	mux.Handle("GET /stream/snapshot", a.serveFrom(stream.KindSnapshot,
@@ -198,30 +200,42 @@ func (a *App) serveNamed(what string, path map[string]string) http.HandlerFunc {
 }
 
 // serveFrom renders a value the stream service already knows how to build,
-// for a caller whose grants let them receive a push of kind.
+// for a caller whose audience receives a push of kind, in the shape that push
+// hands them.
 //
 // No registry entry, because there is no question to ask: these are the
 // sections of the handshake snapshot, and the socket reads the same functions
 // to assemble it. So they are decided by the same table the socket decides its
-// pushes by — see [stream.Audience] — and build is handed the caller's
-// audience, so the whole bundle carries only what that caller may read.
+// pushes by — see [stream.Audience] — over the audience the socket would open
+// with ([stream.Service.AudienceFor]), and what build returns is shaped for it
+// ([stream.ShapeFor]), so the whole bundle carries only what that caller may
+// read.
 func (a *App) serveFrom(kind stream.Kind, build func(stream.Audience) any) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := auth.Caller(w, r)
 		if !ok {
 			return
 		}
-		audience := stream.AudienceOf(principal.Grants)
-		if !audience.Receives(kind) {
-			// THE SAME TWO FIELDS every refusal on authority carries,
-			// rather than a sentence naming the grant: a client reading
-			// `grants` off a refused question reads it off this too.
-			grant, _ := stream.GrantFor(kind)
+		if !principal.Stage.MayAct() {
+			// THE AUTHORITY TABLE'S FIRST CHECK, as every question's: a
+			// person whose stage may not act reads nothing, the overview
+			// included.
 			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(authz.ReasonNoGrant, []iam.Grant{grant}))
+				authz.RefusalDetail(authz.ReasonStage, nil))
 			return
 		}
-		writeJSON(w, http.StatusOK, build(audience))
+		audience := a.stream.AudienceFor(r.Context(), principal)
+		if !audience.Receives(kind) {
+			// THE SAME TWO FIELDS every refusal on authority carries,
+			// rather than a sentence naming the permission: a client
+			// reading `grants` off a refused question reads it off this
+			// too.
+			need, _ := stream.NeedOf(kind)
+			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+				authz.RefusalDetail(authz.ReasonNoGrant, need.Grants()))
+			return
+		}
+		writeJSON(w, http.StatusOK, stream.ShapeFor(build(audience), audience))
 	}
 }
 

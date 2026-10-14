@@ -110,7 +110,7 @@ func TestEveryWriteOnAPurgedTaskIsRefusedAsPurged(t *testing.T) {
 			return err
 		}},
 		{"a restore", func() error {
-			_, err := r.writer.RestoreTask(t.Context(), "op-restore", "t-1", "ENG", nil)
+			_, err := r.writer.RestoreTask(t.Context(), "op-restore", "t-1", "ENG", false, nil)
 			return err
 		}},
 		{"a move to another project", func() error {

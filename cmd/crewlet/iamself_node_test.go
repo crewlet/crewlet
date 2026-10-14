@@ -63,7 +63,7 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	// and redeeming the link as anybody would.
 	const password = "a-perfectly-fine-passphrase"
 	id, secret := inviteOverHTTP(t, client, base, "jane@example.com", "founder",
-		[]iam.Grant{iam.GrantStateRead, iam.GrantPeopleManage})
+		[]iam.Grant{iam.GrantAdmin})
 	founder, _ := json.Marshal(map[string]string{
 		"secret": secret, "login": "jane.founder", "name": "Jane Founder",
 		"password": password,
@@ -85,7 +85,7 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	appendFile(t, tierA, fmt.Sprintf("api:\n  external_url: %s\n", base))
 	var out, errs bytes.Buffer
 	err = runIAM(noEnviron, []string{"token", "-login", "jane.founder", "-label", "laptop",
-		"-grants", string(iam.GrantStateRead), "-config", tierA, "-api", base},
+		"-grants", string(iam.GrantTracker), "-config", tierA, "-api", base},
 		strings.NewReader(password+"\n"), &out, &errs)
 	if err != nil {
 		t.Fatalf("iam token -login against a real node: %v\n%s", err, errs.String())
@@ -120,7 +120,8 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	}
 
 	// AND THE TOKEN IT PRINTED IS ONE THE NODE HONOURS, as its owner —
-	// who acts as the founder's seat.
+	// who acts as the founder's seat — on the overview every resolved
+	// principal reads, so a 401 here is the token and nothing else.
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
 		base+"/agents", nil)
 	if err != nil {
@@ -133,8 +134,8 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	}
 	res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		t.Errorf("the minted token answered %d on a read it carries the grant "+
-			"for, want 200", res.StatusCode)
+		t.Errorf("the minted token answered %d on the overview, want 200",
+			res.StatusCode)
 	}
 }
 

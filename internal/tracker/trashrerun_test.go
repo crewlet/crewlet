@@ -62,7 +62,7 @@ func TestARestoreThatHalfFinishedRestoresTheRestOnARerun(t *testing.T) {
 	// build's record aside on.
 	r.deferRecordOn("t-b", "ENG")
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "t-root",
-		"ENG", nil); err == nil {
+		"ENG", false, nil); err == nil {
 		t.Fatal("the restore finished through a task this node cannot write")
 	}
 	r.drain()
@@ -73,7 +73,7 @@ func TestARestoreThatHalfFinishedRestoresTheRestOnARerun(t *testing.T) {
 
 	r.clearDeferred()
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "t-root",
-		"ENG", nil); err != nil {
+		"ENG", false, nil); err != nil {
 		t.Fatalf("the re-run of the same restore: %v", err)
 	}
 	r.drain()

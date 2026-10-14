@@ -290,7 +290,10 @@ export interface PhaseRound {
 export interface RunningCall {
   round: number;
   name: string;
-  arguments: string;
+  /** What the call was handed — part of the seat's BODY, so absent on a call
+   *  whose body is withheld from this reader ([LiveCall.body_withheld]); its
+   *  name and timing are status and always sent. */
+  arguments?: string;
   started_at: string;
 }
 
@@ -368,19 +371,29 @@ export interface LiveCall {
   phase: string;
   iteration: number;
   model: string;
-  trigger: Record<string, unknown> | null;
-  prompt: string;
+  /**
+   * THE BODY — `trigger`, `prompt`, `prompt_messages`, `response`,
+   * `tool_executions`, `round_narration`, `partial_round` and a running
+   * call's `arguments` — is the seat's TRAIL, and the engine sends it only to
+   * a reader who may read that seat's trail: an admin, or the seat's lead.
+   * Everybody else is sent the call's STATUS with every one of these keys
+   * absent, every body version zero and [body_withheld] set — so each is
+   * optional here, and a screen draws a withheld one as "not shown to you",
+   * never as an empty prompt.
+   */
+  trigger?: Record<string, unknown> | null;
+  prompt?: string;
   /**
    * The conversation as the phase was given it: the system and user
    * messages only. Typed rather than `unknown[]` — it was untyped, so the
    * live view could not read the system prompt off it and hardcoded "".
    */
-  prompt_messages: PromptMessage[] | null;
-  response: string;
+  prompt_messages?: PromptMessage[] | null;
+  response?: string;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
-  tool_executions: ToolExecution[] | null;
+  tool_executions?: ToolExecution[] | null;
   /**
    * Per-round model turns — `{round, reasoning, content}` — where `round`
    * matches `tool_executions[].round`, which is what lets the two lists
@@ -438,9 +451,16 @@ export interface LiveCall {
    * The version of the copy this call holds of each heavy field
    * (`LIVE_CALL_DETAIL`). A push names every one and carries a field only
    * when its version moved; the store fills in the rest from what it holds.
-   * Always present, on every surface that carries a call.
+   * Always present, on every surface that carries a call. A call whose body
+   * is withheld from this reader names every body version ZERO, so the store
+   * never asks for a body it will not be sent (`mergeLiveCall`).
    */
   versions: CallVersions;
+  /**
+   * The engine withheld this call's BODY from this reader — see [prompt].
+   * Absent (or false) on a call sent whole.
+   */
+  body_withheld?: boolean;
 }
 
 /** A live call's heavy-field versions, keyed as `LIVE_CALL_DETAIL` is. */
@@ -573,11 +593,19 @@ export interface SandboxEntry {
   agent_id: string;
   coding_agent: string;
   sandbox_id: string;
-  task: string;
+  /**
+   * What the run was asked to do — the seat's TRAIL, sent only to an admin
+   * and the seat's lead ([body_withheld] says when it was withheld).
+   */
+  task?: string;
   /** The run record's own word: `launching`, `running`,
    *  `awaiting_clarification`, `reseed` or `answered`. */
   status: string;
   started_at: string;
+  /**
+   * The question a parked run asks — sent to whoever may read the seat's
+   * trail AND to the people it is put to, who answer it.
+   */
   question?: string;
   audience?: string;
   /** The item the launching turn is charged to, when it is on one. */
@@ -586,6 +614,8 @@ export interface SandboxEntry {
   owner?: string;
   /** When the run's box began being held paused while it waits on a person. */
   paused_at?: string;
+  /** The engine withheld the run's body (`task`) from this reader. */
+  body_withheld?: boolean;
 }
 
 /**
@@ -619,8 +649,16 @@ export interface SandboxRun {
   coding_agent: string;
   /** Which configured cell the run's box is in: direct, container or e2b. */
   placement: string;
-  task_description: string;
-  question: string;
+  /**
+   * THE RUN'S BODY — `task_description`, `question`, `reply` and
+   * `bridge_calls` — is the launching seat's trail: sent to an admin and the
+   * seat's lead, and the `question` also to the people it is put to. Absent
+   * for everybody else, who are told so by [body_withheld].
+   */
+  task_description?: string;
+  question?: string;
+  /** What reached the waiting party, where something did — body. */
+  reply?: string;
   audience: string;
   /** Who the question is put to, resolved against the org chart when the run
    *  parked. Empty on a run that is not parked. */
@@ -660,6 +698,8 @@ export interface SandboxRun {
    * what the run did.
    */
   bridge_calls_elided?: number;
+  /** The engine withheld this run's body from this reader — see [task_description]. */
+  body_withheld?: boolean;
 }
 
 /** One call a bridged run made. */
@@ -965,7 +1005,7 @@ export interface BudgetsAnswer {
  * anonymous, so it carries a charter, a tree, the budgets and each seat's
  * RESOLVED chain and tool sources ([OrgProjection]); a seat's email, authored
  * `llm` fields, contact identities, tool credentials, integration blocks and
- * schedules live here instead, behind the `config:read` grant.
+ * schedules live here instead, behind Admin.
  *
  * A SUPERSET, deliberately open. Only the fields a screen reads are named, and
  * the index signature keeps every other key the engine writes — including the
@@ -1225,7 +1265,7 @@ export type PhaseLLM =
  * credentials, placement labels and sandbox setup commands among them. What
  * is NOT here — `email`, `contact`, the authored `llm_*` fields,
  * `schedules`, `integrations`, `mcp_env` — is read through the `config`
- * query instead, as [CompanyDocument], which takes `config:read`.
+ * query instead, as [CompanyDocument], which takes Admin.
  *
  * `llm` and `tool_sources` are RESOLVED by the engine, never the authored
  * fields of the same name: a client re-running the precedence between a flat
@@ -1255,8 +1295,8 @@ export interface OrgSeat {
    * name (`execute`, `review`, …): the first key is the model the phase runs
    * on, every later one a fallback in the order tried. Provider KEYS only.
    * Absent on a human seat, on a company configuring no provider, and for
-   * every reader without `config:read` — so an absent one says the seat has
-   * none only to a reader who holds it (`lib/seats.ts`'s `resolvedAbsence`).
+   * every reader but an admin — so an absent one says the seat has none only
+   * to an admin (`lib/seats.ts`'s `resolvedAbsence`).
    */
   llm?: Record<string, string[]>;
   /**
@@ -1264,7 +1304,7 @@ export interface OrgSeat {
    * `builtin`, then `mcp:<server>` per server it is GRANTED, in declaration
    * order. The grant, not what is running — the node heartbeat's MCP report
    * says whether a server started. Absent on a human seat and for every
-   * reader without `config:read`.
+   * reader but an admin.
    */
   tool_sources?: string[];
   /**
@@ -1306,7 +1346,7 @@ export interface OrgUnit {
 }
 
 /**
- * The company as the `state:read` projection carries it: its charter, its seats
+ * The company as the overview's projection carries it: its charter, its seats
  * and units in the positions the document wrote them, and the hierarchy the
  * ENGINE derived from that document.
  *
@@ -1357,7 +1397,7 @@ export interface Derived {
 export interface DerivedSeat {
   /**
    * The seat's authored path in the document (`units[0].roles[1]`). Carried by
-   * the GUARDED config answers and omitted from the `state:read` projection,
+   * the GUARDED config answers and omitted from the overview's projection,
    * which hands a reader no document to point into.
    */
   path?: string;
@@ -1366,7 +1406,7 @@ export interface DerivedSeat {
   kind: string;
   /**
    * The authored path of the seat's effective home unit, "" at the root.
-   * Omitted from the `state:read` projection with `path`: there, membership is
+   * Omitted from the overview's projection with `path`: there, membership is
    * [DerivedUnit.seats].
    */
   unit_path?: string;
@@ -1391,7 +1431,7 @@ export interface DerivedSeat {
 }
 
 export interface DerivedUnit {
-  /** Authored path; omitted from the `state:read` projection, as on a seat. */
+  /** Authored path; omitted from the overview's projection, as on a seat. */
   path?: string;
   /**
    * The unit's KEY — what a `manages:` entry and a seat's placement resolve.
@@ -2152,6 +2192,11 @@ export type KnowledgeReason =
    *  the whole first index build, and rendering it as "nothing found" tells a
    *  reader the company has written nothing down. */
   | "building"
+  /** The caller holds Tracker and not Knowledge: the knowledge base is not
+   *  theirs to search, so nothing was searched — never "nothing matched". The
+   *  dashboard asks the question only with Knowledge (`lib/useSearchQuery.ts`),
+   *  and draws this for an answer that raced an access change. */
+  | "no_access"
   | (string & {});
 
 /**
@@ -3522,8 +3567,16 @@ export interface AgentAnswer {
   handle: string;
   agent_id: string;
   role: string;
+  /** The live overlay, its call masked as every live call is ([LiveCall.body_withheld]). */
   live: Overlay | null;
+  /**
+   * The seat's finished phases. Each record's `payload` — the prompt and the
+   * answer — is its trail, and absent for a reader the engine withholds the
+   * trail from ([body_withheld]); the record's own columns are its status.
+   */
   llm_history: EventRecord[];
+  /** The engine withheld this seat's trail from this reader. */
+  body_withheld?: boolean;
   /** Pass back as `before` to page further into the record. */
   next: string;
   /** Which nodes the history came from — a seat's history is on every node
@@ -4554,8 +4607,8 @@ export interface Viewer {
    *  surface refuses a write with. False for an anonymous caller, and for
    *  every credential a managed document's `api.auth.company_writers` does
    *  not list (ADR-0030): a person's session, a machine token and a lead
-   *  among them. It says nothing about authority — the `config:write` grant,
-   *  or a lead's subtree, still decides whether this caller may write at all. */
+   *  among them. It says nothing about authority — Admin, or a lead's
+   *  subtree, still decides whether this caller may write at all. */
   config_writer: boolean;
   /** The Tier A token ids that alone may change a managed company document —
    *  who manages it — and EMPTY when it is not managed. An anonymous caller

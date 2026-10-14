@@ -381,18 +381,14 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		Events:    e.authEvents,
 		Actor:     nodeID,
 		ActorKind: iam.KindMachine,
-		// THE NODE IS THE DEPLOYMENT, so it authors the classes only the
-		// deployment has: the sweeps, and the re-seal a keyring rotation
-		// moves everybody's values with. Every surface replaces these
+		// THE NODE IS THE DEPLOYMENT, so it writes as an administrator:
+		// the sweeps and evictions, the re-seal a keyring rotation moves
+		// everybody's values with, and the two writes about people with
+		// no principal of their own in the gesture — the person an
+		// invitation redeems into, who does not exist until the
+		// redemption lands (the company's first person included), and
+		// every person a re-seal rewrites. Every surface replaces this
 		// with [iamdomain.Writer.As].
-		//
-		// AND people:manage BESIDE IT, because two of the node's writes
-		// are about people with no principal of their own in the
-		// gesture: the person an invitation redeems into, who does not
-		// exist until the redemption lands — the company's first person
-		// included — and every person a re-seal rewrites. Without it
-		// the sign-in surface's own writer was refused by the domain, so
-		// nobody could redeem an invitation at all.
 		Grants: nodeWriterGrants,
 	})
 	if err != nil {
@@ -402,14 +398,17 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 	return nil
 }
 
-// nodeWriterGrants is what the NODE itself authors identity records as.
+// nodeWriterGrants is what the NODE itself authors identity records as:
+// admin, which is every app beside it ([iam.Expand]).
 //
-// A PACKAGE-LEVEL VALUE so a test can hold it against
-// [iamdomain.AdminGrant] rather than a reader having to remember the pairing:
-// the two halves live in different packages, nothing else compares them, and
-// the failure when they drift is that nobody can redeem an invitation — the
-// company's first person included, since they are invited like anybody else.
-var nodeWriterGrants = []iam.Grant{iam.GrantFleetOperate, iamdomain.AdminGrant}
+// ADMIN AND NOTHING NARROWER, because every record the node writes is one the
+// domain decides as an administrator's — a redemption's enrolment, a sweep,
+// an eviction, a re-seal — and the failure when the node holds less is that
+// nobody can redeem an invitation, the company's first person included,
+// since they are invited like anybody else. A PACKAGE-LEVEL VALUE so a test
+// can pin it: nothing else compares the node's own authority with what the
+// domain's records ask of their writer.
+var nodeWriterGrants = []iam.Grant{iam.GrantAdmin}
 
 // errNoCoreRuntime is what a reader of the core refuses with on an engine that
 // has none — a node without `data`, or one built by hand, since [New] starts it

@@ -48,6 +48,7 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { attribution, type ChangeField } from "~/lib/attribution.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { KNOWLEDGE, accessNames } from "~/lib/access.ts";
 import {
   fmtCount,
   fmtDate,
@@ -925,12 +926,19 @@ function PageLinks({ links }: { links: WorkLink[] }) {
 }
 
 function PageLink({ id }: { id: string }) {
-  const page = useQuery("page", { id }, { pollMs: 300_000 });
+  // A PAGE IS THE KNOWLEDGE BASE'S, so its title is asked only of a reader
+  // holding Knowledge; anybody else is told what would name it, rather than
+  // a refusal drawn as a page this node cannot read.
+  const { knowledge, loading } = useViewer();
+  const page = useQuery("page", { id }, { pollMs: 300_000, enabled: knowledge });
+  const locked = !loading && !knowledge;
   return (
     <a className="task-rail-link" href={href(pathOf({ kind: "page", id }))}>
       <FileTextGlyph size="xs" />
       <span className="truncate">
-        {page.data?.page?.title || (page.error ? "A page this node cannot read" : id)}
+        {locked
+          ? `A page · needs ${accessNames([KNOWLEDGE])} access`
+          : page.data?.page?.title || (page.error ? "A page this node cannot read" : id)}
       </span>
     </a>
   );

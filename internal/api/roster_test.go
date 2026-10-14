@@ -546,6 +546,6 @@ func TestTheSchedulesPushCarriesOnlyTheConfiguredHalf(t *testing.T) {
 	}
 }
 
-// everyRead is an audience holding both read grants: the snapshot these
-// tests inspect is the whole bundle, not one reader's slice of it.
-var everyRead = stream.AudienceOf([]iam.Grant{iam.GrantStateRead, iam.GrantAuditRead})
+// everyRead is an admin's audience: the snapshot these tests inspect is the
+// whole bundle — every key, every seat's body — not one reader's slice of it.
+var everyRead = stream.NewAudience(iam.Principal{Grants: []iam.Grant{iam.GrantAdmin}}, nil)

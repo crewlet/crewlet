@@ -23,7 +23,9 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE POSTURE MATRIX: every credential shape this build can present, against
@@ -32,22 +34,33 @@ import (
 //
 // # What it is for
 //
-// The authority rules are each tested where they live — the registry's grant
-// check, the guard's resolution, the configuration surface's own grants. What
-// no one of them covers is the COMPOSITION: a request travels the CORS gate,
-// the guard, the CSRF gate, the drain gate and the route's own rule, and a
-// hole is something that opens between two of them rather than inside
-// either. Every case here goes through api.App, the way a caller does.
+// The authority rules are each tested where they live — the registry's
+// posture check, the guard's resolution, the configuration surface's own
+// rules. What no one of them covers is the COMPOSITION: a request travels the
+// CORS gate, the guard, the CSRF gate, the drain gate and the route's own
+// rule, and a hole is something that opens between two of them rather than
+// inside either. Every case here goes through api.App, the way a caller does.
 //
 // And the hole this matrix did not see is the reason it grew. The deployment's
 // own controls — the budget reset, the backup, the retention and capacity
 // gestures — and /secrets asked only whether somebody RESOLVED: the guard in
 // front of them answers that and nothing else, and each route resolved its
-// caller for the audit line and decided no grant. A person signed in holding
-// `state:read` alone could reset spend, copy the node's durable state to a
-// directory of their choosing, evict a machine from the fleet and read back
-// any credential the company holds. Every one of those routes is a row now,
-// against a shape holding every grant BUT the one it takes.
+// caller for the audit line and decided no permission. A person signed in to
+// read the company's overview could reset spend, copy the node's durable state
+// to a directory of their choosing, evict a machine from the fleet and read
+// back any credential the company holds. Every one of those routes is a row
+// now, against a shape holding every app — the most a caller can hold and
+// still not be an admin.
+//
+// # The shapes
+//
+// The model is admin and one permission per app, and the columns are its
+// corners: each app alone, both apps, admin, admin on a node whose
+// `api.auth.admin` refuses it (which keeps every app), a person holding
+// nothing but the overview, and every credential SHAPE the guard resolves — a
+// Tier A token, the development principal on a node that serves admin and on
+// one that refuses it, a personal access token, a service account's token
+// holding admin, and a session.
 //
 // # What a row means
 //
@@ -63,47 +76,56 @@ import (
 func TestThePostureMatrix(t *testing.T) {
 	t.Parallel()
 	const (
-		wide      = "a-token-that-carries-every-grant"
-		narrow    = "a-token-that-carries-only-state-read"
-		blind     = "a-token-that-carries-only-config-read"
-		notFleet  = "a-token-carrying-every-grant-but-fleet-operate"
-		fleetOnly = "a-token-that-carries-only-fleet-operate"
+		admin     = "a-token-that-carries-admin"
+		apps      = "a-token-that-carries-every-app-and-not-admin"
+		tracks    = "a-token-that-carries-only-the-tracker"
+		knows     = "a-token-that-carries-only-the-knowledge-base"
+		malformed = "Bearer not-one-of-the-four"
 	)
 	b := config.DefaultBootstrap()
 	b.API.Host = "127.0.0.1"
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	b.API.Auth.Tokens = []config.APIToken{
-		{ID: "ops", Token: wide, Grants: iam.AllGrants},
-		{ID: "viewer", Token: narrow, Grants: []iam.Grant{iam.GrantStateRead}},
-		{ID: "auditor", Token: blind, Grants: []iam.Grant{iam.GrantConfigRead}},
-		{ID: "almost", Token: notFleet, Grants: slices.DeleteFunc(
-			slices.Clone(iam.AllGrants),
-			func(g iam.Grant) bool { return g == iam.GrantFleetOperate })},
-		{ID: "sre", Token: fleetOnly, Grants: []iam.Grant{iam.GrantFleetOperate}},
+		{ID: "ops", Token: admin, Grants: []iam.Grant{iam.GrantAdmin}},
+		{ID: "colleague", Token: apps, Grants: slices.Clone(iam.Apps)},
+		{ID: "tracker", Token: tracks, Grants: []iam.Grant{iam.GrantTracker}},
+		{ID: "writer", Token: knows, Grants: []iam.Grant{iam.GrantKnowledge}},
 	}
+	// THE SAME TIER A ON A NODE THAT REFUSES ADMIN — the node mid-rollout
+	// whose posture is not the one the document was validated against, so
+	// the `ops` token still lists admin here and is clamped to every app
+	// at the moment each request is resolved.
+	refusing := b
+	refusing.API.Auth.Admin = iam.AdminRefuse
 	dev, err := auth.NewDevPrincipal("laptop", &b)
 	if err != nil {
 		t.Fatalf("NewDevPrincipal: %v", err)
 	}
+	devRefusing, err := auth.NewDevPrincipal("laptop", &refusing)
+	if err != nil {
+		t.Fatalf("NewDevPrincipal on a refusing node: %v", err)
+	}
 
-	// TWO APPS, because the development principal is a property of the
-	// PROCESS rather than of a request: there is no header that turns it
-	// on, which is the whole point of it being a flag.
+	// TWO APPS PER POSTURE, because the development principal is a
+	// property of the PROCESS rather than of a request: there is no header
+	// that turns it on, which is the whole point of it being a flag.
 	//
 	// THE COORDINATION SOURCE is supplied so the fleet question is
-	// actually mounted. Without it the row answers 404, which is a route
-	// that is not there rather than one that refused — and a matrix full
-	// of 404s certifies nothing while looking like a pass. The credential
-	// store is the REAL /secrets surface for the same reason.
-	sources := queries.Sources{Company: active(t), Coord: coordmemory.New()}
+	// actually mounted, and a tracker and a knowledge base so each app's
+	// own questions are. Without them those rows answer 404, which is a
+	// route that is not there rather than one that refused — and a matrix
+	// full of 404s certifies nothing while looking like a pass. The
+	// credential store is the REAL /secrets surface for the same reason.
+	sources := queries.Sources{Company: active(t), Coord: coordmemory.New(),
+		Work: stubWorkReader{}, Pages: posturePages{}}
 	store := postureSecrets(t)
 	machine := postureTokens(t)
 	// A SESSION COOKIE IS THE THIRD CREDENTIAL SHAPE, through the guard's
-	// real session arm over rows this fixture states: the reader a person
-	// signed in with `state:read` is, and a person holding every grant
-	// whose proof of who they are is two hours old — past `step_up`, so
-	// every write the deployment's controls and its credentials take must
-	// ask them to confirm, while every read serves them.
+	// real session arm over rows this fixture states: a person holding
+	// nothing — the overview, which is everybody's — and a person holding
+	// admin whose proof of who they are is two hours old, past `step_up`,
+	// so every write the deployment's controls and its credentials take
+	// must ask them to confirm, while every read serves them.
 	//
 	// EACH PROOF IS DATED ON THE WALL CLOCK, because that is the clock the
 	// route's step-up check reads (internal/authz's router decides at
@@ -112,17 +134,23 @@ func TestThePostureMatrix(t *testing.T) {
 	// for a reason other than its proof's age.
 	b.API.ExternalURL = "http://127.0.0.1:8080"
 	cookies := newCookieArm(t, &b)
-	reader := cookies.person(t, []iam.Grant{iam.GrantStateRead}, time.Now())
-	stale := cookies.person(t, iam.AllGrants, time.Now().Add(-2*time.Hour))
+	overview := cookies.person(t, []iam.Grant{}, time.Now())
+	stale := cookies.person(t, []iam.Grant{iam.GrantAdmin}, time.Now().Add(-2*time.Hour))
 	plain := newApp(t, api.Options{Bootstrap: &b, Sources: sources,
 		Secrets: store, Tokens: machine.arm, Sessions: cookies.arm})
 	devApp := newApp(t, api.Options{
 		Bootstrap: &b, DevPrincipal: dev, Sources: sources, Secrets: store,
 	})
+	refuser := newApp(t, api.Options{Bootstrap: &refusing, Sources: sources,
+		Secrets: store})
+	devRefuser := newApp(t, api.Options{
+		Bootstrap: &refusing, DevPrincipal: devRefusing, Sources: sources,
+		Secrets: store,
+	})
 	// A VALUE TO REVEAL, written before any shape asks for it.
 	seed := httptest.NewRequest(http.MethodPut, "/secrets/POSTURE_PROBE",
 		strings.NewReader("probe"))
-	seed.Header.Set("Authorization", "Bearer "+wide)
+	seed.Header.Set("Authorization", "Bearer "+admin)
 	seeded := httptest.NewRecorder()
 	plain.ServeHTTP(seeded, seed)
 	if seeded.Code != http.StatusOK {
@@ -147,49 +175,49 @@ func TestThePostureMatrix(t *testing.T) {
 		// sending one says you meant to be somebody, and quietly
 		// serving you as nobody is how a revoked token goes on
 		// appearing to work.
-		{"a credential this node refuses", plain, "Bearer not-one-of-the-five", nil},
-		// THE NARROW TOKEN IS THE READER `allow_anonymous_read` was
-		// replaced by.
-		{"a Tier A token carrying state:read alone", plain, "Bearer " + narrow, nil},
-		// RESOLVED AND ABLE TO READ NONE OF THE COMPANY'S STATE.
-		{"a Tier A token carrying config:read alone", plain, "Bearer " + blind, nil},
+		{"a credential this node refuses", plain, malformed, nil},
+		// EACH APP ALONE, so a row that names the wrong app is a
+		// column that disagrees.
+		{"a Tier A token carrying the tracker alone", plain, "Bearer " + tracks, nil},
+		{"a Tier A token carrying the knowledge base alone", plain, "Bearer " + knows, nil},
 		// THE MOST AUTHORITY A CALLER CAN HAVE AND STILL BE REFUSED the
 		// deployment's controls, which is what makes each refusal about
-		// the rule rather than about a caller who holds nothing.
-		{"a Tier A token carrying every grant but fleet:operate", plain, "Bearer " + notFleet, nil},
-		// AND THE OPPOSITE: an SRE who runs the deployment and reads
-		// nothing of the company's.
-		{"a Tier A token carrying fleet:operate alone", plain, "Bearer " + fleetOnly, nil},
-		{"a Tier A token carrying every grant", plain, "Bearer " + wide, nil},
-		// THE DEVELOPMENT PRINCIPAL carries the deployment's ceiling and
-		// no more — which here is everything, because this fixture's
-		// ceiling is. `api.auth.disabled` granted everything REGARDLESS,
-		// which is the difference.
+		// admin rather than about a caller who holds nothing.
+		{"a Tier A token carrying every app", plain, "Bearer " + apps, nil},
+		{"a Tier A token carrying admin", plain, "Bearer " + admin, nil},
+		// THE SAME TOKEN ON A NODE THAT REFUSES ADMIN: every app kept,
+		// so it reads exactly as the every-app column does.
+		{"a Tier A token carrying admin, on a node that refuses admin", refuser,
+			"Bearer " + admin, nil},
+		// THE DEVELOPMENT PRINCIPAL carries every app, and admin where
+		// the node serves it — which is the difference between this
+		// column and the next-but-one.
 		{"no credential, on a -dev-principal node", devApp, "", nil},
 		// AND A WRONG CREDENTIAL IS STILL WRONG THERE. The development
 		// principal covers an ABSENT credential only, or it would hide
 		// the typo somebody is about to spend an afternoon on.
-		{"a refused credential, on a -dev-principal node", devApp, "Bearer not-one-of-the-five", nil},
-		// A PERSONAL ACCESS TOKEN MINTED CARRYING state:read, whose
-		// owner holds every grant: it reaches what the TOKEN carries,
-		// never what its owner could.
-		{"a personal access token carrying state:read", plain, "Bearer " + machine.pat, nil},
-		// A SERVICE ACCOUNT'S TOKEN, a machine carrying fleet:operate:
-		// the SRE's column, reached through a directory row rather than
-		// the configuration file.
-		{"a service account's token carrying fleet:operate", plain, "Bearer " + machine.service, nil},
+		{"a refused credential, on a -dev-principal node", devApp, malformed, nil},
+		{"no credential, on a -dev-principal node that refuses admin", devRefuser, "", nil},
+		// A PERSONAL ACCESS TOKEN MINTED CARRYING THE TRACKER, whose
+		// owner holds admin: it reaches what the TOKEN carries, never
+		// what its owner could.
+		{"a personal access token carrying the tracker", plain, "Bearer " + machine.pat, nil},
+		// A SERVICE ACCOUNT'S TOKEN HOLDING ADMIN: every admin route a
+		// pipeline runs, and none that needs a person present — the
+		// value of a credential is never revealed to a token.
+		{"a service account's token carrying admin", plain, "Bearer " + machine.service, nil},
 		// AND A REVOKED ONE is a credential this node refuses, on every
 		// guarded route — never the owner, and never a 503.
 		{"a revoked personal access token", plain, "Bearer " + machine.revoked, nil},
-		// A PERSON SIGNED IN HOLDING state:read, proved a moment ago:
-		// the Tier A reader's column, reached through a cookie.
-		{"a person's session carrying state:read", plain, "", reader},
-		// A PERSON HOLDING EVERY GRANT WHOSE PROOF IS TWO HOURS OLD:
-		// every read serves them, and every write that operates the
+		// A PERSON SIGNED IN HOLDING NOTHING, proved a moment ago: the
+		// overview is theirs and nothing else is.
+		{"a person's session holding nothing", plain, "", overview},
+		// A PERSON HOLDING ADMIN WHOSE PROOF IS TWO HOURS OLD: every
+		// read serves them, and every write that operates the
 		// deployment or holds its credentials asks them to confirm who
-		// they are first — `403 step_up_required`, never the grant's
-		// refusal, because they hold the grant.
-		{"a person's session carrying every grant, proved two hours ago", plain, "", stale},
+		// they are first — `403 step_up_required`, never the
+		// permission's refusal, because they hold it.
+		{"a person's session carrying admin, proved two hours ago", plain, "", stale},
 	}
 
 	const (
@@ -201,20 +229,32 @@ func TestThePostureMatrix(t *testing.T) {
 		broken = http.StatusInternalServerError
 		// stepUp is a 403 that says `step_up_required`: the caller may
 		// take the verb and has not proved who they are recently enough.
-		// Its own cell, because a 403 for a grant the caller lacks and a
-		// 403 for a proof that went stale are opposite fixes.
+		// Its own cell, because a 403 for a permission the caller lacks
+		// and a 403 for a proof that went stale are opposite fixes.
 		stepUp = 1000 + http.StatusForbidden
+		// tokenNo is a 403 that says `token_refused`: the verb needs a
+		// person present, and a machine token is nobody at a keyboard
+		// whatever it carries. Its own cell for the same reason — the
+		// fix is to sign in, not to be given anything.
+		tokenNo = 2000 + http.StatusForbidden
 	)
-	// The routes, each named by what reaching it discloses or does rather
-	// than by its grant — so a row that moves to a different grant still
-	// has to be read rather than renumbered.
+	// THE COLUMNS, in [shapes] order, for reading a row against:
 	//
-	// THE QUESTION SURFACE carries one route per read grant, because it is
-	// the one place every read class is reachable through one mount.
-	// `/config` and `/setup` have their own suites for their own
-	// rules; /secrets is here whole because it is cheap to stand up for
-	// real, and the deployment's controls are here whole because nothing
-	// else composes them.
+	//	 0 nothing          5 Tier A admin        10 PAT tracker
+	//	 1 refused          6 admin, refusing     11 service admin
+	//	 2 Tier A tracker   7 dev, serving        12 revoked PAT
+	//	 3 Tier A knowledge 8 dev, refused cred   13 session, nothing
+	//	 4 Tier A both apps 9 dev, refusing       14 session admin, stale
+	//
+	// The routes, each named by what reaching it discloses or does rather
+	// than by its permission — so a row that moves to a different
+	// permission still has to be read rather than renumbered.
+	//
+	// THE QUESTION SURFACE carries one route per posture, because it is the
+	// one place every posture is reachable through one mount. `/config` and
+	// `/setup` have their own suites for their own rules; /secrets is here
+	// whole because it is cheap to stand up for real, and the deployment's
+	// controls are here whole because nothing else composes them.
 	for _, row := range []struct {
 		name         string
 		method, path string
@@ -223,66 +263,83 @@ func TestThePostureMatrix(t *testing.T) {
 		want [len(shapes)]int
 	}{
 		{"the exempt probe", "GET", "/health", "",
-			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok}},
+			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok}},
 		{"the dashboard shell", "GET", "/dashboard", "",
-			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok}},
-		{"who is asking, and what they may do", "GET", "/query/viewer", "",
-			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath, ok, forbd, unath, ok, ok}},
-		{"an agent's transcripts", "GET", "/query/events", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath, forbd, forbd, unath, forbd, ok}},
-		{"the map of what is not configured", "GET", "/query/integrations", "",
-			[len(shapes)]int{unath, unath, forbd, ok, ok, forbd, ok, ok, unath, forbd, forbd, unath, forbd, ok}},
-		{"the deployment's own shape", "GET", "/query/fleet", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath, forbd, ok}},
-		// THE SNAPSHOT'S REST MIRRORS, decided by the grant their push
-		// kind takes on the socket rather than by being resolved at all.
-		{"the roster mirror", "GET", "/agents", "",
-			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath, ok, forbd, unath, ok, ok}},
-		{"the whole snapshot", "GET", "/stream/snapshot", "",
-			[len(shapes)]int{unath, unath, ok, forbd, ok, forbd, ok, ok, unath, ok, forbd, unath, ok, ok}},
+			[len(shapes)]int{ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok}},
 
-		// --- the deployment's own controls: fleet:operate ------------ //
+		// --- the overview: everybody the guard resolves -------------- //
+		{"who is asking, and what they may do", "GET", "/query/viewer", "",
+			[len(shapes)]int{unath, unath, ok, ok, ok, ok, ok, ok, unath, ok, ok, ok, unath, ok, ok}},
+		// THE SNAPSHOT'S REST MIRRORS, decided by the need their push
+		// kind takes on the socket, which for all four is everybody's.
+		{"the roster mirror", "GET", "/agents", "",
+			[len(shapes)]int{unath, unath, ok, ok, ok, ok, ok, ok, unath, ok, ok, ok, unath, ok, ok}},
+		{"the whole snapshot", "GET", "/stream/snapshot", "",
+			[len(shapes)]int{unath, unath, ok, ok, ok, ok, ok, ok, unath, ok, ok, ok, unath, ok, ok}},
+
+		// --- each app's own questions -------------------------------- //
+		{"the tracker's projects", "GET", "/query/work_projects", "",
+			[len(shapes)]int{unath, unath, ok, forbd, ok, ok, ok, ok, unath, ok, ok, ok, unath, forbd, ok}},
+		// THE CALLER'S OWN RECORD, which is the tracker's too: a relation
+		// arm on a tracker verb takes the tracker.
+		{"a person's own inbox", "GET", "/work/inbox", "",
+			[len(shapes)]int{unath, unath, ok, forbd, ok, ok, ok, ok, unath, ok, ok, ok, unath, forbd, ok}},
+		{"the knowledge base's spaces", "GET", "/query/containers", "",
+			[len(shapes)]int{unath, unath, forbd, ok, ok, ok, ok, ok, unath, ok, forbd, ok, unath, forbd, ok}},
+
+		// --- admin's questions --------------------------------------- //
+		{"an agent's transcripts", "GET", "/query/events", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, ok}},
+		{"the map of what is not configured", "GET", "/query/integrations", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, ok}},
+		{"the deployment's own shape", "GET", "/query/fleet", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, ok}},
+
+		// --- the deployment's own controls: admin -------------------- //
 		{"copying the node's durable state", "POST", "/backup?dir=/srv/posture", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath, forbd, stepUp}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, stepUp}},
 		// ADMITTED AS A 404: this fixture runs no domain log, so the
 		// stream is unknown — which is the handler speaking, after the
 		// authority layer let the request through.
 		{"moving the trim's backup floor", "POST",
 			"/work/retention/ack?stream=CREWLET_TRACKER_LOG&position=1", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, absent, absent, unath, forbd, absent, unath, forbd, stepUp}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, forbd, absent, unath, forbd, forbd, absent, unath, forbd, stepUp}},
 		// ADMITTED AS A 200: every API is handed a node gate — the
 		// engine's core, on every node from boot — and this fixture's
 		// lands every record it is asked for.
 		{"evicting a node", "POST", "/work/retention/evict/n1?confirm=n1", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath, forbd, stepUp}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, stepUp}},
 		{"readmitting a node", "POST", "/work/retention/readmit/n1?confirm=n1", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath, forbd, stepUp}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, stepUp}},
 		// ADMITTED AS A 400: no target named.
 		{"resizing a stream", "POST", "/work/retention/capacity", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath, forbd, stepUp}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
 		// ADMITTED AS A 500: this fixture's capacity window cannot be read.
 		{"the maintenance window's state", "GET",
 			"/work/retention/maintenance?stream=CREWLET_TRACKER_LOG", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, broken, broken, broken, unath, forbd, broken, unath, forbd, broken}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, broken, forbd, broken, unath, forbd, forbd, broken, unath, forbd, broken}},
 		{"abandoning a resize", "POST", "/work/retention/maintenance/abandon", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath, forbd, stepUp}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
 		{"excluding a participant", "POST", "/work/retention/maintenance/exclude", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath, forbd, stepUp}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
 		{"the value a reanchor must echo", "GET",
 			"/work/retention/reanchor?stream=CREWLET_TRACKER_LOG", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, absent, absent, unath, forbd, absent, unath, forbd, absent}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, forbd, absent, unath, forbd, forbd, absent, unath, forbd, absent}},
 		{"re-anchoring a log", "POST", "/work/retention/reanchor", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath, forbd, stepUp}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
 
-		// --- the company's credentials ------------------------------- //
+		// --- the company's credentials: admin ------------------------ //
 		{"which credentials the company holds", "GET", "/secrets", "",
-			[len(shapes)]int{unath, unath, forbd, ok, ok, forbd, ok, ok, unath, forbd, forbd, unath, forbd, ok}},
-		// THE VALUE TAKES config:read AND secrets:read, so the reader
-		// holding the first alone is refused the second.
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, ok}},
+		// THE VALUE NEEDS A PERSON PRESENT as well as admin, so a
+		// machine token is refused it whatever it carries — the
+		// service account's admin included, which reads the listing
+		// the route is mounted on and is refused the reveal asked on
+		// top of it as a token.
 		{"a credential's value", "GET", "/secrets/POSTURE_PROBE?reveal=true", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath, forbd, forbd, unath, forbd, stepUp}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, tokenNo, unath, forbd, stepUp}},
 		{"overwriting a credential", "PUT", "/secrets/POSTURE_PROBE", "probe",
-			[len(shapes)]int{unath, unath, forbd, forbd, ok, forbd, ok, ok, unath, forbd, forbd, unath, forbd, stepUp}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, stepUp}},
 	} {
 		t.Run(row.method+" "+row.path, func(t *testing.T) {
 			t.Parallel()
@@ -304,7 +361,7 @@ func TestThePostureMatrix(t *testing.T) {
 				rec := httptest.NewRecorder()
 				s.app.ServeHTTP(rec, req)
 				want := row.want[i]
-				if want == stepUp {
+				if want == stepUp || want == tokenNo {
 					want = http.StatusForbidden
 				}
 				if rec.Code != want {
@@ -313,12 +370,21 @@ func TestThePostureMatrix(t *testing.T) {
 						want, rec.Body.String())
 					continue
 				}
-				if row.want[i] == stepUp && !strings.Contains(rec.Body.String(),
-					`"step_up_required"`) {
-					t.Errorf("%s reaching %s (%s %s): 403 %s, want "+
-						"step_up_required — the caller holds the grant and "+
-						"only its proof is stale", s.name, row.name,
-						row.method, row.path, rec.Body.String())
+				switch row.want[i] {
+				case stepUp:
+					if !strings.Contains(rec.Body.String(), `"step_up_required"`) {
+						t.Errorf("%s reaching %s (%s %s): 403 %s, want "+
+							"step_up_required — the caller holds admin and "+
+							"only its proof is stale", s.name, row.name,
+							row.method, row.path, rec.Body.String())
+					}
+				case tokenNo:
+					if !strings.Contains(rec.Body.String(), `"token_refused"`) {
+						t.Errorf("%s reaching %s (%s %s): 403 %s, want "+
+							"token_refused — the verb needs a person present, "+
+							"which no token is", s.name, row.name, row.method,
+							row.path, rec.Body.String())
+					}
 				}
 			}
 		})
@@ -333,9 +399,9 @@ type postureMachine struct {
 }
 
 // postureTokens is the guard's REAL machine-token arm over three rows: a
-// person's token minted carrying state:read (their owner holds every grant), a
-// service account's token carrying fleet:operate, and a revoked token of the
-// first person's that carried everything.
+// person's token minted carrying the tracker (their owner holds admin), a
+// service account's token carrying admin, and a revoked token of the first
+// person's that carried admin.
 func postureTokens(t *testing.T) postureMachine {
 	t.Helper()
 	now := time.Now().UTC()
@@ -359,19 +425,19 @@ func postureTokens(t *testing.T) postureMachine {
 		}
 		return token.Value()
 	}
+	admin := []iam.Grant{iam.GrantAdmin}
 	person := credential.TokenOwner{
 		Found: true, ID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindPerson,
-		Stage: iam.StageActive, Login: "jane.doe", Grants: iam.AllGrants,
+		Stage: iam.StageActive, Login: "jane.doe", Grants: admin,
 	}
 	service := credential.TokenOwner{
 		Found: true, ID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindMachine,
-		Stage: iam.StageActive, Login: "svc:deploy",
-		Grants: []iam.Grant{iam.GrantFleetOperate},
+		Stage: iam.StageActive, Login: "svc:deploy", Grants: admin,
 	}
 	out := postureMachine{
-		pat:     mint(person, []iam.Grant{iam.GrantStateRead}, time.Time{}),
-		service: mint(service, []iam.Grant{iam.GrantFleetOperate}, time.Time{}),
-		revoked: mint(person, iam.AllGrants, now.Add(-time.Minute)),
+		pat:     mint(person, []iam.Grant{iam.GrantTracker}, time.Time{}),
+		service: mint(service, admin, time.Time{}),
+		revoked: mint(person, admin, now.Add(-time.Minute)),
 	}
 	arm, err := auth.NewTokens(auth.TokensDeps{
 		Directory: postureRows(rows), Chart: postureNoSeats{},
@@ -402,6 +468,35 @@ func (postureNoSeats) Seat(context.Context, string) (session.Seat, bool, error) 
 	return session.Seat{}, false, nil
 }
 
+// posturePages is a knowledge base holding nothing, so each knowledge question
+// is mounted and answers once the authority layer lets it through: the
+// matrix asserts who is admitted, never what a page says.
+type posturePages struct{}
+
+func (posturePages) List(context.Context, pages.Filter, statelog.Freshness) (
+	pages.Listing, error) {
+	return pages.Listing{}, nil
+}
+
+func (posturePages) Get(context.Context, string, statelog.Freshness) (pages.Detail, error) {
+	return pages.Detail{}, pages.ErrNotFound
+}
+
+func (posturePages) Containers(context.Context, statelog.Freshness) (
+	[]pages.ContainerListing, error) {
+	return nil, nil
+}
+
+func (posturePages) Activity(context.Context, pages.PageActivityQuery) (
+	pages.PageActivity, error) {
+	return pages.PageActivity{}, nil
+}
+
+func (posturePages) Revision(context.Context, string, int, statelog.Freshness) (
+	pages.Revision, bool, error) {
+	return pages.Revision{}, false, nil
+}
+
 // postureSecrets is the real /secrets surface over a memory fleet, so the
 // matrix composes the route the way a running node does rather than an inert
 // stand-in that would admit anybody.
@@ -422,16 +517,16 @@ func postureSecrets(t *testing.T) *secretsapi.Service {
 }
 
 // AND THE MATRIX ABOVE IS NOT ONE-SIDED. A cell asserting a refusal proves
-// nothing unless the same route answers somebody — which is what the
-// every-grant row is — and a cell asserting an answer proves nothing unless
-// the route is genuinely guarded. This states the second half as a claim of
-// its own, so neither can drift into a matrix of one repeated status.
+// nothing unless the same route answers somebody — which is what the admin
+// column is — and a cell asserting an answer proves nothing unless the route
+// is genuinely guarded. This states the second half as a claim of its own, so
+// neither can drift into a matrix of one repeated status.
 func TestThePostureMatrixIsNotAllOneAnswer(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	b.API.Auth.Tokens = []config.APIToken{
-		{ID: "ops", Token: "a-token-that-carries-every-grant", Grants: iam.AllGrants},
+		{ID: "ops", Token: "a-token-that-carries-admin", Grants: []iam.Grant{iam.GrantAdmin}},
 	}
 	a := newApp(t, api.Options{Bootstrap: &b})
 
@@ -439,7 +534,7 @@ func TestThePostureMatrixIsNotAllOneAnswer(t *testing.T) {
 	for _, probe := range []struct{ path, header string }{
 		{"/health", ""}, // exempt
 		{"/config", ""}, // guarded, no credential
-		{"/config", "Bearer a-token-that-carries-every-grant"}, // guarded, allowed
+		{"/config", "Bearer a-token-that-carries-admin"}, // guarded, allowed
 	} {
 		req := httptest.NewRequest(http.MethodGet, probe.path, nil)
 		if probe.header != "" {
@@ -457,20 +552,21 @@ func TestThePostureMatrixIsNotAllOneAnswer(t *testing.T) {
 
 // THE SNAPSHOT MIRROR IS THE CALLER'S AUDIENCE, key by key.
 //
-// A reader holding `state:read` alone receives the roster and not the event
-// feed — every phase's prompt and response, which the `events` question
-// refuses without `audit:read` — so neither channel is a way round the other.
+// A reader holding every app and not admin receives the roster — the overview
+// is everybody's — and not the event feed: every phase's prompt and response,
+// which the `events` question refuses to anybody but an admin. So neither
+// channel is a way round the other.
 func TestTheSnapshotMirrorIsTheCallersAudience(t *testing.T) {
 	t.Parallel()
 	const (
-		wide   = "a-token-that-carries-every-grant"
-		narrow = "a-token-that-carries-only-state-read"
+		wide   = "a-token-that-carries-admin"
+		narrow = "a-token-that-carries-every-app-and-not-admin"
 	)
 	b := config.DefaultBootstrap()
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	b.API.Auth.Tokens = []config.APIToken{
-		{ID: "ops", Token: wide, Grants: iam.AllGrants},
-		{ID: "viewer", Token: narrow, Grants: []iam.Grant{iam.GrantStateRead}},
+		{ID: "ops", Token: wide, Grants: []iam.Grant{iam.GrantAdmin}},
+		{ID: "colleague", Token: narrow, Grants: slices.Clone(iam.Apps)},
 	}
 	a := newApp(t, api.Options{Bootstrap: &b})
 	keys := func(token string) map[string]json.RawMessage {
@@ -489,10 +585,10 @@ func TestTheSnapshotMirrorIsTheCallersAudience(t *testing.T) {
 		return out
 	}
 	if got := keys(narrow); got["events"] != nil || got["agents"] == nil {
-		t.Errorf("a state:read-only snapshot: events present = %v, agents present = %v",
+		t.Errorf("an every-app snapshot: events present = %v, agents present = %v",
 			got["events"] != nil, got["agents"] != nil)
 	}
 	if got := keys(wide); got["events"] == nil {
-		t.Error("an audit:read holder's snapshot carries no event feed")
+		t.Error("an admin's snapshot carries no event feed")
 	}
 }

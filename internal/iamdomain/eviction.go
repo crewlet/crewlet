@@ -148,8 +148,7 @@ func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]state
 // package holds none of the inputs to, and it is asked ONCE, before the first
 // log is written, by the engine's node gate: judged per log, two logs could
 // reach two answers about one node. What IS asked here is this writer's own
-// authority: `fleet:operate`, since a node is the deployment's and
-// administering people confers no say over it ([Writer.mayOperate]).
+// authority: admin, since a node is the deployment's ([Writer.mayOperate]).
 func (w *Writer) EvictNode(ctx context.Context, opID, nodeID string) (statelog.Result, error) {
 	return w.gateNode(ctx, opID, nodeID, false)
 }

@@ -104,7 +104,7 @@ func (s *served) patchPageComment(w http.ResponseWriter, r *http.Request) {
 // ---- the gestures no tool makes ---------------------------------------- //
 
 // postPageRename moves a page to a new title — its ADDRESS — which is the
-// container lead's.
+// container lead's or the page's creator's.
 func (s *served) postPageRename(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "title", "quiet") {
@@ -196,9 +196,9 @@ func (s *served) postPagePurge(w http.ResponseWriter, r *http.Request) {
 
 // deletePageComment takes one remark down: its author, or a moderator.
 //
-// THE MODERATOR IS WHOEVER THE TABLE ADMITTED ON THE GRANT rather than as the
+// THE MODERATOR IS WHOEVER THE TABLE ADMITTED AS AN ADMIN rather than as the
 // author, and the store is told which through [pages.CommentAuthority]: the
-// store holds no chart and no grants, so it states the rule — the author, or
+// store holds no chart and no permissions, so it states the rule — the author, or
 // somebody the caller says may moderate — and this is where the second half
 // is decided.
 func (s *served) deletePageComment(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +239,7 @@ func (s *served) deletePageComment(w http.ResponseWriter, r *http.Request) {
 }
 
 // pageGesture is the shape of the three row-decided page verbs: read the page,
-// decide the verb on its container, act, answer. act is handed the request's
+// decide the verb on its container and its creator, act, answer. act is handed the request's
 // context, the one every other step here reads under.
 func (s *served) pageGesture(w http.ResponseWriter, r *http.Request,
 	action authz.Action,
@@ -249,9 +249,10 @@ func (s *served) pageGesture(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
-	if _, ok = s.decide(w, r, action, authz.Object{
-		Kind: authz.KindPage, Container: detail.Page.Container,
-	}); !ok {
+	// THE ROW DECIDES: the container's lead tidies every page in it and
+	// whoever created the page tidies their own (authz.ClassTidy), so the
+	// object carries both — formed by the tools' own function.
+	if _, ok = s.decide(w, r, action, builtin.PageObject(detail.Page)); !ok {
 		return
 	}
 	if !s.maySkillPage(w, r, detail.Page.Container) {

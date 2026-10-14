@@ -372,10 +372,10 @@ func TestARefusalsSentenceReachesTheCallerOnBothTransports(t *testing.T) {
 func TestAFailingQuestionReportsACodeAndNothingElse(t *testing.T) {
 	t.Parallel()
 	// The reason reaches the LOG, not the caller: it can carry a database
-	// path or a driver's own message, and holding the grant a question
-	// needs does not make a caller somebody that path is meant for.
+	// path or a driver's own message, and being admitted to a question does
+	// not make a caller somebody that path is meant for.
 	a := seededApp(t, nil)
-	a.Queries().Register("boom", iam.GrantStateRead, func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("boom", queries.Everybody(), func(context.Context, queries.Params) (any, error) {
 		return nil, errors.New("open /var/lib/crewlet/crewlet.db: permission denied")
 	})
 
@@ -398,7 +398,7 @@ func TestAFailingQuestionReportsACodeAndNothingElse(t *testing.T) {
 func TestAnUnreachableCoordinationStoreIsUnavailableOnBothTransports(t *testing.T) {
 	t.Parallel()
 	a := seededApp(t, nil)
-	a.Queries().Register("blip", iam.GrantStateRead, func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("blip", queries.Everybody(), func(context.Context, queries.Params) (any, error) {
 		return nil, fmt.Errorf("list leases: %w", coord.ErrUnavailable)
 	})
 
@@ -448,7 +448,7 @@ func TestANativeQuestionOnANodeWithNoCompanyIsOneAnswerOnBothTransports(t *testi
 	t.Run("no company yet", func(t *testing.T) {
 		t.Parallel()
 		a := seededApp(t, nil)
-		a.Queries().Register("board", iam.GrantStateRead,
+		a.Queries().Register("board", queries.Everybody(),
 			func(context.Context, queries.Params) (any, error) {
 				return nil, api.NativeAbsent(false, "tracker")
 			})
@@ -485,7 +485,7 @@ func TestANativeQuestionOnANodeWithNoCompanyIsOneAnswerOnBothTransports(t *testi
 	t.Run("a half the company keeps elsewhere", func(t *testing.T) {
 		t.Parallel()
 		a := seededApp(t, nil)
-		a.Queries().Register("board", iam.GrantStateRead,
+		a.Queries().Register("board", queries.Everybody(),
 			func(context.Context, queries.Params) (any, error) {
 				return nil, api.NativeAbsent(true, "tracker")
 			})
@@ -529,7 +529,7 @@ func TestAStateLogRefusalIsUnavailableOnBothTransports(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			a := seededApp(t, nil)
-			a.Queries().Register("refused", iam.GrantStateRead,
+			a.Queries().Register("refused", queries.Everybody(),
 				func(context.Context, queries.Params) (any, error) {
 					return nil, fmt.Errorf("read the board: %w", tc.refused)
 				})
@@ -602,7 +602,7 @@ func TestAFloorOnAnotherLogIsABadRequestOnBothTransports(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			a := seededApp(t, nil)
-			a.Queries().Register("floored", iam.GrantStateRead,
+			a.Queries().Register("floored", queries.Everybody(),
 				func(context.Context, queries.Params) (any, error) { return nil, tc.err })
 
 			status, answered := overREST(t, a, "floored", nil)
@@ -634,11 +634,11 @@ func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 func TestAnOperatorQuestionIsGuardedOnBothTransports(t *testing.T) {
 	t.Parallel()
 	// The REST route and the socket make the same decision, so a route
-	// that read its own params and forgot the operator check is not a
-	// shape this can take.
+	// that read its own params and forgot the admin check is not a shape
+	// this can take.
 	a := seededApp(t, nil)
 	ran := make(chan struct{}, 1)
-	a.Queries().Register("secrets", iam.GrantSecretRead, func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("secrets", queries.Requires(iam.GrantAdmin), func(context.Context, queries.Params) (any, error) {
 		ran <- struct{}{}
 		return map[string]any{"ok": true}, nil
 	})
@@ -666,28 +666,28 @@ func TestAnOperatorQuestionIsGuardedOnBothTransports(t *testing.T) {
 	}
 	select {
 	case <-ran:
-		t.Error("the operator-only question ran for a caller with no credential")
+		t.Error("the admin-only question ran for a caller with no credential")
 	default:
 	}
 
-	// AND THE REGISTRY'S OWN CHECK STILL REFUSES, asked directly with no
-	// operator. It is what the guard's exemption list is checked against:
-	// a question registered as operator-only must not answer merely
+	// AND THE REGISTRY'S OWN CHECK STILL REFUSES, asked directly with
+	// nobody resolved. It is what the guard's exemption list is checked
+	// against: a question registered as admin's must not answer merely
 	// because the route it arrived on was not guarded.
 	if _, err := a.Queries().Answer(t.Context(), "secrets", nil); err == nil {
-		t.Error("the registry answered an operator-only question to nobody")
+		t.Error("the registry answered an admin-only question to nobody")
 	}
 }
 
 func TestAnOperatorTokenReachesTheQuestionOverREST(t *testing.T) {
 	t.Parallel()
-	// The counterfactual: the guard attaches the operator, and the route
-	// reads it from the same place every other route does.
+	// The counterfactual: the guard attaches an admin's principal, and the
+	// route reads it from the same place every other route does.
 	b := closedPosture()
 	a := seededApp(t, func(o *api.Options) { o.Bootstrap = &b })
 
 	seen := make(chan string, 1)
-	a.Queries().Register("secrets", iam.GrantSecretRead, func(context.Context, queries.Params) (any, error) {
+	a.Queries().Register("secrets", queries.Requires(iam.GrantAdmin), func(context.Context, queries.Params) (any, error) {
 		seen <- "ran"
 		return map[string]any{"ok": true}, nil
 	})
@@ -698,7 +698,7 @@ func TestAnOperatorTokenReachesTheQuestionOverREST(t *testing.T) {
 	a.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 for an operator", rec.Code)
+		t.Fatalf("status = %d, want 200 for an admin", rec.Code)
 	}
 	select {
 	case <-seen:

@@ -66,9 +66,9 @@ import (
 // person or a service account bound to it, or an open invitation onto it.
 //
 // NEVER THE INVITATION'S ADDRESS: a `/config` writer may be a unit's lead who
-// holds no grant over the identity directory, and what they need in order to
+// is no admin and reads nobody's directory row, and what they need in order to
 // act is that the seat is spoken for and by which invitation — cancelling it
-// is somebody holding `people:manage`'s gesture, by its id.
+// is an admin's gesture, by its id.
 type SeatHolder struct {
 	// Person is the holder's id, which the route that moves, unbinds or
 	// removes them takes. Empty where an invitation holds the seat.

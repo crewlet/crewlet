@@ -172,22 +172,18 @@ func bootstrapForURL(t *testing.T, serverURL string) string {
 	}
 	dir := t.TempDir()
 	// A COMPLETE SERVING POSTURE, because a served API now requires one:
-	// an external URL, a ceiling, a credential of its own that clears the
-	// entropy floor, and a keyring. A fixture short of any of them is
-	// refused by `Validate` and the case fails on its own Tier A rather
-	// than on its subject.
+	// an external URL, an admin posture, a credential of its own that
+	// clears the entropy floor, and a keyring. A fixture short of any of
+	// them is refused by `Validate` and the case fails on its own Tier A
+	// rather than on its subject.
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n"+
 		"api:\n  host: %s\n  port: %s\n"+
 		"  external_url: \"http://%s:%s\"\n"+
 		"  auth:\n"+
-		"    max_grants: [state:read, config:read, config:write, secrets:read,\n"+
-		"                 secrets:write, work:write, knowledge:write,\n"+
-		"                 audit:read, fleet:operate, sandbox:run]\n"+
+		"    admin: serve\n"+
 		"    tokens:\n"+
 		"      - id: ops\n        token: %s\n"+
-		"        grants: [state:read, config:read, config:write, secrets:read,\n"+
-		"                 secrets:write, work:write, knowledge:write,\n"+
-		"                 audit:read, fleet:operate, sandbox:run]\n"+
+		"        grants: [admin]\n"+
 		fixtureStream(dir)+fixtureKeyring,
 		filepath.Join(dir, "index.db"), host, port, host, port, cliFixtureToken)
 	path := filepath.Join(dir, "config.yaml")
@@ -421,9 +417,9 @@ func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n"+
 		"api:\n  host: 127.0.0.1\n  port: 1\n"+
 		"  external_url: \"http://127.0.0.1:1\"\n"+
-		"  auth:\n    max_grants: [state:read]\n"+
+		"  auth:\n    admin: serve\n"+
 		"    tokens:\n      - id: ops\n        token: %s\n"+
-		"        grants: [state:read]\n"+
+		"        grants: [tracker]\n"+
 		fixtureStream(dir)+fixtureKeyring,
 		filepath.Join(dir, "index.db"), cliFixtureToken)
 	cfg := filepath.Join(dir, "config.yaml")

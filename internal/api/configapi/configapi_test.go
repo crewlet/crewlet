@@ -1843,41 +1843,42 @@ func TestReferencesCarriesTheDocumentsOwnValidator(t *testing.T) {
 	}
 }
 
-// EVERY ROUTE TAKES ITS GRANT: a read `config:read`, a write `config:write`.
+// EVERY ROUTE IS ADMIN'S, reads included.
 //
 // They decided nothing: the guard in front of them answers only whether
 // somebody resolved, which meant "the operator" while an operator token was the
-// only credential this engine had. A person signed in holding `state:read`
-// alone could then rewrite the company document, revert it to any revision and
-// read every `${VAR}` it names. Each route is stated against a caller holding
-// exactly its grant and against one holding everything BUT it — the most
-// authority a caller can have and still be refused.
+// only credential this engine had. A person signed in holding a read-only
+// permission alone could then rewrite the company document, revert it to any
+// revision and read every `${VAR}` it names. Each route is stated against a
+// caller holding admin and against one holding EVERY APP — the most a caller
+// can carry without admin, and still refused naming admin alone (ADR-0033: the
+// company document is no app's, and a lead's reach into the org chart is the
+// lead tests' subject, not this one's — the caller here is a token bound to
+// no seat, which leads nothing).
 func TestEveryConfigRouteTakesTheGrantItsVerbNames(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		method, path, body string
-		needs              iam.Grant
 	}{
-		{http.MethodGet, "/config", "", iam.GrantConfigRead},
-		{http.MethodGet, "/config/revisions", "", iam.GrantConfigRead},
-		{http.MethodGet, "/config/references", "", iam.GrantConfigRead},
-		{http.MethodOptions, "/config", "", iam.GrantConfigRead},
-		{http.MethodPut, "/config", companyJSONDoc, iam.GrantConfigWrite},
-		{http.MethodPost, "/config/reload", "", iam.GrantConfigWrite},
+		{http.MethodGet, "/config", ""},
+		{http.MethodGet, "/config/revisions", ""},
+		{http.MethodGet, "/config/references", ""},
+		{http.MethodOptions, "/config", ""},
+		{http.MethodPut, "/config", companyJSONDoc},
+		{http.MethodPost, "/config/reload", ""},
 	} {
 		name := c.method + " " + c.path
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			s := newSurface(t)
-			s.grants = []iam.Grant{c.needs}
+			s.grants = []iam.Grant{iam.GrantAdmin}
 			if res := s.do(t, c.method, c.path, c.body, nil); res.Code == http.StatusForbidden {
-				t.Errorf("holding %s: refused %s", c.needs, res.Body.String())
+				t.Errorf("holding admin: refused %s", res.Body.String())
 			}
-			s.grants = slices.DeleteFunc(slices.Clone(iam.AllGrants),
-				func(g iam.Grant) bool { return g == c.needs })
+			s.grants = slices.Clone(iam.Apps)
 			res := s.do(t, c.method, c.path, c.body, nil)
 			if res.Code != http.StatusForbidden {
-				t.Fatalf("holding everything but %s: %d %s, want 403", c.needs,
+				t.Fatalf("holding every app and not admin: %d %s, want 403",
 					res.Code, res.Body.String())
 			}
 			var refusal map[string]any
@@ -1885,8 +1886,8 @@ func TestEveryConfigRouteTakesTheGrantItsVerbNames(t *testing.T) {
 				t.Fatalf("decode: %v", err)
 			}
 			grants, _ := refusal[authz.DetailGrants].([]any)
-			if len(grants) != 1 || grants[0] != string(c.needs) {
-				t.Errorf("refused naming %v, want %s", refusal[authz.DetailGrants], c.needs)
+			if len(grants) != 1 || grants[0] != string(iam.GrantAdmin) {
+				t.Errorf("refused naming %v, want [admin]", refusal[authz.DetailGrants])
 			}
 			// AND THE REFUSAL STILL CARRIES THE SURFACE'S no-store: it is
 			// written under the same wrapper as every other answer here.

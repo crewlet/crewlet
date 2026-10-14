@@ -94,17 +94,7 @@ function answer(extra: Partial<BudgetsAnswer> = {}): BudgetsAnswer {
 
 const OPERATOR = {
   login: "U0FOUNDER",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane",
@@ -382,7 +372,7 @@ test("a ceiling of 0 is refused before anything is sent", async () => {
 // above — the grant a ceiling is written under, for a signed-in reader
 // without it, and signing in for nobody at all.
 test("a reader who cannot change the configuration sees why, on every ceiling", async () => {
-  mount(answer(), { login: "dee", owner: "dee", grants: ["state:read"] });
+  mount(answer(), { login: "dee", owner: "dee", grants: [] });
   await settle();
   const pencils = screen.getAllByRole("button", { name: /token ceiling/ });
   expect(pencils.length).toBe(6);

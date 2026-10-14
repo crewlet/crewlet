@@ -126,9 +126,10 @@ type MCPServerNode struct {
 // not answer in time, only one whose last heartbeat carried no status, and
 // that is a column of its own rather than a row of zeros.
 //
-// ON THE CONFIGURATION READ: it names the launch commands and the first line
-// of each failure, which is the configuration and what became of it rather
-// than the company's work — `/config` shows the same reader the same commands.
+// ADMIN'S, AS THE CONFIGURATION IS (ADR-0033): it names the launch commands
+// and the first line of each failure, which is the configuration and what
+// became of it rather than the company's work — `/config` shows the same
+// reader the same commands.
 func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
 	if err != nil {

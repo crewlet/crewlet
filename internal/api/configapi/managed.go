@@ -30,8 +30,8 @@ import (
 // system's next reconcile overwrites.
 //
 // IT COMPOSES WITH THE AUTHORITY TABLE, in a fixed order: the route's policy
-// decides first (`config:write`, or `config.org.write` for whoever could lead
-// a unit), so a caller who could never write is told the grant they lack;
+// decides first (admin, or `config.org.write` for whoever could lead a unit),
+// so a caller who could never write is told the permission they lack;
 // then this list, so a caller who could is told the document is managed; then
 // the org-chart reach a lead's write is admitted on (admission.go); and only
 // then is the body read. Neither replaces the other: the table says who may

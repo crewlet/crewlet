@@ -34,7 +34,7 @@ A few things worth knowing when deploying Crewlet:
   node its request happened to reach. The cookie is `HttpOnly`, `Secure`,
   `SameSite=Lax` and carries the `__Host-` prefix on any deployment whose
   `api.external_url` is not plain http, which is what stops a sibling
-  subdomain writing one. It carries no login, no address and no grants —
+  subdomain writing one. It carries no login, no address and no permissions —
   only ids, two deadlines and a MAC — so a cookie recovered from a proxy log
   discloses nothing and authenticates nothing. **Dropping a keyring entry ends
   every session signed under it**; see the rotation runbook in
@@ -125,14 +125,15 @@ A few things worth knowing when deploying Crewlet:
   org chart) instead of inviting them, and the answer carries the person's
   first password link, shown once, for the administrator to send on. Until it
   is spent, or for its week, that link sets the password of an `active` person
-  who acts as the seat they hold — so holding `people:manage`, with a vacant
+  who acts as the seat they hold — so holding `admin`, with a vacant
   human seat to name, is enough to obtain a credential that will act as that
   seat once its password is set. Two rules bound it: a create confers only
-  grants its writer holds, exactly as an invitation does, so nobody creates a
+  permissions its writer holds, exactly as an invitation does, so nobody creates a
   person holding more than they could act with themselves; and the link signs
   nobody in, so a second factor the company requires is enrolled at that
-  person's first sign-in. Give `people:manage` to the people you would trust to
-  put somebody on any vacant seat, and treat a created person's link as you
+  person's first sign-in. `admin` is already host access (below), so this
+  widens nothing an administrator could not reach another way; give it only to
+  the people you would trust to put somebody on any vacant seat, and treat a created person's link as you
   would an invitation: send it over a channel only they read, and if it may
   have been seen by anybody else, end it — issue a password reset link, or end
   their sessions — before it is spent. The issue is an
@@ -155,8 +156,8 @@ A few things worth knowing when deploying Crewlet:
   LLM transcripts, diary entries and the roster — without one, by default, and
   it could not be closed durably because it was an `omitempty` bool whose safe
   value was its zero, so `false` did not survive an export round trip. A
-  deliberately public reader is a named `api.auth.tokens` entry holding read
-  grants and nothing else. What stays reachable without one is a short fixed
+  script that only reads what the company is doing holds a service account's
+  token with no permission at all. What stays reachable without one is a short fixed
   list — the probes, the signed webhook edges, the per-run token paths, and the
   dashboard shell, which ships no data — and it is a list of *exemptions*
   rather than a posture anything can widen.
@@ -166,17 +167,33 @@ A few things worth knowing when deploying Crewlet:
   `crewlet run -dev-principal <login>` is what replaces it for local work, and
   it is a **flag rather than a config field** because a field reaches
   production by being copied into an image. It is refused unless `api.host`
-  binds loopback *and* the binary is a development build, grants
-  `api.auth.max_grants` and no more, and logs a warning on every boot that
-  enables it.
+  binds loopback *and* the binary is a development build, grants every app —
+  and `admin` only where `api.auth.admin` is `serve` — and logs a warning on
+  every boot that enables it.
+- **Everybody signed in sees the overview, and nobody without admin or the
+  seat's lead sees a transcript.** Every principal the request guard resolves
+  — a person handed no permission at all, a service account, a machine token —
+  reads the company's overview: the org chart with each human seat's holder by
+  name, what every agent is doing (its status), spend, budgets, schedules and
+  the tools list. That is deliberate: a company is a shared place, and a
+  colleague handed no app still sees what it is doing. What it never carries is
+  a *body* — a prompt, a response, a tool's arguments, a coding run's task or
+  question — which goes only to an administrator, to the seat's lead, and for a
+  coding run's question to the person it is put to; nor a credential, a login
+  of anybody else's, an external contact id or the company-wide trail, which
+  are `admin`'s. If the existence of a seat, an agent's current status or the
+  company's spend must not reach somebody, do not give them a credential
+  (`docs/concepts/identity-and-access.md#everybodys-overview`).
 - **Carrying a credential is not the same as being allowed to use it.** Every
-  route and every socket question declares one of
-  [eleven grants](docs/concepts/identity-and-access.md#grants-the-eleven-things-there-are-to-allow),
-  and both transports are decided by the same registry, so a question cannot be
-  reached by choosing a channel. A route registered with no grant is a build
-  failure rather than a route that answers to anyone.
-- **`config:write` is host access: it runs code on every engine host.** It is
-  deliberately one grant over the whole company configuration, and that
+  route and every socket question declares who may ask it — everybody, one of
+  the [three permissions](docs/concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
+  (`admin`, `tracker`, `knowledge`), or a verb the answer decides record by
+  record — and both transports are decided by the same registry, so a question
+  cannot be reached by choosing a channel. A route registered without saying
+  so is a build failure rather than a route that answers to anyone.
+- **`admin` is host access: it runs code on every engine host.** It is
+  deliberately one permission over the whole company — its configuration, its
+  credentials, its people and its deployment — and the configuration
   configuration runs code: a stdio `mcp_servers` entry is a `command` the
   engine starts as its own user on every node that runs seats; a `cli-agent`
   provider names a binary it runs, and a seat on one with `run_in: self` does
@@ -188,12 +205,16 @@ A few things worth knowing when deploying Crewlet:
   keyring that signs every session, and every credential the store holds. Give
   it to the people and pipelines you would give a shell on those hosts. A
   machine token can carry it — a deploy job applying configuration is what one
-  is for — so minting one with it hands that job the same reach. Every write
-  under it that can start a process — the company document, connecting an
-  integration — asks for a recent step-up, so a
-  stolen session cookie alone does not reach it. `people:manage` is a separate
-  grant so a directory change stays a reviewable gesture of its own, not as a
-  bound on a `config:write` holder.
+  is for — so minting one with it hands that job the same reach. Two locks
+  keep such a token off what needs a person present: the authority table
+  refuses a request that presented a token on revealing a secret, every
+  directory write, ending everybody's sessions and changing how somebody proves
+  who they are, and the identity domain refuses every administrative record —
+  an enrolment, an invitation, a permission change, a suspension, a removal —
+  written
+  through a machine token, whatever it carries. Every write under it that can
+  start a process — the company document, connecting an integration — asks for
+  a recent step-up, so a stolen session cookie alone does not reach it.
 - **A child process is handed an allowlisted environment, never the
   engine's.** The engine's environment is where Tier A's `${VAR}` references
   resolve from — the keyring, every `api.auth.tokens` value, any credential
@@ -234,14 +255,13 @@ A few things worth knowing when deploying Crewlet:
 - **`api.auth.company_writers` prevents drift; it is not a privilege
   boundary.** It refuses a change to a managed company document from every
   credential but a listed Tier A token — a person's session, a machine token
-  and a lead editing their own team included — but every credential holding
-  `secrets:write` still writes the secret store, and a `config:write` holder
-  can reload (`POST /config/reload`), so between them they can rewrite any
-  value the document references through a `${VAR}` — a model key, a webhook
-  secret, an endpoint — and publish it. A value `secrets:write` rewrites alone
-  still takes effect at the next activation: a reload, the managing system's
-  next apply, or a restart. Do not grant `secrets:write` or `config:write` to
-  anyone you would not let change what the company does
+  and a lead editing their own team included — but every administrator still
+  writes the secret store and can reload (`POST /config/reload`), so they can
+  rewrite any value the document references through a `${VAR}` — a model key,
+  a webhook secret, an endpoint — and publish it. A value rewritten in the
+  secret store alone still takes effect at the next activation: a reload, the
+  managing system's next apply, or a restart. Do not grant `admin` to anyone
+  you would not let change what the company does
   (`docs/concepts/configuration.md#managed-configuration`).
 - **A node that cannot read identity answers `503`, never `401`.** The
   principal a node could not check and the principal that presented nothing are
@@ -249,14 +269,20 @@ A few things worth knowing when deploying Crewlet:
   holding a valid credential that theirs is invalid for the length of the
   outage — which is how a company gets taught to reset working passwords during
   one.
-- **`api.auth.max_grants` is the ceiling, and it is required.** A person's
-  grants live in the replicated store, which is not a tier this deployment's
-  operator controls. This is the bound on what that directory may confer,
-  stated in the tier that holds the keyring. It is intersected per node, per request, so lowering
-  it needs no write and no restart of the fleet; each node publishes a hash of
-  its own so a mixed fleet mid-rollout is visible rather than silent.
+- **`api.auth.admin` says whether a node serves admin, and it is required.** A
+  person's permissions live in the replicated store, which is not a tier this
+  deployment's operator controls. This is each node's statement, in the tier
+  that holds the keyring, of whether `admin` counts there at all: `serve`, or
+  `refuse`, which clamps admin away from every principal composed on the node
+  and keeps every app. A node published to the people who use the company,
+  where nobody should be able to administer it however their row reads, is a
+  `refuse` node. It is applied per node, per request, so it needs no write; each
+  node publishes its posture so a mixed fleet mid-rollout is visible rather
+  than silent.
 - **A Tier A token is a real credential and is checked as one.** Each entry
-  states its own `grants` — required and non-empty — and its value must clear
+  states its own `grants` — required and non-empty, naming only `admin`,
+  `tracker` and `knowledge`, and refused for `admin` on a node that refuses it
+  — and its value must clear
   a 26-character floor on what the `${VAR}` *resolves to*, so a reference
   cannot be the way around the rule. At least one is required on every node
   that serves the API: a fresh deployment's identity estate is empty, so it is

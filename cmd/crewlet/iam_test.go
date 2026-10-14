@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -123,7 +125,9 @@ func TestEveryIamSubcommandIsDispatchedAndAdvertised(t *testing.T) {
 // and a person's create each name one; a person is found by their address,
 // and their login may be left to the node, which proposes it from that
 // address; a service account has no address to propose from, so its login is
-// required and its seat is not. The node refuses each the same way — this is
+// required and its seat is not — and nobody is behind it to have meant a
+// default, so what it carries is required too. The node refuses each the same
+// way — this is
 // the sentence an operator who left a flag off needs. The controls are the
 // complete commands, which pass every check here and stop only at the config
 // file nobody wrote. Mutation: drop any one check and its row reaches the
@@ -153,12 +157,15 @@ func TestAnIamNewcomerIsToldWhatItLacksBeforeAnythingIsSent(t *testing.T) {
 		{"a service account with no login",
 			[]string{"create", "-kind", "machine"},
 			[]string{"-login"}},
+		{"a service account naming nothing it carries",
+			[]string{"create", "-kind", "machine", "-login", "ci:release"},
+			[]string{"-grants", "no default"}},
 		{"an invitation onto a seat", []string{"invite", "jane@example.com",
 			"-seat", "founder"}, nil},
 		{"a person with no login", []string{"create", "-email",
 			"jane@example.com", "-seat", "founder"}, nil},
 		{"a service account with no seat", []string{"create", "-kind",
-			"machine", "-login", "ci:release"}, nil},
+			"machine", "-login", "ci:release", "-grants", "none"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, errs bytes.Buffer
@@ -235,7 +242,7 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"id":"c-1","person":"p-1","token":"cwl_pat_the-value",` +
-			`"grants":["state:read"],` +
+			`"grants":["tracker"],` +
 			`"expires_at":"2026-07-01T00:00:00Z"}`))
 	}))
 	defer node.Close()
@@ -244,7 +251,7 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 
 	var out, errs bytes.Buffer
 	if err := run([]string{"iam", "token", "-person", "p-1", "-label", "ci",
-		"-days", "30", "-grants", "state:read",
+		"-days", "30", "-grants", "tracker",
 		"-config", cfg, "-api", node.URL}, &out, &errs); err != nil {
 		t.Fatalf("iam token: %v\n%s", err, errs.String())
 	}
@@ -261,13 +268,13 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 		t.Errorf("the body was %v", seen.body)
 	}
 	if grants, _ := seen.body["grants"].([]any); len(grants) != 1 ||
-		grants[0] != "state:read" {
+		grants[0] != "tracker" {
 		t.Errorf("the grants reached the node as %v", seen.body["grants"])
 	}
 	if seen.auth != "Bearer a-tier-a-token" {
 		t.Errorf("authenticated as %q", seen.auth)
 	}
-	for _, want := range []string{"cwl_pat_the-value", "state:read", apiTokenEnv} {
+	for _, want := range []string{"cwl_pat_the-value", "tracker", apiTokenEnv} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the output does not carry %q:\n%s", want, out.String())
 		}
@@ -276,25 +283,237 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 
 // `none` IS A VALUE AND AN OMITTED FLAG IS NOT.
 //
-// Stripping somebody's last grant and not mentioning grants at all are
-// opposite intentions, and an empty list cannot carry both: a body with
+// Stripping somebody's last permission and not mentioning permissions at all
+// are opposite intentions, and an empty list cannot carry both: a body with
 // `grants: []` strips, and one with no `grants` key leaves them alone. Without
 // the word, the strip silently does not happen.
 func TestStrippingGrantsIsSpeltAndNotImplied(t *testing.T) {
-	empty := iamGrantsBody("")
+	t.Parallel()
+	read := func(flagged string) iamGrantList {
+		t.Helper()
+		granted, err := iamGrants(flagged)
+		if err != nil {
+			t.Fatalf("-grants %q: %v", flagged, err)
+		}
+		return granted
+	}
+	empty := read("").body()
 	if _, mentioned := empty["grants"]; mentioned {
 		t.Errorf("an omitted -grants sent a grants field: %v, which would "+
 			"strip somebody nobody asked to strip", empty)
 	}
-	stripped := iamGrantsBody("none")
+	stripped := read("none").body()
 	held, ok := stripped["grants"].([]string)
 	if !ok || len(held) != 0 {
 		t.Errorf("-grants none sent %v, want an empty list", stripped["grants"])
 	}
-	listed := iamGrantsBody(" state:read , audit:read ")
-	if got := listed["grants"].([]string); len(got) != 2 ||
-		got[0] != "state:read" || got[1] != "audit:read" {
-		t.Errorf("the list parsed to %v", got)
+	// TRIMMED, AND IN THE ENGINE'S ORDER whatever order it was typed in,
+	// each name once.
+	listed := read(" knowledge , tracker,knowledge ").body()
+	if got := listed["grants"].([]string); !slices.Equal(got,
+		[]string{"tracker", "knowledge"}) {
+		t.Errorf("the list parsed to %v, want tracker, knowledge", got)
+	}
+}
+
+// -grants ADMIN STORES EVERY APP BESIDE IT, as the dashboard's picker does.
+//
+// Admin includes every app whether or not a row says so, so what this buys is
+// what happens when admin is taken AWAY: a row that listed the apps beside it
+// keeps them, and an administrator stepping down — a `remove_grants: [admin]`
+// from the dashboard, say — goes on using the tracker. A command that sent
+// admin alone would leave that row holding nothing past the overview. So the
+// expansion is the command's, on every subcommand that sends a set, and it
+// reaches the node as the stored list.
+//
+// Mutation: send admin alone and every row below fails.
+func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
+	t.Parallel()
+	every := []string{"admin", "tracker", "knowledge"}
+	for _, flagged := range []string{"admin", "knowledge,admin", " admin , tracker "} {
+		granted, err := iamGrants(flagged)
+		if err != nil {
+			t.Fatalf("-grants %q: %v", flagged, err)
+		}
+		if got, _ := granted.body()["grants"].([]string); !slices.Equal(got, every) {
+			t.Errorf("-grants %q sends %v, want %v", flagged, got, every)
+		}
+	}
+
+	// THROUGH THE COMMAND, onto the wire, on each subcommand that sends a
+	// set: an invitation, a create, a grant and a mint.
+	var bodies []map[string]any
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"x-1","outcome":"applied","position":"p"}`))
+	}))
+	defer node.Close()
+	cfg := bootstrapWithKeyring(t, "k1")
+	for _, args := range [][]string{
+		{"invite", "lead@example.com", "-seat", "lead", "-grants", "admin"},
+		{"create", "-email", "lead@example.com", "-seat", "lead", "-grants", "admin"},
+		{"create", "-kind", "machine", "-login", "ci:release", "-grants", "admin"},
+		{"grant", "p-1", "-grants", "admin"},
+		{"token", "-person", "svc-1", "-grants", "admin"},
+	} {
+		var out, errs bytes.Buffer
+		err := runIAM(tokenEnviron("a-tier-a-token"), append(args, "-config", cfg,
+			"-api", node.URL), nil, &out, &errs)
+		if err != nil {
+			t.Fatalf("iam %s: %v\n%s", strings.Join(args, " "), err, errs.String())
+		}
+	}
+	if len(bodies) != 5 {
+		t.Fatalf("the node was asked %d times, want 5", len(bodies))
+	}
+	for i, body := range bodies {
+		got := make([]string, 0, 3)
+		raw, _ := body["grants"].([]any)
+		for _, g := range raw {
+			s, _ := g.(string)
+			got = append(got, s)
+		}
+		if !slices.Equal(got, every) {
+			t.Errorf("request %d carried grants %v, want %v", i, body["grants"], every)
+		}
+	}
+}
+
+// A PERSON LEFT WITHOUT -grants IS GIVEN EVERY APP, AND NEVER ADMIN.
+//
+// The node requires `grants` on an invitation and on a create — `[]` is a real
+// answer there, the overview alone — so what a person is given when the
+// command says nothing has to be the command's, and it is the colleague's:
+// every app, which is what a teammate needs to be sent work and to read what
+// the company wrote down. Admin is never a default. A token left without
+// -grants is the opposite case: it sends no field at all, which the node reads
+// as everything the owner holds — the default the help states for each.
+//
+// Mutation: send no grants on a person's invitation or create and the first
+// two rows fail; send the apps on a mint and the third does.
+func TestAPersonsInviteDefaultsToEveryApp(t *testing.T) {
+	t.Parallel()
+	var bodies []map[string]any
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"x-1","outcome":"applied","position":"p"}`))
+	}))
+	defer node.Close()
+	cfg := bootstrapWithKeyring(t, "k1")
+	for _, args := range [][]string{
+		{"invite", "lead@example.com", "-seat", "lead"},
+		{"create", "-email", "lead@example.com", "-seat", "lead"},
+		{"token", "-person", "svc-1"},
+	} {
+		var out, errs bytes.Buffer
+		if err := runIAM(tokenEnviron("a-tier-a-token"), append(args, "-config", cfg,
+			"-api", node.URL), nil, &out, &errs); err != nil {
+			t.Fatalf("iam %s: %v\n%s", strings.Join(args, " "), err, errs.String())
+		}
+	}
+	if len(bodies) != 3 {
+		t.Fatalf("the node was asked %d times, want 3", len(bodies))
+	}
+	apps := make([]any, 0, len(iam.Apps))
+	for _, g := range iam.Apps {
+		apps = append(apps, string(g))
+	}
+	for i, what := range []string{"an invitation", "a person's create"} {
+		if got, _ := bodies[i]["grants"].([]any); !slices.Equal(got, apps) {
+			t.Errorf("%s naming no -grants sent %v, want every app %v and not "+
+				"admin", what, bodies[i]["grants"], apps)
+		}
+	}
+	if grants, sent := bodies[2]["grants"]; sent {
+		t.Errorf("a mint naming no -grants sent %v, want no field — the node "+
+			"reads its absence as everything the owner holds", grants)
+	}
+
+	// AND A GRANT NAMING NOTHING IS REFUSED rather than sent: it is the one
+	// subcommand whose whole job is the set.
+	var out, errs bytes.Buffer
+	err := runIAM(tokenEnviron("a-tier-a-token"), []string{"grant", "p-1",
+		"-config", cfg, "-api", node.URL}, nil, &out, &errs)
+	if err == nil || !strings.Contains(err.Error(), "-grants") {
+		t.Errorf("a grant naming no -grants answered %v, want a refusal "+
+			"naming the flag", err)
+	}
+	if len(bodies) != 3 {
+		t.Errorf("the refused grant reached the node: %v", bodies[3:])
+	}
+}
+
+// A SERVICE ACCOUNT IS TOLD WHAT IT CARRIES, EVERY TIME — and every -grants is
+// held to the engine's vocabulary — before a config file is read.
+//
+// A person left without -grants is given every app, but nobody is behind a
+// service account to have meant a default, so its create without -grants is
+// refused naming the flag; `-grants none` is how to decide nothing. A name the
+// engine does not know, `none` beside a permission, and -grants on a command
+// that sends no set are each refused naming what to do — and every refusal
+// lands before the config is read, which this case proves by naming a config
+// file that does not exist.
+//
+// Mutation: default a service account's grants, accept an unknown name, or
+// ignore -grants on suspend, and a row is answered by the missing config
+// instead.
+func TestAMachineCreateNamesItsGrants(t *testing.T) {
+	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "no-such-config.yaml")
+	for _, tc := range []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"create", "-kind", "machine", "-login", "ci:release"},
+			[]string{"-grants", "no default"}},
+		{[]string{"create", "-kind", "machine", "-login", "ci:release",
+			"-grants", "trackr"},
+			[]string{`"trackr"`, "admin, tracker, knowledge", "none"}},
+		{[]string{"invite", "lead@example.com", "-seat", "lead",
+			"-grants", "billing"},
+			[]string{`"billing"`, "admin, tracker, knowledge"}},
+		{[]string{"grant", "p-1", "-grants", "none,admin"},
+			[]string{"none", "stands alone"}},
+		{[]string{"suspend", "p-1", "-grants", "admin"},
+			[]string{"-grants is invite's", "iam suspend"}},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			t.Parallel()
+			var out, errs bytes.Buffer
+			err := runIAM(tokenEnviron("a-tier-a-token"),
+				append(tc.args, "-config", missing), nil, &out, &errs)
+			if err == nil {
+				t.Fatal("accepted")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal %q does not name %q", err, want)
+				}
+			}
+			if strings.Contains(err.Error(), missing) {
+				t.Errorf("the refusal came from reading the config, after the "+
+					"flags should have been refused: %v", err)
+			}
+		})
+	}
+
+	// THE CONTROL: the same create naming its grants — `none` among them —
+	// is refused only for the config this case withholds.
+	var out, errs bytes.Buffer
+	err := runIAM(tokenEnviron("a-tier-a-token"), []string{"create", "-kind",
+		"machine", "-login", "ci:release", "-grants", "none", "-config", missing},
+		nil, &out, &errs)
+	if err == nil || !strings.Contains(err.Error(), missing) {
+		t.Errorf("a service account's create naming -grants none answered %v, "+
+			"want it to get as far as reading the config", err)
 	}
 }
 
@@ -708,13 +927,20 @@ func TestAnIamInviteAndCreateTakeTheSeatTheOperatorNamed(t *testing.T) {
 		t.Errorf("the create printed the node's header sentence:\n%s", printed)
 	}
 
-	// A SERVICE ACCOUNT'S, with no seat: sent with none, and no link.
-	printed, err = cli("create", "-kind", "machine", "-login", "ci:release")
+	// A SERVICE ACCOUNT'S, with no seat: sent with none, and no link —
+	// and with the grants it was told to carry, here nothing past the
+	// overview, which nobody would have meant by leaving the flag out.
+	printed, err = cli("create", "-kind", "machine", "-login", "ci:release",
+		"-grants", "none")
 	if err != nil {
 		t.Fatalf("iam create of a service account: %v", err)
 	}
 	if len(asked) != 3 || bodies[2]["seat"] != "" || bodies[2]["kind"] != "machine" {
 		t.Errorf("the service account's create carried %v (%v)", bodies[2], asked)
+	}
+	if grants, ok := bodies[2]["grants"].([]any); !ok || len(grants) != 0 {
+		t.Errorf("-grants none reached the node as %v, want an empty list",
+			bodies[2]["grants"])
 	}
 	if strings.Contains(printed, "first password link") ||
 		!strings.Contains(printed, "crewlet iam token -person svc-1") {
@@ -732,7 +958,7 @@ func TestAnIamInviteAndCreateTakeTheSeatTheOperatorNamed(t *testing.T) {
 	}
 
 	// AND NOWHERE ELSE.
-	if _, err = cli("grant", "p-1", "-grants", "state:read", "-seat",
+	if _, err = cli("grant", "p-1", "-grants", "tracker", "-seat",
 		"platform-lead"); err == nil || !strings.Contains(err.Error(), "iam bind") {
 		t.Errorf("a grant given -seat answered %v, want a refusal naming `iam bind`",
 			err)
@@ -1056,6 +1282,60 @@ func TestIamSeatsSaysWhoHoldsEachSeat(t *testing.T) {
 	}
 	if len(queries) != before {
 		t.Errorf("the refused -unheld was sent: %v", queries[before:])
+	}
+}
+
+// A HELD SEAT NEVER READS AS VACANT, WHOEVER ASKS.
+//
+// `GET /iam/seats` is everybody's, and it answers a reader who is neither an
+// admin nor the holder only the name the holder goes by and their kind — no
+// login, id or stage. The HOLDER column used to read the login or the id
+// alone, so for every such reader a held seat printed a dash where its holder
+// was, exactly as a vacant seat prints. Each masked shape the node sends is
+// held here: a name, a name this node's keyring did not open, a holder
+// enrolled with no name, and a service account; the vacant seat beside them is
+// the control. Mutation: drop the name from seatHolder's fallbacks and the
+// first row reads as vacant.
+func TestIamSeatsNamesAMaskedHolderRatherThanReadingItVacant(t *testing.T) {
+	answer := `{"seats":[` +
+		`{"handle":"a","name":"A","holder":{"name":"Jane Doe","kind":"person"}},` +
+		`{"handle":"b","name":"B","holder":{"sealed":true,"kind":"person"}},` +
+		`{"handle":"c","name":"C","holder":{"kind":"person"}},` +
+		`{"handle":"d","name":"D","holder":{"name":"CI","kind":"machine"}},` +
+		`{"handle":"v","name":"V"}]}`
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(answer))
+	}))
+	defer node.Close()
+	t.Setenv(apiTokenEnv, "a-tier-a-token")
+	cfg := bootstrapWithKeyring(t, "k1")
+	var out, errs bytes.Buffer
+	if err := run([]string{"iam", "seats", "-config", cfg, "-api", node.URL}, &out,
+		&errs); err != nil {
+		t.Fatalf("iam seats: %v", err)
+	}
+	rows := map[string]string{}
+	for _, line := range strings.Split(out.String(), "\n") {
+		if handle, _, ok := strings.Cut(line, " "); ok {
+			rows[handle] = line
+		}
+	}
+	// A vacant row dashes its unit, holder, stage, invitation and expiry; a
+	// held one names its holder, so it dashes one fewer.
+	if got := strings.Count(rows["v"], "—"); got != 5 {
+		t.Fatalf("the vacant control row is %q, with %d dashes, want 5", rows["v"], got)
+	}
+	for handle, want := range map[string]string{
+		"a": "Jane Doe",
+		"b": "(name unavailable)",
+		"c": "(held)",
+		"d": "CI (service account)",
+	} {
+		if !strings.Contains(rows[handle], want) || strings.Count(rows[handle], "—") != 4 {
+			t.Errorf("the row for held seat %s is %q, want its holder said as %q "+
+				"rather than a dash", handle, rows[handle], want)
+		}
 	}
 }
 

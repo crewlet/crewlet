@@ -94,9 +94,9 @@ type steerRig struct {
 	cto    uuid.UUID
 }
 
-// operatorCaller is somebody holding the deployment's grant — admitted on any
-// turn without the fleet being asked whose it is.
-var operatorCaller = boundTo("ops", iam.GrantFleetOperate)
+// operatorCaller is an admin — admitted on any turn without the fleet being
+// asked whose it is.
+var operatorCaller = boundTo("ops", iam.GrantAdmin)
 
 // newSteerRig builds the tool with the actor the act route hands it
 // (internal/api/operator's workActor): the caller's principal, carrying the
@@ -189,7 +189,7 @@ func TestSteerTurnSendsTheNoteAsThePersonAndAnswersPending(t *testing.T) {
 			asker.subject, asker.want)
 	}
 	// AS THE PERSON, in iam.ActorFor's three halves — and with no probe
-	// first, because the deployment's grant is admitted on any turn.
+	// first, because admin is admitted on any turn.
 	if len(asker.asked) != 1 {
 		t.Fatalf("asked the fleet %d times, want the offer alone: %+v",
 			len(asker.asked), asker.asked)
@@ -392,7 +392,7 @@ func TestSteeringSomebodyElsesTurnIsRefused(t *testing.T) {
 		asks   int
 	}{
 		{"the lead of another seat", boundTo("jane"), ceoLead, 1},
-		{"a reader who leads nobody", boundTo("sam", iam.GrantStateRead), ceoLead, 0},
+		{"a colleague who leads nobody", boundTo("sam", iam.Apps...), ceoLead, 0},
 		{"a seat holding every grant", iam.Principal{ID: uuid.New(), Kind: iam.KindSeat,
 			Login: "agent-ceo", Seat: "agent-ceo", Stage: iam.StageActive,
 			Grants: iam.AllGrants}, ceoLead, 0},

@@ -3,7 +3,7 @@
  * way into the builder, and the one write the bar offers — adding a seat —
  * plus the section tabs' figures. The chart's other writes are a seat's own
  * and live on it: a vacant human seat's card, peek and page offer Invite and
- * Create to a reader holding `people:manage` (`components/people.tsx`), since
+ * Create to an admin (`components/people.tsx`), since
  * a person comes from the seat they will hold.
  *
  * # One header for every section
@@ -43,6 +43,7 @@ import { useSchedules } from "~/lib/store-hooks.ts";
 import { CONFIG_WRITE_GRANT, useOrgWriteAccess } from "~/lib/useWriteAccess.ts";
 import { useLeadScope } from "~/lib/leadScope.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { holds } from "~/lib/access.ts";
 import { handleLabel, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { unitPath } from "~/lib/orgchart.ts";
 
@@ -112,18 +113,18 @@ export function AgentsHeader({
   filter?: SeatFilter;
 }) {
   const nav = useNavigator();
-  // ADDING A SEAT IS A STRUCTURAL CHART WRITE, decided by the `config:write`
-  // GRANT — or, inside a unit the reader leads, by that lead — and never by a
-  // credential's kind or a seat binding, so the control asks the one gate
-  // every org chart write asks (`useOrgWriteAccess`), and a reader who cannot
-  // press it is told which of offline, still being read, signed out, missing
-  // the grant, or a document another system manages (ADR-0030) is why. A lead
+  // ADDING A SEAT IS A STRUCTURAL CHART WRITE, decided by ADMIN — or, inside
+  // a unit the reader leads, by that lead — and never by a credential's kind
+  // or a seat binding, so the control asks the one gate every org chart write
+  // asks (`useOrgWriteAccess`), and a reader who cannot press it is told which
+  // of offline, still being read, signed out, missing Admin, or a document
+  // another system manages (ADR-0030) is why. A lead
   // adds to the first unit they lead, since nothing at the company's top level
   // is theirs.
   const access = useOrgWriteAccess("anywhere");
   const viewer = useViewer();
   const scope = useLeadScope();
-  const lead = !viewer.grants.includes(CONFIG_WRITE_GRANT) ? scope.tops[0] : undefined;
+  const lead = !holds(viewer.grants, CONFIG_WRITE_GRANT) ? scope.tops[0] : undefined;
   const addHref = href(
     ["agents", "edit"],
     lead ? { unit: lead.key, add: "agent" } : { add: "agent" },

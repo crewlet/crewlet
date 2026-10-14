@@ -232,7 +232,7 @@ timezone: America/Los_Angeles            # an IANA zone name; absent is UTC
 
 It is a clock for **authored instants and calendar boundaries only**. No duration — a lease, a timeout, a retention horizon — is measured against it, because a duration measured on a wall clock changes length twice a year. And there is only one: the tracker and the scheduler take no zone of their own, because a company whose board, whose people's days and whose standups each kept a clock had one "today" per subsystem. A schedule's own `timezone` is that one piece of work's wall clock — the Tokyo team's 09:30 standup — and nothing else is cut on it.
 
-The value must be a real IANA name (`Europe/Berlin`, `America/New_York`, `UTC`), and `Local` and `localtime` are refused: each is whatever zone the host reading it is set to, so two nodes would cut two different days from it. The [`org` projection](../reference/api-endpoints.md) carries the resolved clock to every reader holding `state:read` — `UTC` where none is written — so the dashboard cuts its days where the engine does. An apply that changes it moves the next answer, the next scheduler tick and the next tool call; a turn already running keeps the clock of the epoch it started on.
+The value must be a real IANA name (`Europe/Berlin`, `America/New_York`, `UTC`), and `Local` and `localtime` are refused: each is whatever zone the host reading it is set to, so two nodes would cut two different days from it. The [`org` projection](../reference/api-endpoints.md) carries the resolved clock to every reader — `UTC` where none is written — so the dashboard cuts its days where the engine does. An apply that changes it moves the next answer, the next scheduler tick and the next tool call; a turn already running keeps the clock of the epoch it started on.
 
 ### Token budgets
 
@@ -1345,10 +1345,9 @@ api:
                         #   every webhook, app manifest and per-run sandbox
                         #   endpoint is built on it
   auth:
-    max_grants:         # THE CEILING. Required once port is set
-      [state:read, audit:read, config:read, secrets:read,
-       work:write, knowledge:write, config:write, secrets:write,
-       fleet:operate, people:manage, sandbox:run]
+    admin: serve        # serve | refuse. Required once port is set: whether
+                        #   THIS node grants admin to those who hold it.
+                        #   refuse clamps admin away here and keeps every app
     session:
       absolute: 168h          # 1h..720h (default 168h)
       step_up: 1h             # 5m..24h  (default 1h): how recent a proof of
@@ -1383,12 +1382,11 @@ api:
                         #   by colons (ci-pipeline, ci:release), at most 58
                         #   characters so the login stays within 64
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26+ chars, on the RESOLVED value
-        grants: [state:read, audit:read, config:read, secrets:read,
-                 work:write, knowledge:write, config:write, secrets:write,
-                 fleet:operate, people:manage, sandbox:run]
-                        # what it may do, and the most an invitation or a
-                        #   create it makes may confer — the first
-                        #   person's included
+        grants: [admin]  # admin, tracker, knowledge: what it may do, and
+                        #   the most an invitation or a create it makes may
+                        #   confer — the first person's included. admin
+                        #   includes every app; on a node whose admin is
+                        #   refuse, listing it is refused
 
 logging:
   level: info       # debug, info (default), warn, error
@@ -1486,15 +1484,22 @@ file opens on one port — `api.port`, `api.public.port`, `stream.cluster.port`
 and `stream.leaf.port` — when they bind the same address or either binds every
 interface; `-roles`, `-api-host` and `-api-port` are held to the same rules.
 
-**`api.auth.max_grants` is the ceiling**, and it is required once a port is set.
-A person's grants live in the replicated store and are written by whoever holds
-authority over people. This is the bound on what that directory may confer,
-stated in the tier that holds the keyring and never read from Tier B. It is intersected
-**per node, per request**, so lowering it takes effect on the next request that
-node serves — no apply, no restart of the fleet — which also makes a fleet whose
-nodes disagree a legal state during a rollout. Each node therefore publishes a
-hash of its own resolved ceiling on its presence lease, and `/health` and the
-fleet view report a mixed one.
+**`api.auth.admin` says whether this node serves admin**, and it is required
+once a port is set: `serve`, or `refuse`. A person's
+[permissions](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
+— `admin`, `tracker`, `knowledge` — live in the replicated store and are
+written by an administrator; this is each node's statement, in the tier that
+holds the keyring and never read from Tier B, of whether `admin` counts here at
+all. A `refuse` node clamps admin away from every principal composed on it and
+keeps every app — admin includes the apps, and they are expanded before admin
+is taken away — which is how a node published to the people who use the company
+is kept from being one anybody administers it through, however their row reads.
+A zero is refused naming both values, and any other value naming them too. It
+is applied **per node, per request**, so a restart that changes it takes effect
+on the next request that node serves — no apply, no migration — which also
+makes a fleet whose nodes disagree a legal state during a rollout. Each node
+therefore publishes its posture on its presence lease, and the fleet view
+(`GET /query/fleet`) shows it as `admin` per node.
 
 **At least one `api.auth.tokens` entry is required.** A fresh
 deployment's identity estate is empty, so a Tier A token is what puts the
@@ -1504,12 +1509,14 @@ declares for them: from that seat's card in **Agents › Org chart**, or with
 <address> -seat <handle>` creates them instead and prints their first password
 link). Every person holds a human seat, so a company has to declare one before
 anybody can join it. An invitation or a create confers only what its issuer
-holds, so the token that brings them in has to hold every grant they are to
-carry, `people:manage` included. On a running deployment it is the way back
+holds, so the token that brings them in has to hold `admin` — `grants:
+[admin]` — on a node that serves it. On a running deployment it is the way back
 in when an administrator has locked themselves out. Each entry states its own
 `grants` — required and non-empty, because a credential's blast radius belongs
-where it is pinned — and its value must be at least 26 characters, checked on
-what the `${VAR}` resolves to.
+where it is pinned, naming only `admin`, `tracker` and `knowledge` (an unknown
+name is refused naming the three, and `admin` on a `refuse` node is refused
+too) — and its value must be at least 26 characters, checked on what the
+`${VAR}` resolves to.
 
 **`secrets.keys` is required on every node**, whether or not a port is set.
 Every record on every state log is signed and verified under the keyring, the
@@ -1522,7 +1529,9 @@ node](../concepts/configuration.md#what-tier-a-must-state-on-every-node).
 Binding a credential to a seat is in neither tier. A token acts under the
 login `token:<id>`, and it acts **as a seat** when the identity directory holds
 a row under that login bound to one — `crewlet iam create -kind machine -login
-token:<id> -seat <handle>`, which takes `people:manage` (`crewlet iam bind`
+token:<id> -seat <handle> -grants none`, which takes `admin` — the row binds
+the token to a seat and carries nothing itself, since the token's permissions
+are its Tier A entry's (`crewlet iam bind`
 moves an existing row onto a seat, and `crewlet iam unbind` takes it back). The
 seat must be a human seat nothing else holds: no person, no other row and no
 open invitation, since a seat is held by one row of the directory. Never
@@ -1532,11 +1541,12 @@ which says how to reach a person rather than which credential they hold. See
 [Humans in the Org
 Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api).
 
-**Leave `people:manage` out of the ceiling and nobody can ever hold it.** The
-first person carries what the invitation or the create that enrolled them
-conferred, cut to the ceiling, and may confer only what they hold, so a
-ceiling without it is a deployment in which no person can invite, create,
-move, suspend or remove anybody.
+**Give the first person `admin`, on a node that serves it.** The first person
+carries what the invitation or the create that enrolled them conferred, and may
+confer only what they hold, so a company whose people hold no `admin` — or
+whose only `serve` node is one nobody signs in on — is one in which no person
+can invite, create, move, suspend or remove anybody; `crewlet iam check` names
+it `no_admin_holder`, and the Tier A token stays the way back in.
 
 The event store (LLM observability) is a table in that same file, created by
 the engine's own migrations on first start — there is nothing to configure
@@ -1862,7 +1872,7 @@ knowledge:
 
 `knowledge.scope` is the org-wide read scope, materialised onto `org.Organization.KnowledgeScope` and read by whichever searcher is wired. **Empty means unscoped, and what unscoped MEANS differs by backend:** natively it is the whole company, because the engine is the boundary — every reader is a seat of one company and there is no second account to launder a read through. On Confluence it is whatever the asking seat's own account can read, which is why a credential-less seat searching unscoped there gets nothing: an unscoped query on the shared org token is how one seat reads a page its own account never could. Set it only to **narrow** to a curated floor.
 
-`knowledge.skills_container` (default `TS`) holds [tool-skill](../concepts/tool-skills.md) pages and `knowledge.root_space` (default `HOME`) holds the organisation's own pages, starting with the root Onboarding page every seat reads first. Both are **reserved** — refused as a unit's own `space`, and held back from agents' writes — but not for the same reason, so not in the same way ([who may write where](../concepts/knowledge-system.md#who-may-write-where)). The skills container is machinery: excluded from knowledge search and from routing, closed to every agent write, and written by a person only with `config:write`. The root is the company's own canon: searched and routed like any other container, and closed only to an agent adding a new page. `skills_container` is three-valued — absent takes the default, a name takes that container, and an explicit `""` turns tool skills **off** entirely.
+`knowledge.skills_container` (default `TS`) holds [tool-skill](../concepts/tool-skills.md) pages and `knowledge.root_space` (default `HOME`) holds the organisation's own pages, starting with the root Onboarding page every seat reads first. Both are **reserved** — refused as a unit's own `space`, and held back from agents' writes — but not for the same reason, so not in the same way ([who may write where](../concepts/knowledge-system.md#who-may-write-where)). The skills container is machinery: excluded from knowledge search and from routing, closed to every agent write, and written by a person only with `admin`. The root is the company's own canon: searched and routed like any other container, and closed only to an agent adding a new page. `skills_container` is three-valued — absent takes the default, a name takes that container, and an explicit `""` turns tool skills **off** entirely.
 
 `knowledge.vectors` fuses semantic recall into the search. **Unset derives** from whether `providers.embeddings` is configured — a company already paying for embeddings for its diary gets the better search — and an explicit `true` with no provider is refused, because there would be nothing to compute an embedding with.
 

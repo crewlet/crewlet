@@ -51,9 +51,8 @@ type OperatorDeps struct {
 	// It replaced `Leads` and `LeadsProject`, which asked the chart the
 	// two relation questions [authz.ClassOwnOrLead] and
 	// [authz.ClassContainer] already ask — from the tool rather than from
-	// the table, two-valued, and consulting no grant at all, so an
-	// operator holding fleet:operate was refused here while every HTTP
-	// route allowed.
+	// the table, two-valued, and consulting no permission at all, so an
+	// admin was refused here while every HTTP route allowed.
 	//
 	// NIL REFUSES EVERYTHING, on [Deps.Authorize]'s rule. Pushed down
 	// into [OperatorDeps.Work] and [OperatorDeps.Pages] by

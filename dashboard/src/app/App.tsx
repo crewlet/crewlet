@@ -50,12 +50,11 @@ import { StepUpHost } from "./StepUp.tsx";
 import { AppAnnouncer } from "./announcer.tsx";
 import { parseHash, useNavigator, useRoute } from "./router.tsx";
 import { resolve, type Resolved, type Route } from "./routes.ts";
-import { framelessOf, grantsMissing, personalPath, sectionOf, sectionOpen } from "./nav.ts";
+import { closedBy, framelessOf, guardedPath, personalPath } from "./nav.ts";
 import { AccessRefused } from "./frame/AccessRefused.tsx";
 import { GrantRequired } from "./frame/GrantRequired.tsx";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useHeldReading, useViewer } from "~/lib/viewer.ts";
-import { useFrameSession } from "~/lib/frameSession.ts";
 import { safeNext, signInHash } from "~/lib/session.ts";
 import { currentSessionNeed, onSessionNeed } from "~/protocol/index.ts";
 import { NotFound } from "~/routes/NotFound.tsx";
@@ -298,46 +297,47 @@ function Screen({ where, path }: { where: Route; path: string[] }) {
   const viewer = useViewer();
   const held = useHeldReading();
   const { accessRefused } = useConnection();
-  const { noAccess } = useFrameSession();
   if (!where.resolved) return <NotFound what={where.what} hint={where.hint} />;
-  // A BROWSER THE ENGINE KNOWS AND WILL NOT SERVE, or whose session holds no
-  // grant to read the company, is told so in place of every screen but the
-  // reader's own — their Account and Settings › Appearance, which read no
-  // socket (`personalPath`, the rule the sidebar's locks are drawn by) — see
+  // A BROWSER THE ENGINE KNOWS AND WILL NOT SERVE — a refused handshake, never
+  // a want of access — is told so in place of every screen but the reader's
+  // own: their Account and Settings › Appearance, which read no socket
+  // (`personalPath`, the rule the sidebar's locks are drawn by). See
   // `AccessRefused`.
-  if ((accessRefused !== null || noAccess) && !personalPath(path)) {
+  if (accessRefused !== null && !personalPath(path)) {
     return <AccessRefused reason={accessRefused} />;
   }
-  // A SECTION CLOSED TO THE READER is its refusal and nothing else — see
-  // `GrantRequired` — decided by the rule every lock the navigation draws is
-  // decided by (`nav.ts`'s `sectionOpen`), over the frame's one reading of
+  // AN ITEM SOMEBODY WAS ASKED ABOUT IS OPEN TO THEM, Tracker or not: the
+  // engine answers the person an open ask names with the item and takes their
+  // answer on it, so the link in their inbox notice or chat message has to
+  // open — and its own read decides, refusing anybody it names no ask to in
+  // the same words it refuses an item that does not exist.
+  if (where.screen === "item") return screenFor(where);
+  // A WORKSPACE OR SECTION CLOSED TO THE READER is its refusal and nothing
+  // else — see `GrantRequired` — decided by the rule every lock the
+  // navigation draws is decided by (`nav.ts`'s `closedBy`, over
+  // `sectionOpen`): the workspace's access first (Work is the tracker's), then
+  // the section's (Live › Turns is admin's). Over the frame's one reading of
   // who the reader is and what they hold (`useHeldReading`): the viewer's
   // answer, or the session's where the viewer has not answered — and the
-  // refusal names the reader from that same reading. Read off the viewer alone, a
-  // session whose socket the engine refuses (so whose viewer never answers)
-  // was held at "Checking your access" for good on a section the sidebar
-  // beside it had already locked. Only on an ANSWER, and the first one is
-  // waited for: until it is in, the section asks nothing it may be refused (a
-  // cold load of #/settings/secrets sent its guarded reads, was refused, and
-  // drew the refusal, a frame before the frame knew to). A read that FAILED
-  // is no answer and does not hold the section: the screen mounts, and its
-  // own reads say what they find.
-  const section = sectionOf(path);
-  if (section?.grants) {
+  // refusal names the reader from that same reading. Only on an ANSWER, and
+  // the first one is waited for: until it is in, the screen asks nothing it
+  // may be refused (a cold load of #/settings/secrets sent its guarded reads,
+  // was refused, and drew the refusal, a frame before the frame knew to). A
+  // read that FAILED is no answer and does not hold the screen: it mounts, and
+  // its own reads say what they find.
+  if (guardedPath(path)) {
     if (held === null) {
       if (viewer.asking) {
-        return (
-          <Skeleton variant="text" rows={4} label={`Checking your access to ${section.label}`} />
-        );
+        // NAMED BY WHAT WOULD CLOSE IT to somebody holding nothing — the
+        // workspace's label where the workspace is gated, else the section's.
+        const what = closedBy(path, [])?.what ?? "this page";
+        return <Skeleton variant="text" rows={4} label={`Checking your access to ${what}`} />;
       }
-    } else if (!sectionOpen(section, held.grants)) {
-      return (
-        <GrantRequired
-          what={section.label}
-          grants={grantsMissing(section, held.grants)}
-          reader={held.login}
-        />
-      );
+    } else {
+      const closed = closedBy(path, held.grants);
+      if (closed !== null) {
+        return <GrantRequired what={closed.what} grants={closed.needs} reader={held.login} />;
+      }
     }
   }
   return screenFor(where);

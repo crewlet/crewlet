@@ -75,7 +75,7 @@ type runParties struct {
 //
 // Its REQUESTER's — the person whose message, notice or ask woke the turn that
 // launched the run, recorded on its row by the handle their seat was created
-// under — or whoever leads the run's seat, or the deployment's grant
+// under — or whoever leads the run's seat, or an admin
 // ([authz.ActionRunAnswer]). The requester is admitted through the rule's SELF
 // arm, asked about their own seat, so it is the table that says so; and only
 // when the caller IS that person, so nobody who merely leads them answers a
@@ -252,7 +252,7 @@ func (t *answerRun) parties(ctx context.Context, run sandbox.PendingRun) (runPar
 
 // mayAnswer asks the authority about this run: about the REQUESTER's own seat
 // when the caller is that requester — the rule's self arm — and about the
-// run's seat otherwise, where its lead and the deployment's grant are admitted.
+// run's seat otherwise, where its lead and an admin are admitted.
 // The actor is named by [iam.ActorFor], whose name for a bound person is their
 // seat's handle.
 func (t *answerRun) mayAnswer(ctx context.Context, actor Actor,

@@ -23,9 +23,20 @@ import (
 // rules table against itself, and [TestEveryRegisteredToolHasAnAuthorityRule]
 // holds it against the tool NAMES. A field name inside a row is below all of
 // them.
+//
+// BOTH DIRECTIONS, so the list below is exactly the rows: a tool listed there
+// that no row governs is one whose row was deleted — an app's own verb, which
+// reads no object — and a stale entry would go on claiming this walk covers
+// a tool it reads nothing of.
 func TestEveryObjectFieldIsOneItsToolDeclares(t *testing.T) {
 	t.Parallel()
 	declared := declaredArguments(t)
+	for name := range declared {
+		if _, governed := subjectOf[name]; !governed {
+			t.Errorf("%s is listed in toolsWithArguments and has no row in "+
+				"subjectOf — drop it from the list", name)
+		}
+	}
 	for name, subj := range subjectOf {
 		properties, ok := declared[name]
 		if !ok {
@@ -160,16 +171,14 @@ func declaredArguments(t *testing.T) map[string][]string {
 // external suite already owns and this package cannot import.
 //
 // HAND-WRITTEN AND UNABLE TO GO STALE: the walk above fails on a row with no
-// entry here, so a new row cannot be added without one.
+// entry here and on an entry with no row, so the two change together.
 func toolsWithArguments() []tools.Callable {
 	return []tools.Callable{
-		&createWorkItem{}, &updateWorkItem{}, &commentOnWorkItem{},
-		&mergeWorkItem{}, &a2aAsk{}, &writePage{}, &savePage{},
-		&commentOnPage{}, &writeProject{},
+		&getWorkItem{}, &commentOnWorkItem{},
 		&getPerson{}, &workInbox{}, &setPriorities{}, &myWork{},
 		&markInbox{}, &setPins{}, &saveWorkView{},
 		&removeWorkItem{}, &restoreWorkItem{}, &moveWorkItem{},
-		&placeWorkItem{}, &pauseSeat{}, &resumeSeat{}, &steerTurn{},
-		&answerRun{}, &writeProjectFile{}, &removeProjectFile{},
+		&pauseSeat{}, &resumeSeat{}, &steerTurn{},
+		&answerRun{}, &removeProjectFile{},
 	}
 }

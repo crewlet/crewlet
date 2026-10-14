@@ -60,20 +60,23 @@ func (e errNotResettable) Error() string {
 // again, and the link that may have landed is one nobody holds, which expires.
 // Issuing again revokes it anyway.
 //
-// # Only for somebody whose every grant the issuer holds
+// # Only for somebody whose every permission the issuer holds
 //
 // The administrator who issues the link is shown it, and nothing stops them
 // spending it themselves and signing in as the person — clearing a second
-// factor first is a gesture of the same grant. So a link is held to
+// factor first is a gesture of the same permission. So a link is held to
 // [iamdomain.Writer.MayConfer], judged in the record's own snapshot as though
 // the person's grants were being conferred from nothing: a target holding a
-// grant the issuer lacks is `403`, for the reason a machine token is minted
-// only for a service account and an invitation carries only what its issuer
-// holds — `people:manage` must never be a way to act with a grant one does not
-// have. And since the judgement is the issue's, a grant the person GAINS while
-// the link is outstanding revokes it, in the record that adds the grant
-// ([iamdomain.Writer.UpdatePerson]): that grant was judged against nobody
-// holding the link.
+// permission the issuer lacks is `403`, for the reason a machine token is
+// minted only for a service account and an invitation carries only what its
+// issuer holds — administering people must never be a way to act with a
+// permission one does not have. Issuing is admin's, and admin carries every
+// app (ADR-0033), so what reaches that `403` today is a name this build does
+// not know on the person's row: kept there and ignored, and never one an
+// issuer on this build can be shown to hold. And since the judgement is the
+// issue's, a grant the person GAINS while the link is outstanding revokes it,
+// in the record that adds the grant ([iamdomain.Writer.UpdatePerson]): that
+// grant was judged against nobody holding the link.
 //
 // What the issue does NOT follow is the ISSUER: an administrator demoted after
 // issuing a link still holds a link that opens, as an invitation they issued

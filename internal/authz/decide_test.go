@@ -124,10 +124,11 @@ func seat(handle string, grants ...iam.Grant) iam.Principal {
 // THE WHOLE TABLE, ONE CASE PER ROW OF IT.
 //
 // Written as a table because the rules ARE a table: what makes this suite
-// worth anything is that a reader can see nine classes decided side by side
+// worth anything is that a reader can see fifteen classes decided side by side
 // and spot the row whose answer is wrong for its neighbours.
 func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 	t.Parallel()
+	tracker, knowledge, admin := iam.GrantTracker, iam.GrantKnowledge, iam.GrantAdmin
 	for _, c := range []struct {
 		name    string
 		p       iam.Principal
@@ -136,35 +137,98 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		allowed bool
 		reason  authz.Reason
 	}{
-		// --- read ---------------------------------------------------- //
-		{"state:read reads the board", person("jane.doe", iam.GrantStateRead),
+		// --- everybody ------------------------------------------------ //
+		{"anybody looks a colleague up", person("jane.doe"),
+			authz.ActionColleagueRead, authz.Object{Kind: authz.KindPerson},
+			true, authz.ReasonEverybody},
+		{"anybody reads who holds each seat", person("jane.doe"),
+			authz.ActionSeatsRead, authz.Object{Kind: authz.KindCompany},
+			true, authz.ReasonEverybody},
+		{"anybody reaches an item's thread", person("jane.doe"),
+			authz.ActionWorkThread, authz.Object{Kind: authz.KindTask},
+			true, authz.ReasonEverybody},
+
+		// --- one app -------------------------------------------------- //
+		{"the tracker reads the board", person("jane.doe", tracker),
 			authz.ActionWorkList, authz.Object{Kind: authz.KindTask},
 			true, authz.ReasonGrant},
-		{"a seat reads the board", seat("sre", iam.GrantStateRead),
+		{"a seat holding the apps reads a page", seat("sre", iam.Apps...),
 			authz.ActionPageRead, authz.Object{Kind: authz.KindPage},
 			true, authz.ReasonGrant},
-		// AND A NARROW CREDENTIAL DOES NOT. The whole value of a read
-		// grant is that an operator can withhold it: a service account
-		// minted to file bugs reads no board, no page and no fleet.
-		{"work:write alone reads nothing", person("ci.release", iam.GrantWorkWrite),
+		{"admin reads the board through the apps it includes",
+			person("jane.doe", admin), authz.ActionWorkList,
+			authz.Object{Kind: authz.KindTask}, true, authz.ReasonGrant},
+		// AND THE OTHER APP DOES NOT. The whole value of one permission per
+		// app is that a company can hand out one: a knowledge holder reads
+		// no board and a tracker holder no page.
+		{"knowledge alone reads no board", person("ana.writer", knowledge),
 			authz.ActionWorkList, authz.Object{Kind: authz.KindTask},
 			false, authz.ReasonNoGrant},
-		// A PROJECT'S FILES ARE THE BOARD'S, read on the read grant and on
-		// nothing narrower.
-		{"state:read reads a project's file", seat("sre", iam.GrantStateRead),
+		{"the tracker alone reads no page", person("ci.release", tracker),
+			authz.ActionPageRead, authz.Object{Kind: authz.KindPage},
+			false, authz.ReasonNoGrant},
+		{"the overview alone reads no board", person("jane.doe"),
+			authz.ActionWorkList, authz.Object{Kind: authz.KindTask},
+			false, authz.ReasonNoGrant},
+		// A PROJECT'S FILES ARE THE TRACKER'S, read and kept on it and on
+		// nothing narrower — never the knowledge base.
+		{"the tracker reads a project's file", seat("sre", tracker),
 			authz.ActionFileRead,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
 			true, authz.ReasonGrant},
-		{"work:write alone lists no project's files",
-			person("ci.release", iam.GrantWorkWrite), authz.ActionFileList,
+		{"the tracker keeps a file in a project", seat("sre", tracker),
+			authz.ActionFileWrite,
+			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
+			true, authz.ReasonGrant},
+		{"knowledge does not", seat("sre", knowledge), authz.ActionFileWrite,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
 			false, authz.ReasonNoGrant},
+		{"the tracker files an item", seat("sre", tracker),
+			authz.ActionWorkCreate, authz.Object{Kind: authz.KindTask},
+			true, authz.ReasonGrant},
+		{"the tracker does not author a page", seat("sre", tracker),
+			authz.ActionPageCreate, authz.Object{Kind: authz.KindPage},
+			false, authz.ReasonNoGrant},
+		{"knowledge authors a page", seat("sre", knowledge),
+			authz.ActionPageCreate, authz.Object{Kind: authz.KindPage},
+			true, authz.ReasonGrant},
+
+		// --- any app --------------------------------------------------- //
+		{"a person using the knowledge base asks it", personLeading("sam", knowledge),
+			authz.ActionKnowledgeAnswer, authz.Object{Kind: authz.KindCompany},
+			true, authz.ReasonGrant},
+		{"so does a person using the tracker", personLeading("sam", tracker),
+			authz.ActionKnowledgeAnswer, authz.Object{Kind: authz.KindCompany},
+			true, authz.ReasonGrant},
+		{"somebody using neither has nothing to search", personLeading("sam"),
+			authz.ActionKnowledgeAnswer, authz.Object{Kind: authz.KindCompany},
+			false, authz.ReasonNoGrant},
+		{"a seat never does — it has a search and a model of its own",
+			seat("sre", iam.Apps...), authz.ActionKnowledgeAnswer,
+			authz.Object{Kind: authz.KindCompany}, false, authz.ReasonSeatRefused},
+
+		// --- the person asked ------------------------------------------- //
+		{"the person an open ask names reads the item", personLeading("sre"),
+			authz.ActionWorkRead,
+			authz.Object{Kind: authz.KindTask, Container: "PLATFORM", Asked: "sre"},
+			true, authz.ReasonAsked},
+		{"and answers on it", personLeading("sre"), authz.ActionWorkComment,
+			authz.Object{Kind: authz.KindTask, Container: "PLATFORM", Asked: "sre"},
+			true, authz.ReasonAsked},
+		{"somebody else is not let in by another's ask", personLeading("cto"),
+			authz.ActionWorkRead,
+			authz.Object{Kind: authz.KindTask, Container: "PLATFORM", Asked: "sre"},
+			false, authz.ReasonNoGrant},
+		{"the tracker reads it whoever is asked", person("jane.doe", tracker),
+			authz.ActionWorkRead,
+			authz.Object{Kind: authz.KindTask, Container: "PLATFORM", Asked: "sre"},
+			true, authz.ReasonGrant},
 
 		// --- the caller's own working state -------------------------- //
 		{"a seat reads its own episodes", seat("sre"),
 			authz.ActionEpisodesQuery, authz.Object{Kind: authz.KindPerson},
 			true, authz.ReasonSelf},
-		{"a seat writes its own diary with no grant at all", seat("sre"),
+		{"a seat writes its own diary with no permission at all", seat("sre"),
 			authz.ActionMemoryPersist, authz.Object{Kind: authz.KindPerson},
 			true, authz.ReasonSelf},
 		{"and never somebody else's", seat("sre"),
@@ -172,111 +236,146 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 			authz.Object{Kind: authz.KindPerson, Owner: "cto"},
 			false, authz.ReasonNotSelf},
 		// NOT EVEN THE ADMIN PATH, which is what makes this its own class:
-		// an operator reading a seat's memory is a different surface with a
-		// grant of its own, and admitting it here too would be a second
-		// answer to one question.
-		{"the admin grant does not reach a seat's diary",
-			person("jane.doe", iam.GrantFleetOperate), authz.ActionMemoryPersist,
+		// somebody reading a seat's memory is a different verb with a rule
+		// of its own, and admitting it here too would be a second answer to
+		// one question.
+		{"admin does not reach a seat's diary",
+			person("jane.doe", admin), authz.ActionMemoryPersist,
 			authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			false, authz.ReasonNotSelf},
 
-		// --- colleague write ----------------------------------------- //
-		{"an ask spends a colleague's turn, so it needs the write",
-			seat("sre", iam.GrantWorkWrite), authz.ActionColleagueAsk,
-			authz.Object{Kind: authz.KindPerson, Owner: "cto"},
-			true, authz.ReasonGrant},
-		{"a read-only credential cannot make every seat think",
-			person("status.board", iam.GrantStateRead), authz.ActionColleagueAsk,
-			authz.Object{Kind: authz.KindPerson, Owner: "cto"},
-			false, authz.ReasonNoGrant},
-		{"work:write files an item", seat("sre", iam.GrantWorkWrite),
-			authz.ActionWorkCreate, authz.Object{Kind: authz.KindTask},
-			true, authz.ReasonGrant},
-		{"work:write does not author a page", seat("sre", iam.GrantWorkWrite),
-			authz.ActionPageCreate, authz.Object{Kind: authz.KindPage},
-			false, authz.ReasonNoGrant},
-		{"knowledge:write authors a page", seat("sre", iam.GrantKnowledgeWrite),
-			authz.ActionPageCreate, authz.Object{Kind: authz.KindPage},
-			true, authz.ReasonGrant},
-		// A FILE IS WRITTEN AS AN ITEM IS FILED, on the work grant — the
-		// project is the object — and never on the page grant.
-		{"work:write keeps a file in a project", seat("sre", iam.GrantWorkWrite),
-			authz.ActionFileWrite,
-			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
-			true, authz.ReasonGrant},
-		{"knowledge:write does not", seat("sre", iam.GrantKnowledgeWrite),
-			authz.ActionFileWrite,
-			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
-			false, authz.ReasonNoGrant},
+		// --- an agent's own -------------------------------------------- //
+		{"a seat asks a colleague holding no permission", seat("sre"),
+			authz.ActionColleagueAsk, authz.Object{Kind: authz.KindPerson, Owner: "cto"},
+			true, authz.ReasonEverybody},
+		{"a seat starts a coding run holding no permission", seat("sre"),
+			authz.ActionSandboxRun, authz.Object{Kind: authz.KindCompany},
+			true, authz.ReasonEverybody},
+		{"a person holding admin does neither", person("jane.doe", admin),
+			authz.ActionSandboxRun, authz.Object{Kind: authz.KindCompany},
+			false, authz.ReasonSeatOnly},
 
 		// --- own record ---------------------------------------------- //
-		{"a seat marks its own inbox", seat("sre"),
+		{"a seat marks its own inbox", seat("sre", tracker),
 			authz.ActionInboxMark, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			true, authz.ReasonSelf},
-		{"a lead does not mark a report's inbox", seat("cto"),
+		{"but not without the tracker", seat("sre"),
+			authz.ActionInboxMark, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			false, authz.ReasonNoGrant},
+		{"a lead does not mark a report's inbox", seat("cto", tracker),
 			authz.ActionInboxMark, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			false, authz.ReasonNotSelf},
-		{"the admin path unsticks a queue", person("jane.doe", iam.GrantFleetOperate),
+		{"admin unsticks a queue", person("jane.doe", admin),
 			authz.ActionInboxMark, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			true, authz.ReasonGrant},
-		{"an unnamed owner is refused", seat("sre"),
+		{"an unnamed owner is refused", seat("sre", tracker),
 			authz.ActionInboxMark, authz.Object{Kind: authz.KindPerson},
 			false, authz.ReasonUnnamed},
 
 		// --- own or lead --------------------------------------------- //
-		{"a seat sets its own priorities", seat("sre"),
+		{"a seat sets its own priorities", seat("sre", tracker),
 			authz.ActionPrioritiesSet, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			true, authz.ReasonSelf},
-		{"a lead sets a report's priorities", seat("cto"),
+		{"a lead sets a report's priorities", seat("cto", tracker),
 			authz.ActionPrioritiesSet, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			true, authz.ReasonLead},
-		{"a colleague does not", seat("design"),
+		// A LEAD WHO DOES NOT USE THE TRACKER keeps no queue in it, theirs
+		// or a report's.
+		{"a lead without the tracker does not", seat("cto"),
+			authz.ActionPrioritiesSet, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			false, authz.ReasonNoGrant},
+		{"a colleague does not", seat("design", tracker),
 			authz.ActionPrioritiesSet, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			false, authz.ReasonNotSelf},
 
 		// --- container ------------------------------------------------ //
-		{"a project's lead writes its policy", seat("cto"),
+		{"a project's lead writes its policy", seat("cto", tracker),
 			authz.ActionProjectPolicy,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
 			true, authz.ReasonLead},
-		{"a colleague does not", seat("sre"),
+		{"a colleague does not", seat("sre", tracker),
 			authz.ActionProjectPolicy,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
 			false, authz.ReasonNotLead},
-		{"the admin path does", person("jane.doe", iam.GrantFleetOperate),
+		{"admin does", person("jane.doe", admin),
 			authz.ActionProjectPolicy,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
 			true, authz.ReasonGrant},
-		{"an unnamed container is refused", seat("cto"),
+		{"an unnamed container is refused", seat("cto", tracker),
 			authz.ActionProjectPolicy, authz.Object{Kind: authz.KindProject},
 			false, authz.ReasonUnnamed},
-		// BUT THE TOOL ITSELF IS A COLLEAGUE WRITE: adding a label is
-		// open to every seat that may write work at all, and gating the
-		// whole verb as the container's refused a colleague the one
-		// facet internal/tracker grants them.
-		{"a colleague declares a label", seat("sre", iam.GrantWorkWrite),
+		// BUT THE TOOL ITSELF IS THE APP: adding a label is open to
+		// everybody who uses the tracker, and gating the whole verb as the
+		// container's refused a colleague the one facet internal/tracker
+		// grants them.
+		{"a colleague declares a label", seat("sre", tracker),
 			authz.ActionProjectWrite,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
 			true, authz.ReasonGrant},
-		// A PAGE CONTAINER IS A THIRD KEY CLASS, and the fixture holds
-		// it apart from the other two for the same reason: the CTO
-		// leads the RUNBOOKS container and neither the project nor the
-		// unit map answers for it. A rule that asked the project
-		// relation with a container key refused the lead of that very
-		// container on every company that does not spell its `space:`
-		// and its `project:` the same — which is what
-		// [authz.ActionContainerWrite] did before it read the kind.
-		{"a container's lead renames a page in it", seat("cto"),
+
+		// --- tidy ------------------------------------------------------ //
+		//
+		// A PAGE CONTAINER IS A THIRD KEY CLASS, and the fixture holds it
+		// apart from the other two: the CTO leads the RUNBOOKS container and
+		// neither the project nor the unit map answers for it. A rule that
+		// asked the project relation with a container key refused the lead
+		// of that very container on every company that does not spell its
+		// `space:` and its `project:` the same.
+		{"a container's lead renames a page in it", seat("cto", knowledge),
 			authz.ActionPageRename,
 			authz.Object{Kind: authz.KindContainer, Container: "RUNBOOKS"},
 			true, authz.ReasonLead},
-		{"a colleague does not", seat("sre"),
+		{"a colleague does not", seat("sre", knowledge),
 			authz.ActionPageRename,
 			authz.Object{Kind: authz.KindContainer, Container: "RUNBOOKS"},
 			false, authz.ReasonNotLead},
-		{"and the project relation is not asked for it", seat("cto"),
+		{"and the project relation is not asked for it", seat("cto", knowledge),
 			authz.ActionPageRename,
 			authz.Object{Kind: authz.KindContainer, Container: "PLATFORM"},
+			false, authz.ReasonNotLead},
+		// AND WHOEVER WROTE IT TIDIES IT, whoever leads its container.
+		{"the page's creator renames it", seat("sre", knowledge),
+			authz.ActionPageRename,
+			authz.Object{Kind: authz.KindPage, Container: "RUNBOOKS", Author: "sre"},
+			true, authz.ReasonAuthor},
+		{"the page's creator trashes it", personLeading("sre", knowledge),
+			authz.ActionPageTrash,
+			authz.Object{Kind: authz.KindPage, Container: "RUNBOOKS", Author: "sre"},
+			true, authz.ReasonAuthor},
+		{"an item's reporter removes it", seat("sre", tracker),
+			authz.ActionWorkRemove,
+			authz.Object{Kind: authz.KindTask, Container: "PLATFORM", Author: "sre"},
+			true, authz.ReasonAuthor},
+		{"and restores it", seat("sre", tracker),
+			authz.ActionWorkRestore,
+			authz.Object{Kind: authz.KindTask, Container: "PLATFORM", Author: "sre"},
+			true, authz.ReasonAuthor},
+		{"the container's lead removes an item", seat("cto", tracker),
+			authz.ActionWorkRemove,
+			authz.Object{Kind: authz.KindTask, Container: "PLATFORM"},
+			true, authz.ReasonLead},
+		{"a colleague who may file may not remove another's",
+			seat("sre", tracker), authz.ActionWorkRemove,
+			authz.Object{Kind: authz.KindTask, Container: "PLATFORM", Author: "cto"},
+			false, authz.ReasonNotLead},
+
+		// --- destructive ---------------------------------------------- //
+		{"the project's lead moves an item out", seat("cto", tracker),
+			authz.ActionWorkMove,
+			authz.Object{Kind: authz.KindTask, Container: "PLATFORM"},
+			true, authz.ReasonLead},
+		// A MOVE HAS NO AUTHOR ARM: carrying work out of a project is the
+		// project's lead's, whoever filed it.
+		{"the reporter does not", seat("sre", tracker), authz.ActionWorkMove,
+			authz.Object{Kind: authz.KindTask, Container: "PLATFORM", Author: "sre"},
+			false, authz.ReasonNotLead},
+		{"the project's lead removes a file", seat("cto", tracker),
+			authz.ActionFileRemove,
+			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
+			true, authz.ReasonLead},
+		{"a colleague who may write a file may not remove one",
+			seat("sre", tracker), authz.ActionFileRemove,
+			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
 			false, authz.ReasonNotLead},
 
 		// --- saved views ---------------------------------------------- //
@@ -284,72 +383,70 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		// ONE VERB, TWO AUTHORITIES, picked by what the view IS. The
 		// payload decides and the caller cannot choose which question
 		// is asked — see [authz.ClassSavedView].
-		{"a seat saves its own personal view", seat("sre"),
+		{"a seat saves its own personal view", seat("sre", tracker),
 			authz.ActionViewSave,
 			authz.Object{Kind: authz.KindView, Owner: "sre"},
 			true, authz.ReasonSelf},
-		{"a lead does not rearrange a report's own strip", seat("cto"),
+		{"a lead does not rearrange a report's own strip", seat("cto", tracker),
 			authz.ActionViewSave,
 			authz.Object{Kind: authz.KindView, Owner: "sre"},
 			false, authz.ReasonNotSelf},
-		{"a project's lead saves a shared view on it", seat("cto"),
+		{"a project's lead saves a shared view on it", seat("cto", tracker),
 			authz.ActionViewSave,
 			authz.Object{Kind: authz.KindView, ContainerKind: authz.KindProject,
 				Container: "PLATFORM"},
 			true, authz.ReasonLead},
-		{"a colleague does not share one there", seat("sre"),
+		{"a colleague does not share one there", seat("sre", tracker),
 			authz.ActionViewSave,
 			authz.Object{Kind: authz.KindView, ContainerKind: authz.KindProject,
 				Container: "PLATFORM"},
 			false, authz.ReasonNotLead},
-		{"a unit's lead shares one on the unit", seat("cto"),
+		{"a unit's lead shares one on the unit", seat("cto", tracker),
 			authz.ActionViewSave,
 			authz.Object{Kind: authz.KindView, ContainerKind: authz.KindUnit,
 				Container: "sre"},
 			true, authz.ReasonLead},
-		{"a seat shares one on its own page", seat("sre"),
+		{"a seat shares one on its own page", seat("sre", tracker),
 			authz.ActionViewSave,
 			authz.Object{Kind: authz.KindView, ContainerKind: authz.KindPerson,
 				Container: "sre"},
 			true, authz.ReasonSelf},
-		{"and their lead does too", seat("cto"),
+		{"and their lead does too", seat("cto", tracker),
 			authz.ActionViewSave,
 			authz.Object{Kind: authz.KindView, ContainerKind: authz.KindPerson,
 				Container: "sre"},
 			true, authz.ReasonLead},
 		// THE WORKSPACE TAB IS THE ADMIN PATH ALONE: it lands in front
 		// of every person in the company and nobody leads it.
-		{"nobody leads the workspace", seat("cto"),
+		{"nobody leads the workspace", seat("cto", tracker),
 			authz.ActionViewSave,
 			authz.Object{Kind: authz.KindView, ContainerKind: authz.KindCompany,
 				Container: "workspace"},
 			false, authz.ReasonNotLead},
-		{"so the admin path saves a workspace tab",
-			person("jane.doe", iam.GrantFleetOperate),
+		{"so admin saves a workspace tab", person("jane.doe", admin),
 			authz.ActionViewSave,
 			authz.Object{Kind: authz.KindView, ContainerKind: authz.KindCompany,
 				Container: "workspace"},
 			true, authz.ReasonGrant},
-		{"a view naming neither is refused", seat("cto"),
+		{"a view naming neither is refused", seat("cto", tracker),
 			authz.ActionViewSave, authz.Object{Kind: authz.KindView},
 			false, authz.ReasonUnnamed},
+
 		// --- the org chart's subtree ---------------------------------- //
 		//
 		// A UNIT IS ITS OWN RELATION, and the fixture holds it apart from
 		// the project one: the CTO leads the `sre` UNIT and the PLATFORM
-		// PROJECT, and neither key answers the other's map. A rule that
-		// asked the project relation with a unit key would refuse the lead
-		// of that very unit on every company whose unit does not file under
-		// a project of the same name.
+		// PROJECT, and neither key answers the other's map.
 		//
 		// A PERSON BOUND TO THE SEAT, because that is who writes the chart:
 		// it is a /config write, no seat's tool reaches it, and every write
-		// asks for a recent proof of identity no seat can give.
+		// asks for a recent proof of identity no seat can give. NO APP: the
+		// chart is the company's shape, not one of its apps.
 		{"a unit's lead writes inside it", personLeading("cto"),
 			authz.ActionOrgWrite,
 			authz.Object{Kind: authz.KindUnit, Container: "sre"},
 			true, authz.ReasonLead},
-		{"a colleague in it does not", personLeading("sre"),
+		{"a colleague in it does not", personLeading("sre", iam.Apps...),
 			authz.ActionOrgWrite,
 			authz.Object{Kind: authz.KindUnit, Container: "sre"},
 			false, authz.ReasonNotLead},
@@ -357,37 +454,21 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 			authz.ActionOrgWrite,
 			authz.Object{Kind: authz.KindUnit, Container: "PLATFORM"},
 			false, authz.ReasonNotLead},
-		// THE ROOT IS NO UNIT'S, so it is in nobody's subtree: a seat or a
-		// unit at the top of the company is the company grant's alone —
-		// refused as a unit somebody else leads is, so a refusal never
-		// says whether an id is at the root or nowhere at all.
 		{"the company root is nobody's subtree", personLeading("cto"),
 			authz.ActionOrgWrite, authz.Object{Kind: authz.KindUnit},
 			false, authz.ReasonNotLead},
-		{"the company's grant writes anywhere",
-			person("jane.doe", iam.GrantConfigWrite), authz.ActionOrgWrite,
-			authz.Object{Kind: authz.KindUnit},
-			true, authz.ReasonGrant},
-		{"the deployment's grant alone does not",
-			person("jane.doe", iam.GrantFleetOperate), authz.ActionOrgWrite,
-			authz.Object{Kind: authz.KindUnit, Container: "sre"},
-			false, authz.ReasonNotLead},
+		{"admin writes anywhere", person("jane.doe", admin), authz.ActionOrgWrite,
+			authz.Object{Kind: authz.KindUnit}, true, authz.ReasonGrant},
 		{"an agent never writes the chart, whatever it holds",
-			seat("cto", iam.GrantConfigWrite), authz.ActionOrgWrite,
+			seat("cto", admin), authz.ActionOrgWrite,
 			authz.Object{Kind: authz.KindUnit, Container: "sre"},
 			false, authz.ReasonSeatRefused},
 		{"a lead reads inside their subtree", personLeading("cto"),
 			authz.ActionOrgRead,
 			authz.Object{Kind: authz.KindUnit, Container: "sre"},
 			true, authz.ReasonLead},
-		{"the read grant reads anywhere",
-			person("jane.doe", iam.GrantConfigRead), authz.ActionOrgRead,
-			authz.Object{Kind: authz.KindUnit},
-			true, authz.ReasonGrant},
-		{"and does not write",
-			person("jane.doe", iam.GrantConfigRead), authz.ActionOrgWrite,
-			authz.Object{Kind: authz.KindUnit, Container: "sre"},
-			false, authz.ReasonNotLead},
+		{"admin reads anywhere", person("jane.doe", admin), authz.ActionOrgRead,
+			authz.Object{Kind: authz.KindUnit}, true, authz.ReasonGrant},
 		// A WRITE NOBODY HAS READ YET passes the route for anybody a unit
 		// could name as its lead, and nobody else: the body decides.
 		{"a person bound to a seat passes the route before the body",
@@ -399,101 +480,81 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 			authz.Object{Kind: authz.KindUnit, Unresolved: true},
 			false, authz.ReasonNotLead},
 
-		// --- destructive ---------------------------------------------- //
-		{"the container's lead removes an item", seat("cto"),
-			authz.ActionWorkRemove,
-			authz.Object{Kind: authz.KindTask, Container: "PLATFORM"},
-			true, authz.ReasonLead},
-		{"a colleague who may file may not remove",
-			seat("sre", iam.GrantWorkWrite), authz.ActionWorkRemove,
-			authz.Object{Kind: authz.KindTask, Container: "PLATFORM"},
-			false, authz.ReasonNotLead},
-		// AND A FILE IS REMOVED AS AN ITEM IS: the project's lead takes it
-		// out, and a colleague who may add one may not.
-		{"the project's lead removes a file", seat("cto"),
-			authz.ActionFileRemove,
-			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
-			true, authz.ReasonLead},
-		{"a colleague who may write a file may not remove one",
-			seat("sre", iam.GrantWorkWrite), authz.ActionFileRemove,
-			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
-			false, authz.ReasonNotLead},
-
 		// --- purge ----------------------------------------------------- //
-		{"a person with the grant purges",
-			person("jane.doe", iam.GrantFleetOperate), authz.ActionWorkPurge,
+		{"admin purges", person("jane.doe", admin), authz.ActionWorkPurge,
 			authz.Object{Kind: authz.KindTask}, true, authz.ReasonGrant},
-		{"a seat holding the grant does not",
-			seat("sre", iam.GrantFleetOperate), authz.ActionWorkPurge,
+		{"a seat holding admin does not", seat("sre", admin), authz.ActionWorkPurge,
 			authz.Object{Kind: authz.KindTask}, false, authz.ReasonSeatRefused},
-		{"a person without it does not", person("jane.doe"),
-			authz.ActionWorkPurge, authz.Object{Kind: authz.KindTask},
+		// THE ONE TIDY AN AUTHOR DOES NOT TAKE: nothing undoes it.
+		{"an item's reporter does not purge it", person("jane.doe", tracker),
+			authz.ActionWorkPurge,
+			authz.Object{Kind: authz.KindTask, Author: "jane.doe"},
 			false, authz.ReasonNoGrant},
-		// AND THE SAME BAR COMPOSES WITH A RELATION rather than only
-		// with the grant, which is why it is a field on the row and not
-		// a class: a project's own lead archives it, and an agent that
-		// leads one does not — a project nobody can file into again is
-		// a company decision.
-		{"a project's lead archives it", seat("cto"),
+		// AND THE HUMAN-ONLY BAR COMPOSES WITH A RELATION rather than only
+		// with admin, which is why it is a field on the row and not a class:
+		// a project's own lead archives it, and an agent that leads one does
+		// not — a project nobody can file into again is a company decision.
+		{"an agent leading a project does not archive it", seat("cto", tracker),
 			authz.ActionProjectArchive,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
 			false, authz.ReasonSeatRefused},
-		{"and a person who leads it does",
-			personLeading("cto"), authz.ActionProjectArchive,
+		{"a person who leads it does", personLeading("cto", tracker),
+			authz.ActionProjectArchive,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"},
 			true, authz.ReasonLead},
 
 		// --- authored --------------------------------------------------- //
-		{"the author edits their comment", person("jane.doe"),
+		{"the author edits their comment", person("jane.doe", knowledge),
 			authz.ActionPageCommentEdit,
 			authz.Object{Kind: authz.KindPage, Author: "jane.doe"},
 			true, authz.ReasonAuthor},
-		{"somebody else does not", person("sam.rey"),
+		{"somebody else does not", person("sam.rey", knowledge),
 			authz.ActionPageCommentEdit,
 			authz.Object{Kind: authz.KindPage, Author: "jane.doe"},
 			false, authz.ReasonNotAuthor},
-		// A WORK ITEM'S REMARK IS DECIDED BY THE SAME CLASS, and the seat
-		// a person is bound to is their authorship there: a comment a
-		// bound person wrote is recorded under their SEAT handle.
+		{"nor does the author who no longer uses the knowledge base",
+			person("jane.doe"), authz.ActionPageCommentEdit,
+			authz.Object{Kind: authz.KindPage, Author: "jane.doe"},
+			false, authz.ReasonNoGrant},
+		// A WORK ITEM'S REMARK IS DECIDED BY THE SAME CLASS, and the seat a
+		// person is bound to is their authorship there: a comment a bound
+		// person wrote is recorded under their SEAT handle.
 		{"a bound person edits the remark their seat wrote",
-			personLeading("sre"), authz.ActionWorkCommentEdit,
+			personLeading("sre", tracker), authz.ActionWorkCommentEdit,
 			authz.Object{Kind: authz.KindTask, Author: "sre"},
 			true, authz.ReasonAuthor},
-		{"and a colleague does not", personLeading("cto"),
+		{"and a colleague does not", personLeading("cto", tracker),
 			authz.ActionWorkCommentEdit,
 			authz.Object{Kind: authz.KindTask, Author: "sre"},
 			false, authz.ReasonNotAuthor},
 
 		// --- a place on a board ----------------------------------------- //
-		// THE CAPABILITY THAT FILES WORK ARRANGES IT, and nothing less: a
-		// board's order is nobody's object, so the relation is none.
-		{"work:write moves a card", person("jane.doe", iam.GrantWorkWrite),
+		{"the tracker moves a card", person("jane.doe", tracker),
 			authz.ActionWorkPlace, authz.Object{Kind: authz.KindTask},
 			true, authz.ReasonGrant},
-		{"state:read alone does not", person("jane.doe", iam.GrantStateRead),
+		{"knowledge alone does not", person("jane.doe", knowledge),
 			authz.ActionWorkPlace, authz.Object{Kind: authz.KindTask},
 			false, authz.ReasonNoGrant},
 		// AND NEVER A SEAT, however it is granted: a board is a person's
 		// arrangement.
-		{"a seat does not rearrange a board", seat("sre", iam.GrantWorkWrite),
+		{"a seat does not rearrange a board", seat("sre", tracker),
 			authz.ActionWorkPlace, authz.Object{Kind: authz.KindTask},
 			false, authz.ReasonSeatRefused},
 
 		// --- whether a seat works ---------------------------------------- //
-		// ITS LEAD PAUSES IT, and nobody who merely reads the board: every
-		// person signed in holds a credential, so a rule that asked for one
-		// would let any reader stop any seat.
-		{"a lead pauses their report", personLeading("cto", iam.GrantStateRead),
+		// ITS LEAD PAUSES IT, and nobody who merely uses the company's
+		// apps: a rule that asked for one would let any colleague stop any
+		// seat. No app: a lead who uses neither still runs their team.
+		{"a lead pauses their report", personLeading("cto"),
 			authz.ActionSeatPause, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			true, authz.ReasonLead},
-		{"a reader does not", person("jane.doe", iam.GrantStateRead),
+		{"a colleague holding every app does not", person("jane.doe", iam.Apps...),
 			authz.ActionSeatPause, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			false, authz.ReasonNotSelf},
-		{"the deployment's grant resumes any seat",
-			person("jane.doe", iam.GrantFleetOperate), authz.ActionSeatResume,
-			authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+		{"admin resumes any seat", person("jane.doe", admin),
+			authz.ActionSeatResume, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			true, authz.ReasonGrant},
-		{"a seat resumes nobody, itself included", seat("sre", iam.GrantFleetOperate),
+		{"a seat resumes nobody, itself included", seat("sre", admin),
 			authz.ActionSeatResume, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			false, authz.ReasonSeatRefused},
 		{"a lead steers their report's turn", personLeading("cto"),
@@ -511,33 +572,40 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 			authz.ActionRunAnswer, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			true, authz.ReasonLead},
 
-		// --- a question answered from the company's knowledge ------------ //
-		{"a person holding the read grant asks",
-			personLeading("sam", iam.GrantStateRead), authz.ActionKnowledgeAnswer,
-			authz.Object{Kind: authz.KindCompany}, true, authz.ReasonGrant},
-		{"a seat never does — it has a search and a model of its own",
-			seat("sre", iam.GrantStateRead), authz.ActionKnowledgeAnswer,
-			authz.Object{Kind: authz.KindCompany}, false, authz.ReasonSeatRefused},
-		{"work:write alone discloses nothing", person("ci.release", iam.GrantWorkWrite),
-			authz.ActionKnowledgeAnswer, authz.Object{Kind: authz.KindCompany},
+		// --- one seat's trail ---------------------------------------------- //
+		{"a lead reads their agent's trail", personLeading("cto"),
+			authz.ActionSeatTrailRead, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			true, authz.ReasonLead},
+		{"a colleague holding every app does not",
+			personLeading("sam", iam.Apps...), authz.ActionSeatTrailRead,
+			authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			false, authz.ReasonNotSelf},
+		{"admin reads any seat's", person("jane.doe", admin),
+			authz.ActionSeatTrailRead, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
+			true, authz.ReasonGrant},
+		// AND THE COMPANY-WIDE TRAIL IS ADMIN'S, whoever leads whom.
+		{"a lead does not read the whole company's trail", personLeading("cto"),
+			authz.ActionAuditRead, authz.Object{Kind: authz.KindCompany},
 			false, authz.ReasonNoGrant},
 
-		// --- operator ---------------------------------------------------- //
-		{"config:write patches the company",
-			person("jane.doe", iam.GrantConfigWrite), authz.ActionConfigWrite,
-			authz.Object{Kind: authz.KindCompany}, true, authz.ReasonGrant},
-		{"config:read does not", person("jane.doe", iam.GrantConfigRead),
+		// --- running the company ----------------------------------------- //
+		{"admin patches the company", person("jane.doe", admin),
+			authz.ActionConfigWrite, authz.Object{Kind: authz.KindCompany},
+			true, authz.ReasonGrant},
+		{"every app together does not", person("jane.doe", iam.Apps...),
 			authz.ActionConfigWrite, authz.Object{Kind: authz.KindCompany},
 			false, authz.ReasonNoGrant},
-		{"secrets:write does not reveal one",
-			person("jane.doe", iam.GrantSecretWrite), authz.ActionSecretReveal,
-			authz.Object{Kind: authz.KindCompany}, false, authz.ReasonNoGrant},
+		{"admin reveals a credential at a keyboard", person("jane.doe", admin),
+			authz.ActionSecretReveal, authz.Object{Kind: authz.KindCompany},
+			true, authz.ReasonGrant},
+		{"a tool skill page is admin's, not the knowledge base's",
+			person("jane.doe", knowledge), authz.ActionSkillPageWrite,
+			authz.Object{Kind: authz.KindPage}, false, authz.ReasonNoGrant},
 
 		// --- stage --------------------------------------------------------- //
 		{"an invited principal may do nothing yet",
 			iam.Principal{ID: uuid.New(), Login: "new.hire", Kind: iam.KindPerson,
-				Stage:  iam.StageInvited,
-				Grants: []iam.Grant{iam.GrantFleetOperate, iam.GrantStateRead}},
+				Stage: iam.StageInvited, Grants: []iam.Grant{admin}},
 			authz.ActionWorkList, authz.Object{Kind: authz.KindTask},
 			false, authz.ReasonStage},
 	} {
@@ -562,7 +630,7 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 //
 // The control for the table above. Without it every lead case could be
 // passing because the rule ignores the chart entirely and answers from the
-// grant, which is exactly the collapse that made `Lead` false for every
+// permission, which is exactly the collapse that made `Lead` false for every
 // operator in the surface this replaces.
 func TestFlippingTheChartInvertsEveryLeadAnswer(t *testing.T) {
 	t.Parallel()
@@ -584,11 +652,14 @@ func TestFlippingTheChartInvertsEveryLeadAnswer(t *testing.T) {
 			authz.Object{Kind: authz.KindTask, Container: "PLATFORM"}},
 		{"a file's removal", "cto", authz.ActionFileRemove,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}},
+		{"a seat's trail", "cto", authz.ActionSeatTrailRead,
+			authz.Object{Kind: authz.KindPerson, Owner: "sre"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			was := authz.Decide(t.Context(), seat(c.actor), c.action, c.object, nimbus(), decidedAt)
-			is := authz.Decide(t.Context(), seat(c.actor), c.action, c.object, inverted, decidedAt)
+			actor := seat(c.actor, iam.GrantTracker)
+			was := authz.Decide(t.Context(), actor, c.action, c.object, nimbus(), decidedAt)
+			is := authz.Decide(t.Context(), actor, c.action, c.object, inverted, decidedAt)
 			if !was.Allowed {
 				t.Fatalf("the fixture does not allow this to begin with: %q", was.Reason)
 			}
@@ -620,10 +691,12 @@ func TestAChartReadErrorIsUnknownNotARefusal(t *testing.T) {
 			authz.Object{Kind: authz.KindPerson, Owner: "sre"}},
 		{"project policy", authz.ActionProjectPolicy,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}},
+		{"a tidy", authz.ActionPageTrash,
+			authz.Object{Kind: authz.KindPage, Container: "RUNBOOKS"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			d := authz.Decide(t.Context(), seat("cto"), c.action, c.object,
+			d := authz.Decide(t.Context(), seat("cto", iam.Apps...), c.action, c.object,
 				chart{err: behind}, decidedAt)
 			if !d.Unknown() {
 				t.Fatalf("a chart that could not answer decided %v (%q), which "+
@@ -642,14 +715,13 @@ func TestAChartReadErrorIsUnknownNotARefusal(t *testing.T) {
 
 // AND THE ADMIN PATH DOES NOT NEED THE CHART.
 //
-// The control for the case above, and the reason the grant is checked first:
-// an operator holding the deployment's own grant must not be told "I cannot
-// tell" by a node that is merely lagging. Without this, closing the hole
-// above would have opened a worse one — every operator locked out whenever
-// the chart is unavailable.
+// The control for the case above, and the reason admin is checked first: an
+// administrator must not be told "I cannot tell" by a node that is merely
+// lagging. Without this, closing the hole above would have opened a worse one
+// — every administrator locked out whenever the chart is unavailable.
 func TestTheAdminPathDecidesWithNoChartAtAll(t *testing.T) {
 	t.Parallel()
-	admin := person("jane.doe", iam.GrantFleetOperate)
+	admin := person("jane.doe", iam.GrantAdmin)
 	for _, c := range []struct {
 		name   string
 		action authz.Action
@@ -661,6 +733,8 @@ func TestTheAdminPathDecidesWithNoChartAtAll(t *testing.T) {
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}},
 		{"removal", authz.ActionWorkRemove,
 			authz.Object{Kind: authz.KindTask, Container: "PLATFORM"}},
+		{"the chart", authz.ActionOrgWrite,
+			authz.Object{Kind: authz.KindUnit, Container: "sre"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -669,45 +743,42 @@ func TestTheAdminPathDecidesWithNoChartAtAll(t *testing.T) {
 				t.Fatalf("the admin path asked a chart it does not need: %v", d.Err)
 			}
 			if !d.Allowed || d.Reason != authz.ReasonGrant {
-				t.Errorf("allowed = %v (%q), want the grant to decide",
+				t.Errorf("allowed = %v (%q), want admin to decide",
 					d.Allowed, d.Reason)
 			}
 		})
 	}
 }
 
-// THE SUBTREE'S REFUSAL NAMES ITS ROW'S GRANT, AND THAT GRANT NEEDS NO CHART.
+// THE SUBTREE'S ADMIN PATH IS ADMIN, AND IT NEEDS NO CHART.
 //
 // `Decision.Grants` is what a person refused reads as the remedy, so a lead
-// refused a unit they do not lead is told `config:write` for a write and
-// `config:read` for a read — the grant that admits them — and never
-// `fleet:operate`, the admin path of the classes that decide somebody's work.
-// And the admin path is decided before the relation, so a node that cannot
-// read its org never tells an administrator that it cannot tell, while a lead
-// on the same node is told exactly that.
+// refused a unit they do not lead is told admin — for a read as for a write —
+// and never an app, which would change nothing. And the admin path is decided
+// before the relation, so a node that cannot read its org never tells an
+// administrator that it cannot tell, while a lead on the same node is told
+// exactly that.
 //
-// Mutation: make the class's admin path the deployment's grant and every
-// grant assertion here goes red; ask the chart before the grant and the
-// administrator's decision turns unknown.
-func TestTheSubtreesAdminPathIsItsRowsGrant(t *testing.T) {
+// Mutation: name the row's app on the refusal and every grant assertion here
+// goes red; ask the chart before admin and the administrator's decision turns
+// unknown.
+func TestTheSubtreesAdminPathIsAdmin(t *testing.T) {
 	t.Parallel()
 	object := authz.Object{Kind: authz.KindUnit, Container: "elsewhere"}
-	for action, want := range map[authz.Action]iam.Grant{
-		authz.ActionOrgWrite: iam.GrantConfigWrite,
-		authz.ActionOrgRead:  iam.GrantConfigRead,
-	} {
-		refused := authz.Decide(t.Context(), personLeading("cto"), action, object,
-			nimbus(), decidedAt)
-		if refused.Allowed || !slices.Equal(refused.Grants, []iam.Grant{want}) {
+	want := []iam.Grant{iam.GrantAdmin}
+	for _, action := range []authz.Action{authz.ActionOrgWrite, authz.ActionOrgRead} {
+		refused := authz.Decide(t.Context(), personLeading("cto", iam.Apps...), action,
+			object, nimbus(), decidedAt)
+		if refused.Allowed || !slices.Equal(refused.Grants, want) {
 			t.Errorf("%s: a lead refused a unit they do not lead: allowed %v "+
-				"naming %v, want a refusal naming [%s]", action, refused.Allowed,
+				"naming %v, want a refusal naming %v", action, refused.Allowed,
 				refused.Grants, want)
 		}
-		admitted := authz.Decide(t.Context(), person("jane.doe", want), action, object,
-			authz.NoChart{}, decidedAt)
+		admitted := authz.Decide(t.Context(), person("jane.doe", iam.GrantAdmin), action,
+			object, authz.NoChart{}, decidedAt)
 		if admitted.Unknown() || !admitted.Allowed {
-			t.Errorf("%s: %s on a node with no chart: allowed %v, err %v — the "+
-				"admin path needs no chart", action, want, admitted.Allowed, admitted.Err)
+			t.Errorf("%s: admin on a node with no chart: allowed %v, err %v — the "+
+				"admin path needs no chart", action, admitted.Allowed, admitted.Err)
 		}
 		blind := authz.Decide(t.Context(), personLeading("cto"), action, object,
 			chart{err: authz.ErrNoChart}, decidedAt)
@@ -725,7 +796,7 @@ func TestTheSubtreesAdminPathIsItsRowsGrant(t *testing.T) {
 // production; this is what happens if it ever gets there.
 func TestAVerbWithNoRuleIsRefused(t *testing.T) {
 	t.Parallel()
-	d := authz.Decide(t.Context(), person("jane.doe", iam.GrantFleetOperate),
+	d := authz.Decide(t.Context(), person("jane.doe", iam.GrantAdmin),
 		authz.Action("delete_the_company"), authz.Object{Kind: authz.KindCompany},
 		nimbus(), decidedAt)
 	if d.Allowed {
@@ -743,25 +814,28 @@ func TestAVerbWithNoRuleIsRefused(t *testing.T) {
 	}
 }
 
-// A REFUSAL NAMES EXACTLY THE GRANTS THAT WOULD HAVE ADMITTED THE CALLER.
+// A REFUSAL NAMES THE SMALLEST PERMISSIONS THAT WOULD HAVE ADMITTED THE CALLER.
 //
 // [authz.Decision.Grants] is what a surface puts in front of a person refused
-// — "this needs fleet:operate" — so it has to be the decision's own account
-// of what it consulted, never a guess made beside it. Held here against the
-// decision itself, over every verb, every kind of object and every grant: for
-// each refusal of a principal carrying nothing, the grants it names are
-// precisely those that, carried ALONE, turn the same question into an admit
-// on that grant. Both directions, because each fails differently: naming a
-// grant that would not have helped sends somebody to ask for authority that
-// changes nothing, and leaving one out tells them there is no way in when
-// there is.
+// — "this needs Tracker" — so it has to be the decision's own account of what
+// it consulted, never a guess made beside it. Held here against the decision
+// itself, over every verb, every kind of object and every permission: for each
+// refusal of a principal carrying nothing, the permissions it names are
+// precisely the MINIMAL ones that, carried alone, turn the same question into
+// an admit on the permission — every one that does, less any whose [iam.Expand]
+// already holds another that does (admin is never named beside an app it
+// includes). Both directions, because each fails differently: naming a
+// permission that would not have helped sends somebody to ask for authority
+// that changes nothing, leaving one out tells them there is no way in when
+// there is, and naming admin beside the app tells them to ask for running the
+// company when using one app would do.
 //
 // TWO OBJECTS PER KIND, because several rules refuse an object missing its
-// field BEFORE they consult any grant — no capability would change that
-// answer, so it names none — and an object with every field filled is the
-// one that reaches the relation and the admin path behind it. The chart
-// answers every relation with a firm no, so a lead relation never admits
-// anybody and never hides a grant.
+// field BEFORE they consult any permission — no permission would change that
+// answer, so it names none — and an object with every field filled is the one
+// that reaches the relation and the admin path behind it. The chart answers
+// every relation with a firm no, so a lead relation never admits anybody and
+// never hides a permission.
 func TestARefusalNamesExactlyTheGrantsThatWouldHaveAdmittedIt(t *testing.T) {
 	t.Parallel()
 	nobody := func() iam.Principal { return person("jane.doe") }
@@ -780,15 +854,6 @@ func TestARefusalNamesExactlyTheGrantsThatWouldHaveAdmittedIt(t *testing.T) {
 				if d.Allowed {
 					continue
 				}
-				if also, _ := authz.AlsoGrantOf(a); also != "" && len(d.Grants) > 0 {
-					// A TWO-GRANT ROW names what the caller lacks and
-					// needs ALL of it: with every named grant it is
-					// admitted, and short of any one it is not. One that
-					// refused before consulting any grant (nobody named)
-					// names none, as every other row does, below.
-					namesExactlyWhatItLacks(t, a, object, d)
-					continue
-				}
 				var admits []iam.Grant
 				for _, g := range iam.AllGrants {
 					alone := person("jane.doe", g)
@@ -797,17 +862,36 @@ func TestARefusalNamesExactlyTheGrantsThatWouldHaveAdmittedIt(t *testing.T) {
 						admits = append(admits, g)
 					}
 				}
-				named := append([]iam.Grant(nil), d.Grants...)
+				named := slices.Clone(d.Grants)
+				minimal := minimalCover(admits)
 				slices.Sort(named)
-				slices.Sort(admits)
-				if !slices.Equal(named, admits) {
-					t.Errorf("%s on %+v refused (%s) naming %v; the grants "+
-						"that would have admitted it alone are %v",
-						a, object, d.Reason, named, admits)
+				slices.Sort(minimal)
+				if !slices.Equal(named, minimal) {
+					t.Errorf("%s on %+v refused (%s) naming %v; the smallest "+
+						"permissions that would have admitted it alone are %v",
+						a, object, d.Reason, named, minimal)
 				}
 			}
 		}
 	}
+}
+
+// minimalCover is admits less every permission whose expansion already holds
+// another member of admits: admin, wherever an app it includes admits too.
+func minimalCover(admits []iam.Grant) []iam.Grant {
+	var out []iam.Grant
+	for _, g := range admits {
+		covered := false
+		for _, h := range admits {
+			if h != g && slices.Contains(iam.Expand([]iam.Grant{g}), h) {
+				covered = true
+			}
+		}
+		if !covered {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 // A NAME NOBODY HAS RESOLVED IS DECIDED BEFORE THE DIRECTORY IS ASKED, and a
@@ -817,11 +901,11 @@ func TestARefusalNamesExactlyTheGrantsThatWouldHaveAdmittedIt(t *testing.T) {
 // on the name as typed while a held one this node could not resolve answered
 // 503 carrying the seat it was bound to — so which logins exist, and whose
 // seat each holds, was readable off the difference by anybody. Decided first:
-// the admin grant and the caller's own login admit as they would on any
-// record; a class with no lead path, and a caller who leads nobody, are
-// refused with EXACTLY the decision somebody's seat they do not lead gets, so
-// the refusal cannot say whether a lookup ever happened; and a caller who
-// leads somebody is told to resolve the name and decide again on the record.
+// admin and the caller's own login admit as they would on any record; a class
+// with no lead path, and a caller who leads nobody, are refused with EXACTLY
+// the decision somebody's seat they do not lead gets, so the refusal cannot
+// say whether a lookup ever happened; and a caller who leads somebody is told
+// to resolve the name and decide again on the record.
 func TestANameNobodyResolvedIsDecidedBeforeTheDirectoryIsAsked(t *testing.T) {
 	t.Parallel()
 	unresolved := func(login string) authz.Object {
@@ -830,9 +914,9 @@ func TestANameNobodyResolvedIsDecidedBeforeTheDirectoryIsAsked(t *testing.T) {
 	resolvedTo := func(seat string) authz.Object {
 		return authz.Object{Kind: authz.KindPerson, Owner: seat}
 	}
-	stranger := person("pat.nobody", iam.GrantWorkWrite, iam.GrantStateRead)
-	lead := personLeading("cto", iam.GrantWorkWrite, iam.GrantStateRead)
-	admin := person("ops.admin", iam.GrantFleetOperate, iam.GrantStateRead)
+	stranger := person("pat.nobody", iam.GrantTracker)
+	lead := personLeading("cto", iam.GrantTracker)
+	admin := person("ops.admin", iam.GrantAdmin)
 	blind := chart{err: errors.New("the running org is not built yet")}
 
 	for _, c := range []struct {
@@ -842,8 +926,8 @@ func TestANameNobodyResolvedIsDecidedBeforeTheDirectoryIsAsked(t *testing.T) {
 		chart  chart
 		want   string // allowed, refused, resolve, unknown
 	}{
-		{"the admin grant, on a queue", admin, authz.ActionPersonRead, nimbus(), "allowed"},
-		{"the admin grant, on a mark", admin, authz.ActionInboxMark, nimbus(), "allowed"},
+		{"admin, on a queue", admin, authz.ActionPersonRead, nimbus(), "allowed"},
+		{"admin, on a mark", admin, authz.ActionInboxMark, nimbus(), "allowed"},
 		{"the caller's own login", stranger, authz.ActionPersonRead, nimbus(), "allowed"},
 		{"a stranger, on a queue", stranger, authz.ActionPersonRead, nimbus(), "refused"},
 		{"a stranger, on a mark", stranger, authz.ActionInboxMark, nimbus(), "refused"},
@@ -862,21 +946,10 @@ func TestANameNobodyResolvedIsDecidedBeforeTheDirectoryIsAsked(t *testing.T) {
 			}
 			d := authz.Decide(t.Context(), c.p, c.action, unresolved(login),
 				c.chart, decidedAt)
-			var got string
-			switch {
-			case errors.Is(d.Err, authz.ErrUnresolved):
-				got = "resolve"
-			case d.Unknown():
-				got = "unknown"
-			case d.Allowed:
-				got = "allowed"
-			default:
-				got = "refused"
-			}
-			if got != c.want {
+			if got := outcome(d); got != c.want {
 				t.Fatalf("decided %s (%+v), want %s", got, d, c.want)
 			}
-			if got != "refused" {
+			if c.want != "refused" {
 				return
 			}
 			// THE SAME REFUSAL SOMEBODY'S SEAT THEY DO NOT LEAD GETS,
@@ -893,49 +966,63 @@ func TestANameNobodyResolvedIsDecidedBeforeTheDirectoryIsAsked(t *testing.T) {
 	}
 }
 
-// namesExactlyWhatItLacks holds a TWO-PARTY row's refusal to its own
-// contract: the grants it names, added to what the caller holds, admit it on
-// the grant — and every one of them is needed, so the caller short of any one
-// is still refused.
-func namesExactlyWhatItLacks(t *testing.T, a authz.Action, object authz.Object,
-	d authz.Decision) {
-
-	t.Helper()
-	if len(d.Grants) == 0 {
-		t.Errorf("%s on %+v refused (%s) naming nothing, and it asks for two "+
-			"grants", a, object, d.Reason)
-		return
-	}
-	with := person("jane.doe", d.Grants...)
-	if got := authz.Decide(t.Context(), with, a, object, chart{}, decidedAt); !got.Allowed ||
-		got.Reason != authz.ReasonGrant {
-		t.Errorf("%s on %+v: holding every grant the refusal named (%v) "+
-			"decided %+v, want admitted on the grant", a, object, d.Grants, got)
-	}
-	for i := range d.Grants {
-		short := slices.Delete(slices.Clone(d.Grants), i, i+1)
-		if got := authz.Decide(t.Context(), person("jane.doe", short...), a,
-			object, chart{}, decidedAt); got.Allowed {
-			t.Errorf("%s on %+v: holding %v, short of %s, was admitted — the "+
-				"refusal named a grant it did not need", a, object, short,
-				d.Grants[i])
-		}
+// A CALLER WITHOUT THE ROW'S APP IS REFUSED BEFORE ANYTHING IS READ.
+//
+// [authz.ErrUnresolved] tells a surface to look something up — a login in the
+// directory, a row in the tracker — and decide again. A caller the looked-up
+// answer could never admit, because they do not use the app the verb belongs
+// to, must not be sent there: they are refused on the spot, naming the app,
+// the same answer whatever the lookup would have said. The control is the same
+// caller holding the app, who IS sent to resolve. Mutation: let withApp pass
+// an unresolved decision through and every first assertion goes red.
+func TestACallerWithoutTheAppIsRefusedBeforeAnythingIsRead(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		action authz.Action
+		object authz.Object
+		app    iam.Grant
+	}{
+		{"a lead naming a report's queue", authz.ActionPersonRead,
+			authz.Object{Kind: authz.KindPerson, Owner: "someone.else", Unresolved: true},
+			iam.GrantTracker},
+		{"a page nobody has read", authz.ActionPageTrash,
+			authz.Object{Kind: authz.KindPage, Unresolved: true}, iam.GrantKnowledge},
+		{"an item nobody has read", authz.ActionWorkMove,
+			authz.Object{Kind: authz.KindTask, Unresolved: true}, iam.GrantTracker},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			without := authz.Decide(t.Context(), personLeading("cto"), c.action,
+				c.object, nimbus(), decidedAt)
+			if without.Unknown() || without.Allowed ||
+				!slices.Equal(without.Grants, []iam.Grant{c.app}) {
+				t.Errorf("without the app: %+v, want refused naming [%s]", without, c.app)
+			}
+			with := authz.Decide(t.Context(), personLeading("cto", c.app), c.action,
+				c.object, nimbus(), decidedAt)
+			if !errors.Is(with.Err, authz.ErrUnresolved) {
+				t.Errorf("with the app: %+v, want told to resolve", with)
+			}
+		})
 	}
 }
 
-// READING A PERSON'S DAY IS A READ, AND KEEPING IT IS NOT. Their notices name
-// the company's tasks and their queue lists them, so reading their own takes
-// `state:read` beside the owner-or-lead relation, as every other read does;
-// marking, pinning and ordering it takes none. Without the grant on the row,
-// one question had two answers: the query surface asks `state:read` of every
-// question it registers, so `GET /work/inbox` refused a person's no-grant
-// token while `POST /operator/act/work_inbox` answered it — and the token
-// dialog told them it could read their inbox. Mutation: drop the read grant
-// from the three rows and the first case is admitted.
-func TestReadingADayTakesTheReadGrantAndKeepingItDoesNot(t *testing.T) {
+// READING AND KEEPING A DAY BOTH TAKE THE TRACKER.
+//
+// A person's notices name the company's tasks and their queue lists them, so
+// their day IS the tracker's: reading it, marking it, pinning views over it and
+// ordering it each take the app beside the relation, and somebody who does not
+// use the tracker has no day there to keep. Without the app on the rows one
+// question had two answers — the query surface asks the app of every work
+// question it registers, so the queue a REST route refused would have been
+// answered over the act transport. Mutation: drop the app from the mark's row
+// and its case is admitted.
+func TestReadingAndKeepingADayBothTakeTheTracker(t *testing.T) {
 	t.Parallel()
 	own := authz.Object{Kind: authz.KindPerson, Owner: "erin.ng"}
 	theirs := authz.Object{Kind: authz.KindPerson, Owner: "someone.else"}
+	tracker := []iam.Grant{iam.GrantTracker}
 	for _, c := range []struct {
 		name   string
 		p      iam.Principal
@@ -945,24 +1032,25 @@ func TestReadingADayTakesTheReadGrantAndKeepingItDoesNot(t *testing.T) {
 		grants []iam.Grant
 	}{
 		{"own inbox, holding nothing", person("erin.ng"), authz.ActionInboxRead, own,
-			false, []iam.Grant{iam.GrantStateRead}},
-		{"own queue, holding nothing", person("erin.ng"), authz.ActionMyWork, own,
-			false, []iam.Grant{iam.GrantStateRead}},
+			false, tracker},
+		{"own queue, holding knowledge", person("erin.ng", iam.GrantKnowledge),
+			authz.ActionMyWork, own, false, tracker},
 		{"own record, holding nothing", person("erin.ng"), authz.ActionPersonRead, own,
-			false, []iam.Grant{iam.GrantStateRead}},
-		{"own inbox, holding the read", person("erin.ng", iam.GrantStateRead),
-			authz.ActionInboxRead, own, true, nil},
-		{"the admin path without the read", person("ops.admin", iam.GrantFleetOperate),
-			authz.ActionInboxRead, theirs, false, []iam.Grant{iam.GrantStateRead}},
-		{"the admin path with it", person("ops.admin", iam.GrantFleetOperate,
-			iam.GrantStateRead), authz.ActionInboxRead, theirs, true, nil},
-		// THE CONTROLS: keeping your own record takes no grant at all.
+			false, tracker},
 		{"marking own inbox, holding nothing", person("erin.ng"), authz.ActionInboxMark,
-			own, true, nil},
+			own, false, tracker},
 		{"pinning own views, holding nothing", person("erin.ng"), authz.ActionPinsSet,
-			own, true, nil},
+			own, false, tracker},
 		{"ordering own queue, holding nothing", person("erin.ng"),
-			authz.ActionPrioritiesSet, own, true, nil},
+			authz.ActionPrioritiesSet, own, false, tracker},
+		// THE CONTROLS: the app opens every one of them, and admin opens
+		// somebody else's through the apps it includes.
+		{"own inbox, holding the tracker", person("erin.ng", iam.GrantTracker),
+			authz.ActionInboxRead, own, true, nil},
+		{"marking own inbox, holding the tracker", person("erin.ng", iam.GrantTracker),
+			authz.ActionInboxMark, own, true, nil},
+		{"admin on somebody else's", person("ops.admin", iam.GrantAdmin),
+			authz.ActionInboxRead, theirs, true, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -975,4 +1063,17 @@ func TestReadingADayTakesTheReadGrantAndKeepingItDoesNot(t *testing.T) {
 			}
 		})
 	}
+}
+
+// outcome names a decision's arm for the cases that compare arms.
+func outcome(d authz.Decision) string {
+	switch {
+	case errors.Is(d.Err, authz.ErrUnresolved):
+		return "resolve"
+	case d.Unknown():
+		return "unknown"
+	case d.Allowed:
+		return "allowed"
+	}
+	return "refused"
 }

@@ -17,6 +17,7 @@
 import { Card, DATA_COLOR_OTHER, StackedColumns } from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
 import { companyDateLabel } from "~/lib/format.ts";
+import { TRACKER, needsWords } from "~/lib/access.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { WorkFlowAnswer } from "~/protocol/index.ts";
 
@@ -25,7 +26,14 @@ export const CHART_DAYS = 14;
 
 const SERIES = [{ id: "completed", name: "Completed", color: DATA_COLOR_OTHER }] as const;
 
-export function CompletedChart({ flow }: { flow: QueryResult<WorkFlowAnswer> }) {
+export function CompletedChart({
+  flow,
+  locked,
+}: {
+  flow: QueryResult<WorkFlowAnswer>;
+  /** The reader holds no Tracker, so the series was never asked. */
+  locked: boolean;
+}) {
   const points = flow.data?.points?.slice(-CHART_DAYS) ?? [];
   const week = points.slice(-7).reduce((n, p) => n + p.completed, 0);
   const last = points.length - 1;
@@ -52,17 +60,21 @@ export function CompletedChart({ flow }: { flow: QueryResult<WorkFlowAnswer> }) 
           </span>
         )}
       </div>
-      <QueryState error={flow.error} refusal={flow.refusal} loading={flow.loading && !flow.data}>
-        <StackedColumns
-          series={SERIES}
-          buckets={buckets}
-          legend="none"
-          height="9.5rem"
-          label="Tasks completed per company day, the last fourteen days"
-          format={(v) => Math.round(v).toLocaleString()}
-          formatTime={(at) => labels.get(at) ?? ""}
-        />
-      </QueryState>
+      {locked ? (
+        <p className="home-card-note">{needsWords("The tracker's history", [TRACKER])}</p>
+      ) : (
+        <QueryState error={flow.error} refusal={flow.refusal} loading={flow.loading && !flow.data}>
+          <StackedColumns
+            series={SERIES}
+            buckets={buckets}
+            legend="none"
+            height="9.5rem"
+            label="Tasks completed per company day, the last fourteen days"
+            format={(v) => Math.round(v).toLocaleString()}
+            formatTime={(at) => labels.get(at) ?? ""}
+          />
+        </QueryState>
+      )}
     </Card>
   );
 }

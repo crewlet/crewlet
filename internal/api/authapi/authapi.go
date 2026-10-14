@@ -3,10 +3,10 @@
 // # What is here, and what is deliberately not
 //
 // Every route here is a step in the same sequence: somebody proves who they
-// are and leaves holding a session cookie. What
-// decides whether that session may DO anything is internal/authz, reached
-// through the grant on each route it guards — this package establishes
-// identity and never authority.
+// are and leaves holding a session cookie. What decides whether that session
+// may DO anything is internal/authz, reached through the verb each route it
+// guards is mounted on — this package establishes identity and never
+// authority.
 //
 // The machinery it drives belongs to other packages and none of it is
 // reimplemented here: internal/iam/credential hashes, verifies and throttles;
@@ -448,7 +448,7 @@ type Audit interface {
 // Options is what the surface is built from.
 type Options struct {
 	// Bootstrap is Tier A. REQUIRED: the cookie's name and Secure flag,
-	// the session deadlines, the password rules and the grant ceiling all come
+	// the session deadlines, the password rules and the admin posture all come
 	// from it, and a surface that guessed any of them would mint cookies
 	// the next node rejects.
 	Bootstrap *config.Bootstrap

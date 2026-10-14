@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -652,40 +651,34 @@ func TestANameTheWritePathWouldRefuseNamesNoSecret(t *testing.T) {
 	}
 }
 
-// EVERY ROUTE TAKES ITS GRANT, and the value takes one of its own.
+// EVERY ROUTE IS ADMIN'S, the value included.
 //
 // These routes decided nothing: the guard in front of them answers only
 // whether somebody resolved, which meant "the operator" while an operator
-// token was the only credential this engine had. A person signed in holding
-// `state:read` alone could then list, reveal, overwrite and delete the
+// token was the only credential this engine had. A person signed in holding a
+// read-only permission alone could then list, reveal, overwrite and delete the
 // company's credentials. So each route is stated against a caller holding
-// exactly the grant it needs, and against one holding everything BUT that
-// grant — the most authority a caller can have and still be refused, which is
-// what makes the refusal about the rule. A refusal names the grant.
+// admin, and against one holding EVERY APP — the most a caller can carry
+// without admin, and still refused, which is what makes the refusal about the
+// rule (ADR-0033: a listing of the company's credentials is not part of
+// anybody's overview, and no app opens it). A refusal names admin and nothing
+// else — the minimal grant that would admit.
 func TestEveryRouteTakesTheGrantItsVerbNames(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name         string
 		method, path string
 		body         string
-		// needs is every grant the request takes, all of which the
-		// admitted caller carries; each is then withheld in turn.
-		needs []iam.Grant
 	}{
-		{"the listing", http.MethodGet, "/secrets", "",
-			[]iam.Grant{iam.GrantConfigRead}},
-		{"one row's metadata", http.MethodGet, "/secrets/A", "",
-			[]iam.Grant{iam.GrantConfigRead}},
-		// THE VALUE TAKES BOTH: the route's own grant, because the
-		// metadata is the listing's, and the one the value needs.
-		{"revealing the value", http.MethodGet, "/secrets/A?reveal=true", "",
-			[]iam.Grant{iam.GrantConfigRead, iam.GrantSecretRead}},
-		{"a write", http.MethodPut, "/secrets/B", "two",
-			[]iam.Grant{iam.GrantSecretWrite}},
-		{"a delete", http.MethodDelete, "/secrets/A", "",
-			[]iam.Grant{iam.GrantSecretWrite}},
-		{"a rekey", http.MethodPost, "/secrets/rekey", "",
-			[]iam.Grant{iam.GrantSecretWrite}},
+		{"the listing", http.MethodGet, "/secrets", ""},
+		{"one row's metadata", http.MethodGet, "/secrets/A", ""},
+		// THE VALUE IS ITS OWN VERB, `secrets.reveal`, asked on top of the
+		// route's once the flag is read: admin as the listing is, so a
+		// caller holding every app is refused it naming admin too.
+		{"revealing the value", http.MethodGet, "/secrets/A?reveal=true", ""},
+		{"a write", http.MethodPut, "/secrets/B", "two"},
+		{"a delete", http.MethodDelete, "/secrets/A", ""},
+		{"a rekey", http.MethodPost, "/secrets/rekey", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -699,45 +692,77 @@ func TestEveryRouteTakesTheGrantItsVerbNames(t *testing.T) {
 				}
 				return mounted(t, opts, grants...)
 			}
-			if code, body := call(t, build(c.needs...), c.method, c.path, c.body); code >= 400 {
-				t.Errorf("holding %v: %d %s, want it admitted", c.needs, code, body)
+			if code, body := call(t, build(iam.GrantAdmin), c.method, c.path, c.body); code >= 400 {
+				t.Errorf("holding admin: %d %s, want it admitted", code, body)
 			}
-			for _, withheld := range c.needs {
-				rest := slices.DeleteFunc(slices.Clone(iam.AllGrants),
-					func(g iam.Grant) bool { return g == withheld })
-				code, body := call(t, build(rest...), c.method, c.path, c.body)
-				if code != http.StatusForbidden {
-					t.Errorf("holding everything but %s: %d %s, want 403",
-						withheld, code, body)
-					continue
-				}
-				var refusal map[string]any
-				if err := json.Unmarshal([]byte(body), &refusal); err != nil {
-					t.Fatalf("decode %s: %v", body, err)
-				}
-				grants, _ := refusal[authz.DetailGrants].([]any)
-				if len(grants) != 1 || grants[0] != string(withheld) {
-					t.Errorf("refused naming %v, want %s", refusal[authz.DetailGrants],
-						withheld)
-				}
+			code, body := call(t, build(iam.Apps...), c.method, c.path, c.body)
+			if code != http.StatusForbidden {
+				t.Fatalf("holding every app and not admin: %d %s, want 403",
+					code, body)
+			}
+			var refusal map[string]any
+			if err := json.Unmarshal([]byte(body), &refusal); err != nil {
+				t.Fatalf("decode %s: %v", body, err)
+			}
+			grants, _ := refusal[authz.DetailGrants].([]any)
+			if len(grants) != 1 || grants[0] != string(iam.GrantAdmin) {
+				t.Errorf("refused naming %v, want [admin]", refusal[authz.DetailGrants])
 			}
 		})
 	}
 }
 
-// AND A REFUSED REVEAL NEVER OPENS THE VALUE: the grant is asked before the
-// store is read, so a caller without it cannot learn even whether the value
-// would have decrypted — the answer is the same 403 for a name that exists and
-// one that does not.
+// AND A REFUSED REVEAL NEVER OPENS THE VALUE: `secrets.reveal` is asked before
+// the store is read, so a caller the listing admits and the reveal does not
+// cannot learn even whether the value would have decrypted — the answer is the
+// same 403 for a name that exists and one that does not.
+//
+// Admin opens both verbs, so what tells them apart is the reveal row's own
+// lock: a person present and a recent proof. An admin acting through a machine
+// token, and an admin whose sign-in is a day old, may each list and are each
+// refused the value — before the name is looked up.
 func TestARefusedRevealIsTheSameForANameThatDoesNotExist(t *testing.T) {
 	t.Parallel()
-	h := mounted(t, secretsapi.Options{Fleet: coordmem.NewFleet(),
-		Cipher: cipherFor(t, "k1"), ActiveKeyID: "k1"}, iam.GrantConfigRead)
-	present, _ := call(t, h, http.MethodGet, "/secrets/NOWHERE?reveal=true", "")
-	if present != http.StatusForbidden {
-		t.Errorf("revealing an absent name without secrets:read = %d, want 403: "+
-			"a 404 would tell a caller without the grant which names exist",
-			present)
+	opts := secretsapi.Options{Fleet: coordmem.NewFleet(),
+		Cipher: cipherFor(t, "k1"), ActiveKeyID: "k1",
+		Now: func() time.Time { return clock }}
+	if code, body := call(t, mounted(t, opts, iam.AllGrants...),
+		http.MethodPut, "/secrets/A", "one"); code != http.StatusOK {
+		t.Fatalf("seed = %d %s", code, body)
+	}
+	for name, caller := range map[string]iam.Principal{
+		"an admin acting through a machine token": {
+			ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
+			Stage: iam.StageActive, Grants: iam.AllGrants,
+			Via:      "pat:0192f00d-0000-7000-8000-00000000000b",
+			ReauthAt: time.Now().Add(time.Hour),
+		},
+		"an admin whose proof is stale": {
+			ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
+			Stage: iam.StageActive, Grants: iam.AllGrants,
+			ReauthAt: time.Now().Add(-time.Hour),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := mountedAs(t, opts, caller)
+			if code, body := call(t, h, http.MethodGet, "/secrets/A", ""); code != http.StatusOK {
+				t.Fatalf("the metadata = %d %s, want 200: the case is about "+
+					"the reveal's own row, not the listing's", code, body)
+			}
+			present, presentBody := call(t, h, http.MethodGet, "/secrets/A?reveal=true", "")
+			absent, absentBody := call(t, h, http.MethodGet, "/secrets/NOWHERE?reveal=true", "")
+			if present != http.StatusForbidden || absent != http.StatusForbidden {
+				t.Errorf("revealing a name that exists = %d, one that does not "+
+					"= %d, want both 403: a 404 would tell a caller the reveal "+
+					"refuses which names exist", present, absent)
+			}
+			// THE SAME BYTES, which is what says the value was never read:
+			// a refusal that had opened it could not match one for a name
+			// with nothing under it.
+			if presentBody != absentBody {
+				t.Errorf("the two refusals differ:\n%s\n%s", presentBody, absentBody)
+			}
+		})
 	}
 }
 

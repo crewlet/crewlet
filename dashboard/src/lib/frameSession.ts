@@ -1,6 +1,5 @@
 /**
- * Who this browser is signed in as, read ONCE by the frame — and whether that
- * session may read the company at all.
+ * Who this browser is signed in as, read ONCE by the frame.
  *
  * `GET /auth/session` answers who a session is and what it holds whatever else
  * the engine refuses it, so it is the frame's FIRST question: the sidebar's
@@ -13,20 +12,19 @@
  * unbound reader, People & access marking the reader's own row — reads THIS,
  * never a read of its own, and the Account re-reads it through [reload].
  *
- * # The socket is dialled only for a session that may read the company
+ * # Every session is dialled
  *
- * The live socket needs `state:read`: the engine refuses its handshake to a
- * session without it (`internal/api/stream`), and every screen but the
- * reader's Account reads the socket. A session lacking it is NO ACCESS YET —
- * an ordinary state, a person invited with no grants, not a fault — so the
- * frame dials nothing for it (a dial was a refused handshake, its refusal probe
- * and a refused degraded-mode snapshot, twice) and draws one panel in place of
- * every screen but the Account.
- *
- * AND IT ASKS AGAIN, every [NO_ACCESS_RECHECK_MS] and whenever the tab comes
- * back, because nothing else can tell this tab that an administrator has given
- * the grant: the identity move that names the person is pushed over the socket
- * it does not have. The answer that holds the grant is what dials it.
+ * The live socket admits every principal the engine resolves whose stage may
+ * act (`internal/api/stream`): what a reader may SEE on it is decided per push
+ * by their access — the overview for everybody, a seat's transcript for its
+ * lead and an admin, the tracker's pushes for whoever holds Tracker — so a
+ * person invited with no app still reads the org chart, the agents' status
+ * and their own account. So the frame dials for every session it reads and
+ * holds nothing back for one that holds no app; access given later reaches
+ * the open tab by the engine closing its socket to reconnect (1013), after
+ * which the viewer is asked again. A session the engine refuses the socket
+ * outright — a person whose seat was taken out of the chart — is the
+ * handshake's refusal, drawn by `app/frame/AccessRefused.tsx`.
  */
 
 import {
@@ -34,38 +32,12 @@ import {
   createElement,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   type ReactNode,
 } from "react";
-import { COMPANY_GRANT, type Grant } from "~/app/nav.ts";
 import { takeSession } from "./session.ts";
 import { useRest, type RestResult } from "./useRest.ts";
 import { auth, type RestError, type SessionAnswer } from "~/protocol/index.ts";
-
-/**
- * The grant the live socket needs — the engine's `iam.GrantStateRead`, which
- * `internal/api/stream` refuses a handshake without — and so the grant every
- * screen but the reader's own needs: `nav.ts`'s [COMPANY_GRANT], the one rule
- * every lock the navigation draws is decided by, named here for the socket.
- */
-export const LIVE_VIEW_GRANT: Grant = COMPANY_GRANT;
-
-/**
- * The refusal a session without [LIVE_VIEW_GRANT] is recorded as in the store
- * (`Store.setAccessRefused`), where a refused handshake records the engine's:
- * the frame dials nothing for it, so nothing else would.
- */
-export const NO_ACCESS = `this session holds no ${LIVE_VIEW_GRANT}`;
-
-/**
- * How often a session with no access asks again, in ms. The socket's own
- * reconnect ceiling: a tab waiting on something outside it — an engine coming
- * back, an administrator's grant — notices within half a minute, and an idle
- * tab of somebody who can do nothing else here costs the engine two cheap
- * guarded reads a minute rather than a standing poll on every tab.
- */
-export const NO_ACCESS_RECHECK_MS = 30_000;
 
 export interface FrameSession {
   /** What `GET /auth/session` answered, or null before an answer and after a refusal. */
@@ -76,8 +48,6 @@ export interface FrameSession {
   code: RestResult<SessionAnswer>["code"];
   refusal: RestResult<SessionAnswer>["refusal"];
   loading: boolean;
-  /** The session holds no [LIVE_VIEW_GRANT]: nothing is dialled, and it is asked again. */
-  noAccess: boolean;
   /** Ask again now, quietly. */
   reload: () => Promise<void>;
 }
@@ -100,18 +70,12 @@ export function SessionReading({ children }: { children: ReactNode }) {
     { refetchOnFocus: true },
   );
   const answer = read.data;
-  const noAccess = answer !== null && !(answer.grants ?? []).includes(LIVE_VIEW_GRANT);
   const { reload: readAgain } = read;
   const reload = useCallback(() => readAgain({ quiet: true }), [readAgain]);
-  useEffect(() => {
-    if (!noAccess) return;
-    const timer = setInterval(() => void reload(), NO_ACCESS_RECHECK_MS);
-    return () => clearInterval(timer);
-  }, [noAccess, reload]);
   const { error, code, refusal, loading } = read;
   const value = useMemo(
-    () => ({ answer, error, code, refusal, loading, noAccess, reload }),
-    [answer, error, code, refusal, loading, noAccess, reload],
+    () => ({ answer, error, code, refusal, loading, reload }),
+    [answer, error, code, refusal, loading, reload],
   );
   return createElement(Reading.Provider, { value }, children);
 }

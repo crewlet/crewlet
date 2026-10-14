@@ -141,18 +141,18 @@ func list(t *testing.T, sess *mcp.ClientSession) (bool, string) {
 func TestAGrantWithdrawnMidSessionStopsTheNextCall(t *testing.T) {
 	t.Parallel()
 	dir := &directory{people: map[string]iam.Principal{
-		"ops": machine("token:ops", iam.GrantStateRead),
+		"ops": machine("token:ops", iam.GrantTracker),
 	}}
 	server := operatorServer(t, dir)
 	sess := connectAs(t, server.URL+operator.MCPPath, "ops")
 
 	if refused, out := list(t, sess); refused {
-		t.Fatalf("a credential holding state:read was refused the board: %s", out)
+		t.Fatalf("a credential holding the tracker was refused the board: %s", out)
 	}
-	dir.set("ops", machine("token:ops", iam.GrantWorkWrite))
+	dir.set("ops", machine("token:ops", iam.GrantKnowledge))
 	refused, out := list(t, sess)
 	if !refused {
-		t.Fatalf("the board was served after state:read was withdrawn, on the "+
+		t.Fatalf("the board was served after the tracker was withdrawn, on the "+
 			"session opened while it was held: %s", out)
 	}
 	if !strings.Contains(out, "refused") {
@@ -161,9 +161,9 @@ func TestAGrantWithdrawnMidSessionStopsTheNextCall(t *testing.T) {
 
 	// AND RESTORED, so the refusal above is the grant and not a session
 	// that simply stopped working.
-	dir.set("ops", machine("token:ops", iam.GrantStateRead))
+	dir.set("ops", machine("token:ops", iam.GrantTracker))
 	if refused, out := list(t, sess); refused {
-		t.Fatalf("the board was refused after state:read came back: %s", out)
+		t.Fatalf("the board was refused after the tracker came back: %s", out)
 	}
 }
 
@@ -177,7 +177,7 @@ func TestAGrantWithdrawnMidSessionStopsTheNextCall(t *testing.T) {
 func TestAnotherCredentialCannotRideTheOpenersSession(t *testing.T) {
 	t.Parallel()
 	dir := &directory{people: map[string]iam.Principal{
-		"founder":  machine("token:founder", iam.GrantStateRead),
+		"founder":  machine("token:founder", iam.GrantTracker),
 		"stranger": machine("token:stranger"),
 	}}
 	server := operatorServer(t, dir)
@@ -219,7 +219,7 @@ func TestAnotherCredentialCannotRideTheOpenersSession(t *testing.T) {
 		t.Fatalf("a credential holding no grant read the board by presenting the "+
 			"founder's session id (%d): %s", res.StatusCode, answer)
 	}
-	if res.StatusCode == http.StatusOK && !strings.Contains(answer, "state:read") &&
+	if res.StatusCode == http.StatusOK && !strings.Contains(answer, "no_grant") &&
 		!strings.Contains(answer, "refused") {
 		t.Errorf("the stranger's call failed for a reason other than its own "+
 			"authority: %s", answer)
@@ -237,7 +237,7 @@ func TestAnotherCredentialCannotRideTheOpenersSession(t *testing.T) {
 func TestTheOperatorSurfaceServesOnlyPOST(t *testing.T) {
 	t.Parallel()
 	dir := &directory{people: map[string]iam.Principal{}}
-	dir.set("ops", machine("token:ops", iam.GrantStateRead))
+	dir.set("ops", machine("token:ops", iam.GrantTracker))
 	server := operatorServer(t, dir)
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
 		req, err := http.NewRequestWithContext(t.Context(), method, server.URL, nil)
@@ -271,7 +271,7 @@ func TestTheOperatorSurfaceServesOnlyPOST(t *testing.T) {
 func TestAnArgumentTheToolDoesNotReadIsRefusedOverMCP(t *testing.T) {
 	t.Parallel()
 	dir := &directory{people: map[string]iam.Principal{
-		"ops": machine("token:ops", iam.GrantStateRead),
+		"ops": machine("token:ops", iam.GrantTracker),
 	}}
 	server := operatorServer(t, dir)
 	sess := connectAs(t, server.URL+operator.MCPPath, "ops")

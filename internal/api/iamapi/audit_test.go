@@ -65,13 +65,13 @@ func TestTheDirectoryAnnouncesWhatItChanged(t *testing.T) {
 		t.Parallel()
 		r := newRig(t)
 		got := r.as(administrator(), http.MethodPost, "/iam/credentials",
-			map[string]any{"label": "ci", "grants": []string{"state:read"}})
+			map[string]any{"label": "ci", "grants": []string{"knowledge"}})
 		if got.status != http.StatusCreated {
 			t.Fatalf("mint answered %d: %v", got.status, got.body)
 		}
 		row := only[types.IAMCredentialMinted](t, r.audit)
 		if row.Kind != types.CredentialToken || row.Owner != alice.String() ||
-			len(row.Grants) != 1 || row.Grants[0] != "state:read" ||
+			len(row.Grants) != 1 || row.Grants[0] != "knowledge" ||
 			row.By != "founder" || row.Credential == "" || row.ExpiresAt.IsZero() {
 			t.Errorf("minted row = %+v", row)
 		}
@@ -172,7 +172,7 @@ func TestTheDirectoryAnnouncesWhatItChanged(t *testing.T) {
 		r := newRig(t)
 		got := r.as(administrator(), http.MethodPost, "/iam/people",
 			map[string]any{"email": "dana@example.com", "seat": "sre",
-				"reason": "joins on Monday"})
+				"grants": iam.Apps, "reason": "joins on Monday"})
 		if got.status != http.StatusCreated {
 			t.Fatalf("create answered %d: %v", got.status, got.body)
 		}
@@ -185,8 +185,12 @@ func TestTheDirectoryAnnouncesWhatItChanged(t *testing.T) {
 		}
 
 		machine := newRig(t)
-		machine.as(administrator(), http.MethodPost, "/iam/people",
-			map[string]any{"kind": "machine", "login": "ci:release"})
+		if got := machine.as(administrator(), http.MethodPost, "/iam/people",
+			map[string]any{"kind": "machine", "login": "ci:release",
+				"grants": []iam.Grant{}}); got.status != http.StatusCreated {
+			t.Fatalf("a service account's create answered %d: %v — the case "+
+				"below is about one that landed", got.status, got.body)
+		}
 		if seen := machine.audit.all(); len(seen) != 0 {
 			t.Errorf("a service account's create announced %v", seen)
 		}

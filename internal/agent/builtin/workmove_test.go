@@ -15,7 +15,7 @@ import (
 )
 
 // A CROSS-PROJECT MOVE CAN BE STARTED — by the lead of the item's project, or
-// by a holder of the admin grant.
+// by an admin.
 //
 // The tracker's move carried a subtree, re-keyed it, left its old keys
 // resolving, marked a stopped walk and had a duty to finish one; and no tool,
@@ -68,9 +68,9 @@ func moverRegistry(t *testing.T, trk *fakeTracker,
 	return reg
 }
 
-// callMove is a move made by a seat holding the ordinary write grants and NOT
-// the admin one — which every relation class checks before the chart, so a
-// case about who may move made with it would be admitted by any chart.
+// callMove is a move made by a seat holding every app and NOT admin — which
+// every relation class checks before the chart, so a case about who may move
+// made with it would be admitted by any chart.
 func callMove(t *testing.T, reg *tools.Registry, args map[string]any) tools.Result {
 	t.Helper()
 	return callWorkAs(colleagueCaller(), t, reg, tracker.MoveWorkItemTool, args)
@@ -147,7 +147,7 @@ func TestAMoveIsTheItemsProjectLeads(t *testing.T) {
 				t.Fatalf("register %s: %v", tool.Name(), err)
 			}
 		}
-		// THE ADMIN GRANT, leading nothing: callNoTurn carries every grant.
+		// ADMIN, leading nothing: callNoTurn carries every permission.
 		got := callNoTurn(t, reg, tracker.MoveWorkItemTool,
 			map[string]any{"item": "ENG-1", "project": "OPS"})
 		if got.Failed {

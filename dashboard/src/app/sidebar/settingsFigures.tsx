@@ -8,12 +8,12 @@
  * the life of the tab and React will not let a hook be called conditionally,
  * so the hook runs on every screen — and a hook that polled unconditionally
  * would ask the engine three questions on a timer for the whole life of every
- * tab, on screens that draw none of the answers, and ask a reader without the
- * grants three refusals on the same timer. So each query is ENABLED only while
+ * tab, on screens that draw none of the answers, and ask a reader without
+ * Admin three refusals on the same timer. So each query is ENABLED only while
  * the Settings column is on screen and the section its figure is drawn beside
- * is open to the reader (`nav.ts`'s `sectionOpen` — Nodes and Backups take
- * `fleet:operate`, Integrations `config:read`, which are the answers' own,
- * beside the company's `state:read`); everywhere else the hook asks nothing.
+ * is open to the reader (`nav.ts`'s `sectionOpen` — Nodes, Backups and
+ * Integrations take Admin, which is the answers' own); everywhere else the
+ * hook asks nothing.
  *
  * # What each figure is
  *
@@ -158,7 +158,7 @@ export function settingsFigures({
  * Whether a reader holding `grants` may open the Settings section `key` — by
  * the one rule the column draws its locks by (`sectionOpen`), so a figure is
  * never asked for beside a section the column locks: each of these answers is
- * a socket question, and a reader without `state:read` has no socket to ask.
+ * Admin's, and a refusal on a timer is a refusal nobody reads.
  */
 function opens(key: string, grants: readonly string[]): boolean {
   const section = workspaceRow("settings")?.sections.find((s) => s.key === key);

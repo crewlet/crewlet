@@ -81,7 +81,7 @@ import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { goSignIn } from "~/lib/session.ts";
-import { needsSentence } from "~/lib/refusal.ts";
+import { ADMIN, needsWords } from "~/lib/access.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useRest } from "~/lib/useRest.ts";
 import type { EventRecord, SetupRun } from "~/protocol/types.ts";
@@ -1308,16 +1308,16 @@ function rosterOf(tools: SetupToolState[]): SetupToolState | undefined {
  * A WRITE CONTROL IS NEVER HIDDEN (dashboard rule 4): it is disabled with the
  * one sentence that says why. `/setup` is guarded in full, so a reader the
  * engine refused has no form to open, and a listing that answered nothing for
- * this tool has none either — which is a different sentence, because no grant
- * would help.
+ * this tool has none either — which is a different sentence, because no
+ * access would help.
  *
- * THE GRANTS, NAMED: reading what a tool needs is `config:read`, and
- * connecting it is `config:write` and `secrets:write`.
+ * THE ACCESS, NAMED: reading what a tool needs and connecting it are both
+ * Admin's.
  */
 export function formBlocked(sections: unknown[], guarded: boolean): string | undefined {
   if (sections.length > 0) return undefined;
   return guarded
-    ? "Setting up integrations needs config:read to see what they need, and config:write and secrets:write to connect them."
+    ? needsWords("Setting up integrations", [ADMIN])
     : "The engine did not say what this integration needs, so there is no form to open.";
 }
 
@@ -1930,7 +1930,7 @@ export function useSetup(): {
   byKey: Map<string, SetupToolState>;
   base: SetupListing["external_url"] | null;
   guarded: boolean;
-  /** The grants the refusal named, when [guarded] — see [needsSentence]. */
+  /** The access the refusal named, when [guarded] — see `lib/access.ts`'s `needsWords`. */
   needs: string[];
   /**
    * True until this read has answered ONCE, however it answered.
@@ -2248,7 +2248,7 @@ const PASS_IDLE_POLL_MS = 60_000;
  *
  * REST, LIKE [useSetup], AND FOR THE SAME REASONS: no query in the socket's
  * registry answers anything about a pass, and `/setup` is guarded in full —
- * so a reader without `config:read` is REFUSED here rather than shown an
+ * so a reader without Admin is REFUSED here rather than shown an
  * empty history, and `guarded` is what tells those two apart.
  */
 function useSetupRuns(kinds: string[]): {
@@ -2497,7 +2497,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
     return (
       <Card>
         <Card.Header icon={<RotateCwGlyph size="sm" />}>Provisioning passes</Card.Header>
-        <span className="t-caption">{needsSentence("Seeing passes", needs)}</span>
+        <span className="t-caption">{needsWords("Seeing passes", needs)}</span>
       </Card>
     );
   }
@@ -2675,7 +2675,7 @@ function PassDetail({
     return (
       <div className="int-row-note">
         <span className="int-row-note-text">
-          <span className="int-row-note-when">{needsSentence("Reading one pass", needs)}</span>
+          <span className="int-row-note-when">{needsWords("Reading one pass", needs)}</span>
         </span>
       </div>
     );
@@ -3194,7 +3194,7 @@ export function Integrations({ kind }: { kind?: string }) {
       )}
       {setup.guarded && (
         <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
-          <span>{needsSentence("Reading the integrations' setup state", setup.needs)}</span>
+          <span>{needsWords("Reading the integrations' setup state", setup.needs)}</span>
           <span className="spacer" />
           {/* THE DOOR, FOR A READER WHO IS NOBODY: a banner that only NAMES
               the missing credential leaves them nothing on the page that can

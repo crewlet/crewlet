@@ -54,12 +54,7 @@ import { ConfigField, HelperOnFocus, type FieldChoice } from "~/components/Confi
 import { useQuery } from "~/lib/useQuery.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import {
-  SeatHolding,
-  canManagePeople,
-  canReadDirectory,
-  useHumanSeats,
-} from "~/components/people.tsx";
+import { SeatHolding, canManagePeople, useHumanSeats } from "~/components/people.tsx";
 import { TOOL_TONE, toolRollup } from "~/lib/toolState.ts";
 import type { IntegrationTool } from "~/contract/integrations.ts";
 import { AVATAR_CHARACTERS } from "~/contract/avatar.ts";
@@ -1694,8 +1689,9 @@ function HandleFact({
 /**
  * Who holds a human seat, and the gestures that fill or free it: the one
  * [SeatHolding] the seat's page, its peek and its card on the chart draw
- * (`components/people.tsx`), for a reader the identity directory answers and
- * nothing at all, asked of nobody, for anybody else.
+ * (`components/people.tsx`), for every signed-in reader — the directory
+ * answers each holder's name to everybody and the gestures to an admin — and
+ * nothing at all, asked of nobody, before somebody has said who this is.
  *
  * NOT A DRAFT EDIT. Inviting or creating a person, and cancelling the
  * invitation that holds the seat, write the identity directory about the seat
@@ -1706,7 +1702,7 @@ function HandleFact({
  */
 function SeatHolder({ seat, minted }: { seat: { handle: string; name: string }; minted: boolean }) {
   const viewer = useViewer();
-  const reads = !viewer.asking && canReadDirectory(viewer.grants);
+  const reads = !viewer.asking && !viewer.anonymous;
   const seats = useHumanSeats(reads && !minted);
   if (!reads) return null;
   return (

@@ -3,8 +3,8 @@
  * organization, and creating the company where none exists.
  *
  * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. Being
- * signed in proves nothing about the grant the configuration is read under
- * (`config:read`) or written under (`config:write`), so `GET /config` is read
+ * signed in proves nothing about the access the configuration is read and
+ * written under (Admin), so `GET /config` is read
  * on mount and again whenever somebody else signs in on this tab, and its
  * answer decides:
  *
@@ -21,7 +21,7 @@
  * its log stay on screen, the check runs again for the new reader, and a
  * refusal pauses editing rather than throwing the work away.
  *
- * A LEAD EDITS THE UNITS THEY LEAD. A person without `config:write` who leads
+ * A LEAD EDITS THE UNITS THEY LEAD. A person without Admin who leads
  * a unit (`lib/leadScope.ts`) is not refused here: the builder opens one unit
  * they lead as a document of its own (`model/scope.ts`), read and written at
  * `/config/units/{key}`, and the toolbar says which and offers the others.
@@ -351,9 +351,9 @@ interface StatusLook {
 /**
  * How the toolbar reads a check status. A refusal is worded by what lifts it,
  * from the refusal's own `code`: nobody signed in is asked to sign in, a
- * step-up the person declined is theirs to confirm, and only a refusal of the
- * GRANT names config:write — said about a declined confirmation, it sent a
- * person who holds the grant to an administrator for nothing. Anything else
+ * step-up the person declined is theirs to confirm, and only a refusal of
+ * ACCESS names Admin — said about a declined confirmation, it sent an admin
+ * to another admin for nothing. Anything else
  * is "Refused", and the banner beneath carries its sentence.
  */
 function statusLook(
@@ -385,7 +385,7 @@ function guardedLabel(code: string, signedIn: boolean): string {
   if (!signedIn) return "Needs sign-in";
   if (code === STEP_UP_REQUIRED) return "Needs confirmation";
   return configGuardedReason(code) === CONFIG_WRITE_REASONS.no_grant
-    ? "Needs config:write"
+    ? "Needs Admin access"
     : "Refused";
 }
 
@@ -713,7 +713,7 @@ function BuilderScreen({
   const orgKnown = org !== null || authRejected || accessRefused !== null;
 
   // WHICH DOCUMENT THIS BUILDER EDITS: the company, or — for a reader without
-  // `config:write` who leads a unit — one unit they lead (see the module doc):
+  // Admin who leads a unit — one unit they lead (see the module doc):
   // the one they chose, else the one holding the node the address they
   // arrived at names, else the first.
   //
@@ -952,7 +952,7 @@ function BuilderScreen({
   // drawn, every one disabled with who manages it — rather than collecting a
   // draft the engine refuses at the save, or that the managing system
   // replaces at its next reconcile if this credential were let through. It
-  // holds whoever reads, the config:write grant and a lead's own unit alike:
+  // holds whoever reads, an admin and a lead's own unit alike:
   // where the company is written is not a question of who may write it.
   //
   // AND IF THE ENGINE SAYS SO FIRST — a check answered `config_managed`
@@ -2318,7 +2318,7 @@ function PostureScreen({
           icon={<KeyGlyph />}
           title={
             posture.signedIn
-              ? "Reading the configuration needs config:read."
+              ? "Reading the configuration needs Admin access."
               : "Editing the organization needs you to sign in."
           }
           description="The configuration is guarded, reads included. A unit's lead edits the units they lead here without it."

@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -44,8 +45,8 @@ func TestAChartAuthorityWithNoCompanyIsUnknownRatherThanFalse(t *testing.T) {
 	// AND THE DECISION IS UNKNOWN, which is what a surface renders as 503
 	// rather than 403 — the whole reason the error exists.
 	//
-	// ASKED WITH THE POLICY VERB, because `write_project` itself is a
-	// colleague write now and reads no chart at all: adding a label is
+	// ASKED WITH THE POLICY VERB, because `write_project` itself is the
+	// tracker's own verb and reads no chart at all: adding a label is
 	// open to every seat, and only the lead-only facets ask a relation.
 	d := authz.Decide(t.Context(), leadPrincipal("cto"), authz.ActionProjectPolicy,
 		authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}, chart,
@@ -97,9 +98,11 @@ func TestAChartAuthorityReadsBothTheManagesChainAndTheUnitLead(t *testing.T) {
 	}
 }
 
-// leadPrincipal is a seat principal with no grant, so the decision turns on
-// the chart alone — the admin path is checked first and would hide it.
+// leadPrincipal is a seat principal holding the apps every agent seat holds
+// and no admin, so the decision turns on the chart alone: the admin path is
+// checked first and would hide it, and a caller short of a relation row's app
+// is refused naming the app whatever the chart says.
 func leadPrincipal(handle string) iam.Principal {
 	return iam.Principal{ID: uuid.New(), Login: handle, Kind: iam.KindSeat,
-		Seat: handle, Stage: iam.StageActive}
+		Seat: handle, Stage: iam.StageActive, Grants: slices.Clone(iam.Apps)}
 }

@@ -1,6 +1,6 @@
 /**
  * People & access's own write dialogs: a service account, and an edit of
- * somebody's login, seat and grants.
+ * somebody's login, seat and access.
  *
  * Each is one write through `lib/iamWrite.ts` — a create is keyed so the retry
  * an unknown answer asks for names what its first attempt made. See
@@ -20,29 +20,20 @@ import { useMemo, useState } from "react";
 import { Button, Callout, FormField, InlineCode, Input, Modal, Select, Text } from "@crewlethq/ui";
 import { PencilGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
 import {
-  GrantPicker,
+  AccessPicker,
+  AppReachNote,
   IamOutcome,
   MintTokenDialog,
   NO_SEAT,
   pressLabel,
-  ReachNote,
   seatOptions,
   useSeatEntry,
   useUnheldSeats,
 } from "~/components/people.tsx";
-import { TOKEN_WITHHELD_GRANTS } from "~/contract/identity.ts";
+import { ADMIN, expand } from "~/lib/access.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
 import { loginProblem } from "~/lib/login.ts";
 import { useWaiting } from "~/lib/waiting.ts";
-
-/**
- * Why a machine is offered neither of the grants a token never carries: it has
- * no password and no session, so it acts only through tokens, and the engine
- * refuses either on a machine — offered as ordinary boxes, a service account
- * was created holding `people:manage` it could never exercise.
- */
-const MACHINE_WITHHELD =
-  "A service account acts only through tokens, and a token never carries this: it needs a person present.";
 
 /** A directory row, as much of it as an edit and a mint need. */
 export interface EditableRow {
@@ -56,8 +47,15 @@ export interface EditableRow {
 
 /**
  * A new service account — a MACHINE: a login in the colon grammar, a name,
- * grants and, if it should act as one, a human seat nothing holds — and then,
- * once it exists, the offer to mint its token.
+ * its access and, if it should act as one, a human seat nothing holds — and
+ * then, once it exists, the offer to mint its token.
+ *
+ * ITS ACCESS STARTS EMPTY: a service account is a credential somebody
+ * scripts, and what it may do is decided on purpose rather than defaulted —
+ * the engine takes no default for one either. It may hold Admin, which its
+ * tokens then carry for configuration; the engine still refuses a token every
+ * administrative record about a person and every gesture that needs a person
+ * present.
  *
  * THE SEAT GOES IN THE SAME RECORD as the account, which the engine takes:
  * created bare and bound after, a pipeline meant to act as a seat acted as
@@ -204,12 +202,7 @@ export function ServiceAccountDialog({
               The seats nothing holds could not be read: {seats.error.message}
             </Text>
           )}
-          <GrantPicker
-            value={grants}
-            onChange={setGrants}
-            held={held}
-            withheld={{ grants: TOKEN_WITHHELD_GRANTS, reason: MACHINE_WITHHELD }}
-          />
+          <AccessPicker value={grants} onChange={setGrants} held={held} />
         </>
       )}
       <IamOutcome answer={write.answer} />
@@ -242,9 +235,8 @@ export function OnYourself({
       {alone && (
         <>
           {" "}
-          Nobody else active holds <InlineCode>people:manage</InlineCode>, so afterwards nobody
-          could administer people except through this node&rsquo;s API token (
-          <InlineCode>api.auth.tokens</InlineCode>).
+          Nobody else active holds Admin, so afterwards nobody could administer people except
+          through this node&rsquo;s API token (<InlineCode>api.auth.tokens</InlineCode>).
         </>
       )}
     </Callout>
@@ -252,9 +244,9 @@ export function OnYourself({
 }
 
 /**
- * Change somebody's login, seat or grants — one `PATCH`, carrying only what
+ * Change somebody's login, seat or access — one `PATCH`, carrying only what
  * changed. The engine moves the login and the seat in one record before the
- * grants, and a refusal part way names what had already landed.
+ * access, and a refusal part way names what had already landed.
  *
  * WHAT CHANGED IS MEASURED AGAINST THE ROW THE DIALOG OPENED ON, never the
  * live one: the directory is read again every minute and when the tab comes
@@ -264,11 +256,14 @@ export function OnYourself({
  * refusal part way, what landed is sent again equal to what the engine holds,
  * and the engine skips it.
  *
- * THE GRANTS GO AS WHAT WAS TICKED AND UNTICKED (`add_grants`,
+ * THE ACCESS GOES AS WHAT WAS TICKED AND UNTICKED (`add_grants`,
  * `remove_grants`), which the engine applies to what the person holds when it
- * decides — never as the whole list, whose untouched grants are the ones the
- * dialog opened with: sent whole, a grant another administrator took away
- * meanwhile comes back with any other tick, and one they gave goes.
+ * decides — never as the whole list, whose untouched names are the ones the
+ * dialog opened with: sent whole, a permission another administrator took
+ * away meanwhile comes back with any other tick, and one they gave goes.
+ * Ticking Admin adds every app beside it, and unticking it keeps them
+ * (`components/people.tsx`' `AccessPicker`), so taking Admin away leaves the
+ * person their apps.
  */
 export function EditPersonDialog({
   row: live,
@@ -302,11 +297,15 @@ export function EditPersonDialog({
   const loginWrong = changesLogin
     ? loginProblem(machine ? "machine" : "person", login.trim())
     : null;
-  // WHAT THIS EDIT MAY CONFER is the engine's rule: only a grant it ADDS needs
-  // the editor to hold it, so one the person already holds may be kept or
-  // taken away by an administrator who does not hold it — stripping a
-  // compromised colleague's config:write needs nobody to hold config:write.
-  const conferrable = useMemo(() => [...held, ...(row.grants ?? [])], [held, row.grants]);
+  // WHAT THIS EDIT MAY CONFER is the engine's rule: only what it ADDS needs
+  // the editor to hold it, so what the person already holds may be kept or
+  // taken away by an editor who does not hold it — and an edit is an admin's,
+  // who holds everything, so in practice this widens only to a name this
+  // build does not know.
+  const conferrable = useMemo(
+    () => [...expand(held), ...expand(row.grants ?? [])],
+    [held, row.grants],
+  );
   // THEIR OWN SEAT STAYS OFFERED beside the vacant ones: nobody else holds it,
   // but it is held, so the vacancies list leaves it out. The seat they hold
   // NOW, which the vacancies are read beside — an edit that landed its seat
@@ -422,29 +421,15 @@ export function EditPersonDialog({
           />
         )}
       </FormField>
-      <GrantPicker
-        value={grants}
-        onChange={setGrants}
-        held={conferrable}
-        withheld={
-          // A MACHINE IS GIVEN NEITHER, and the engine judges what an edit
-          // ADDS: one it already holds stays a box, so it can be taken away.
-          machine
-            ? {
-                grants: TOKEN_WITHHELD_GRANTS.filter((g) => !before.includes(g)),
-                reason: MACHINE_WITHHELD,
-              }
-            : undefined
-        }
-      />
-      {!machine && <ReachNote grants={grants} you={you} />}
-      {/* TAKING YOUR OWN people:manage stops you administering once it saves —
-          and where nobody else active holds it, anybody but a Tier A token. It
-          was the one gesture on your own row that said neither. */}
-      {you && removed.includes("people:manage") && (
+      <AccessPicker value={grants} onChange={setGrants} held={conferrable} kept={before} />
+      {!machine && <AppReachNote grants={grants} you={you} />}
+      {/* TAKING YOUR OWN ADMIN stops you administering once it saves — and
+          where nobody else active holds it, anybody but a Tier A token. It was
+          the one gesture on your own row that said neither. */}
+      {you && removed.includes(ADMIN) && (
         <OnYourself
           alone={alone}
-          what="Without people:manage you stop administering people once this saves."
+          what="Without Admin you stop administering this company once this saves."
         />
       )}
       <IamOutcome answer={write.answer} />

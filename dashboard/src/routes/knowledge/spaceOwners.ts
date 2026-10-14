@@ -6,17 +6,17 @@
  *
  * A unit's `space:` is guarded (`internal/api/orgprojection_test.go`: "a
  * knowledge container key: where this unit's pages are written"), so the
- * `state:read` org projection carries none of it and the answer comes from the
- * company document, which takes `config:read`. Four different facts come out
+ * overview's org projection carries none of it and the answer comes from the
+ * company document, which takes Admin. Four different facts come out
  * of trying to read it, and each has its own sentence:
  *
  *  - `read`     — the document answered; an EMPTY list is then a real fact
  *                 about the company ("no unit names this space").
- *  - `no_grant` — the engine has said this reader does not hold
- *                 `config:read`, so nothing was asked: the refusal is known
- *                 before the question.
+ *  - `no_grant` — the engine has said this reader does not hold Admin, so
+ *                 nothing was asked: the refusal is known before the
+ *                 question.
  *  - `loading`  — the read is in flight, or the viewer has not answered yet.
- *                 Not "needs a grant": that sentence was drawn at a reader who
+ *                 Not "needs Admin": that sentence was drawn at a reader who
  *                 HOLDS it for as long as the read took.
  *  - `refused`  — the read answered with an error: "Owner unknown".
  *
@@ -29,6 +29,7 @@ import { useMemo } from "react";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { documentUnits, RUNTIME_GRANT } from "~/lib/seats.ts";
+import { holds } from "~/lib/access.ts";
 
 export type SpaceOwners =
   | { state: "read"; units: { id: string; name: string; project?: string }[] }
@@ -39,9 +40,9 @@ export type SpaceOwners =
 /** A lookup from a space key to who files into it. */
 export function useSpaceOwners(options: { enabled?: boolean } = {}): (key: string) => SpaceOwners {
   const viewer = useViewer();
-  const holds = viewer.grants.includes(RUNTIME_GRANT);
-  const refused = !viewer.loading && !holds;
-  const doc = useQuery("config", undefined, { enabled: holds && (options.enabled ?? true) });
+  const reads = holds(viewer.grants, RUNTIME_GRANT);
+  const refused = !viewer.loading && !reads;
+  const doc = useQuery("config", undefined, { enabled: reads && (options.enabled ?? true) });
   return useMemo(() => {
     if (refused) return () => ({ state: "no_grant" as const });
     if (doc.error) return () => ({ state: "refused" as const });
@@ -62,7 +63,7 @@ export function useSpaceOwners(options: { enabled?: boolean } = {}): (key: strin
 export function ownerSentence(owners: SpaceOwners): string {
   switch (owners.state) {
     case "no_grant":
-      return "Who files here needs config:read to read";
+      return "Who files here needs Admin access to read";
     case "loading":
       return "Who files here is still being read";
     case "refused":

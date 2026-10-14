@@ -881,10 +881,10 @@ func memorySeat(organization *org.Organization, handle string) (memread.Seat, bo
 // is never read as a seat's handle; and the authority is
 // [authz.ActionSeatTrailRead], the one verb every trail question asks, so the
 // halves of what a seat has said and remembered cannot answer one reader
-// differently. That verb's rule is the audit read the questions are
-// registered on today, which makes the decision look redundant; it is there so
-// the rule for reading one seat's trail is stated once, in the authority
-// table, rather than once per question.
+// differently: the seat itself, whoever leads it, or an admin (ADR-0033). The
+// questions are registered as decided by that verb ([DecidedBy]), so this is
+// the ONLY place the decision is made — anybody whose stage may act reaches
+// it, and a lead reads their own agents' trail and nobody else's.
 //
 // THE CALLER'S OWN IS THEIR SEAT and nothing else: an unbound caller has no
 // trail, and naming nobody is [errNoSeat], whose remedy is a binding rather
@@ -971,21 +971,41 @@ func (s Sources) agentEpisode(ctx context.Context, p Params) (any, error) {
 // counted — because a seat missing from the list reads as a seat that does not
 // exist.
 //
-// DECIDED BY [authz.ActionSeatTrailRead] like each seat's own memory, once for
-// the whole list: it is every seat's trail in summary.
+// DECIDED PER SEAT by [authz.ActionSeatTrailRead], exactly as each seat's own
+// memory is, and the list holds the seats the caller's trail reaches and no
+// others: every seat for an admin, a lead's own agents, and nothing at all for
+// anybody else — an empty list rather than a refusal, because "you lead no
+// agent" is an answer about the caller. It was decided ONCE, on no seat at
+// all, which the owner-or-lead rule refuses as naming nobody — to everybody,
+// an admin included — so the diaries list answered nobody the day the trail
+// stopped being one grant's.
+//
+// A SEAT THIS NODE CANNOT DECIDE MAKES THE WHOLE ANSWER UNAVAILABLE rather
+// than leaving the seat out: a list short by a seat the caller leads reads as
+// the seat's memory gone, and the chart that cannot say is one read away from
+// saying.
 func (s Sources) memoryOverview(ctx context.Context, _ Params) (any, error) {
 	principal, how := iam.From(ctx)
 	if how == iam.Unknown {
 		return nil, unresolved(ctx, "memory_overview")
 	}
-	if err := s.mayRead(ctx, principal, authz.ActionSeatTrailRead, ""); err != nil {
-		return nil, err
-	}
 	organization := s.organization()
 	var seats []memread.Seat
 	if organization != nil {
 		for role := range organization.AllRoles() {
-			if seat, ok := memorySeat(organization, role.Handle()); ok {
+			seat, ok := memorySeat(organization, role.Handle())
+			if !ok {
+				continue
+			}
+			d := authz.Decide(ctx, principal, authz.ActionSeatTrailRead,
+				authz.Object{Kind: authz.KindPerson, ID: seat.Handle, Owner: seat.Handle},
+				s.Chart, s.clock())
+			switch {
+			case d.Unknown():
+				return nil, fmt.Errorf("%w: this node cannot yet decide whose "+
+					"memory the caller may read — %s on %s: %w", ErrUnavailable,
+					authz.ActionSeatTrailRead, seat.Handle, d.Err)
+			case d.Allowed:
 				seats = append(seats, seat)
 			}
 		}

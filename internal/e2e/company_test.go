@@ -59,11 +59,17 @@ roles:
 # anything can be filed in it — and the only thing that makes one is the chart
 # apply reading these keys. A company that declared none could file no work at
 # all, which is what these two exercise end to end.
+#
+# ENGINEERING ALSO DECLARES A SPACE, for the same reason one level over: a page
+# is created only in a space the company declares — a unit's or a seat's
+# space:, the root space or the tool-skills space — and the knowledge cases
+# here write their pages in ENG.
 units:
   - name: Engineering
     id: engineering
     purpose: builds and runs the product
     project: ENG
+    space: ENG
     lead: ceo
   - name: Operations
     id: operations

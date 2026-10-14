@@ -29,10 +29,11 @@ import (
 // node, that a stalled identity applier answers 503 rather than 401: those are
 // their own cases, over a fixture that boots a closed posture deliberately.
 //
-// # It carries every grant
+// # It carries admin
 //
-// A case here narrows nothing, so the fixture grants everything the ceiling
-// permits and the ceiling is everything. A case whose subject IS authority
+// A case here narrows nothing, so the fixture's token carries admin — and with
+// it every app — on a node whose `api.auth.admin` serves it. A case whose
+// subject IS authority
 // builds its own posture and says what it presents — which is the same
 // division internal/api's own fixtures draw.
 
@@ -43,12 +44,13 @@ import (
 // validation, and the failure would name a config rule rather than the case.
 const e2eToken = "an-end-to-end-fixture-credential-long-enough"
 
-// withCredential gives a bootstrap the fixture's token and the ceiling behind
-// it.
+// withCredential gives a bootstrap the fixture's token and the admin posture
+// behind it.
 //
-// BOTH HALVES, because a principal's grants are the INTERSECTION of what its
-// token declares with the deployment's ceiling: either one missing carries
-// none, and every question would refuse for want of a grant rather than
+// BOTH HALVES, because a principal's grants are what its token declares as
+// the node's admin posture lets it carry them: a posture left unset confers
+// nothing and a token declaring nothing carries nothing, and either way every
+// question past the overview would refuse for want of a grant rather than
 // answering whatever the case is about.
 //
 // UNEXPORTED AND ONLY REACHED THROUGH [withServingTierA], so a fixture cannot
@@ -57,9 +59,9 @@ const e2eToken = "an-end-to-end-fixture-credential-long-enough"
 // from one of the two fixtures that needed it.
 func withCredential(t *testing.T, boot *config.Bootstrap) {
 	t.Helper()
-	boot.API.Auth.MaxGrants = iam.AllGrants
+	boot.API.Auth.Admin = iam.AdminServe
 	boot.API.Auth.Tokens = []config.APIToken{
-		{ID: "e2e", Token: e2eToken, Grants: iam.AllGrants},
+		{ID: "e2e", Token: e2eToken, Grants: []iam.Grant{iam.GrantAdmin}},
 	}
 }
 
@@ -69,7 +71,7 @@ func withCredential(t *testing.T, boot *config.Bootstrap) {
 // # One call, because the requirement is one rule
 //
 // `api.port` non-zero makes three settings mandatory at once — the external
-// URL, the grant ceiling and at least one credential — and the keyring is
+// URL, the admin posture and at least one credential — and the keyring is
 // mandatory on every node whatever it serves; a fixture that took some of
 // them is a fixture that fails validation or answers 401 to its own case. They were two helpers and one fixture called only the
 // first, which is a pairing nothing could have caught: the case that broke was

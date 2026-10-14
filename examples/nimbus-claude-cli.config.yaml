@@ -219,39 +219,20 @@ api:
     # `accept_insecure: true`).
     totp: optional
 
-    # THE CEILING on what a directory record may ever confer.  Required once a port is set, and deliberately without
-    # a default.
-    max_grants:
-      - state:read
-      - audit:read
-      - config:read
-      - secrets:read
-      - work:write
-      - knowledge:write
-      - config:write
-      - secrets:write
-      - fleet:operate
-      - people:manage
-      - sandbox:run
+    # Whether THIS NODE grants admin to those who hold it: `serve` here,
+    # where the founder signs in to run the company; `refuse` would clamp
+    # admin away and keep every app.  Required once a port is set, and
+    # deliberately without a default.
+    admin: serve
 
     tokens:
       # At least one is required once a port is set: a fresh deployment's
       # identity estate is empty, so this is what creates the first
-      # person.  26 characters at minimum, on the RESOLVED value.
+      # person.  26 characters at minimum, on the RESOLVED value.  The
+      # founder's token is admin, which includes every app.
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"
-        grants:
-          - state:read
-          - audit:read
-          - config:read
-          - secrets:read
-          - work:write
-          - knowledge:write
-          - config:write
-          - secrets:write
-          - fleet:operate
-          - people:manage
-          - sandbox:run
+        grants: [admin]
 
 # ── The keyring (REQUIRED) ────────────────────────────────────────────
 #

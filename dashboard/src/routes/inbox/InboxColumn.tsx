@@ -42,6 +42,7 @@ import {
   type Who,
 } from "./model.ts";
 import { TaskLink } from "./TaskLink.tsx";
+import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 
 /** What the list holds beyond its two groups, read only when opened. */
 export interface Later {
@@ -208,7 +209,11 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
         case "ask":
           return { text: askQuestion(row.subject.ask) };
         case "run":
-          return { text: firstLine(row.subject.run.question ?? "") || "Parked on a question" };
+          return {
+            text:
+              firstLine(row.subject.run.question ?? "") ||
+              (questionWithheld(row.subject.run) ? QUESTION_WITHHELD : "Parked on a question"),
+          };
         case "seat":
           return { text: budgetLine(row.subject.seat.window?.period) };
       }

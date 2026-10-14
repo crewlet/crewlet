@@ -36,17 +36,7 @@ class InertWebSocket {
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -334,9 +324,9 @@ describe("the figures", () => {
   });
 
   // THE WAY IN IS OFFERED TO WHOEVER CAN SET ONE: a reader without
-  // `config:write` gets the fact, not a link to a screen that would refuse them.
+  // Admin gets the fact, not a link to a screen that would refuse them.
   test("a reader who cannot set a budget is told there is none, with no way in", async () => {
-    mount({ viewer: { ...JANE, grants: ["state:read", "work:write"] }, budget: UNCAPPED });
+    mount({ viewer: { ...JANE, grants: ["tracker"] }, budget: UNCAPPED });
     await settle();
     const card = tile(/^Tokens · /);
     expect(card.textContent).toContain("No weekly budget");
@@ -570,7 +560,7 @@ describe("the decisions", () => {
     mount({
       viewer: {
         login: "ci.release",
-        grants: ["state:read"],
+        grants: [],
         handle: "",
         owner: "ci.release",
         name: "",
@@ -608,7 +598,7 @@ describe("the decisions", () => {
     mount({
       viewer: {
         login: "bob.smith",
-        grants: ["state:read"],
+        grants: [],
         handle: "",
         owner: "bob.smith",
         name: "",
@@ -678,7 +668,7 @@ describe("the decisions", () => {
   // on them.
   test("a stopped seat the reader cannot act on is a condition, not their decision", async () => {
     mount({
-      viewer: { ...JANE, grants: ["state:read", "work:write"], acts: ["comment_on_work_item"] },
+      viewer: { ...JANE, grants: ["tracker"], acts: ["comment_on_work_item"] },
       agents: [
         {
           id: "devrel",

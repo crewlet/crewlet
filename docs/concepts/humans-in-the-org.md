@@ -171,15 +171,17 @@ exactly one human seat**, from the moment they exist until they are removed
 ([ADR-0032](https://github.com/crewlet/crewlet/blob/main/adr/0032-every-person-holds-a-human-seat.md)),
 so the seat is declared first — in the company document, as above — and the
 person is then put in it. A human seat is in one of three states, and **Agents
-› Org chart** draws each on the seat's card for anybody who holds
-`people:manage` or `audit:read` (a reader holding neither sees the card's
-usual line, and the directory is never asked on their behalf):
+› Org chart** draws each on the seat's card. **Everybody** sees who holds a
+seat, by name — the org chart is the overview everybody signed in reads — and
+an administrator also sees the holder's login and an open invitation, which
+`GET /iam/seats` sends nobody else (to anybody else an invited seat reads as
+vacant):
 
-| The card says | What it means | What `people:manage` can do from the card's menu, its peek and its page |
+| The card says | What it means | What an administrator can do from the card's menu, its peek and its page |
 |---|---|---|
-| **Vacant** | Nobody holds it and no invitation names it | **Invite** (on the card's menu, **Invite to this seat…**) — an address and the grants; the link is shown once, and the person chooses their login and password when they redeem it. **Create person** (**Create a person on this seat…**) — an address, optionally a name and a login (proposed from the address when left empty), and the grants; the person exists at once, `active`, and you are shown their **first password link** once |
+| **Vacant** | Nobody holds it and no invitation names it | **Invite** (on the card's menu, **Invite to this seat…**) — an address and their access, both apps ticked and Admin not to start; the link is shown once, and the person chooses their login and password when they redeem it. **Create person** (**Create a person on this seat…**) — an address, optionally a name and a login (proposed from the address when left empty), and their access, ticked the same way; the person exists at once, `active`, and you are shown their **first password link** once |
 | **Invited ·** an address | An open invitation holds it until it is redeemed, cancelled or lapses — a week. Nobody else can be invited onto it, created on it or bound to it meanwhile | **Cancel invitation**, which frees the seat |
-| **Held by** a login | A person holds it, at whatever stage, or a service account or a token's row is bound to it | Nothing here: the person is changed, moved, suspended or removed in Settings › People & access |
+| **Held by** a name | A person holds it, at whatever stage, or a service account or a token's row is bound to it | Nothing here: the person is changed, moved, suspended or removed in Settings › People & access |
 
 The dialog is about the seat it was opened from and offers no other. The same
 gestures are a command and a route each — `crewlet iam invite <address> -seat
@@ -193,7 +195,7 @@ seat](identity-and-access.md#a-person-arrives-on-their-seat-invited-or-created).
 
 **A person's seat is moved, never cleared.** To put somebody on another seat,
 bind them to it — `crewlet iam bind <person-id> <seat>`, or the seat field of
-**Edit login, seat and grants** in Settings › People & access, which offers the
+**Edit login, seat and access** in Settings › People & access, which offers the
 vacant human seats and their own and no "No seat". The move is one record: the
 old seat is free the moment the new one is taken. A suspended or retired person
 **keeps** their seat. To free a seat for somebody else, move its holder or
@@ -237,8 +239,9 @@ is why every path that creates somebody ends with one, and why an invitation's
 form and a create propose one from the address. A **Tier A token** acts under
 the login `token:<id>`, so it acts as a seat when the directory holds a machine
 row under that login bound to one: `crewlet iam create -kind machine -login
-token:<id> -seat <handle>` enrols and binds it in one record, on a human seat
-nobody holds. Typed into the dashboard's sign-in screen, a Tier A token is
+token:<id> -seat <handle> -grants none` enrols and binds it in one record, on a
+human seat nobody holds — the row carries nothing itself, since the token's
+permissions are its Tier A entry's. Typed into the dashboard's sign-in screen, a Tier A token is
 exchanged for a one-hour session that acts exactly as the token does, its
 binding included — the browser keeps the session and never the token. The bind
 is a claim on the seat itself, so two principals can never be bound to one seat
@@ -250,7 +253,8 @@ What the binding buys:
 - **The work the chart hands a seat reaches you.** `#/inbox` — one click
   from the dashboard's landing screen — shows your notices, the one reason of eighteen
   that routed each one, and what is waiting on a decision; `#/me` is your own
-  work. Both ask the engine who is looking, and your own record is kept under
+  work, and both are the tracker's — they need the `tracker` app. Both ask the
+  engine who is looking, and your own record is kept under
   the seat you hold — which is where an assignment, a mention and a lead's
   priority list are addressed. Your login names that
   same record, to you and to anybody else: a lead reading your inbox by your
@@ -258,17 +262,18 @@ What the binding buys:
 - **Your seat's lead relations are yours.** Every authority rule that asks "do
   you lead this" is asked about the seat you hold — so the person holding a
   unit's lead seat may re-route that unit's project's work, declare its fields
-  and set a report's priorities, where a token or service account bound to no
-  seat reaches those only through `fleet:operate`. See [the authority
+  and set a report's priorities (each with the `tracker` app), pause, steer and
+  answer for the team's agents, and read those agents' own trail — where a token
+  or service account bound to no seat reaches those only through `admin`. See [the authority
   table](identity-and-access.md#the-authority-table-one-function-decides).
 - **You edit your own team.** Holding a unit's lead seat, you may change the
   seats and units inside it through `/config` — add a seat, edit a goal, move
   somebody between two of your teams, remove a sub-team, restate your team's
-  purpose — without `config:write`, and read each of them with
+  purpose — without `admin`, and read each of them with
   `GET /config/roles/{handle}` and `GET /config/units/{id}`. Handing your team to
   somebody else, reaching outside it, a project, space, channel, address or
   contact id — your own seat's included — a credential, a `${VAR}` in any
-  field and a setting stay `config:write`'s. See [A lead edits their own
+  field and a setting stay `admin`'s. See [A lead edits their own
   team](identity-and-access.md#a-lead-edits-their-own-team).
 
 - **Your writes are the seat's.** A write you make — through the `/work` and
@@ -280,7 +285,7 @@ What the binding buys:
 
 **A credential bound to no seat is ordinary.** A pipeline, an automation, the
 deployment's own break-glass token — each acts as itself under its own login,
-decided by its grants alone, and is never refused for it. It has a record of
+decided by its permissions alone, and is never refused for it. It has a record of
 its own all the same: its pins, its inbox marks, its priorities and its
 personal views are kept under that **login**, which is the name every write it
 makes is attributed to and the name every personal read answers for — so what
@@ -426,7 +431,12 @@ on where the work lives:
   [native tracker](task-engine.md) writes a notice to each person it concerns,
   under the one reason that routed it to them (`assignee`, `mention`,
   `blocking`, …). It is the `work_inbox` question, and the dashboard's
-  Inbox.
+  Inbox — the tracker's, so reading it takes the `tracker` app. Somebody
+  without it still sees a question a colleague put to them on a work item,
+  among their decisions, and may open that item and post their answer to it
+  ([You may answer what you were asked](identity-and-access.md#what-each-app-opens));
+  agents send everything else through the tracker, which is why the
+  dashboard warns when Tracker is left unticked for a person.
 - **The dashboard, the moment that inbox moves.** For somebody with no Slack or
   Jira account — a person who works in Crewlet only — this is the delivery
   surface.
@@ -471,7 +481,8 @@ sequenceDiagram
   and a count — the seat, the task, the reason — and never what the notice
   says, which is read through `work_inbox` as before.
 - **A watch is decided like the inbox itself.** You may watch your own seat;
-  a lead may watch a seat they lead; the admin grant may watch any. A watch
+  a lead may watch a seat they lead; an administrator may watch any — each with
+  the `tracker` app, since the frames are about tracker notices. A watch
   this node cannot decide — it runs no company yet — is not installed,
   and the dashboard asks again when the refusal's `retry_after` says it may
   have changed — never, on a timer, when that is `0` (a log waiting will not
@@ -602,7 +613,7 @@ Three things to keep in mind:
   ownership (`PUT /config`, API auth tokens, the dashboard) stays an
   API-auth concern: the seat makes agents know you, and — once you are
   invited or created onto it — carries its lead relations onto the
-  engine's own surface; your grants make the engine obey you.
+  engine's own surface; your permissions make the engine obey you.
   Different hats, deliberately separate.
 - **It is the seat you join through.** Every person holds a human seat, so
   this is where you are put when you first sign in. Declare it before you

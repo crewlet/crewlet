@@ -189,7 +189,7 @@ describe("classifyCheck", () => {
   });
 
   // A PART REFUSED IS A PROBLEM ONLY WITH A LEAD'S DRAFT. Drafting the whole
-  // company without config:write is leading no unit, and every write of it is
+  // company without Admin is leading no unit, and every write of it is
   // refused whole — the engine names the unchanged document first — which is
   // a grant the reader lacks rather than a problem with each edit.
   test("a refused part is a lead's draft's problem, and a grant the whole company's reader lacks", () => {
@@ -198,7 +198,7 @@ describe("classifyCheck", () => {
       body: {
         error: "unauthorized",
         reason: "no_grant",
-        grants: ["config:write"],
+        grants: ["admin"],
         refused: [{ kind: "document", id: "", place: "", why: "unchanged", reason: "no_grant" }],
       },
     };

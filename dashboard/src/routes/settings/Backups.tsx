@@ -50,7 +50,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useNow } from "~/lib/clock.ts";
 import { eventHistorySpan, fmtBytes, fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { needsSentence } from "~/lib/refusal.ts";
+import { ADMIN, needsWords } from "~/lib/access.ts";
 import { throughOf } from "~/lib/attribution.ts";
 import { useSeatOf, writerOf, WriterCell } from "./Audit.tsx";
 import {
@@ -81,17 +81,15 @@ export function Backups({ domain }: { domain?: string }) {
   // refuse is one to say no to before it is made.
   const page = domain === undefined;
   const backups = useQuery("backups", undefined, { pollMs: BACKUPS_POLL_MS, enabled: page });
-  // THE RETENTION REPORT IS ASKED ONCE FOR THE PAGE, and only of a reader
-  // holding the grant the engine decides it on, `fleet:operate`: the alarms
-  // leading the page and the panels under them read this one answer, and
-  // asking for anybody else would refuse on every poll and paint the screen
-  // red for a reader who simply does not operate the fleet, under the
-  // backups' own refusal that already names the grant.
-  const retention = useRetentionReport(page && viewer.operatesFleet);
+  // THE RETENTION REPORT IS ASKED ONCE FOR THE PAGE, and only of an admin,
+  // whom the engine decides it on: the alarms leading the page and the panels
+  // under them read this one answer, and asking for anybody else would refuse
+  // on every poll and paint the screen red for a reader who simply does not
+  // operate the fleet, under the backups' own refusal that already names the
+  // access.
+  const retention = useRetentionReport(page && viewer.admin);
   const refused =
-    !viewer.loading && !viewer.operatesFleet
-      ? needsSentence("Taking a backup", ["fleet:operate"])
-      : undefined;
+    !viewer.loading && !viewer.admin ? needsWords("Taking a backup", [ADMIN]) : undefined;
   if (domain !== undefined) return <DomainScreen key={domain} name={domain} />;
   const node = health?.node;
   return (

@@ -1,7 +1,6 @@
 package authz_test
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -14,19 +13,6 @@ import (
 // guard composes a token: the owner, with the credential named beside them.
 func throughToken(p iam.Principal) iam.Principal {
 	p.Via = iam.MachineTokenName(uuid.Must(uuid.NewV7()).String())
-	return p
-}
-
-// withoutPersonPresentGrants is p holding everything a machine token may carry
-// and nothing it may not.
-func withoutPersonPresentGrants(p iam.Principal) iam.Principal {
-	var carried []iam.Grant
-	for _, g := range p.Grants {
-		if !slices.Contains(iam.PersonPresentGrants, g) {
-			carried = append(carried, g)
-		}
-	}
-	p.Grants = carried
 	return p
 }
 
@@ -49,9 +35,9 @@ func presenceObjects(self iam.Principal) map[string]authz.Object {
 //
 // A token acts as its owner and is stepped up by construction, so the table's
 // own refusal is the lock between it and changing how its owner proves who
-// they are — no grant is asked of that self arm at all. Walked over EVERY row,
-// with a principal holding every grant (so the class admits on every arm and
-// the token can only be refused for being one) and its control — the same
+// they are — no permission is asked of that self arm at all. Walked over EVERY
+// row, with a principal holding every permission (so the class admits on every
+// arm and the token can only be refused for being one) and its control — the same
 // principal at a keyboard — over the four things a verb can be about:
 //
 //   - a row needing a person on every arm refuses the token on all four,
@@ -125,97 +111,72 @@ func TestARowThatNeedsAPersonRefusesATokenOnExactlyTheArmsItNames(t *testing.T) 
 	}
 }
 
-// AN ARM ONLY A PERSON-PRESENT GRANT OPENS NEEDS A PERSON, AND ITS ROW SAYS SO.
+// A TOKEN HOLDING ADMIN IS REFUSED EVERY PERSON-PRESENT GESTURE ABOUT ANYBODY
+// BUT ITS OWNER.
 //
-// The direction that decays quietly: a new verb gated on `secrets:read` or
-// `people:manage` is a gesture a pipeline has no business making, and nothing
-// but memory would mark its row. Derived from the table's own decisions rather
-// than a list: for every verb and every object that is not the caller, an arm
-// that admits a principal holding every grant and refuses the same principal
-// without the person-present ones is opened by those alone — and a token
-// presenting them (as no real token can, which is what isolates the row's own
-// lock) must be refused there.
+// A machine token may carry admin — the permission it is minted with is its
+// owner's to choose — so no permission it cannot hold stands between it and
+// revealing a credential, editing the directory, changing how somebody signs
+// in or ending everybody's sessions: the row's own presence does, and this
+// walk is what holds it there. Pinned to the gestures that need a person — the
+// directory's every write and every gesture on somebody's credentials or
+// sessions (every directory-class row but the read), writing the directory,
+// ending every session in the company, and revealing a secret — because each
+// is one a pipeline has no business making and nothing but this pin would
+// notice a row that stopped saying so. Over every such row, a token holding
+// every permission, freshly proved, is refused as a token about somebody
+// else, the company and nobody; its control, the same person at a keyboard,
+// is admitted somewhere on every row.
 //
 // Mutation: drop the presence from the machine-token write's row and an
 // administrator's token revokes somebody else's credentials here.
-func TestAnArmOnlyAPersonPresentGrantOpensNeedsAPerson(t *testing.T) {
+func TestATokenHoldingAdminIsRefusedEveryPersonPresentGestureAboutAnybodyElse(t *testing.T) {
 	t.Parallel()
-	derived := 0
+	need := []authz.Action{authz.ActionDirectoryWrite,
+		authz.ActionSessionInvalidate, authz.ActionSecretReveal}
 	for _, a := range authz.Actions() {
-		keyboard := person("jane.doe", iam.AllGrants...)
-		narrowed := withoutPersonPresentGrants(keyboard)
-		for name, object := range presenceObjects(keyboard) {
-			if name == "the caller" {
-				continue
-			}
-			wide := authz.Decide(t.Context(), keyboard, a, object, nimbus(), decidedAt)
-			narrow := authz.Decide(t.Context(), narrowed, a, object, nimbus(), decidedAt)
-			if wide.Unknown() || narrow.Unknown() || !wide.Allowed || narrow.Allowed {
-				continue
-			}
-			derived++
-			if got := authz.Decide(t.Context(), throughToken(keyboard), a, object,
-				nimbus(), decidedAt); got.Allowed {
-				presence, _ := authz.PresenceOf(a)
-				t.Errorf("%s about %s is opened only by a person-present grant, "+
-					"and a token presenting one was admitted (%s): its row "+
-					"states %q", a, name, got.Reason, presence)
-			}
+		if class, _ := authz.ClassOf(a); class == authz.ClassDirectory &&
+			a != authz.ActionDirectoryRead {
+			need = append(need, a)
 		}
 	}
-	if derived == 0 {
-		t.Fatal("no arm of the table is opened by a person-present grant alone, " +
-			"so this walk certifies nothing")
-	}
-}
-
-// A GESTURE THAT NEEDS A PERSON PRESENT, ABOUT ANYBODY BUT THE CALLER, NEEDS A
-// GRANT NO MACHINE TOKEN CAN CARRY.
-//
-// The second lock, held independently of the first: a token presenting itself
-// is refused by the row ([TestARowThatNeedsAPersonRefusesATokenOnExactlyTheArmsItNames]),
-// and every way into such a gesture that is not the caller acting on their OWN
-// record ALSO asks a grant that needs a person present
-// ([iam.PersonPresentGrants]) — which internal/iamdomain refuses at a token's
-// mint and internal/iam/credential strips from what one carries on every
-// request. Walked over EVERY row that states a presence, with a principal at a
-// keyboard holding everything else, freshly proved, about somebody else, the
-// company and nobody: none is admitted.
-//
-// Mutation: gate secret reveal on `secrets:write`, which a token can carry,
-// and it is admitted here.
-func TestAGestureThatNeedsAPersonPresentNeedsAGrantNoTokenCarries(t *testing.T) {
-	t.Parallel()
-	p := withoutPersonPresentGrants(person("ci.pipeline", iam.AllGrants...))
-	walked := 0
-	for _, a := range authz.Actions() {
+	keyboard := person("jane.doe", iam.AllGrants...)
+	token := throughToken(keyboard)
+	for _, a := range need {
 		if presence, _ := authz.PresenceOf(a); presence == authz.PresenceOptional {
-			continue
+			t.Errorf("%s states no presence, and it is a gesture a pipeline has "+
+				"no business making", a)
 		}
-		walked++
-		for name, object := range presenceObjects(p) {
+		admitted := false
+		for name, object := range presenceObjects(keyboard) {
+			admitted = admitted || authz.Decide(t.Context(), keyboard, a, object,
+				nimbus(), decidedAt).Allowed
 			if name == "the caller" {
 				continue
 			}
-			if d := authz.Decide(t.Context(), p, a, object, nimbus(), decidedAt); d.Allowed {
-				t.Errorf("%s about %s admitted a principal holding no grant "+
-					"that needs a person present (%s) — a machine token "+
-					"carrying the same would reach it but for one lock", a,
-					name, d.Reason)
+			if got := authz.Decide(t.Context(), token, a, object, nimbus(),
+				decidedAt); got.Allowed || got.Reason != authz.ReasonTokenRefused {
+				t.Errorf("%s about %s: a token holding admin decided %+v, want "+
+					"refused as a token", a, name, got)
 			}
 		}
+		if !admitted {
+			t.Errorf("%s admitted the person at a keyboard on nothing, so its "+
+				"token refusals certify nothing", a)
+		}
 	}
-	if walked == 0 {
-		t.Fatal("no row needs a person present, so this walk certifies nothing")
+	if len(need) < 4 {
+		t.Fatalf("pinned %d rows; the directory's own gestures are missing", len(need))
 	}
 }
 
 // A MACHINE TOKEN NEVER CHANGES HOW ITS OWNER PROVES WHO THEY ARE — and still
 // contains itself.
 //
-// The self arm is the one no grant guards: a person changes their own second
-// factor, recovery codes and password on no capability at all, and a token
-// acts as them, stepped up. So the row is the whole of the protection there,
+// The self arm is the one no permission guards: a person changes their own
+// second factor, recovery codes and password holding nothing at all, and a
+// token acts as them, stepped up. So the row is the whole of the protection
+// there,
 // and which rows spare the self arm is the decision this pins: a token about
 // its own owner may revoke a token (itself included, from wherever somebody
 // found it leaked) and end its owner's sessions (which ends it), and is
@@ -226,7 +187,7 @@ func TestAGestureThatNeedsAPersonPresentNeedsAGrantNoTokenCarries(t *testing.T) 
 // owner's second factor here.
 func TestAMachineTokenNeverChangesHowItsOwnerProvesWhoTheyAre(t *testing.T) {
 	t.Parallel()
-	owner := withoutPersonPresentGrants(person("jane.doe", iam.AllGrants...))
+	owner := person("jane.doe", iam.Apps...)
 	token := throughToken(owner)
 	self := authz.Object{Kind: authz.KindPerson, Owner: owner.ID.String()}
 	for _, c := range []struct {

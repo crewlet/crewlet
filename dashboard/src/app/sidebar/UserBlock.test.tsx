@@ -75,7 +75,9 @@ function block(viewer: ViewerState, seatName = ""): ReactNode {
 const nobody: ViewerState = {
   login: "",
   grants: [],
-  operatesFleet: false,
+  admin: false,
+  tracker: false,
+  knowledge: false,
   handle: "",
   owner: "",
   name: "",
@@ -92,7 +94,7 @@ const nobody: ViewerState = {
 const ada: ViewerState = {
   ...nobody,
   login: "ada.lovelace",
-  grants: ["state:read", "work:write"],
+  grants: ["tracker"],
   handle: "ada",
   owner: "ada",
   name: "Ada Lovelace",
@@ -165,14 +167,14 @@ describe("who the block says this is", () => {
     expect(whoLine(ada, "Founder", own)).toEqual({
       name: "Ada Lovelace",
       detail: "ada.lovelace · Founder",
-      grants: "Holds state:read, work:write",
+      grants: "Access: Tracker",
     });
     // NO NAME OF THEIR OWN: their login, and the seat under it — never the
     // seat's name in their place.
     expect(whoLine(ada, "Founder", { login: "ada.lovelace" })).toEqual({
       name: "ada.lovelace",
       detail: "Founder",
-      grants: "Holds state:read, work:write",
+      grants: "Access: Tracker",
     });
     // A seat named as the person adds nothing to the login.
     expect(whoLine(ada, "Ada Lovelace", own).detail).toBe("ada.lovelace");
@@ -203,7 +205,7 @@ describe("who the block says this is", () => {
     expect(r).toEqual({
       name: "token:ops",
       detail: "Not bound to a seat",
-      grants: "Holds no grants",
+      grants: "Access: Overview only",
     });
   });
 
@@ -218,7 +220,7 @@ describe("who the block says this is", () => {
     expect(r).toEqual({
       name: "Bob Smith",
       detail: "bob.smith · Not bound to a seat",
-      grants: "Holds no grants",
+      grants: "Access: Overview only",
     });
   });
 
@@ -227,24 +229,24 @@ describe("who the block says this is", () => {
     expect(whoLine({ ...nobody, loading: true }, "").name).toBe("Checking who you are");
   });
 
-  // A VIEWER THAT NEVER ANSWERS — the socket refused a person without
-  // `state:read` — is no reason to keep asking: the session names them, and
-  // what they hold. The CONTROL is the case above, with no session either.
-  // AND BY THE SAME RULE: the session names the reader's SEAT, which that
-  // arm dropped for "Signed in". The chart is unreadable without
-  // `state:read`, so the handle stands in, written as a handle.
+  // A VIEWER THAT NEVER ANSWERS — the socket refused a person whose seat was
+  // taken out of the chart — is no reason to keep asking: the session names
+  // them, and what they hold. The CONTROL is the case above, with no session
+  // either. AND BY THE SAME RULE: the session names the reader's SEAT, which
+  // that arm dropped for "Signed in". The chart is unread under a refused
+  // socket, so the handle stands in, written as a handle.
   test("a session stands in for a viewer that has not answered", () => {
     expect(
       whoLine({ ...nobody, loading: true }, "", { login: "erin.ng", seat: "erin", grants: [] }),
-    ).toEqual({ name: "erin.ng", detail: "@erin", grants: "Holds no grants" });
+    ).toEqual({ name: "erin.ng", detail: "@erin", grants: "Access: Overview only" });
     expect(
       whoLine({ ...nobody, loading: true }, "", {
         login: "erin.ng",
         name: "Erin Ng",
         seat: "erin",
-        grants: ["work:write"],
+        grants: ["tracker"],
       }),
-    ).toEqual({ name: "Erin Ng", detail: "erin.ng · @erin", grants: "Holds work:write" });
+    ).toEqual({ name: "Erin Ng", detail: "erin.ng · @erin", grants: "Access: Tracker" });
     // A SESSION BOUND TO NO SEAT says so, as the answered arm does.
     expect(whoLine({ ...nobody, loading: true }, "", { login: "token:ops" }).detail).toBe(
       "Not bound to a seat",
@@ -276,7 +278,7 @@ describe("who the block says this is", () => {
     cleanup();
     // UNBOUND HAS AN ACCOUNT TOO — a token's session is told there what it
     // is — so it is a link to the same page.
-    render(block({ ...nobody, login: "token:ops", unbound: true, grants: ["state:read"] }));
+    render(block({ ...nobody, login: "token:ops", unbound: true, grants: [] }));
     expect(screen.getByRole("link", { name: /token:ops/ }).getAttribute("href")).toBe("#/account");
     cleanup();
     // NOBODY has no account to open: the popover offers the sign-in.
@@ -406,8 +408,7 @@ describe("what the account offers", () => {
   });
 
   // THE VIEWER IS A SOCKET QUESTION, and a person the socket refuses — a seat
-  // taken out of the chart, a session without `state:read` — never has it
-  // answered. The menu drew nothing until it was, so those people had no way
+  // taken out of the chart — never has it answered. The menu drew nothing until it was, so those people had no way
   // to end their own session; the session route still answers them.
   test("a session the viewer never answers for is still offered its sign-outs", () => {
     const waiting = { ...nobody, loading: true };
@@ -468,7 +469,7 @@ function actions(account: Account) {
           <LayerHost>
             <AccountActions
               account={account}
-              grants="Holds state:read"
+              grants="Access: Tracker"
               onLeave={onLeave}
               onSignOutEverywhere={onSignOutEverywhere}
             />

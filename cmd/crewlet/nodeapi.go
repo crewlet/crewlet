@@ -183,7 +183,7 @@ func unclaimedDetail(ctx context.Context, anybody func(context.Context) (bool, e
 	}
 	const nobody = "nobody is in this company's identity directory yet"
 	const invite = "`crewlet iam invite <address> -seat <handle> -grants " +
-		"<grants>` with " + apiTokenEnv + " set to one of api.auth.tokens, " +
+		"admin` with " + apiTokenEnv + " set to one of api.auth.tokens, " +
 		"then send them the link it prints"
 	human, running := seats()
 	switch {

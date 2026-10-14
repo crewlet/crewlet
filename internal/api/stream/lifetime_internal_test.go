@@ -93,10 +93,19 @@ func newDecidingService(t *testing.T, chart authz.Chart) *Service {
 // reads.
 func newServiceOver(t *testing.T, chart authz.Chart, seatOf SeatOfFunc) *Service {
 	t.Helper()
+	return newServiceWithSeats(t, chart, seatOf, tokens.Seats{})
+}
+
+// newServiceWithSeats is [newServiceOver] over a chart holding seats — the
+// agent seats whose trail an audience is decided against.
+func newServiceWithSeats(t *testing.T, chart authz.Chart, seatOf SeatOfFunc,
+	seats tokens.Seats) *Service {
+
+	t.Helper()
 	svc, err := NewService(livestate.New(), Options{
 		Health:    func() Health { return nodeHealth{Status: "ok"} },
 		Posture:   func(Health) FramePosture { return FrameLive },
-		Seats:     func() tokens.Seats { return tokens.Seats{} },
+		Seats:     func() tokens.Seats { return seats },
 		Roster:    func() []map[string]any { return nil },
 		Org:       func() any { return map[string]any{} },
 		Tools:     func() []map[string]any { return nil },
@@ -227,7 +236,7 @@ func (s *served) settled(t *testing.T, n int64) {
 
 func person(handle string) iam.Principal {
 	return iam.Principal{ID: uuid.New(), Login: handle, Kind: iam.KindPerson,
-		Seat: handle, Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead}}
+		Seat: handle, Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
 }
 
 // sessionOf is what a person's session socket was opened with.
@@ -296,8 +305,8 @@ func TestASocketIsOpenedWithWhatItsHandshakeResolved(t *testing.T) {
 
 	b := config.DefaultBootstrap()
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ci", Token: "a-tier-a-token-long-enough",
-		Grants: []iam.Grant{iam.GrantStateRead}}}
-	b.API.Auth.MaxGrants = iam.AllGrants
+		Grants: []iam.Grant{iam.GrantTracker}}}
+	b.API.Auth.Admin = iam.AdminServe
 	r := httptest.NewRequest(http.MethodGet, auth.SocketPath, nil)
 	r.Header.Set("Authorization", "Bearer a-tier-a-token-long-enough")
 	r, _ = auth.New(&b).Resolve(httptest.NewRecorder(), r)
@@ -331,12 +340,6 @@ func TestAnOpenSocketIsClosedByWhatEndsItsCredential(t *testing.T) {
 			func(r *http.Request) (*http.Request, *auth.Refusal) {
 				return r.WithContext(iam.WithAnonymous(r.Context())), nil
 			}, CloseUnauthenticated},
-		{"a withdrawn state:read closes 4403",
-			func(r *http.Request) (*http.Request, *auth.Refusal) {
-				p := person("ana")
-				p.Grants = []iam.Grant{iam.GrantAuditRead}
-				return r.WithContext(iam.WithPrincipal(r.Context(), p)), nil
-			}, CloseUnauthorized},
 		{"a seat that is gone closes 4403",
 			func(r *http.Request) (*http.Request, *auth.Refusal) {
 				return r.WithContext(iam.WithPrincipal(r.Context(), person("ana"))),
@@ -759,7 +762,7 @@ func TestAQuestionIsAskedAsTheLastDecisionResolved(t *testing.T) {
 
 // A DECISION THAT MOVES WHO A SOCKET ACTS AS CLOSES IT, 1013.
 //
-// A rename, a seat bound or unbound, a grant given or taken: the socket was
+// A rename, a seat bound or unbound, a permission given or taken: the socket was
 // kept open and went on answering as the new principal while the tab still
 // named the old one — the sidebar read "Jane Founder · human seat" and the
 // seat page "Your day" after Jane unbound herself, until a reload — because
@@ -767,11 +770,14 @@ func TestAQuestionIsAskedAsTheLastDecisionResolved(t *testing.T) {
 // reconnect and on nothing a decision did. A changed grant used to be sent a
 // fresh snapshot in place, which moved the pushes and left that answer behind.
 // Closed 1013, the reconnect's handshake decides the new principal, builds
-// its snapshot for its grants, and the tab asks who it is again. The CONTROL
-// is a decision resolving the same actor, which keeps the socket open.
+// its snapshot for its audience, and the tab asks who it is again. A
+// permission TAKEN is this case too and never a 4403: an open socket needs no
+// permission (ADR-0033), so losing one changes what it carries, not whether
+// it may be open. The CONTROL is a decision resolving the same actor, which
+// keeps the socket open.
 //
 // Mutation: carry on past a moved principal and every case but the control
-// stays open; compare the login alone and the seat and grant cases do.
+// stays open; compare the login alone and the seat and permission cases do.
 func TestADecisionThatMovesWhoASocketActsAsClosesIt(t *testing.T) {
 	t.Parallel()
 	ana := person("ana")
@@ -780,7 +786,7 @@ func TestADecisionThatMovesWhoASocketActsAsClosesIt(t *testing.T) {
 		after func(p iam.Principal) iam.Principal
 	}{
 		{"the same actor (the control)", func(p iam.Principal) iam.Principal {
-			p.Grants = []iam.Grant{iam.GrantStateRead, iam.GrantStateRead}
+			p.Grants = []iam.Grant{iam.GrantTracker, iam.GrantTracker}
 			return p
 		}},
 		{"unbound from the seat", func(p iam.Principal) iam.Principal {
@@ -795,8 +801,12 @@ func TestADecisionThatMovesWhoASocketActsAsClosesIt(t *testing.T) {
 			p.Login = "ana.ops"
 			return p
 		}},
-		{"given a grant", func(p iam.Principal) iam.Principal {
-			p.Grants = []iam.Grant{iam.GrantStateRead, iam.GrantAuditRead}
+		{"given a permission", func(p iam.Principal) iam.Principal {
+			p.Grants = []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}
+			return p
+		}},
+		{"its last permission taken", func(p iam.Principal) iam.Principal {
+			p.Grants = []iam.Grant{}
 			return p
 		}},
 	} {
@@ -816,6 +826,64 @@ func TestADecisionThatMovesWhoASocketActsAsClosesIt(t *testing.T) {
 			}
 			if got := s.closedWith(t); got != CloseUndecided {
 				t.Fatalf("the socket closed %d, want %d", got, CloseUndecided)
+			}
+		})
+	}
+}
+
+// A LEAD MOVED OFF A TEAM IS CLOSED TO RECONNECT, and so is one moved onto
+// one.
+//
+// Whose trail an open socket reads — which seats' live calls reach it whole —
+// is decided at its handshake from the chart ([Service.AudienceFor]), and the
+// client keeps that audience for as long as it is open. A published company
+// that moves the lead relation would otherwise leave a lead taken off a team
+// still receiving that team's transcripts, and one put on a team never
+// receiving theirs. So the publish decides the audience again, in memory, and
+// a socket whose audience it changes closes 1013 for the reconnect to build
+// the audience it has now. The CONTROL is a publish that leaves the relation
+// where it was: the socket stays open.
+//
+// Mutation: skip the audience check on a publish, and the moved lead's socket
+// stays open; close on every publish, and the control does not.
+func TestALeadMovedOffATeamIsClosedToReconnect(t *testing.T) {
+	t.Parallel()
+	seats := tokens.Seats{"agent-sarah": {Handle: "sarah-chen"}}
+	for _, tc := range []struct {
+		name          string
+		before, after bool
+		code          websocket.StatusCode
+	}{
+		{"still leading the team, the control", true, true, 0},
+		{"moved off the team", true, false, CloseUndecided},
+		{"moved onto the team", false, true, CloseUndecided},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			chart := &mutableChart{}
+			chart.set(tc.before, nil)
+			svc := newServiceWithSeats(t, chart, func(string) (SeatState, bool) {
+				return SeatState{Human: true}, true
+			}, seats)
+			lead := person("platform-lead")
+			if got := svc.AudienceFor(t.Context(), lead).Body("agent-sarah"); got != tc.before {
+				t.Fatalf("before the publish the lead reads the seat's body = %v, "+
+					"want %v — the case is not the one it names", got, tc.before)
+			}
+			s := serve(t, svc, socketCase{principal: lead, opened: sessionOf(lead),
+				decide: resolvedAs(lead)})
+			s.settled(t, 1)
+			asked := chart.asked.Load()
+			chart.set(tc.after, nil)
+			svc.CompanyPublished()
+			if tc.code == 0 {
+				waitUntil(t, func() bool { return chart.asked.Load() > asked },
+					"the published company was never decided against the chart")
+				s.open(t)
+				return
+			}
+			if got := s.closedWith(t); got != tc.code {
+				t.Fatalf("the socket closed %d, want %d", got, tc.code)
 			}
 		})
 	}

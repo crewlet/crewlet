@@ -194,17 +194,7 @@ const noWork = { items: [], groups: [], total_hint: 0, complete: true };
 
 const ada = {
   login: "ops-1",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "ada",
   owner: "ada",
   name: "Ada Okonkwo",
@@ -214,7 +204,7 @@ const ada = {
 /** A principal the directory binds to no seat: their record is their login. */
 const unbound = {
   login: "token:ops-7",
-  grants: ["state:read", "work:write", "knowledge:write", "people:manage"],
+  grants: ["tracker", "knowledge", "admin"],
   handle: "",
   owner: "token:ops-7",
   name: "",
@@ -320,7 +310,10 @@ test("an unbound reader's own day is the one kept under their login", async () =
   // person's (`Inbox.test.tsx`).
   expect(screen.getByText(/binds/)).toBeTruthy();
   expect(
-    screen.getByText(/crewlet iam create -kind machine -login token:ops-7 -seat SEAT/),
+    // The whole command, `-grants` included: the CLI refuses a service
+    // account's create that names none, so a command without it fails as
+    // pasted.
+    screen.getByText("crewlet iam create -kind machine -login token:ops-7 -seat SEAT -grants none"),
   ).toBeTruthy();
   expect(screen.queryByText(/Every person holds a human seat/)).toBeNull();
   expect(screen.getAllByText(/token:ops-7/).length).toBeGreaterThan(0);

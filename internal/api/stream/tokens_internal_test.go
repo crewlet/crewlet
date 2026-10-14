@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
@@ -36,7 +35,7 @@ func TestAConnectingTabLeavesTheTicksPushToTheOpenOnes(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 	t.Cleanup(s.Stop)
-	open := NewClient(AudienceOf([]iam.Grant{iam.GrantStateRead}))
+	open := NewClient(NewAudience(trackerPrincipal, nil))
 	s.Hub().Register(open)
 
 	s.Ingest(livestate.Envelope{
@@ -51,7 +50,7 @@ func TestAConnectingTabLeavesTheTicksPushToTheOpenOnes(t *testing.T) {
 	}
 
 	now.Store(start.Add(livestate.LiveSpendWindow + time.Minute).UnixNano())
-	if snap := s.Snapshot(AudienceOf(iam.AllGrants))["tokens"].(tokens.Rollup); snap.Totals.TotalTokens != 0 {
+	if snap := s.Snapshot(NewAudience(adminPrincipal, nil))["tokens"].(tokens.Rollup); snap.Totals.TotalTokens != 0 {
 		t.Fatalf("the connecting tab's rollup is %+v, want the emptied window", snap.Totals)
 	}
 	s.flushTokens()

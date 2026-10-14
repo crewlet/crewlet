@@ -18,8 +18,16 @@
  * A human seat's Overview asks nothing a runtime answers — no activity, no
  * memory, no turn list, no phase history: the engine never spawns a person,
  * so every one of those reads would be a question about a thing that cannot
- * exist. What it shows is their day (theirs, or a `fleet:operate` holder's, to read), the
- * work assigned to them and who they are.
+ * exist. What it shows is their day (theirs, their lead's or an admin's to
+ * read, each with Tracker), the work assigned to them and who they are.
+ *
+ * # Status for everybody, the rest by access
+ *
+ * An agent's figures, its state and its setup's public half are the
+ * overview's. Its open work and the task its turn is on are the tracker's,
+ * asked only with Tracker; its memory and its turns' tokens are its trail,
+ * asked only by an admin or its lead (`profile.ts`' `mayReadTrail`) — and
+ * each part a reader may not read is drawn locked, saying what opens it.
  */
 
 import { useId, useMemo, useRef, useState } from "react";
@@ -27,6 +35,7 @@ import {
   Card,
   DATA_COLOR_OTHER,
   EmptyValue,
+  Skeleton,
   StackedColumns,
   StatCard,
   StatGroup,
@@ -92,6 +101,7 @@ import {
   feedRows,
   fortnight,
   mayReadRecord,
+  mayReadTrail,
   placementWords,
   roundWords,
   sandboxWords,
@@ -99,9 +109,12 @@ import {
   signed,
   tokensTile,
   turnTokens,
+  TRAIL_WORDS,
   workersWords,
   type SeatTab,
 } from "./profile.ts";
+import { ADMIN, TRACKER, WITHHELD_WHY, needsWords } from "~/lib/access.ts";
+import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { ModelChain, YourAccount } from "./shared.tsx";
 import { answersAddress, detailItem, itemAddress, itemPath, turnItem } from "~/lib/work.ts";
 
@@ -150,6 +163,8 @@ export function Overview(props: OverviewProps) {
 
 function AgentOverview({ seat, agent, index, work, reading, now }: OverviewProps) {
   const handle = seat.handle;
+  const viewer = useViewer();
+  const trail = mayReadTrail(viewer, index, handle);
   const activity = useQuery(
     "seat_activity",
     { seat: handle, days: ACTIVITY_DAYS, previous: true },
@@ -159,16 +174,17 @@ function AgentOverview({ seat, agent, index, work, reading, now }: OverviewProps
   // THE TOTALS AND THE NEWEST REFLECTION, from the node HOLDING the seat —
   // one row of each list is all this card draws, and the totals are counted
   // there rather than read off a page.
+  // ITS TRAIL: asked only by a reader the engine answers it to.
   const memory = useQuery(
     "agent_memory",
     { id: handle, limit: 1 },
-    { enabled: handle !== "", pollMs: 60_000 },
+    { enabled: handle !== "" && trail, pollMs: 60_000 },
   );
   return (
     <div className="prof-overview">
       <div className="prof-main">
         <Kpis seat={seat} agent={agent} activity={activity} />
-        <CurrentTurn seat={seat} agent={agent} now={now} />
+        <CurrentTurn seat={seat} agent={agent} trail={trail} now={now} />
         <div className="prof-pair">
           <AssignedWork seat={seat} work={work} now={now} />
           <TurnsPerDay activity={activity} row={row} />
@@ -178,7 +194,7 @@ function AgentOverview({ seat, agent, index, work, reading, now }: OverviewProps
       <aside className="prof-side" aria-label={`About ${seat.name}`}>
         <About seat={seat} onboardedAt={memory.data?.onboarded_at} />
         <Setup seat={seat} agent={agent} reading={reading} />
-        <MemoryCard seat={seat} memory={memory} now={now} />
+        <MemoryCard seat={seat} memory={memory} trail={trail} now={now} />
         <SchedulesCard seat={seat} now={now} />
       </aside>
     </div>
@@ -318,12 +334,16 @@ function Kpis({
 function CurrentTurn({
   seat,
   agent,
+  trail,
   now,
 }: {
   seat: Seat;
   agent: AgentRow | undefined;
+  /** The reader may read this seat's trail (`mayReadTrail`). */
+  trail: boolean;
   now: number;
 }) {
+  const viewer = useViewer();
   const sandboxes = useSandboxes();
   const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
   const turn = agent?.turn ?? null;
@@ -340,19 +360,23 @@ function CurrentTurn({
   const itemTurns = useQuery(
     "work_item_turns",
     { id: asked, limit: 1 },
-    { enabled: onTurn && asked !== "" },
+    { enabled: viewer.tracker && onTurn && asked !== "" },
   );
   // WHAT THE TASK IS CALLED, read by the turn's own item — never a lookup in
   // the Assigned-work card's top five: a turn on a task outside those five
   // (one just asked of it, with no priority) read "On ENG-35" with no title at
   // all.
-  const item = useQuery("work_item", { id: asked }, { enabled: onTurn && asked !== "" });
+  const item = useQuery(
+    "work_item",
+    { id: asked },
+    { enabled: viewer.tracker && onTurn && asked !== "" },
+  );
   // THE PHASES THIS TURN HAS RECORDED, for its tokens: the seat's newest
   // turn row is this turn's once any phase of it has completed.
   const newest = useQuery(
     "turns",
     { seat: seat.handle, limit: 1 },
-    { enabled: onTurn && seat.handle !== "", pollMs: 20_000 },
+    { enabled: trail && onTurn && seat.handle !== "", pollMs: 20_000 },
   );
   if (!agent || !onTurn) {
     const last = agent?.last_turn;
@@ -493,6 +517,10 @@ function CurrentTurn({
             </li>
           ))}
         </ol>
+      ) : call?.body_withheld ? (
+        // WITHHELD, NOT EMPTY: the engine sent this reader the call's status
+        // and none of its calls, so "no tool called" would be a claim.
+        <p className="prof-turn-last">{WITHHELD_WHY}</p>
       ) : (
         <p className="prof-turn-last">
           {current === "execute"
@@ -514,9 +542,31 @@ function AssignedWork({
   work: QueryResult<WorkItemsAnswer>;
   now: number;
 }) {
-  const self = isOwnSeat(useViewer(), seat.handle);
+  const viewer = useViewer();
+  const self = isOwnSeat(viewer, seat.handle);
   const rows = work.data?.items ?? [];
   const total = work.data?.total_hint ?? rows.length;
+  if (!viewer.tracker) {
+    // THE TRACKER'S, and never asked without it: drawn locked — once the
+    // viewer has said so, and waited for until it has.
+    return (
+      <Card padding="none" className="prof-card">
+        <Card.Header>
+          <Card.Title as="h3">Assigned work</Card.Title>
+        </Card.Header>
+        {viewer.loading ? (
+          <Skeleton variant="text" rows={3} label="Checking your access" />
+        ) : (
+          <GrantRequired
+            size="compact"
+            what="Assigned work"
+            grants={[TRACKER]}
+            reader={viewer.login}
+          />
+        )}
+      </Card>
+    );
+  }
   return (
     <Card padding="none" className="prof-card">
       <Card.Header
@@ -742,19 +792,18 @@ function About({ seat, onboardedAt }: { seat: Seat; onboardedAt?: string | undef
 
 /**
  * How the seat is set up: the model it runs on and the tools it is granted —
- * both on the org projection, which carries them only to a reader holding
- * `config:read` because both are derived from the company document — and
- * where its code runs, which nodes may hold it and which workers it may
- * delegate to, which are the company document's and read only with
- * `config:read`.
+ * both on the org projection, which carries them only to an admin because
+ * both are derived from the company document — and where its code runs,
+ * which nodes may hold it and which workers it may delegate to, which are the
+ * company document's and read only with Admin (or by the seat's lead).
  *
  * AN ABSENT CHAIN OR TOOL LIST IS THE SEAT'S OWN ONLY FOR A READER THE ENGINE
  * WOULD HAVE SENT IT TO ([resolvedAbsence]): "No provider configured" and
- * "none granted" are said to a `config:read` holder, and everybody else is
- * told which grant shows them.
+ * "none granted" are said to an admin, and everybody else is told which
+ * access shows them.
  *
  * FOUR STATES FOR THE GUARDED HALF, never an empty value over a setting
- * nobody could read: read, refused (the reader does not hold `config:read`),
+ * nobody could read: read, refused (the reader does not hold Admin),
  * absent (the active revision names no seat by this handle) and unread (still
  * in flight).
  */
@@ -769,16 +818,16 @@ function Setup({
 }) {
   const viewer = useViewer();
   const health = useEngineHealth();
-  // THE FLEET'S LEASES ARE THE DEPLOYMENT'S, read on `fleet:operate`.
-  const fleet = useQuery("fleet", undefined, { enabled: viewer.operatesFleet, pollMs: 60_000 });
+  // THE FLEET'S LEASES ARE THE DEPLOYMENT'S, read on Admin.
+  const fleet = useQuery("fleet", undefined, { enabled: viewer.admin, pollMs: 60_000 });
   const chain = seat.raw.llm?.["execute"] ?? [];
   const tools = seat.raw.tool_sources ?? [];
   const absent = resolvedAbsence(viewer);
   const lease = fleet.data?.seats?.find((s) => s.handle === seat.handle);
-  // WHICH NODE HOLDS IT NOW: the fleet's lease for a `fleet:operate` holder,
-  // else what the health push says (`heldBy`), which the peek says too. Empty
-  // only while that holder's fleet read is in flight.
-  const holder = viewer.operatesFleet
+  // WHICH NODE HOLDS IT NOW: the fleet's lease for an admin, else what the
+  // health push says (`heldBy`), which the peek says too. Empty only while
+  // that admin's fleet read is in flight.
+  const holder = viewer.admin
     ? lease
       ? lease.node
       : fleet.data
@@ -848,11 +897,11 @@ function Setup({
       {reading.state !== "read" && (
         <p className="prof-note">
           {reading.state === "refused" || reading.state === "withheld"
-            ? // A READER WITHOUT THE GRANT IS NEVER ASKED (`useSeatSetup`):
-              // the reading says so, and what they are missing is the grant,
+            ? // A READER WITHOUT ADMIN IS NEVER ASKED (`useSeatSetup`): the
+              // reading says so, and what they are missing is the access,
               // not a read in flight, while a lead's read of the seat, which
               // the engine answers without it, is one.
-              "Needs config:read to see its sandbox, placement and workers."
+              needsWords("Seeing its sandbox, placement and workers", [ADMIN])
             : reading.state === "absent"
               ? "Its setup can’t be read: the configuration names no seat by this handle."
               : "Loading setup…"}
@@ -866,12 +915,16 @@ function Setup({
 function MemoryCard({
   seat,
   memory,
+  trail,
   now,
 }: {
   seat: Seat;
   memory: QueryResult<AgentMemory>;
+  /** The reader may read this seat's trail; otherwise the card is drawn locked. */
+  trail: boolean;
   now: number;
 }) {
+  const viewer = useViewer();
   const data = memory.data;
   const reflection = data?.latest_reflection ?? null;
   return (
@@ -887,6 +940,18 @@ function MemoryCard({
         <Card.Title as="h3">Memory</Card.Title>
       </Card.Header>
       <div className="prof-memory">
+        {!trail &&
+          (viewer.loading ? (
+            <Skeleton variant="text" rows={3} label="Checking your access" />
+          ) : (
+            <GrantRequired
+              size="compact"
+              what="Its memory"
+              grants={[ADMIN]}
+              reader={viewer.login}
+              also={TRAIL_WORDS}
+            />
+          ))}
         <QueryState error={memory.error} refusal={memory.refusal} loading={memory.loading && !data}>
           {data && (
             <>
@@ -984,10 +1049,10 @@ function SchedulesCard({ seat, now }: { seat: Seat; now: number }) {
 function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
   const viewer = useViewer();
   // A PERSON RECORD IS THEIRS: their unread notices, the order they mean to
-  // work in and who set it. The engine answers it to its owner, to whoever
-  // leads them and to a `fleet:operate` holder — so it is asked where this
-  // page can tell it will be answered ([mayReadRecord]), and WITHHELD by a
-  // sentence elsewhere rather than drawn as a person with nothing to do.
+  // work in and who set it. The engine answers it to a Tracker holder who is
+  // its owner, leads them or is an admin — so it is asked where this page can
+  // tell it will be answered ([mayReadRecord]), and WITHHELD by a sentence
+  // elsewhere rather than drawn as a person with nothing to do.
   const self = isOwnSeat(viewer, seat.handle);
   const mayRead = mayReadRecord(viewer, index, seat.handle);
   const person = useQuery(
@@ -1098,7 +1163,9 @@ function HumanOverview({ seat, index, work, nameOf, now }: OverviewProps) {
               <Card.Title as="h3">Their day</Card.Title>
             </Card.Header>
             <p className="prof-note">
-              Their day is theirs. Seeing it needs fleet:operate, or leading them.
+              {viewer.tracker
+                ? "Their day is theirs: their lead and an admin read it too."
+                : needsWords("Their day", [TRACKER])}
             </p>
           </Card>
         )}

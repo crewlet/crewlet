@@ -13,12 +13,11 @@ import (
 const (
 	// DetailReason is the rule's own [Reason].
 	DetailReason = "reason"
-	// DetailGrants is [Decision.Grants]: the capabilities any one of which
-	// would have admitted the caller — or, on the one verb that asks for two
-	// at once (ending every session in the company), the ones the caller
-	// lacks, every one of which it needs. Always present, and an EMPTY list
-	// is an answer — no capability would, and what is missing is a relation
-	// the chart does not hold — rather than an omission.
+	// DetailGrants is [Decision.Grants]: the smallest permissions any ONE
+	// of which would have admitted the caller — an app, or admin. Always
+	// present, and an EMPTY list is an answer — no permission would, and
+	// what is missing is a relation the chart does not hold — rather than an
+	// omission.
 	DetailGrants = "grants"
 	// DetailWindow is [Decision.Recency] on a step-up refusal: the window
 	// the verb asks a proof inside, spelled as the `api.auth.session` key
@@ -31,15 +30,16 @@ const (
 // made: the reason and the grants, under the keys every surface answers them
 // with.
 //
-// VALUES, NOT A SENTENCE. "This needs fleet:operate" written at the call site
-// is a second statement of the rule, and it is the one that goes stale the day
-// the rule's grant moves; the grants here are what the deciding rule actually
+// VALUES, NOT A SENTENCE. "This needs admin" written at the call site is a
+// second statement of the rule, and it is the one that goes stale the day the
+// rule's permission moves; the grants here are what the deciding rule actually
 // consulted. The sentence a person reads is the envelope's `message`, which
 // belongs to the code.
 //
 // A pair rather than a [Decision], because not every refusal is one: a
-// question's own declared grant is checked by internal/api/queries' registry,
-// which has a reason and a grant to report and no decision to hand over.
+// question's own declared permission is checked by internal/api/queries'
+// registry, which has a reason and a permission to report and no decision to
+// hand over.
 func RefusalDetail(reason Reason, grants []iam.Grant) httpjson.Detail {
 	names := make([]string, 0, len(grants))
 	for _, g := range grants {

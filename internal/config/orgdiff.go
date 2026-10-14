@@ -15,8 +15,8 @@ import (
 
 // What a write changes in the company document, judged object by object.
 //
-// The org chart is written by its LEADS as well as by whoever holds
-// `config:write` (internal/authz's subtree rule): a lead may change what sits
+// The org chart is written by its LEADS as well as by whoever holds admin
+// (internal/authz's subtree rule): a lead may change what sits
 // inside a unit they lead, and nothing else. So a write is not judged as a
 // document but as the seats and units it adds, removes, moves, reorders and
 // edits, and for each one the PLACES it reaches — every unit that must be
@@ -40,8 +40,8 @@ import (
 //     among the siblings both documents hold there, so a seat added or
 //     removed beside another moves nothing; and as with a removal, a lead
 //     reordering their own seats may change which of them is the first to
-//     manage a seat outside, through a `manages:` entry somebody with the
-//     company's grant already gave both.
+//     manage a seat outside, through a `manages:` entry an administrator
+//     already gave both.
 //   - A UNIT ITSELF, before and after, when its own fields change. A lead
 //     edits their own team's name and purpose, while handing the unit to
 //     another `lead:` fails the AFTER side unless they also lead the unit
@@ -69,7 +69,7 @@ import (
 // field a change sets, clears or alters — compared whole, so a key with nothing
 // under it counts, since an `mcp_env` key alone starts its server for the seat
 // — and every `${VAR}` reference it sets, clears or alters in ANY field, is
-// listed apart ([OrgChange.Credentials]) and is the company grant's. A
+// listed apart ([OrgChange.Credentials]) and is admin's. A
 // reference names any variable the engine's process can resolve — the
 // company's secrets and Tier A's own keyring and tokens alike — and a
 // credential field is not the only place one is resolved: a human seat's
@@ -77,7 +77,7 @@ import (
 // recited by `lookup_colleague` and a lead's prompt roster and matched by the
 // party registry. So a lead could otherwise read any secret back by naming it
 // as their own Slack id. A setting outside `roles:` and `units:` is listed
-// apart for the same grant ([OrgDiff.Settings]).
+// apart for the same reason ([OrgDiff.Settings]).
 //
 // NOR IS A KEY ANOTHER SYSTEM FINDS THE OBJECT BY ([keyed]): a unit's or a
 // seat's tracker project and page space, a unit's channel, a seat's email and
@@ -90,14 +90,14 @@ import (
 // the document's own objects alone, a lead declaring an orphaned project as
 // their team's became its lead, with authority over every task in it. So a
 // change that sets, clears or alters one is listed apart ([OrgChange.Keys]) for
-// the company grant.
+// admin.
 //
 // A REMOVAL TAKES ITS KEYS WITH IT, judged by where the object was and nothing
 // else, and that is the one residual: a lead may remove a sub-team or a seat
 // that declares a project or a space, and what it declared stays in the
 // tracker with its tasks, or the knowledge base with its pages, declared by
-// nothing in the document — an orphan nobody leads, which only the company
-// grant may declare again. It takes authority away and gives none.
+// nothing in the document — an orphan nobody leads, which only admin may
+// declare again. It takes authority away and gives none.
 //
 // PURE, over two documents and never the running company: a node behind on
 // applies decides a write exactly as a current one does.
@@ -236,8 +236,8 @@ func diffObject(kind OrgKind, id string, b, a *surveyed) (OrgChange, bool) {
 
 	// TWO OBJECTS ANSWERING TO ONE ID cannot be judged object by object —
 	// which of them is the one a change is about is not a fact either side
-	// states — so the change is placed at the root, which only the company
-	// grant writes. Only a stored revision can carry one (the admission
+	// states — so the change is placed at the root, which only admin
+	// writes. Only a stored revision can carry one (the admission
 	// rules refuse it in anything submitted), so this reaches a revert.
 	if was.count > 1 || is.count > 1 {
 		change.Op = OrgChanged
@@ -515,11 +515,11 @@ func settingsChanged(before, after *Company) []string {
 	return differingKeys(b, a)
 }
 
-// credentialsOf is everything in v only the company's grant may change, by
+// credentialsOf is everything in v only admin may change, by
 // its path inside v: the WHOLE VALUE of every credential field — its keys as
 // much as its strings — and every other string that carries a `${VAR}`.
 //
-// THE WHOLE VALUE, because a credential field's key is a grant of its own. An
+// THE WHOLE VALUE, because a credential field's key is a capability of its own. An
 // `mcp_env` block naming a per-seat server is what starts that server for the
 // seat, with the template's own resolved environment and headers, whatever the
 // block holds — `{github: {}}` and `{github: {TOKEN: ""}}` included — so a walk

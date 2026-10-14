@@ -188,7 +188,7 @@ describe("enrolling", () => {
           person: "p-1",
           login: "jane.doe",
           kind: "person",
-          grants: ["state:read"],
+          grants: [],
           status: "signed_in",
         },
       },

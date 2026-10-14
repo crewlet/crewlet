@@ -762,7 +762,9 @@ The tool-skills container is excluded from every result. A tool skill is machine
 
 #### Who may write where
 
-Authoring a page — `write_page`, `save_page`, `comment_on_page` — is an ordinary colleague write, decided by `knowledge:write`, which every seat carries. Four rules sit beside it.
+Reading and authoring pages — `get_page`, `list_pages`, `search_knowledge`, `write_page`, `save_page`, `comment_on_page` — is the **`knowledge` app**, which every agent seat holds and a person holds when an administrator ticks it (`admin` includes it). Five rules sit beside it.
+
+**A page lives in a space the company declares.** Creating a page under a container key the company does not declare is refused, for a person and an agent alike, with a sentence naming the key and how a space is declared — exactly as filing a task in a project the company does not declare is. The declared spaces are every unit's and seat's `space:`, `knowledge.root_space` and the tool-skills container (`knowledge.skills_container`), read off the configuration current at each create; a company that declares none can create no page until it does. Creating is the only way into a container — a save cannot move a page and a rename keeps its container — so the rule is asked of `write_page`, the human write surface's `POST /pages` and the operator's assistant alike, by the knowledge base's own store, and a page's existing container is never re-judged. A container the chart's apply creates for a declared space needs no create of its own.
 
 **Two containers are reserved from agents, for two different reasons, so they hold back different writes.** The knowledge base's own **store** enforces both, answering `ErrReserved`:
 
@@ -773,11 +775,13 @@ Authoring a page — `write_page`, `save_page`, `comment_on_page` — is an ordi
 
 The rule lives in the store rather than beside one tool because it was once one check on `write_page`, and a seat that could not create a page in the skills container could still save over one, rename it and comment on it. It is a rule about the **actor**, not about capability: an agent cannot see from anything it holds that a page is machinery, or that a container is the company's canon, while a person publishing into either on purpose — through their own assistant over [`/operator/mcp`](#on-the-native-backend-your-own-assistant) — is what the containers are for. The container keys are read off the configuration current at each write, so an apply that moves `skills_container` or `root_space` moves the rule with it.
 
-**A tool skill is configuration, and a person writing one needs `config:write`.** The store's rule above is about agents and exempts every person, because whether a person may is a capability and the store holds no grants — so the tool layer asks it, once the container is known. Creating or saving a page in the skills container (`write_page`, `save_page`), and renaming, trashing, restoring or purging one over the [write surface](../reference/api-endpoints.md#the-human-write-surface), is decided as `pages.skill.write` on top of the verb's own rule: `config:write`, the grant that edits the company document, because a skill page is injected into every seat's turn and rewrites the prompt the whole company runs under. `knowledge:write` alone is not a way to put words in every agent's mouth. A remark on a skill page is not the skill, and stays the ordinary colleague write. The org root needs nothing beyond the colleague write: publishing the onboarding tree there is what a person with `knowledge:write` does.
+**A tool skill is configuration, and a person writing one needs `admin`.** The store's rule above is about agents and exempts every person, because whether a person may is a permission and the store holds none — so the tool layer asks it, once the container is known. Creating or saving a page in the skills container (`write_page`, `save_page`), and renaming, trashing, restoring or purging one over the [write surface](../reference/api-endpoints.md#the-human-write-surface), is decided as `pages.skill.write` on top of the verb's own rule: `admin`, the permission that edits the company document, because a skill page is injected into every seat's turn and rewrites the prompt the whole company runs under. The `knowledge` app alone is not a way to put words in every agent's mouth. A remark on a skill page is not the skill, and stays an ordinary comment. The org root needs nothing beyond the app: publishing the onboarding tree there is what a person holding `knowledge` does.
 
-**A remark is its author's.** Editing a comment is the author's alone — nobody puts words in somebody else's mouth, on a record that outlives the page's body. Removing one is the author's, or a caller holding the deployment's own `fleet:operate`: a lead is not automatically a moderator of what is said on their team's pages.
+**A remark is its author's.** Editing a comment is the author's alone — nobody puts words in somebody else's mouth, on a record that outlives the page's body. Removing one is the author's, or an administrator's (`admin`): a lead is not automatically a moderator of what is said on their team's pages. Both need the `knowledge` app beside the authorship.
 
-**A page container is led through a unit's `space:`.** The rules that are a container's lead's — a container's own settings, trashing and restoring a page — ask who leads the unit whose `space:` names the container (or the seat whose own container it is). That is its own question of the org chart rather than the project one: a unit declares its tracker project and its page container in two separate fields, and asking one with the other's key would refuse the lead of every company that spells them differently. See [the authority table](identity-and-access.md#the-authority-table-one-function-decides).
+**A page's creator tidies it.** Renaming a page, trashing it and restoring it are its **creator's** — whoever wrote it first, which a save never changes — as well as its container's lead's and an administrator's, each with the `knowledge` app: somebody who drafted a page in the wrong place should not need a lead to take it down again. A **purge**, which nothing undoes, stays an administrator's alone, asks for a recent proof, and is never an agent's.
+
+**A page container is led through a unit's `space:`.** The rules that are a container's lead's — renaming, trashing and restoring a page — ask who leads the unit whose `space:` names the container (or the seat whose own container it is). That is its own question of the org chart rather than the project one: a unit declares its tracker project and its page container in two separate fields, and asking one with the other's key would refuse the lead of every company that spells them differently. See [the authority table](identity-and-access.md#the-authority-table-one-function-decides).
 
 ### Confluence backend — the Confluence searcher
 
@@ -858,10 +862,14 @@ sequenceDiagram
   sentence when they do not answer the question. Source `[n]` is the n-th entry
   of the answer's `sources`, so a screen links every citation. A question
   nothing matches is answered without a model at all, and costs nothing.
-- **A person's, not a seat's.** It takes `state:read` and a caller who holds
-  a seat — a person, from the dashboard or through their own assistant over
-  `/operator/mcp`, or a token or service account the identity directory binds
-  to one — because the spend is on somebody's behalf and it runs on the model
+- **A person's, not a seat's, and only what the asker uses.** It takes either
+  app and a caller who holds a seat: it searches the pages only for a
+  `knowledge` holder and the board only for a `tracker` holder, a caller with
+  neither is refused naming both, and the answer cache is kept apart per set
+  of apps, so an answer drawn from pages is never handed to somebody who
+  cannot read them. The seat is required — a person's, from the dashboard or
+  through their own assistant over `/operator/mcp`, or that of a token or
+  service account the identity directory binds to one — because the spend is on somebody's behalf and it runs on the model
   of that seat; every person holds a human seat. A credential bound to no
   seat — a pipeline's token, or a service account bound to none — is refused
   rather than answered on the company's default model, because a credential is
@@ -913,8 +921,8 @@ flag-driven CLI handles badly: the parent chain, a title that already exists
 The [reserved containers](#who-may-write-where) are **not** refused to it, which
 is the difference from a seat: they are refused to an agent, and publishing the
 tool skills and the onboarding tree on purpose is exactly what a person does
-there. The onboarding tree takes the token's ordinary `knowledge:write`; the
-tool skills take **`config:write`** as well, because each one is injected into
+there. The onboarding tree takes the token's ordinary `knowledge`; the
+tool skills take **`admin`**, because each one is injected into
 every seat's turn. It is also why this is the native way to seed [tool
 skills](tool-skills.md) — a file with a `trigger:` in its frontmatter belongs in
 the skills container, where it is injected into a phase as an instruction

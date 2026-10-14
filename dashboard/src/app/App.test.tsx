@@ -15,7 +15,8 @@ import { Router } from "./router.tsx";
 import { screenScroller } from "~/lib/scroller.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, QueryError, Store, sessionRestored } from "~/protocol/index.ts";
-import { DESTINATIONS, WORKSPACES, grantWords, workspaceRow } from "./nav.ts";
+import { DESTINATIONS, WORKSPACES, closedBy, workspaceRow } from "./nav.ts";
+import { accessNames } from "~/lib/access.ts";
 import { PAGE_ACTIONS_SLOT } from "./frame/PageActions.tsx";
 import { buildHash } from "./router.tsx";
 import { noteReader } from "~/lib/reader.ts";
@@ -35,9 +36,29 @@ class InertWebSocket {
   close(): void {}
 }
 
-function mount() {
+/** An admin's `viewer` answer: every screen is theirs to read. */
+const ADMIN_VIEWER = {
+  login: "founder",
+  owner: "jane",
+  handle: "jane",
+  grants: ["admin", "tracker", "knowledge"],
+};
+
+/**
+ * The app over a socket that never connects — and, where a case reads a
+ * screen only an admin reads, one whose `viewer` question answers `viewer`.
+ */
+function mount(viewer: unknown = null) {
   const store = new Store();
   const socket = new LiveSocket(store);
+  if (viewer !== null) {
+    const real = socket.query.bind(socket);
+    (socket as unknown as { query: (what: string, ...rest: unknown[]) => Promise<unknown> }).query =
+      (what, ...rest) =>
+        what === "viewer"
+          ? Promise.resolve(viewer)
+          : (real as (w: string, ...r: unknown[]) => Promise<unknown>)(what, ...rest);
+  }
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -117,7 +138,7 @@ describe("the shell", () => {
   test("every workspace is in the sidebar, Settings included", async () => {
     // A SECTION THAT VANISHES without its grant is indistinguishable from one
     // that does not exist, so Settings is always a row.
-    mountAs(Promise.resolve({ login: "jane.doe", owner: "jane.doe", grants: ["state:read"] }));
+    mountAs(Promise.resolve({ login: "jane.doe", owner: "jane.doe", grants: [] }));
     const nav = screen.getByRole("navigation", { name: "Navigation" });
     for (const label of [
       "Home",
@@ -142,11 +163,11 @@ describe("the shell", () => {
   // nothing), and its column locks each section that is not.
   test("Settings is not locked as a whole; its column locks what is closed", async () => {
     location.hash = "#/settings";
-    mountAs(Promise.resolve({ login: "jane.doe", owner: "jane.doe", grants: ["state:read"] }));
+    mountAs(Promise.resolve({ login: "jane.doe", owner: "jane.doe", grants: [] }));
     const column = await screen.findByRole("navigation", { name: "Settings sections" });
     await waitFor(() =>
       expect(within(column).getByRole("link", { name: /^Nodes/ }).textContent).toMatch(
-        /needs fleet:operate/,
+        /needs Admin/,
       ),
     );
     const foot = screen.getByRole("navigation", { name: "Settings" });
@@ -169,7 +190,7 @@ describe("the overlays the frame opens", () => {
     owner: "jane",
     handle: "jane",
     name: "Jane",
-    grants: ["state:read"],
+    grants: [],
   };
 
   test("the Account popover is portalled to the body, under no layer host", async () => {
@@ -378,7 +399,7 @@ describe("routing", () => {
    * the router encodes each segment whole, so a tool page is always exactly
    * one tail segment and the filter always two.
    */
-  test("a tool named `servers` keeps its page, and the origin filter keeps its", () => {
+  test("a tool named `servers` keeps its page, and the origin filter keeps its", async () => {
     const annotations = {
       read_only: "yes",
       destructive: "no",
@@ -391,25 +412,26 @@ describe("routing", () => {
     ];
 
     location.hash = "#/settings/tools/servers";
-    const one = mount();
+    const one = mount(ADMIN_VIEWER);
     one.store.applyTools(catalogue);
     one.view.rerender(
-      <ClientContext.Provider value={{ store: one.store, socket: new LiveSocket(one.store) }}>
+      <ClientContext.Provider value={{ store: one.store, socket: one.socket }}>
         <Router>
           <App />
         </Router>
       </ClientContext.Provider>,
     );
-    // The addressed tool is drawn above the catalogue in its own header.
-    expect(one.view.container.querySelector(".object-head")).not.toBeNull();
+    // The addressed tool is drawn above the catalogue in its own header —
+    // once the viewer has said this reader is an admin, whose screen it is.
+    await waitFor(() => expect(one.view.container.querySelector(".object-head")).not.toBeNull());
     one.view.unmount();
     cleanup();
 
     location.hash = "#/settings/tools/servers/github";
-    const two = mount();
+    const two = mount(ADMIN_VIEWER);
     two.store.applyTools(catalogue);
     two.view.rerender(
-      <ClientContext.Provider value={{ store: two.store, socket: new LiveSocket(two.store) }}>
+      <ClientContext.Provider value={{ store: two.store, socket: two.socket }}>
         <Router>
           <App />
         </Router>
@@ -417,6 +439,9 @@ describe("routing", () => {
     );
     // Two segments is the FILTER, so no tool is addressed and the catalogue
     // stands alone.
+    await waitFor(() =>
+      expect(screen.queryByText("Checking your access to Tools & MCP")).toBeNull(),
+    );
     expect(two.view.container.querySelector(".prof-head")).toBeNull();
   });
 
@@ -458,7 +483,7 @@ describe("a section, for a reader holding none of its grants", () => {
         "audit",
       ]),
     );
-    // AND THE AUDIT TRAIL'S READS ARE THE AUDIT GRANT'S, wherever they sit.
+    // AND THE AUDIT TRAIL'S READS ARE ADMIN'S, wherever they sit.
     expect(everywhere.map((s) => s.key)).toEqual(
       expect.arrayContaining(["turns", "a2a", "events", "diaries"]),
     );
@@ -473,13 +498,19 @@ describe("a section, for a reader holding none of its grants", () => {
     );
     for (const section of everywhere) {
       location.hash = buildHash(section.path);
-      // HOLDING THE COMPANY'S GRANT, as every reader the socket answers does
-      // (its handshake needs `state:read`): what such a reader lacks is the
-      // section's own grant, which is what its refusal names (`sectionOpen`).
-      const { view } = mountAs(Promise.resolve({ ...reader, grants: ["state:read"] }));
+      // HOLDING NO ACCESS AT ALL, which the socket serves the overview: what
+      // such a reader lacks is the section's own access, which is what its
+      // lock names (`sectionOpen`).
+      const { view } = mountAs(Promise.resolve({ ...reader, grants: [] }));
       const content = () => view.container.querySelector(".crewlet-app-shell__content")!;
-      const needs = grantWords(section.grants!);
-      expect(await screen.findByText(`${section.label} needs ${needs}`), section.key).toBeDefined();
+      // THE CLOSED THING IS NAMED: the section, or — for a section in a
+      // workspace the reader cannot open at all — the workspace.
+      const closed = closedBy(section.path, [])!;
+      expect(closed, section.key).not.toBeNull();
+      expect(
+        await screen.findByText(`${closed.what} needs ${accessNames(closed.needs)} access`),
+        section.key,
+      ).toBeDefined();
       // THE WAY OUT IS A SIGN-IN AS SOMEBODY ELSE, never a token — and the
       // reader is named, from the reading the refusal was decided on.
       expect(screen.getByRole("button", { name: "Sign in as somebody else" })).toBeDefined();
@@ -539,7 +570,7 @@ describe("a section, for a reader holding none of its grants", () => {
       for (let i = 0; i < 8; i++) await Promise.resolve();
       await new Promise((r) => setTimeout(r, 0));
       expect(
-        screen.queryByText(`${section.label} needs ${grantWords(section.grants!)}`),
+        screen.queryByText(`${section.label} needs ${accessNames(section.grants!)} access`),
         section.key,
       ).toBeNull();
       expect(
@@ -548,11 +579,15 @@ describe("a section, for a reader holding none of its grants", () => {
       ).toBeNull();
       // A COUNT IN THE HEADER IS A TAG ("0 nodes", "0 credentials held",
       // "0 of 6 configured"); a time-range control there is not a figure.
-      expect(
-        document.getElementById(PAGE_ACTIONS_SLOT)?.querySelector(".crewlet-tag"),
-        section.key,
-      ).toBeNull();
-      expect(content().querySelector(".crewlet-statcard"), section.key).toBeNull();
+      // Tools' figures are the registry the socket pushes every reader — no
+      // read was refused for them — so they are the figures kept.
+      if (section.key !== "tools") {
+        expect(
+          document.getElementById(PAGE_ACTIONS_SLOT)?.querySelector(".crewlet-tag"),
+          section.key,
+        ).toBeNull();
+        expect(content().querySelector(".crewlet-statcard"), section.key).toBeNull();
+      }
       view.unmount();
       cleanup();
     }
@@ -560,13 +595,13 @@ describe("a section, for a reader holding none of its grants", () => {
   });
 
   // SETTINGS IS WHERE A PERSON LOOKS FOR THEIR OWN SECURITY, and for a reader
-  // holding none of the company's grants it was nothing but locks — so a
+  // holding no permission it was nothing but locks — so a
   // company's people concluded there was no two-step verification at all.
   // Their Account is the column's FIRST row, never locked, and a cross-link
   // out of Settings said by name: Budgets' said the path segment, "spend".
   test("the Settings column offers a reader holding nothing their own Account, first", async () => {
     location.hash = "#/settings";
-    mountAs(Promise.resolve({ ...reader, grants: ["state:read"] }));
+    mountAs(Promise.resolve({ ...reader, grants: [] }));
     const column = await screen.findByRole("navigation", { name: "Settings sections" });
     const rows = within(column).getAllByRole("link");
     expect(rows[0]?.getAttribute("href")).toBe("#/account");
@@ -577,7 +612,7 @@ describe("a section, for a reader holding none of its grants", () => {
     // AND THE LOCKS ARE STILL DRAWN, so this reader is not told everything
     // is open to them.
     const people = rows.find((a) => a.getAttribute("href") === "#/settings/people");
-    expect(people?.textContent).toMatch(/needs people:manage or audit:read/);
+    expect(people?.textContent).toMatch(/needs Admin access/);
     // EACH ROW'S TITLE IS ITS HINT, and a cross-link's is the hint of the
     // place it leads to — the reader's Account is described alike wherever it
     // is offered, here, in the palette and in the user block.
@@ -588,10 +623,10 @@ describe("a section, for a reader holding none of its grants", () => {
     );
   });
 
-  // THE READER'S OWN SECTIONS NEED NOTHING, and every other needs the
-  // company's grant first: a reader holding no `state:read` is told that, not
-  // the section's own grant, and their Account and Appearance carry no lock.
-  test("for a reader holding no state:read, only the company's sections are locked", async () => {
+  // THE READER'S OWN SECTIONS AND GENERAL NEED NOTHING, and every other
+  // Settings section is Admin's: a reader holding nothing is told that, and
+  // their Account, Appearance and the company's charter carry no lock.
+  test("for a reader holding nothing, only Admin's sections are locked", async () => {
     location.hash = "#/settings";
     mountAs(Promise.resolve(reader));
     const column = await screen.findByRole("navigation", { name: "Settings sections" });
@@ -599,8 +634,9 @@ describe("a section, for a reader holding none of its grants", () => {
       within(column)
         .getAllByRole("link")
         .find((a) => a.getAttribute("href") === href);
-    await waitFor(() => expect(row("#/settings")?.textContent).toMatch(/needs state:read/));
-    expect(row("#/settings/people")?.textContent).toMatch(/needs state:read/);
+    await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/needs Admin/));
+    expect(row("#/settings/tools")?.textContent).toMatch(/needs Admin access/);
+    expect(row("#/settings")?.textContent).toBe("General");
     expect(row("#/account")?.textContent).toBe("Account, outside Settings");
     expect(row("#/settings/appearance")?.textContent).toBe("Appearance");
   });
@@ -611,34 +647,26 @@ describe("a section, for a reader holding none of its grants", () => {
       Promise.resolve({
         login: "ops",
         owner: "ops",
-        grants: [
-          "config:read",
-          "config:write",
-          "secrets:write",
-          "fleet:operate",
-          "people:manage",
-          "audit:read",
-          "state:read",
-          "work:write",
-          "knowledge:write",
-        ],
+        grants: ["admin", "tracker", "knowledge"],
       }),
     );
     expect(await screen.findByText(/Log positions are under/)).toBeDefined();
-    expect(screen.queryByText("Nodes needs fleet:operate")).toBeNull();
+    expect(screen.queryByText("Nodes needs Admin")).toBeNull();
   });
 
-  // THE CHARTER IS PUBLIC, and so is the tool registry: neither is guarded.
-  test("General and Tools are open to anybody", async () => {
-    for (const path of [["settings"], ["settings", "tools"]]) {
-      location.hash = buildHash(path);
-      const { view } = mountAs(Promise.resolve({ login: "", owner: "", grants: [] }));
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(view.container.textContent, path.join("/")).not.toMatch(/(General|Tools) needs /);
-      view.unmount();
-      cleanup();
-    }
+  // THE CHARTER IS PUBLIC; the tool registry is Admin's, since what each
+  // seat may call is how the company is run.
+  test("General is open to anybody, and Tools is Admin's", async () => {
+    location.hash = buildHash(["settings"]);
+    const general = mountAs(Promise.resolve({ login: "", owner: "", grants: [] }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(general.view.container.textContent).not.toMatch(/General needs /);
+    general.view.unmount();
+    cleanup();
+    location.hash = buildHash(["settings", "tools"]);
+    mountAs(Promise.resolve({ login: "reader", owner: "reader", grants: ["tracker"] }));
+    expect(await screen.findByText("Tools & MCP needs Admin access")).toBeDefined();
   });
 });
 
@@ -813,23 +841,26 @@ describe("a turn watched to its end", () => {
     },
   });
 
-  function seatView() {
+  // A SEAT'S TURNS ARE ITS TRAIL, read here by an admin — once the viewer
+  // has said so, which the tab waits for.
+  async function seatView() {
     location.hash = "#/agents/seats/ceo?tab=turns";
-    const { store, view } = mount();
+    const { store, view, socket } = mount(ADMIN_VIEWER);
     store.applyOrg(withDerived(seat));
     const redraw = () =>
       view.rerender(
-        <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+        <ClientContext.Provider value={{ store, socket }}>
           <Router>
             <App />
           </Router>
         </ClientContext.Provider>,
       );
+    await waitFor(() => expect(screen.queryByLabelText("Checking your access")).toBeNull());
     return { store, view, redraw };
   }
 
-  test("the turn is still there once its review completes", () => {
-    const { store, redraw } = seatView();
+  test("the turn is still there once its review completes", async () => {
+    const { store, redraw } = await seatView();
 
     // Onboarding and execute have landed; the review is live.
     store.applyEvent(phaseEnvelope("p1", "onboarding", "2026-01-01T00:00:01Z") as never);
@@ -883,12 +914,12 @@ describe("a turn watched to its end", () => {
     expect(screen.queryByText("No phases in the record for this seat")).toBeNull();
   });
 
-  test("it is not held behind a 'new turns' button either", () => {
+  test("it is not held behind a 'new turns' button either", async () => {
     // The reader was watching it: it is not a new row, whichever list it is in.
     // SCROLLED DOWN, which is the whole condition — at the top of the scroller
     // the settled list admits everything anyway, so an assertion taken there
     // passes whether the rule holds or not.
-    const { store, redraw } = seatView();
+    const { store, redraw } = await seatView();
     const scroller = screenScroller();
     if (!scroller) throw new Error("no scroller to scroll: the shell's layout moved");
     Object.defineProperty(scroller, "scrollTop", { value: 400, configurable: true });
@@ -954,17 +985,7 @@ test("a node named `backups` keeps its page, and a domain keeps its own", async 
       Promise.resolve({
         login: "ops",
         owner: "ops",
-        grants: [
-          "config:read",
-          "config:write",
-          "secrets:write",
-          "fleet:operate",
-          "people:manage",
-          "audit:read",
-          "state:read",
-          "work:write",
-          "knowledge:write",
-        ],
+        grants: ["admin", "tracker", "knowledge"],
       }),
     );
   const settle = async () => {
@@ -1027,17 +1048,7 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
     if (what === "viewer") {
       return Promise.resolve({
         login: "U0FOUNDER",
-        grants: [
-          "config:read",
-          "config:write",
-          "secrets:write",
-          "fleet:operate",
-          "people:manage",
-          "audit:read",
-          "state:read",
-          "work:write",
-          "knowledge:write",
-        ],
+        grants: ["admin", "tracker", "knowledge"],
         handle: "jane",
         owner: "jane",
         name: "Jane Founder",
@@ -1076,17 +1087,7 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
       return Promise.resolve({
         login: "U0FOUNDER",
         owner: "U0FOUNDER",
-        grants: [
-          "config:read",
-          "config:write",
-          "secrets:write",
-          "fleet:operate",
-          "people:manage",
-          "audit:read",
-          "state:read",
-          "work:write",
-          "knowledge:write",
-        ],
+        grants: ["admin", "tracker", "knowledge"],
       });
     if (what === "work_item") return Promise.resolve(task);
     if (what === "work_project") return Promise.resolve(project);

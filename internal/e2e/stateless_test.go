@@ -379,7 +379,7 @@ func TestAStatelessNodesPartyRegistryReadsTheDirectory(t *testing.T) {
 	// node — which is the only node holding the rows either record lands in.
 	writer := p.data.engine.IAMWriter().As(iam.Principal{
 		Login: iam.TokenLogin(e2eTokenID), Kind: iam.KindMachine,
-		Grants: []iam.Grant{iam.GrantPeopleManage},
+		Grants: []iam.Grant{iam.GrantAdmin},
 	})
 	key, err := uuid.NewV7()
 	if err != nil {

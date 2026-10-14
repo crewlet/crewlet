@@ -96,7 +96,7 @@ func TestEveryDirectoryWriteAsksForAProof(t *testing.T) {
 			t.Errorf("%s named the window %v, want %s", pattern,
 				body[authz.DetailWindow], window)
 		case !window.Demands() && steppedUp:
-			t.Errorf("%s asked a caller holding every grant to step up, and "+
+			t.Errorf("%s asked a caller holding every permission to step up, and "+
 				"it is decided to need no proof", pattern)
 		}
 	}
@@ -126,7 +126,7 @@ func TestAStaleProofMayNotChangeAnybodysGrants(t *testing.T) {
 	edit := func(p iam.Principal) (answered, []string) {
 		r := newRig(t)
 		got := r.as(p, http.MethodPatch, "/iam/people/"+bob.String(),
-			map[string]any{"grants": []string{string(iam.GrantStateRead)}})
+			map[string]any{"grants": []string{string(iam.GrantKnowledge)}})
 		return got, r.writer.calls
 	}
 	older := administrator()

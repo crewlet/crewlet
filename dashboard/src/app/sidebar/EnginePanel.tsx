@@ -12,14 +12,14 @@
  * node's name, the fleet, the configuration and the uptime, the alarms by
  * name, and a way to each place that acts on them.
  *
- * Three states are not about the engine at all but about THIS BROWSER, and the
+ * Two states are not about the engine at all but about THIS BROWSER, and the
  * engine serves it nothing to put in a panel. Nobody signed in is the one a
  * press can fix, so there the row is the button that goes to the sign-in and
- * opens no panel. No access yet, and a refusal of somebody the engine knows,
- * are fixed by an administrator: the row STATES them and is no control at all
- * (the kit's static rail row: no pointer, no chevron, never focused), and the
- * panel drawn in place of the screen carries the retry and the sign-out. A
- * statement wearing a control's marks reads as a control that does nothing.
+ * opens no panel. A refusal of somebody the engine knows is fixed by an
+ * admin: the row STATES it and is no control at all (the kit's static rail
+ * row: no pointer, no chevron, never focused), and the panel drawn in place
+ * of the screen carries the retry and the sign-out. A statement wearing a
+ * control's marks reads as a control that does nothing.
  *
  * # One state, chosen by precedence
  *
@@ -29,10 +29,9 @@
  *
  *   1. nobody is signed in: the engine accepted no session from this
  *      browser, and nothing else on screen can be trusted;
- *   2. the reader holds no access yet: a session without `state:read`, for
- *      which nothing is dialled, said NEUTRALLY, because a person invited
- *      with no grants is not a fault; and then the engine knows who this is
- *      and will not serve them (a seat taken out of the chart), in danger;
+ *   2. the engine knows who this is and will not serve them (a seat taken out
+ *      of the chart), in danger — never for want of access, since the socket
+ *      serves every signed-in reader the overview;
  *   3. the engine was lost: everything shown is the last push;
  *   4. nothing has reported yet: the tab is still connecting, which is not
  *      "healthy" and not a fault either, so its dot is neutral;
@@ -64,8 +63,8 @@
  * are not on the push, which is public and carries only the one that has
  * stood longest; they are the retention report, the same document Settings ›
  * Backups & retention lists them from, asked for when the panel opens and
- * again when the count moves, and only of a reader holding the grant that
- * section opens on (`fleet:operate`). Each is named by the rule in
+ * again when the count moves, and only of a reader holding the access that
+ * section opens on (Admin). Each is named by the rule in
  * `lib/alarms.ts`. A reader without that grant, or a report not answered yet,
  * gets the longest-standing alarm by name and how many more stand.
  *
@@ -104,7 +103,6 @@ const AGREED = new Set(["", "serve", "wait"]);
 /** Which of the engine's states the row says. */
 export type EngineState =
   | "signed-out"
-  | "no-access"
   | "refused"
   | "unreachable"
   | "connecting"
@@ -136,21 +134,11 @@ export function engineReading(input: {
   authRejected: boolean;
   /** Why the engine will not serve a browser it knows, or null. */
   accessRefused?: string | null;
-  /** The reader's session holds no `state:read`, so nothing is dialled. */
-  noAccess?: boolean;
   lostAt: number | null;
   everConnected: boolean;
   health: EngineHealth | null;
 }): EngineReading {
-  const {
-    connected,
-    authRejected,
-    accessRefused = null,
-    noAccess = false,
-    lostAt,
-    everConnected,
-    health,
-  } = input;
+  const { connected, authRejected, accessRefused = null, lostAt, everConnected, health } = input;
   if (authRejected) {
     return {
       state: "signed-out",
@@ -159,18 +147,6 @@ export function engineReading(input: {
       lead: "The engine accepted no session from this browser",
       health: null,
       lostAt,
-    };
-  }
-  // NO ACCESS YET BEFORE A REFUSAL: a socket refused for want of the grant is
-  // the same state, and the session is what says which one this is.
-  if (noAccess) {
-    return {
-      state: "no-access",
-      tone: "neutral",
-      title: "No access yet",
-      lead: "Signed in, without the state:read grant the company's live state needs",
-      health: null,
-      lostAt: null,
     };
   }
   if (accessRefused !== null) {
@@ -269,7 +245,7 @@ export function EnginePanel({
   reading: EngineReading;
   /**
    * Whether this reader may ask the retention report, which names the alarms:
-   * whether they hold the grant Settings › Backups & retention opens on.
+   * whether they hold the access Settings › Backups & retention opens on.
    */
   readsReport: boolean;
   onSignIn: () => void;
@@ -288,11 +264,11 @@ export function EnginePanel({
       </AppShell.RailRow>
     );
   }
-  // A STATEMENT WEARS NOTHING A CONTROL WEARS. No access yet, and a refusal of
-  // somebody the engine knows, are repaired by an administrator: the row says
-  // which, and is the kit's static row, with no pointer, no chevron and no
+  // A STATEMENT WEARS NOTHING A CONTROL WEARS. A refusal of somebody the
+  // engine knows is repaired by an admin: the row says so, and is the kit's
+  // static row, with no pointer, no chevron and no
   // place in the tab order. The panel in place of the screen says the rest.
-  if (reading.state === "no-access" || reading.state === "refused") {
+  if (reading.state === "refused") {
     return (
       <AppShell.RailRow icon={<StatusDot tone={reading.tone} />}>{reading.title}</AppShell.RailRow>
     );

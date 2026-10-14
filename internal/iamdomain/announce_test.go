@@ -57,21 +57,34 @@ func TestOnlyALandedWriteIsAnnounced(t *testing.T) {
 		nil, row)
 }
 
-// THE DELTA IS A SET DIFFERENCE, SORTED, so two nodes describing one write
-// describe it byte for byte — and a duplicate in a stored set does not make
-// one grant into two rows.
+// THE DELTA IS A SET DIFFERENCE OF THE EXPANDED SETS, SORTED, so two nodes
+// describing one write describe it byte for byte — a duplicate in a stored set
+// does not make one permission into two rows, and an app an administrator
+// already held through admin is no change when a save spells it out. Taking
+// admin away removes admin and every app it carried that the new row does not
+// list. Mutation: diff the raw rows and the spelled-out app reads as added.
 func TestAGrantDeltaIsSortedAndDeduplicated(t *testing.T) {
 	t.Parallel()
 	added, removed := grantDelta(
-		[]iam.Grant{iam.GrantWorkWrite, iam.GrantSecretRead, iam.GrantWorkWrite},
-		[]iam.Grant{iam.GrantSecretWrite, iam.GrantSecretRead, iam.GrantAuditRead,
-			iam.GrantSecretWrite},
+		[]iam.Grant{iam.GrantTracker, "swarm", iam.GrantTracker},
+		[]iam.Grant{iam.GrantKnowledge, "swarm", iam.GrantKnowledge},
 	)
-	if !slices.Equal(added, []string{"audit:read", "secrets:write"}) {
+	if !slices.Equal(added, []string{"knowledge"}) {
 		t.Errorf("added %v", added)
 	}
-	if !slices.Equal(removed, []string{"work:write"}) {
+	if !slices.Equal(removed, []string{"tracker"}) {
 		t.Errorf("removed %v", removed)
+	}
+	if a, r := grantDelta([]iam.Grant{iam.GrantAdmin},
+		[]iam.Grant{iam.GrantAdmin, iam.GrantTracker, iam.GrantKnowledge}); a != nil ||
+		r != nil {
+		t.Errorf("spelling out the apps admin includes is %v / %v, want nothing", a, r)
+	}
+	if a, r := grantDelta([]iam.Grant{iam.GrantAdmin},
+		[]iam.Grant{iam.GrantKnowledge}); a != nil ||
+		!slices.Equal(r, []string{"admin", "tracker"}) {
+		t.Errorf("taking admin away is %v / %v, want admin and the app not kept "+
+			"removed", a, r)
 	}
 	if a, r := grantDelta(nil, nil); a != nil || r != nil {
 		t.Errorf("an empty change is %v / %v, want nothing", a, r)

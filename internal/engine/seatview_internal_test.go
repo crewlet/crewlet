@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
-	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -191,23 +191,25 @@ func TestTheObservedLagIsWhatTheRequestPathReads(t *testing.T) {
 	}
 }
 
-// THE NODE'S OWN WRITER MAY ENROL SOMEBODY WHO HAS NO PRINCIPAL YET.
+// THE NODE'S OWN WRITER IS AN ADMINISTRATOR, AND NOTHING ELSE.
 //
 // An identity gesture is performed on behalf of a person who does not exist:
 // the person an invitation redeems into, the company's first person included.
 // It goes through this node's own writer, and the domain refuses an
-// administrative record from a party without [iamdomain.AdminGrant].
+// administrative record from a party that does not hold admin.
 //
-// This pairing had already drifted: the writer held fleet:operate and the
-// domain asked for config:write, so every bootstrap and every redemption was
-// refused on a real deployment — invisibly, because the surface that drives
-// them is exercised against a stub writer.
-func TestTheNodesOwnWriterMayEnrolOnSomebodysBehalf(t *testing.T) {
+// This pairing had already drifted once — the writer held one capability and
+// the domain asked for another — so every bootstrap and every redemption was
+// refused on a real deployment, invisibly, because the surface that drives
+// them is exercised against a stub writer. Pinned EXACTLY, because admin is
+// every app beside it and a list carrying anything more is a name the
+// vocabulary does not have. Mutation: write as [tracker, knowledge] and the
+// node cannot redeem an invitation; this goes red.
+func TestTheNodesOwnWriterIsAnAdministrator(t *testing.T) {
 	t.Parallel()
-	if !slices.Contains(nodeWriterGrants, iamdomain.AdminGrant) {
-		t.Errorf("the node writes identity records as %v, which does not "+
-			"carry %s — so a fresh deployment cannot create its first person "+
-			"and an invitation cannot be redeemed",
-			nodeWriterGrants, iamdomain.AdminGrant)
+	if !slices.Equal(nodeWriterGrants, []iam.Grant{iam.GrantAdmin}) {
+		t.Errorf("the node writes identity records as %v, want [admin] — "+
+			"without it a fresh deployment cannot create its first person "+
+			"and an invitation cannot be redeemed", nodeWriterGrants)
 	}
 }

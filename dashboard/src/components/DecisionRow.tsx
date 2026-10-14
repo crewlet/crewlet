@@ -43,6 +43,7 @@ import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { AnswerAsk, AnswerRunButton, AssignButton, type AskAnswer } from "./writes.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg, stateWord, type OrgIndex } from "~/lib/seats.ts";
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import { relTime } from "~/lib/format.ts";
@@ -54,6 +55,7 @@ import type {
   WorkAskRow,
 } from "~/protocol/index.ts";
 import { itemAddress, itemPath, type ItemRef } from "~/lib/work.ts";
+import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 
 /** A seat the engine stopped for a spent token budget, as a decision. */
 export interface SeatCondition {
@@ -102,11 +104,10 @@ export function seatConditionsOf(agents: readonly AgentRow[]): SeatCondition[] {
  * when they can take one of them:
  *
  *  - RAISE THE CEILING — a change to the company document, which `/config`
- *    takes from a principal holding `config:write`, and a SEAT's ceiling
- *    also from whoever leads it (`lib/leadScope.ts`) — so the reader's grant
- *    or the units they lead decide it, never a binding of their own. The
- *    company's ceiling, which stops a seat whose own window has room, is the
- *    grant's alone. Where another system manages the document (ADR-0030),
+ *    takes from an admin, and a SEAT's ceiling also from whoever leads it
+ *    (`lib/leadScope.ts`) — so the reader's access or the units they lead
+ *    decide it, never a binding of their own. The company's ceiling, which
+ *    stops a seat whose own window has room, is Admin's alone. Where another system manages the document (ADR-0030),
  *    only its writers raise anything: `configWrite` is `mayChangeConfig`
  *    (`lib/useWriteAccess.ts`), the same answer the raise control is disabled
  *    by, and the caller passes no leads — so a seat is never counted as a
@@ -532,7 +533,7 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
   const since = run.paused_at || run.updated_at;
   const sub = joined([
     item ? <Key key="k" item={item} /> : "",
-    run.question ? `“${run.question}”` : "",
+    run.question ? `“${run.question}”` : questionWithheld(run) ? QUESTION_WITHHELD : "",
     audienceOf(run, index),
     relTime(since, now),
   ]);
@@ -543,7 +544,9 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
       title={`${who.name}’s coding run is parked on a question`}
       sub={sub}
       line={holdLine(run, now)}
-      actions={<AnswerRunButton turnId={run.turn_id} seat={who.name} question={run.question} />}
+      actions={
+        <AnswerRunButton turnId={run.turn_id} seat={who.name} question={run.question ?? ""} />
+      }
     />
   );
 }
@@ -614,7 +617,10 @@ function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; n
  * version this reader saw, like every assignment (`AssignButton`).
  */
 export function ReassignItem({ item }: { item: string }) {
-  const read = useQuery("work_item", { id: item });
+  // A HAND-OFF IS A TRACKER WRITE, so the version it is conditional on is
+  // read only for a reader holding Tracker; without it there is no button.
+  const { tracker } = useViewer();
+  const read = useQuery("work_item", { id: item }, { enabled: tracker });
   const task = read.data?.task;
   if (!task) return null;
   return (

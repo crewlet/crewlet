@@ -77,6 +77,24 @@ var FeedKinds = []FeedKind{FeedCompleted, FeedCreated, FeedHandoff, FeedSchedule
 // Valid reports whether a kind off the wire is one of the five.
 func (k FeedKind) Valid() bool { return slices.Contains(FeedKinds, k) }
 
+// object is the kind of object a row of this kind is about, which is what
+// decides the app it belongs to ([authz.AppFor]) and so who the feed shows it
+// to: the tracker's three are tasks, a page change a page, and a schedule's
+// run the company's own declaration, which is no app's.
+//
+// A KIND NOT NAMED HERE IS THE TRACKER'S, so one added without a row here is
+// held to an app rather than shown to everybody. [feedKinds] refuses a kind
+// that is not one of the five, so none reaches here today.
+func (k FeedKind) object() authz.ObjectKind {
+	switch k {
+	case FeedPage:
+		return authz.KindPage
+	case FeedSchedule:
+		return authz.KindCompany
+	}
+	return authz.KindTask
+}
+
 // DefaultFeedPage is what one screen of the landing feed shows before "Load
 // older"; the ceiling is the tracker's [tracker.MaxFeedPage], shared by every
 // source so one merged page never needs more than one page of any of them.
@@ -216,11 +234,21 @@ const feedSourceReads = 4
 // the last row of it this page consumed. So a row is never repeated and never
 // skipped however the three interleave, and a source that has nothing more
 // stops being asked.
+//
+// EVERYBODY'S, AND EACH KIND SHOWN BY ITS APP (ADR-0033): the work the
+// tracker records to whoever holds the tracker, the pages to whoever holds the
+// knowledge base, and the schedules' runs — the company's own machinery — to
+// everybody, through [authz.Shows]. A kind the caller may not see is DROPPED
+// from what is read, named in `kinds=` or not, never refused: a refusal of
+// `kinds=page` would confirm to somebody without the knowledge base that the
+// company keeps pages, and an answer of the rows they may see is the one they
+// asked for.
 func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
 	kinds, err := feedKinds(p.String("kinds"), s.feedKept())
 	if err != nil {
 		return nil, err
 	}
+	kinds = slices.DeleteFunc(kinds, func(k FeedKind) bool { return !shows(ctx, k.object()) })
 	for _, kind := range kinds {
 		if (kind == FeedPage && s.Pages == nil) || (kind == FeedSchedule && s.Usage == nil) {
 			return nil, fmt.Errorf("%w: kinds=%s is not kept on this node — the "+
@@ -387,8 +415,8 @@ func foldRun(last *FeedEntry, entry FeedEntry) bool {
 }
 
 // feedKept is the kinds this node keeps a source for: the tracker's three
-// always (the question is registered on the tracker), and the page and
-// schedule kinds where their domains are here.
+// always (the question is registered only where the tracker is kept), and the
+// page and schedule kinds where their domains are here.
 func (s Sources) feedKept() []FeedKind {
 	out := []FeedKind{FeedCompleted, FeedCreated, FeedHandoff}
 	if s.Usage != nil {
@@ -548,8 +576,19 @@ type DecisionItem struct {
 //
 // THE SAME SCOPE RULE AS `work_my_work` — see [Sources.recordHandle]: no
 // `handle` is the caller's own record, and naming anybody else's is
-// [authz.ActionPersonRead] — theirs, whoever leads them, or the deployment's
-// admin grant — decided on the record the name resolves to.
+// [authz.ActionPersonRead] — theirs, whoever leads them, or an admin, each
+// with the tracker — decided on the record the name resolves to.
+//
+// BUT YOUR OWN NEEDS NO TRACKER, which is why this is everybody's question
+// rather than the tracker's (ADR-0033): a person kept off the tracker is still
+// asked things — and may read the item an open ask names them on, and post the
+// answer, without it (`get_work_item`'s and `comment_on_work_item`'s asked
+// arm). A list of what is waiting on them that refused them would leave the
+// only way to find those asks closed.
+//
+// AND A CODING RUN'S QUESTION IS SHOWN AS THE BOARD SHOWS IT ([serialiseRun]):
+// to the people it is put to — the record being read, when it is the caller's
+// own — and its seat's trail to whoever reads that.
 func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 	handle, err := s.recordHandle(ctx, authz.ActionPersonRead,
 		strings.TrimSpace(p.String("handle")))
@@ -595,6 +634,7 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		reach := s.runReach(ctx)
 		for _, run := range runs {
 			// WAITING ON AN ANSWER — [sandbox.Awaiting], a reseeded run
 			// included, since its answer can still arrive — and put to
@@ -604,7 +644,8 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 				continue
 			}
 			at := waitingSince(run)
-			items = append(items, DecisionItem{Kind: "run", At: at, Run: serialiseRun(run)})
+			items = append(items, DecisionItem{Kind: "run", At: at,
+				Run: serialiseRun(run, reach(run))})
 			total++
 			older(at)
 		}

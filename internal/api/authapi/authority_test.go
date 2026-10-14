@@ -14,11 +14,11 @@ import (
 
 // WHAT THE ONE ENROLMENT THIS SURFACE PERFORMS NAMES AS ITS AUTHORITY.
 //
-// It runs under the node's own writer, which holds fleet:operate and
-// people:manage and nothing else — so the domain would refuse it on the
-// writer's own grants. What makes it land is the basis it NAMES: the
-// invitation a redemption spends, which its issuer was held to their own
-// grants for. The domain holds the enrolment to that basis in its own
+// It runs under the node's own writer, which holds admin — so the writer's own
+// grants would admit any enrolment at all, every permission included. What
+// bounds it is the basis it NAMES: the invitation a redemption spends, which
+// its issuer was held to their own grants for, and which confers nothing it
+// did not carry. The domain holds the enrolment to that basis in its own
 // snapshot; this case holds the surface to naming it.
 
 // enrolmentRecorder is a writer that keeps the redemption it was asked for.

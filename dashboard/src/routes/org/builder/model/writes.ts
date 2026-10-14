@@ -39,9 +39,9 @@
  * active document and accepts it only when it is the conflict's revision or a
  * descendant of it.
  *
- * A LEAD READS NO REVISION HISTORY. `GET /config/revisions/{id}` is
- * `config:read`'s, which a lead editing their unit (`scope.ts`) does not
- * hold, so neither walk is open to them. Their lost answer is settled by
+ * A LEAD READS NO REVISION HISTORY. `GET /config/revisions/{id}` is Admin's,
+ * which a lead editing their unit (`scope.ts`) does not hold, so neither walk
+ * is open to them. Their lost answer is settled by
  * reading the unit back ([settleUnknownWrite]), and their update accepts the
  * unit the node serves now, which a node that is behind can only make an
  * older one — and an update onto an older revision ends at the save, whose

@@ -231,7 +231,7 @@ func TestEveryTaskWriteTellsAPurgedTaskFromAnUnappliedOne(t *testing.T) {
 			return err
 		},
 		"a restore": func(id string) error {
-			_, err := r.writer.RestoreTask(t.Context(), "op-s-"+id, id, "ENG", nil)
+			_, err := r.writer.RestoreTask(t.Context(), "op-s-"+id, id, "ENG", false, nil)
 			return err
 		},
 		"a purge": func(id string) error {
@@ -367,7 +367,7 @@ func TestTheDutyReportsAMergeWaitingOnTheTrashAndFinishesTheRest(t *testing.T) {
 	}
 
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "a-keep", "ENG",
-		nil); err != nil {
+		false, nil); err != nil {
 		t.Fatalf("RestoreTask: %v", err)
 	}
 	r.drain()
@@ -464,7 +464,7 @@ func TestTheDutyWaitsOnADuplicateInTheTrashUntilItIsRestored(t *testing.T) {
 	}
 
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "dup", "ENG",
-		nil); err != nil {
+		false, nil); err != nil {
 		t.Fatalf("RestoreTask: %v", err)
 	}
 	r.drain()
@@ -514,7 +514,7 @@ func TestADuplicateInTheTrashWaitsEvenWhenItsSurvivorIsPurged(t *testing.T) {
 		t.Fatal("the mark was cleared on an item in the trash, which takes no write")
 	}
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "dup", "ENG",
-		nil); err != nil {
+		false, nil); err != nil {
 		t.Fatalf("RestoreTask: %v", err)
 	}
 	r.drain()

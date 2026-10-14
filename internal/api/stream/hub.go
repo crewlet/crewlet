@@ -21,7 +21,8 @@
 //
 // The hub INDEXES a watch and decides nothing about it; the socket decides it
 // ([watching]), the way the `work_inbox` question decides a read of the same
-// seat's inbox — its holder, whoever leads it, the admin grant — through the
+// seat's inbox — its holder, whoever leads it, an admin, each with the
+// tracker — through the
 // same three-valued chart seam, and re-decides it whenever the socket's
 // credential is decided again (lifetime.go).
 // The one seat-routed kind, `inbox_changed`, says whose inbox moved, when and
@@ -47,12 +48,17 @@
 package stream
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -91,7 +97,7 @@ const QueueDepth = 512
 // query, or the pong.
 //
 // A NAMED TYPE, so the one place a kind is spelled is a constant below and
-// every frame is built from one — and the route, grant and posture tables are
+// every frame is built from one — and the route, need and posture tables are
 // keyed by it, so a kind spelled as a bare string somewhere else does not
 // compile. The dashboard's `PushKind` union is its copy of exactly these
 // constants — `contract/wire.ts`, held both ways by
@@ -170,39 +176,90 @@ var routes = map[Kind]Route{
 	KindPong:   RouteDirect,
 }
 
-// needs is the grant a reader must carry to receive each kind that says
-// something about the COMPANY.
+// Need is who may read a push kind that says something about the COMPANY.
+//
+// A NAMED STRING rather than a grant, because most of what the socket carries
+// asks no permission at all: the overview — the roster, what each seat is
+// doing, the org chart, spend, schedules, the tools, health — is everybody's
+// (ADR-0033). What a need says is whether the kind is everybody's, admin's,
+// or one app's.
+type Need string
+
+const (
+	// NeedEverybody is the overview's: any principal the guard resolved
+	// whose stage may act — which every open socket is, since the handshake
+	// admits nobody else.
+	NeedEverybody Need = "everybody"
+
+	// NeedAdmin is the company-wide audit trail's: an event is the
+	// `events` question's row, which carries a phase's prompts and its
+	// response for every seat at once.
+	NeedAdmin Need = "admin"
+
+	// NeedTracker is the tracker's: an `inbox_changed` frame says whose
+	// inbox moved, which is what the `work_inbox` question it tells a
+	// screen to ask again answers.
+	NeedTracker Need = "tracker"
+)
+
+// Needs is the closed set.
+var Needs = []Need{NeedEverybody, NeedAdmin, NeedTracker}
+
+// Valid reports whether n is a need this build knows.
+func (n Need) Valid() bool { return slices.Contains(Needs, n) }
+
+// needs is who may read each kind that says something about the COMPANY.
 //
 // BESIDE THE ROUTES and total over the kinds together with [answers]: a route
-// says who a frame is addressed to, and this says who may read it at all. The
-// socket used to decide only that its caller was somebody, which was harmless
-// while the only credentials were operator tokens and became a firehose the
-// day a session cookie resolved: a person enrolled with `work:write` alone
-// opened the socket and received every phase's prompt and response, which
-// the `events` question beside it refuses without `audit:read`.
+// says who a frame is addressed to, and this says who may read it at all.
 //
-// EACH KIND TAKES THE GRANT ITS QUESTION TAKES, so no fact is reachable by
-// choosing a channel: an event is the `events` query's row, so `audit:read`;
-// everything else here is what the dashboard's `state:read` questions answer.
+// EACH KIND IS DECLARED AS ITS QUESTION IS, so no fact is reachable by
+// choosing a channel: an event is the `events` query's row, so admin's; an
+// `inbox_changed` frame the tracker's; everything else is the overview the
+// questions beside it answer to everybody. What of the overview a reader
+// receives is decided per payload — a seat's live call is masked to its
+// status for a reader its trail is not open to — by [Shaped].
+//
 // A kind in neither table is received by NOBODY — see [Audience.Receives].
-var needs = map[Kind]iam.Grant{
-	KindSnapshot:     iam.GrantStateRead,
-	KindEvent:        iam.GrantAuditRead,
-	KindAgents:       iam.GrantStateRead,
-	KindSeats:        iam.GrantStateRead,
-	KindSandboxes:    iam.GrantStateRead,
-	KindTokens:       iam.GrantStateRead,
-	KindBudget:       iam.GrantStateRead,
-	KindSchedules:    iam.GrantStateRead,
-	KindOrg:          iam.GrantStateRead,
-	KindTools:        iam.GrantStateRead,
-	KindHealth:       iam.GrantStateRead,
-	KindInboxChanged: iam.GrantStateRead,
+var needs = map[Kind]Need{
+	KindSnapshot:     NeedEverybody,
+	KindEvent:        NeedAdmin,
+	KindAgents:       NeedEverybody,
+	KindSeats:        NeedEverybody,
+	KindSandboxes:    NeedEverybody,
+	KindTokens:       NeedEverybody,
+	KindBudget:       NeedEverybody,
+	KindSchedules:    NeedEverybody,
+	KindOrg:          NeedEverybody,
+	KindTools:        NeedEverybody,
+	KindHealth:       NeedEverybody,
+	KindInboxChanged: NeedTracker,
+}
+
+// NeedOf is who may read kind, and false for a kind that says nothing about
+// the company — an answer to a socket's own exchange — or one this build does
+// not declare.
+func NeedOf(kind Kind) (Need, bool) {
+	need, gated := needs[kind]
+	return need, gated
+}
+
+// Grants are the permissions any one of which admits a reader to a kind of
+// this need — what a refusal names. The overview names none, since nothing
+// the reader could be given would change an answer they already have.
+func (n Need) Grants() []iam.Grant {
+	switch n {
+	case NeedAdmin:
+		return []iam.Grant{iam.GrantAdmin}
+	case NeedTracker:
+		return []iam.Grant{iam.GrantTracker}
+	}
+	return nil
 }
 
 // answers are the kinds that say nothing about the company, only about this
-// socket's own exchange — which is why no grant stands in front of them. A
-// query's result or refusal was already decided by the grant its question is
+// socket's own exchange — which is why no need stands in front of them. A
+// query's result or refusal was already decided by the posture its question is
 // registered under, and deciding it again here would be a second opinion that
 // could only ever disagree; a pong carries nothing at all.
 var answers = map[Kind]bool{
@@ -211,19 +268,44 @@ var answers = map[Kind]bool{
 	KindPong:   true,
 }
 
-// Audience is what one reader may receive, decided from the grants it
-// carries.
+// Audience is what one reader may receive: whether they are an admin, which
+// apps they use, their own record, and which seats' bodies — what a seat is
+// saying, as opposed to what it is doing — are theirs to read.
 //
-// ITS ZERO VALUE RECEIVES NO COMPANY FACT AT ALL, which is the closed end and
-// the only safe one: a reader nobody described is not one this node knows may
-// see anything.
+// ITS ZERO VALUE RECEIVES NO COMPANY FACT AT ALL, because it was resolved for
+// nobody: the closed end and the only safe one, since a reader nobody
+// described is not one this node knows may see anything.
+//
+// A VALUE, compared whole by [Audience.Equal], because an open socket keeps
+// the audience it was opened with and a published company that would give it
+// another closes it for the reconnect to build the new one.
 type Audience struct {
-	grants []iam.Grant
+	resolved  bool
+	admin     bool
+	tracker   bool
+	knowledge bool
+	record    string
+
+	// body is the agent ids of the seats whose body this reader may read,
+	// sorted. Unread for an admin, who reads every body whatever it holds.
+	body []string
 }
 
-// AudienceOf is the audience a principal's grants describe.
-func AudienceOf(grants []iam.Grant) Audience {
-	return Audience{grants: slices.Clone(grants)}
+// NewAudience is the audience principal p describes, given the agent ids of
+// the seats `audit.seat.read` admits p to. An admin reads every body whatever
+// body holds; anybody else reads exactly those.
+//
+// [Service.AudienceFor] is how the engine builds one — it decides body from
+// the authority table, seat by seat. This constructor is the value half, for
+// a caller that already holds the decision.
+func NewAudience(p iam.Principal, body []string) Audience {
+	a := Audience{resolved: true, admin: p.Can(iam.GrantAdmin),
+		tracker: p.Can(iam.GrantTracker), knowledge: p.Can(iam.GrantKnowledge),
+		record: iam.RecordOwner(p)}
+	if !a.admin {
+		a.body = slices.Compact(slices.Sorted(slices.Values(body)))
+	}
+	return a
 }
 
 // Receives reports whether this audience may read a frame of kind.
@@ -231,27 +313,106 @@ func (a Audience) Receives(kind Kind) bool {
 	if answers[kind] {
 		return true
 	}
-	grant, gated := needs[kind]
-	if !gated {
+	if !a.resolved {
 		return false
 	}
-	return iam.Principal{Grants: a.grants}.Can(grant)
+	switch needs[kind] {
+	case NeedEverybody:
+		return true
+	case NeedAdmin:
+		return a.admin
+	case NeedTracker:
+		return a.tracker
+	}
+	return false
 }
 
-// Holds reports whether this audience carries grant — the question a [Shaped]
-// payload asks to decide what of itself a reader receives.
-func (a Audience) Holds(grant iam.Grant) bool {
-	return iam.Principal{Grants: a.grants}.Can(grant)
+// Admin reports whether this audience is an administrator's — the question an
+// org projection asks to decide which variant of itself a reader receives.
+func (a Audience) Admin() bool { return a.resolved && a.admin }
+
+// Has reports whether this audience may use app — an administrator through
+// every app.
+func (a Audience) Has(app iam.Grant) bool {
+	switch {
+	case !a.resolved:
+		return false
+	case a.admin:
+		return true
+	case app == iam.GrantTracker:
+		return a.tracker
+	case app == iam.GrantKnowledge:
+		return a.knowledge
+	}
+	return false
+}
+
+// Body reports whether this audience may read the body of the seat with
+// agentID: an administrator any seat's, anybody else the seats their trail
+// reaches.
+func (a Audience) Body(agentID string) bool {
+	if !a.resolved {
+		return false
+	}
+	if a.admin {
+		return true
+	}
+	_, found := slices.BinarySearch(a.body, agentID)
+	return agentID != "" && found
+}
+
+// Record is the reader's own record ([iam.RecordOwner]).
+func (a Audience) Record() string { return a.record }
+
+// Reach is what this audience may see of the seat with agentID's live state.
+func (a Audience) Reach(agentID string) livestate.Reach {
+	return livestate.Reach{Body: a.Body(agentID), Tracker: a.Has(iam.GrantTracker),
+		Record: a.record}
+}
+
+// Equal reports whether two audiences receive exactly the same.
+func (a Audience) Equal(b Audience) bool {
+	return a.resolved == b.resolved && a.admin == b.admin &&
+		a.tracker == b.tracker && a.knowledge == b.knowledge &&
+		a.record == b.record && (a.admin || slices.Equal(a.body, b.body))
+}
+
+// variant is the name of what this audience receives of a payload masked by
+// reach — whether it is an administrator's, which apps it uses, and which
+// seats' bodies it reads — so two audiences given one variant receive
+// byte-identical frames and a broadcast encodes once per variant rather than
+// once per client. withRecord adds the reader's own record, for a payload that
+// shows something to a person by who they are (a coding run's question).
+//
+// THE BODY SET AS A DIGEST, so a variant name stays short however many seats a
+// lead leads; two different sets colliding would hand one reader another's
+// variant, which is why it is SHA-256 rather than a cheaper hash.
+func (a Audience) variant(withRecord bool) string {
+	switch {
+	case !a.resolved:
+		return "nobody"
+	case a.admin:
+		return "admin"
+	}
+	sum := sha256.Sum256([]byte(strings.Join(a.body, "\x00")))
+	name := fmt.Sprintf("tracker=%t;knowledge=%t;body=%s", a.tracker,
+		a.knowledge, hex.EncodeToString(sum[:]))
+	if withRecord {
+		name += ";record=" + a.record
+	}
+	return name
 }
 
 // Shaped is a push payload whose CONTENT depends on what its reader may read,
 // beyond whether they may read its kind at all.
 //
-// The grant table ([needs]) decides WHETHER an audience receives a kind; a
-// shaped payload decides WHAT of it. The org tree is a `state:read` push, and a
-// seat's resolved model chain and tool sources inside it are derived from the
-// seat's runtime settings, which only a `config:read` holder reads — so one kind
-// carries two shapes, and a reader is handed the one its grants describe.
+// The need table ([needs]) decides WHETHER an audience receives a kind; a
+// shaped payload decides WHAT of it. The roster is everybody's, and a seat's
+// live call inside it is its body only to an administrator and the seat's
+// lead; the org tree is everybody's, and a seat's resolved model chain and
+// tool sources inside it are derived from settings only an administrator
+// reads — so one kind carries several shapes, and a reader is handed the one
+// its audience describes.
 //
 // The decision travels WITH THE PAYLOAD rather than being a second table here,
 // because the payload's type is the one place that knows which of its fields
@@ -265,6 +426,14 @@ type Shaped interface {
 	For(Audience) (variant string, data any)
 }
 
+// ShapeFor is data as audience may receive it — the payload itself when it is
+// not [Shaped] — for a REST mirror of a push, which answers one reader the
+// shape the push hands them.
+func ShapeFor(data any, audience Audience) any {
+	_, shaped := shapeFor(data, audience)
+	return shaped
+}
+
 // shapeFor is data as audience may receive it, and its variant's name — the
 // payload itself, unnamed, when it is not [Shaped].
 func shapeFor(data any, audience Audience) (string, any) {
@@ -274,11 +443,37 @@ func shapeFor(data any, audience Audience) (string, any) {
 	return "", data
 }
 
-// GrantFor is the grant a reader needs to receive kind, and whether kind is a
-// company fact at all rather than an answer to a socket's own exchange.
-func GrantFor(kind Kind) (iam.Grant, bool) {
-	grant, gated := needs[kind]
-	return grant, gated
+// AgentRows are `agents` or `seats` rows — roster rows with the live overlay
+// merged onto them, or a push's overlay rows — as a [Shaped] payload: each row
+// masked to the reach its reader has over the seat it names.
+type AgentRows []map[string]any
+
+// For masks every row for audience.
+func (rows AgentRows) For(audience Audience) (string, any) {
+	out := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		id, _ := row["agent_id"].(string)
+		out = append(out, livestate.MaskRow(row, audience.Reach(id)))
+	}
+	return audience.variant(false), out
+}
+
+// SandboxRows are the in-flight coding runs as a [Shaped] payload: each masked
+// to the reach its reader has over the seat that launched it.
+type SandboxRows []livestate.SandboxEntry
+
+// For masks every run for audience. THE READER'S RECORD NAMES THE VARIANT only
+// while some run is parked on a question, because only a question is shown to
+// somebody by who they are; every other push is shared by every reader with
+// the same reach.
+func (rows SandboxRows) For(audience Audience) (string, any) {
+	out := make([]livestate.SandboxEntry, 0, len(rows))
+	asks := false
+	for _, entry := range rows {
+		asks = asks || entry.Question != ""
+		out = append(out, entry.For(audience.Reach(entry.AgentID)))
+	}
+	return audience.variant(asks), out
 }
 
 // Envelope is one server-to-client frame.
@@ -414,8 +609,9 @@ type Client struct {
 
 	// audience is what this client may receive. Set at [NewClient] from
 	// the principal the socket was opened as, and never moved: a decision
-	// that finds the grants changed closes the socket, and the reconnect is
-	// a new client.
+	// that finds the principal's permissions changed, or a published
+	// company that changes whose trail it reads, closes the socket, and the
+	// reconnect is a new client (lifetime.go).
 	audience Audience
 
 	// seat is the seat this client asked to be a recipient for, empty
@@ -523,7 +719,7 @@ func (c *Client) Reply(env Envelope) {
 		// dropping it is sending it to somebody who may not read it.
 		log.Error("stream_reply_withheld", "kind", env.Kind,
 			"hint", "build the frame from the client's own audience; this "+
-				"client does not carry the grant the kind needs")
+				"client is not among the readers the kind is declared for")
 		return
 	}
 	if !c.Posture().Delivers(env.Kind) {
@@ -871,9 +1067,9 @@ func (h *Hub) Broadcast(env Envelope) {
 	}
 	cache := map[encoding]*Frame{}
 	for _, c := range targets {
-		// WHO MAY READ IT before how it is encoded: a client that does
-		// not carry the kind's grant is not in its audience whatever the
-		// route says. See [needs].
+		// WHO MAY READ IT before how it is encoded: a client the kind is
+		// not declared for is not in its audience whatever the route
+		// says. See [needs].
 		if !c.Receives(env.Kind) {
 			continue
 		}

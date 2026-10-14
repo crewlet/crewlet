@@ -172,8 +172,9 @@ const (
 	CodeUnknownQuery Code = "unknown_query"
 
 	// CodeUnauthorized is a request from a caller this node KNOWS, refused
-	// because their credential does not carry the grant it needs — or, for
-	// a personal record, the relation. DISTINCT from CodeInvalidToken, which
+	// because their credential does not carry the permission it needs —
+	// admin or the app the request belongs to — or, for a personal record,
+	// the relation. DISTINCT from CodeInvalidToken, which
 	// refuses a caller nobody could identify: the remedy there is a
 	// credential and here it is authority, and a reader told the first
 	// when they meant the second goes and replaces a credential that
@@ -852,13 +853,16 @@ var codes = map[Code]string{
 		"issued.",
 
 	CodeUnknownQuery: "This node does not serve that query.",
-	// ABOUT THE GRANT, NOT A TOKEN. It said "that query needs an operator
+	// ABOUT THE ACCESS, NOT A TOKEN. It said "that query needs an operator
 	// token", which was true while an operator token was the only credential
 	// and authority a single yes-or-no; a person signed in with a session
-	// and refused one grant was told to go and find a token.
-	CodeUnauthorized: "The credential you presented does not carry the grant " +
-		"this request needs. Ask whoever runs this deployment for it, or use " +
-		"a credential that carries it.",
+	// and refused one permission was told to go and find a token. It NAMES
+	// THE THREE PERMISSIONS there are (ADR-0033), because a person reading it
+	// on a screen has to know what to ask an admin for, and the refusal's
+	// `grants` beside it says which one.
+	CodeUnauthorized: "The credential you presented does not carry the access " +
+		"(Admin, Tracker or Knowledge) this request needs. Ask an admin of " +
+		"this deployment for it, or use a credential that carries it.",
 	CodeQueryFailed: "That query could not be answered. The reason is in " +
 		"this node's log.",
 	CodeNotFound:  "There is no such record here.",

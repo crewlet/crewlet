@@ -85,14 +85,14 @@ func ParseRunnableBootstrap(data []byte, r *Resolver) (*Bootstrap, error) {
 const testTokenValue = "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"
 
 // TestServedAPIYAML is what a node SERVING the API must state beside its port
-// ([Bootstrap.ServesAPI]) — an external URL, the grant ceiling and a token —
+// ([Bootstrap.ServesAPI]) — an external URL, the admin posture and a token —
 // as lines under an `api:` key, for a document whose subject is something else
 // to carry. The https address has its front end named, so it raises no
 // warning either.
 const TestServedAPIYAML = "  external_url: https://crewlet.example.com\n" +
 	"  trusted_proxies: [10.0.0.0/8]\n" +
-	"  auth:\n    max_grants: [config:write]\n    tokens:\n" +
-	"      - {id: founder, token: \"" + testTokenValue + "\", grants: [config:write]}\n"
+	"  auth:\n    admin: serve\n    tokens:\n" +
+	"      - {id: founder, token: \"" + testTokenValue + "\", grants: [admin]}\n"
 
 // Served is a Tier A document whose `api:` block carries [TestServedAPIYAML],
 // for a case about a node that serves the API and about something else. A
@@ -115,8 +115,8 @@ func Served(doc string) string {
 func ServeAPI(b *Bootstrap) {
 	b.API.ExternalURL = "https://crewlet.example.com"
 	b.API.TrustedProxies = []string{"10.0.0.0/8"}
-	b.API.Auth.MaxGrants = []iam.Grant{iam.GrantConfigWrite}
+	b.API.Auth.Admin = iam.AdminServe
 	b.API.Auth.Tokens = []APIToken{{
-		ID: "founder", Token: testTokenValue, Grants: []iam.Grant{iam.GrantConfigWrite},
+		ID: "founder", Token: testTokenValue, Grants: []iam.Grant{iam.GrantAdmin},
 	}}
 }

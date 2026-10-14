@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -279,8 +280,8 @@ func (w *Writer) As(p iam.Principal) *Writer {
 // FOR THE GESTURES A PERSON MAKES THROUGH THE NODE: signing in and out, a
 // second factor's spend, an invitation's redemption, a reset link, enrolling
 // their own authenticator. The node's own writer authors those, because the
-// person holds no grant the record asks of its party — a redemption's
-// enrolment needs [AdminGrant], and nobody is a principal before they have
+// person holds no permission the record asks of its party — a redemption's
+// enrolment needs admin, and nobody is a principal before they have
 // signed in — and the trail named the node as WHO for every one of them, so
 // it could not say who had signed in, only that somebody had. The node only
 // wrote the record; the person made the gesture. What the engine decides for
@@ -350,16 +351,26 @@ var ErrCollapsed = fmt.Errorf("iamdomain: this operation landed as a copy "+
 // into the framework's empty decision, which answers `applied` with no record.
 var errNothingToPublish = errors.New("iamdomain: nothing to publish")
 
-// grantDelta is what one write added to a grant set and what it took away,
-// each sorted, so two nodes describing one write describe it identically.
+// grantDelta is what one write added to a permission set and what it took
+// away, each sorted, so two nodes describing one write describe it
+// identically.
+//
+// COMPARED THROUGH [iam.Expand] ON BOTH SIDES, as every comparison of
+// permissions is: an app an administrator already held through admin is not
+// "added" by a save that spells it out, so saving `[admin]` as `[admin,
+// tracker, knowledge]` announces no change and revokes no reset link, while
+// taking admin away from `[admin]` removes admin and every app it carried.
+// What is reported is still the row's own names — a name this build does not
+// know included — because the trail records what the rows said.
 func grantDelta(before, after []iam.Grant) (added, removed []string) {
-	for _, g := range after {
-		if !slices.Contains(before, g) && !slices.Contains(added, string(g)) {
+	held, holds := iam.Expand(before), iam.Expand(after)
+	for _, g := range holds {
+		if !slices.Contains(held, g) && !slices.Contains(added, string(g)) {
 			added = append(added, string(g))
 		}
 	}
-	for _, g := range before {
-		if !slices.Contains(after, g) && !slices.Contains(removed, string(g)) {
+	for _, g := range held {
+		if !slices.Contains(holds, g) && !slices.Contains(removed, string(g)) {
 			removed = append(removed, string(g))
 		}
 	}
@@ -368,19 +379,13 @@ func grantDelta(before, after []iam.Grant) (added, removed []string) {
 	return added, removed
 }
 
-// Can reports whether this writer's party holds a grant.
+// Can reports whether this writer's party holds a permission, counting every
+// app admin includes.
 //
-// FAIL-CLOSED ON AN UNKNOWN GRANT, through [iam.Principal.Can]'s own rule: a
-// grant a newer peer wrote that this build cannot name answers false, because
+// FAIL-CLOSED ON AN UNKNOWN NAME, through [iam.Principal.Can]'s own rule: a
+// name a newer peer wrote that this build cannot read answers false, because
 // a denylist would have admitted it.
-func (w *Writer) Can(g iam.Grant) bool {
-	for _, held := range w.Grants {
-		if held == g {
-			return true
-		}
-	}
-	return false
-}
+func (w *Writer) Can(g iam.Grant) bool { return iam.Principal{Grants: w.Grants}.Can(g) }
 
 // ErrRefused reports a write this writer's party may not make.
 //
@@ -389,7 +394,8 @@ func (w *Writer) Can(g iam.Grant) bool {
 // could not tell" are three answers a surface renders as 403, 409 and 503.
 var ErrRefused = errors.New("iamdomain: this party may not author that record")
 
-// mayAdminister refuses a record only an administrator may publish.
+// mayAdminister refuses a record only an administrator may publish, and every
+// administrative record written through a machine token.
 //
 // # Why the domain decides this at all, when internal/authz exists
 //
@@ -403,32 +409,47 @@ var ErrRefused = errors.New("iamdomain: this party may not author that record")
 // and suspending somebody else are both "a record on a person's subject", and
 // only the arbitration tells them apart — which is to say, not at all.
 //
-// # The grant is people:manage, and it used to be config:write
+// # The permission is admin
 //
-// That was wrong in both directions and wrong loudly in one. An automation
-// holding the company's own grant could enrol itself a colleague, which is
-// the escalation this estate exists to close; and the NODE's own writer —
-// which authors the invite redemption and the sweeps — holds
-// [iam.GrantFleetOperate] and never
-// config:write, so every one of those paths was refused. Nothing noticed,
-// because the surface that exercises them builds a stub writer.
+// The NODE's own writer — which authors the invite redemption and the sweeps —
+// holds admin too, so a redemption, bounded by its invitation, passes.
+//
+// # And never through a machine token, whatever it carries
+//
+// A token may be minted with admin, because what a pipeline may do is its
+// owner's to choose. But an administrative identity record — enrolling
+// somebody, inviting them, editing their permissions, suspending or removing
+// them, ending everybody's sessions — decides who may do anything at all, and
+// a token proves nobody is at a keyboard. The authority table refuses such a
+// request at its row (internal/authz's `iam.write` needs a person present); this refuses
+// the RECORD, because a record is formed by more than the routes that table
+// guards, and the guarantee it keeps — that no token ever writes the
+// directory — used to rest on a permission no token could carry, which is
+// gone. CHECKED FIRST, so a token holding admin is told it is a token rather
+// than that it lacks a permission it plainly has. The CLASS decides, never the
+// spelling of an id: an operator id naming the machine-token class is a token,
+// whether or not this build can parse what follows.
 func (w *Writer) mayAdminister(op OpKind) error {
-	if w.Can(AdminGrant) {
+	if strings.HasPrefix(w.OperatorID, iam.MachineTokenPrefix) {
+		return fmt.Errorf("%w: %w: %s was asked through the machine token %s, "+
+			"and an administrative identity record needs a person present — "+
+			"sign in and make it yourself", ErrRefused, ErrTokenRefused, op,
+			w.OperatorID)
+	}
+	if w.Can(iam.GrantAdmin) {
 		return nil
 	}
 	return fmt.Errorf("%w: %s requires %s, and this party holds %v", ErrRefused,
-		op, AdminGrant, w.Grants)
+		op, iam.GrantAdmin, w.Grants)
 }
 
-// AdminGrant is the capability every administrative record in this domain
-// requires.
-//
-// EXPORTED so the parties that must hold it can be CHECKED rather than
-// remembered. The node's own writer is one — it authors the invite
-// redemption on behalf of people who have no principal yet — and a grant list
-// that drifts away from this one refuses every redemption, silently, on a path
-// whose tests use a stub writer.
-const AdminGrant = iam.GrantPeopleManage
+// ErrTokenRefused reports an administrative identity record asked through a
+// machine token ([Writer.mayAdminister]). Every error carrying it also wraps
+// [ErrRefused], so a surface that only knows "may not" still refuses; one that
+// tells the two apart answers that a person must be present rather than that
+// a permission is missing.
+var ErrTokenRefused = errors.New("iamdomain: an administrative identity record " +
+	"is not written through a machine token")
 
 // publish runs one decide through the framework's own write authority.
 //

@@ -29,10 +29,11 @@ var facetActions = map[string]authz.Action{
 }
 
 // scopeOf is the scope a row has to declare, read off the authority table: a
-// write decided by the CONTAINER's lead or by a deployment GRANT rewrites what
-// every seat's tracker means — a project's settings, the company's catalogue —
-// and is `company`; every other is a person's change to the company's work in
-// their own name, and is `person`.
+// write decided by the CONTAINER's lead or by admin rewrites what every seat's
+// tracker means — a project's settings, the company's catalogue — and is
+// `company`; every other is a person's change to the company's work in their
+// own name, and is `person` — tidying one item included, whoever is admitted
+// to it, its reporter or its project's lead ([authz.ClassTidy]).
 func scopeOf(t *testing.T, tool string) string {
 	t.Helper()
 	action, ok := facetActions[tool]
@@ -45,7 +46,7 @@ func scopeOf(t *testing.T, tool string) string {
 			tool, action)
 	}
 	switch class {
-	case authz.ClassContainer, authz.ClassOperator:
+	case authz.ClassContainer, authz.ClassAdmin:
 		return "company"
 	}
 	return "person"

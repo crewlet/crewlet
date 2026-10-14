@@ -60,8 +60,7 @@
 //
 // # Nothing here decides anything
 //
-// A gate asks [Principal.Can]; a route or a query declares an [Access]; a
-// store writes what [ActorFor] returns. What a request actually presented, and
+// A gate asks [Principal.Can]; a store writes what [ActorFor] returns. What a request actually presented, and
 // whether the answer could be reached at all, is [From]'s three-valued job.
 //
 // # Whose record a name is, and why it is one function

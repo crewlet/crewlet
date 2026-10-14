@@ -81,14 +81,15 @@ type Person struct {
 	// handful of credentials rather than anything large.
 	Credentials []Credential `json:"credentials,omitempty"`
 
-	// Grants are the capabilities this person carries, as internal/iam
-	// names them.
+	// Grants are the permissions this person carries, as internal/iam
+	// names them: admin, and the apps they use.
 	//
 	// ON THE PERSON AND NOT DERIVED FROM A ROLE, because this engine has
-	// no roles: a grant is the unit internal/authz decides with, and a
-	// role would be a second vocabulary that has to be kept in step with
-	// it. A grant this build does not know is RETAINED and refused rather
-	// than dropped — see [iam.Principal.UnknownGrants].
+	// no roles: a permission is the unit internal/authz decides with, and
+	// a role would be a second vocabulary that has to be kept in step with
+	// it. A name this build does not know is KEPT in the row and grants
+	// nothing — see [iam.Grant] — and a writer may remove it but never add
+	// it ([Writer.MayConfer]).
 	Grants []iam.Grant `json:"grants,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`

@@ -70,7 +70,7 @@ Usage:
                                                        Create a person on a vacant human
                                                        seat; their first password link
                                                        is shown ONCE
-  crewlet iam create -kind machine -login L [-seat SEAT] [-name N] [-grants G,...]
+  crewlet iam create -kind machine -login L -grants G,... [-seat SEAT] [-name N]
                                                        Create a service account
   crewlet iam bind ID SEAT                             Move a person to another vacant
                                                        human seat, or bind a service
@@ -105,6 +105,14 @@ Flags:
   -reason TEXT   Recorded on the change, and read by whoever audits it
   -idempotency-key OP
                  Retry a write whose outcome was unknown, as the SAME operation
+  -grants G,...  On invite, create, grant and token: what they carry — admin,
+                 tracker and knowledge, comma-separated, or none for nothing
+                 past the overview everybody reads. admin also stores every
+                 app, so taking admin away later leaves them. Left out on
+                 invite and on a person's create it is EVERY APP (tracker,
+                 knowledge) and not admin; on a service account's create it
+                 is required, since nobody is behind it to have meant a
+                 default; on token it is everything the owner holds
   -seat SEAT     On invite and create: the human seat they will hold — one
                  nobody holds and no open invitation is for, which "iam seats
                  -unheld" lists. Required on invite and on a person's create;
@@ -189,7 +197,10 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	asJSON := fs.Bool("json", false, "print the raw answer")
 	reason := fs.String("reason", "", "recorded on the change")
 	grants := fs.String("grants", "",
-		"a comma-separated grant list, or `none` for an empty one")
+		"admin, tracker and knowledge, comma-separated, or `none`; admin "+
+			"stores every app beside it. Left out: every app on invite and a "+
+			"person's create, the owner's on token, required on a service "+
+			"account's create")
 	stage := fs.String("stage", "", "narrow the directory to one enrolment stage")
 	term := fs.String("q", "", "narrow the directory on a login or a seat")
 	limit := fs.Int("limit", 0, "how many rows at most")
@@ -267,17 +278,38 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 			"somebody holds or an open invitation is for — `iam %s` takes "+
 			"no -unheld", sub)
 	}
+	// WHAT SOMEBODY IS GIVEN, read before a config file is read or a
+	// request is sent: a name this build does not know is refused naming
+	// the set, and -grants anywhere it means nothing is refused rather than
+	// ignored, for -seat's reason. See [iamGrants].
+	granted, err := iamGrants(*grants)
+	if err != nil {
+		return err
+	}
+	if granted.given && !iamGranting[sub] {
+		return fmt.Errorf("-grants is invite's, create's, grant's and "+
+			"token's: it names what somebody carries — `iam %s` takes no "+
+			"-grants", sub)
+	}
 	// WHAT A NEW PERSON OR SERVICE ACCOUNT HAS TO BE GIVEN, told here
 	// rather than by the node, before a config file is read or a request
 	// is sent — the node refuses each the same way, and an operator who
 	// left a flag off needs the sentence naming it rather than a round
 	// trip to a 400. See [iamNewcomer].
-	if err := iamNewcomer(sub, *kind, *email, *login, *seat); err != nil {
+	if err = iamNewcomer(sub, *kind, *email, *login, *seat, granted.given); err != nil {
 		return err
+	}
+	// AND WHAT A PERSON IS GIVEN WHEN NOTHING SAYS: every app, and never
+	// admin. The node requires the field on a create and an invitation —
+	// `[]` is a real answer there, the overview alone — so the default is
+	// this command's, stated in its help, rather than an absence the node
+	// would have to guess at.
+	if !granted.given && iamNewPerson(sub, *kind) {
+		granted = iamGrantList{grants: slices.Clone(iam.Apps), given: true}
 	}
 	// A TOKEN HAS AN OWNER, and which kind decides who may mint it: a
 	// person mints their own, signed in (-login), and a service account's
-	// is minted by whoever manages people (-person). Naming both, or
+	// is minted by an admin (-person). Naming both, or
 	// neither, is told so here rather than by the node.
 	if sub == "token" {
 		owner := strings.TrimSpace(orSubject(*person, subject))
@@ -303,7 +335,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 		// signs in for the one request and never reads
 		// CREWLET_API_TOKEN. See iamself.go.
 		return out.token(mintOwnToken(ctx, boot, *apiURL,
-			strings.TrimSpace(*login), iamTokenBody(*grants, *label, *days),
+			strings.TrimSpace(*login), iamTokenBody(granted, *label, *days),
 			stdin, stderr))
 	}
 	client, err := newIAMClient(environ, boot, *apiURL)
@@ -326,7 +358,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	case "show":
 		return out.one(client.get(ctx, "/iam/people/"+subject, nil))
 	case "invite":
-		body := iamGrantsBody(*grants)
+		body := granted.body()
 		body["email"] = subject
 		body["seat"] = strings.TrimSpace(*seat)
 		body["reason"] = *reason
@@ -378,7 +410,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 		// A PERSON'S LOGIN MAY BE LEFT OUT: the node proposes one from
 		// the address, the proposal an invitation's screen offers its
 		// redeemer, and the answer names the login it took.
-		body := iamGrantsBody(*grants)
+		body := granted.body()
 		body["login"], body["email"] = *login, *email
 		body["name"], body["kind"] = *name, *kind
 		body["seat"] = strings.TrimSpace(*seat)
@@ -398,9 +430,10 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 		return out.written(client.patch(ctx, "/iam/people/"+subject,
 			map[string]any{"seat": "", "reason": *reason}))
 	case "grant":
-		body := iamGrantsBody(*grants)
+		body := granted.body()
 		if len(body) == 0 {
-			return errors.New("name what to change: -grants")
+			return errors.New("name what to change: -grants admin, tracker " +
+				"and knowledge, comma-separated, or none")
 		}
 		body["reason"] = *reason
 		return out.written(client.patch(ctx, "/iam/people/"+subject, body))
@@ -431,7 +464,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 		// longer reads.
 		return out.token(client.call(ctx, http.MethodPost, "/iam/credentials",
 			withPerson(orSubject(*person, subject)),
-			iamTokenBody(*grants, *label, *days)))
+			iamTokenBody(granted, *label, *days)))
 	case "revoke-credential":
 		return out.written(client.delete(ctx, "/iam/credentials/"+subject,
 			withPerson(*person)))
@@ -500,10 +533,15 @@ var iamSubjects = subjectTable{
 // node proposes it from their address — and a service account's may not,
 // since it has no address to propose from.
 //
+// A SERVICE ACCOUNT IS ALSO TOLD WHAT IT CARRIES, every time: a person left
+// without -grants is given every app ([iamNewPerson]), the colleague's
+// default, but nobody is behind a service account to have meant one — what a
+// pipeline may do is a decision, and `-grants none` is how to decide nothing.
+//
 // THE KIND IS THE FLAG'S, never guessed from the login's shape: the node reads
 // a blank kind as a person, and so does this. A kind this command does not
 // name is the node's to refuse, in its own words.
-func iamNewcomer(sub, kind, email, login, seat string) error {
+func iamNewcomer(sub, kind, email, login, seat string, granted bool) error {
 	seatless := strings.TrimSpace(seat) == ""
 	switch sub {
 	case "invite":
@@ -522,6 +560,13 @@ func iamNewcomer(sub, kind, email, login, seat string) error {
 					"Tier A token) — it has no address to be found by, so " +
 					"its login is how it is found and the name its changes " +
 					"are recorded under")
+			}
+			if !granted {
+				return errors.New("name what the service account carries: " +
+					"-grants admin, tracker and knowledge, comma-separated, " +
+					"or none for nothing past the overview — a service " +
+					"account has no default, since nobody is behind it to " +
+					"have meant one")
 			}
 		case "", iam.KindPerson:
 			if strings.TrimSpace(email) == "" {
@@ -619,35 +664,123 @@ func withPerson(person string) url.Values {
 	return q
 }
 
-// iamGrantsBody turns the -grants flag into a patch body.
+// iamGrantList is the -grants flag read: the permissions it names, and whether
+// it named any at all.
 //
 // `none` IS A VALUE AND AN OMITTED FLAG IS NOT. Stripping somebody's last
-// grant and not mentioning grants at all are opposite intentions, and an
-// empty string cannot carry both — so the word is explicit, and it is the one
-// spelling that could never be a grant.
-func iamGrantsBody(grants string) map[string]any {
+// permission and not mentioning permissions at all are opposite intentions,
+// and an empty string cannot carry both — so the word is explicit, and it is
+// the one spelling that could never be a permission. `given` is what tells
+// them apart once the word has been read: an empty list given is the overview
+// alone, and an empty list not given is no `grants` field at all.
+type iamGrantList struct {
+	grants []iam.Grant
+	given  bool
+}
+
+// body is the field the list sends: `grants` when it was given — an empty
+// array for `none` — and nothing when it was not.
+func (l iamGrantList) body() map[string]any {
 	body := map[string]any{}
-	switch strings.TrimSpace(grants) {
-	case "":
-	case "none":
-		body["grants"] = []string{}
-	default:
-		parts := strings.Split(grants, ",")
-		out := make([]string, 0, len(parts))
-		for _, part := range parts {
-			if trimmed := strings.TrimSpace(part); trimmed != "" {
-				out = append(out, trimmed)
-			}
+	if l.given {
+		out := make([]string, 0, len(l.grants))
+		for _, g := range l.grants {
+			out = append(out, string(g))
 		}
 		body["grants"] = out
 	}
 	return body
 }
 
+// iamGranting is every subcommand that sends what somebody carries: an
+// invitation's and a create's whole set, a grant's replacement for it, and a
+// mint's choice of what the token carries.
+var iamGranting = map[string]bool{
+	"invite": true, "create": true, "grant": true, "token": true,
+}
+
+// iamNewPerson reports whether sub enrols a PERSON — an invitation, which is
+// always one, or a create whose kind is not a machine — the one newcomer the
+// command gives every app when -grants is left out.
+func iamNewPerson(sub, kind string) bool {
+	switch sub {
+	case "invite":
+		return true
+	case "create":
+		return iam.Kind(strings.TrimSpace(kind)) != iam.KindMachine
+	}
+	return false
+}
+
+// iamGrants reads the -grants flag.
+//
+// THE VOCABULARY IS THE ENGINE'S OWN ([iam.AllGrants]: admin, tracker,
+// knowledge), comma-separated, or the one word `none` — and anything else is
+// refused here, naming the set, before a config file is read or a request is
+// sent. The node refuses a name it does not know too, but an operator who
+// typed `trackr` needs the sentence listing the four words rather than a round
+// trip to a 400, and `none` beside a permission is a contradiction nothing
+// should guess the meaning of.
+//
+// `admin` STORES EVERY APP BESIDE IT ([iam.Expand]), as the dashboard's picker
+// does: admin includes every app whether or not the row says so, but a row
+// that says so keeps them when admin is later taken away — an administrator
+// stepping down goes on using the tracker. The list is sent in
+// [iam.AllGrants] order with each name once, whatever order it was typed in.
+func iamGrants(flagged string) (iamGrantList, error) {
+	flagged = strings.TrimSpace(flagged)
+	switch flagged {
+	case "":
+		return iamGrantList{}, nil
+	case "none":
+		return iamGrantList{grants: []iam.Grant{}, given: true}, nil
+	}
+	var named []iam.Grant
+	for part := range strings.SplitSeq(flagged, ",") {
+		g := iam.Grant(strings.TrimSpace(part))
+		switch {
+		case g == "":
+			continue
+		case g == "none":
+			return iamGrantList{}, errors.New("-grants none means nothing " +
+				"past the overview, so it stands alone: name the permissions " +
+				"to give, or none, not both")
+		case !g.Valid():
+			return iamGrantList{}, fmt.Errorf("-grants: %q is not a permission "+
+				"— name %s, comma-separated, or none", g, iamGrantWords())
+		}
+		named = append(named, g)
+	}
+	if len(named) == 0 {
+		return iamGrantList{}, fmt.Errorf("-grants named nothing — name %s, "+
+			"comma-separated, or none", iamGrantWords())
+	}
+	expanded := iam.Expand(named)
+	out := make([]iam.Grant, 0, len(iam.AllGrants))
+	for _, g := range iam.AllGrants {
+		if slices.Contains(expanded, g) {
+			out = append(out, g)
+		}
+	}
+	return iamGrantList{grants: out, given: true}, nil
+}
+
+// iamGrantWords is the vocabulary a refusal names, read off [iam.AllGrants]
+// so a permission a later build adds is named here without anybody
+// remembering this sentence exists.
+func iamGrantWords() string {
+	words := make([]string, 0, len(iam.AllGrants))
+	for _, g := range iam.AllGrants {
+		words = append(words, string(g))
+	}
+	return strings.Join(words, ", ")
+}
+
 // iamTokenBody is a mint's request: what the token carries, what it is called
-// and how long it lasts — the same whoever the owner is.
-func iamTokenBody(grants, label string, days int) map[string]any {
-	body := iamGrantsBody(grants)
+// and how long it lasts — the same whoever the owner is. A list not given
+// sends no `grants`, which the node reads as everything the owner holds.
+func iamTokenBody(granted iamGrantList, label string, days int) map[string]any {
+	body := granted.body()
 	body["label"] = label
 	if days > 0 {
 		body["expires_in_days"] = days
@@ -1309,10 +1442,19 @@ func (p *iamPrinter) seats(asked url.Values, answer map[string]any,
 	return tw.Flush()
 }
 
-// seatHolder is the HOLDER column: whoever the directory binds to the seat, by
-// their login where they have one, and a service account said to be one —
-// because the two free a seat differently, a person by a move or a removal and
-// a service account by an unbind.
+// seatHolder is the HOLDER column: whoever the directory binds to the seat,
+// and a service account said to be one — because the two free a seat
+// differently, a person by a move or a removal and a service account by an
+// unbind.
+//
+// WHO IT IS DEPENDS ON WHO ASKS. An admin, and the holder themselves, are
+// answered the holder's login (their id where it has none); everybody else is
+// answered only the name the holder goes by, because the overview says who
+// holds a seat and not what they sign in with — "name unavailable" where this
+// node's keyring did not open it, and "held" for a holder enrolled with no
+// name. NEVER EMPTY for a held seat: an empty cell renders as a dash, which is
+// exactly how a vacant seat reads, and it read so for every reader without
+// admin.
 func seatHolder(holder map[string]any) string {
 	if holder == nil {
 		return ""
@@ -1320,6 +1462,15 @@ func seatHolder(holder map[string]any) string {
 	who := str(holder["login"])
 	if who == "" {
 		who = str(holder["person"])
+	}
+	if who == "" {
+		who = str(holder["name"])
+	}
+	if who == "" && truthy(holder["sealed"]) {
+		who = "(name unavailable)"
+	}
+	if who == "" {
+		who = "(held)"
 	}
 	if iam.Kind(str(holder["kind"])) == iam.KindMachine {
 		who += " (service account)"

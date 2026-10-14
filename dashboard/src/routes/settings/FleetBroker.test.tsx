@@ -117,19 +117,22 @@ describe("broker membership", () => {
   });
 
   // A READ THE ENGINE REFUSED ON AUTHORITY names the grant that would admit
-  // the reader — `fleet:operate`, the question's own — rather than saying the
+  // the reader — Admin, the question's own — rather than saying the
   // membership could not be read, which reads as a broker in trouble.
   test("a refused read says which grant would admit the reader", () => {
     render(
       <Router>
         <BrokerMembership
           error="unauthorized"
-          refusal={{ reason: "no_grant", grants: ["fleet:operate"] }}
+          refusal={{ reason: "no_grant", grants: ["admin"] }}
         />
       </Router>,
     );
-    expect(screen.getByText("fleet:operate")).toBeTruthy();
-    expect(screen.getByText(/You may not read this/)).toBeTruthy();
+    expect(
+      screen.getByText(/This answer needs Admin access\. An admin can give it to you\./),
+    ).toBeTruthy();
+    // The sentence for a refusal NO access would change is not drawn beside it.
+    expect(screen.queryByText(/no access would change that/)).toBeNull();
   });
 
   test("an external cluster's fleet is told whose membership it is", () => {

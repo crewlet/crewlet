@@ -111,7 +111,7 @@ func TestTheActiveCountIsExactAcrossMoveRemoveRestoreAndPurge(t *testing.T) {
 	check("removing it", tracker.TaskCounts{Todo: 1, Done: 1}, tracker.TaskCounts{})
 
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "a", "OPS",
-		nil); err != nil {
+		false, nil); err != nil {
 		t.Fatalf("restore a: %v", err)
 	}
 	r.drain()
@@ -201,7 +201,7 @@ func TestATargetDateIsTheLeadsOrAPersons(t *testing.T) {
 		target    string
 	}{
 		{"the lead", tracker.ProjectAuthority{Policy: true}, "2026-12-18"},
-		{"the deployment grant", tracker.ProjectAuthority{Policy: true, Archive: true}, "2027-01-29"},
+		{"an admin", tracker.ProjectAuthority{Policy: true, Archive: true}, "2027-01-29"},
 	} {
 		if _, err := r.writer.WriteProject(t.Context(), "op-"+c.target, "ENG",
 			tracker.ProjectEdit{TargetDate: day(c.target)}, c.authority); err != nil {

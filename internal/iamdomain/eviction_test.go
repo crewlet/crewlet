@@ -20,8 +20,8 @@ import (
 // write, stated the positions it took effect at as FIELDS — which a writer
 // cannot know, since only the broker says where a record lands.
 //
-// Mutation: take the grant off [iamdomain.Writer.mayOperate] and the
-// administrator's eviction lands; state the boundary from anything but the
+// Mutation: take admin off [iamdomain.Writer.mayOperate] and the app user's
+// eviction lands; state the boundary from anything but the
 // record's own position and the row names another; drop the standing and the
 // stale retry answers applied.
 func TestANodeGateIsTheDeploymentsAndLandsAtItsOwnPosition(t *testing.T) {
@@ -29,17 +29,19 @@ func TestANodeGateIsTheDeploymentsAndLandsAtItsOwnPosition(t *testing.T) {
 	rig := newWriteRig(t)
 	const node = "node-z"
 
-	// ADMINISTERING PEOPLE CONFERS NO SAY OVER A NODE.
-	admin := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
-		[]iam.Grant{iamdomain.AdminGrant}))
-	if _, err := admin.EvictNode(rig.t.Context(), statelog.NewOpID(time.Now(), "evict-"+node),
+	// USING THE COMPANY'S APPS CONFERS NO SAY OVER A NODE.
+	user := rig.writer.As(principalNamed("app.user", iam.KindPerson, iam.Apps))
+	if _, err := user.EvictNode(rig.t.Context(), statelog.NewOpID(time.Now(), "evict-"+node),
 		node); !errors.Is(err, iamdomain.ErrRefused) {
-		t.Fatalf("an eviction by a people administrator answered %v, want %v",
+		t.Fatalf("an eviction by a party using every app answered %v, want %v",
 			err, iamdomain.ErrRefused)
 	}
 
-	operator := rig.writer.As(principalNamed("ops:fleet", iam.KindMachine,
-		[]iam.Grant{iam.GrantFleetOperate}))
+	// AN ADMINISTRATOR'S PIPELINE, THROUGH A MACHINE TOKEN: a node is the
+	// deployment's, not a decision about who may act, so the token's
+	// refusal for administrative identity records does not reach it.
+	operator := throughMachineToken(rig.writer.As(principalNamed("ops:fleet",
+		iam.KindMachine, []iam.Grant{iam.GrantAdmin})))
 	gate := func(op string, readmit bool) (statelog.Result, error) {
 		var result statelog.Result
 		err := rig.during(func() error {

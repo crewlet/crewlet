@@ -284,7 +284,7 @@ since an invitation holds its seat until it is redeemed, cancelled or lapses.
 The answer names the one thing holding each seat under `held` — a holder by
 `person`, `kind`, `login` and `stage`, or an invitation by its `invitation` id
 and `expires_at`, never the invitee's address — and the remedy follows the
-holder, each a gesture for whoever holds `people:manage`:
+holder, each a gesture for an administrator:
 
 | What holds the seat | Free it with |
 |---|---|
@@ -300,7 +300,7 @@ refused when somebody tries to redeem it.
 
 ### A lead editing their own team
 
-A person who leads a unit needs no `config:write` to change what is inside it.
+A person who leads a unit needs no `admin` to change what is inside it.
 Signed in as themselves, they read and write the seats and units of their team
 — the unit they lead and every unit beneath it — through the same entity
 routes, with the same `If-Match` and `X-Summary`:
@@ -325,14 +325,14 @@ unit reordered, their own unit's name or purpose. Handing their unit to
 another `lead:`, removing, moving or reordering it among its siblings, naming somebody
 outside it in a `lead:` or `manages:` entry, setting or changing a project,
 space, channel, address or contact id, changing a credential, naming a
-`${VAR}` in any field, and any setting take `config:write`. A write that reaches past them
+`${VAR}` in any field, and any setting take `admin`. A write that reaches past them
 is refused whole —
 `403 unauthorized` with a `refused` list naming every part, the place it
 reaches and why; see [A lead edits their own
 team](../reference/api-endpoints.md#a-lead-edits-their-own-team). A seat or a
 unit outside their team, and a name the company does not have, is refused
 `403` at its own address before the body is read, in the same words either
-way. The whole document (`GET /config`) stays `config:read`'s, so a lead edits
+way. The whole document (`GET /config`) stays `admin`'s, so a lead edits
 through the entity routes rather than a `GET` and `PUT` of `/config`. While
 the document is [managed by another system](#when-another-system-manages-the-document),
 a lead's edit is refused `403 config_managed` like everybody else's.
@@ -389,23 +389,23 @@ api:
     tokens:
       - id: gitops
         token: "${CREWLET_API_TOKEN_GITOPS}"
-        grants: [config:read, config:write]
+        grants: [admin]
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"
-        grants: [state:read, config:read, config:write, secrets:write, people:manage]
+        grants: [admin]
     company_writers: [gitops]
 ```
 
 The list names a credential rather than granting one: the pipeline's token
-still needs `config:write`, as every write of the document does, and the list
-is asked only once that grant has admitted it.
+still needs `admin`, as every write of the document does, and the list is
+asked only once that permission has admitted it.
 
 The pipeline keeps writing as above, with `Authorization: Bearer
 $CREWLET_API_TOKEN_GITOPS` and an `If-Match` on the revision it last wrote, so a
 person's reload in between is a `409` it re-reads rather than one it
 overwrites. Everyone else still reads — `GET /config`, the history, the diffs —
 and is refused a change. That is every credential the list does not name, the
-ones holding `config:write` included: a person signed in to the dashboard, a
+ones holding `admin` included: a person signed in to the dashboard, a
 machine token acting as its owner, and a [lead editing their own
 team](#a-lead-editing-their-own-team), whose edit is exactly the one the
 pipeline's next reconcile would overwrite:
@@ -449,11 +449,11 @@ classified, beside the `detail` that renders them.
 | `400` | `identity_mismatch` | A per-entity `PUT` whose body names another id than its path: this route never renames — a seat's handle and a unit's key are permanent, and a server or provider is renamed in the whole document, with everything that names it |
 | `400` | `not_creatable` | A create-only `PUT` (`If-None-Match: *`) of a seat or a unit: each has a place the path cannot name, so add it by replacing the unit it sits in, or through `PUT /config` |
 | `401` | `invalid_token` | Bearer missing / wrong / wrong scheme |
-| `403` | `unauthorized` | The credential holds neither the grant the route takes nor, on the org chart, the lead relation. A lead's write that reaches outside their team names every part under `refused` |
+| `403` | `unauthorized` | The credential holds neither `admin`, which the route takes, nor, on the org chart, the lead relation. A lead's write that reaches outside their team names every part under `refused` |
 | `403` | `config_managed` | The document is [managed by another system](#when-another-system-manages-the-document) and this credential is not one of the Tier A tokens `api.auth.company_writers` lists; `managed_by` names the writers. A write and its dry run alike, asked once the grant has admitted the caller and before the body is read |
 | `403` | `step_up_required` | A write whose proof of identity is older than `step_up`: confirm who you are and send it again |
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
-| `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — a plain `PUT` never creates; send `If-None-Match: *` to add an MCP server or an LLM provider. Of a seat or a unit, only `config:write` is told: a lead is refused `403` as for one outside their team |
+| `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — a plain `PUT` never creates; send `If-None-Match: *` to add an MCP server or an LLM provider. Of a seat or a unit, only `admin` is told: a lead is refused `403` as for one outside their team |
 | `404` | `no_route` | A path under `/config` this surface does not serve |
 | `405` | `method_not_allowed` | A `/config` path under a method it does not take; `Allow` names the ones it does |
 | `409` | `no_active_revision` | A per-entity write before the first PUT: there is nothing to splice into |

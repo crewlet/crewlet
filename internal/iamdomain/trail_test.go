@@ -1,6 +1,7 @@
 package iamdomain_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -15,11 +16,16 @@ import (
 // `GET /iam/audit` reads iam_history, and the trail named its actor alone. A
 // machine token acts as its owner, so its gesture's actor is the owner — and
 // what somebody's token did to the directory read there as done by them. The
-// record names the credential, and the row carries it beside the actor: on a
-// removal too, the gesture somebody comes back to the trail for. A writer that
-// acted through nothing — the node's own, which writes every sign-in and every
-// duty — names none. Mutation: drop the column from the apply, or the field
-// from the record, and a row goes red.
+// record names the credential, and the row carries it beside the actor. The
+// gesture a token may still make about the directory is the one that spares
+// its own owner — signing them out everywhere, which a leaked token must be
+// able to do to itself — so that is the token's row here; an administrator's
+// suspension and removal, which no token may write (ADR-0033), name the
+// browser session they came through instead, and the token's own attempt at a
+// suspension writes no row at all. A writer that acted through nothing — the
+// node's own, which writes every sign-in and every duty — names none.
+// Mutation: drop the column from the apply, or the field from the record, and
+// a row goes red; drop the record-layer lock and the refused row appears.
 func TestAGestureMadeThroughATokenIsRecordedAsOneOnTheTrail(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -27,17 +33,32 @@ func TestAGestureMadeThroughATokenIsRecordedAsOneOnTheTrail(t *testing.T) {
 	id := uuid.Must(uuid.NewV7()).String()
 	enrolSarah(t, rig, id)
 
-	const via = "pat:0192f00d-0000-7000-8000-00000000000a"
-	owner := principalNamed("ana.admin", iam.KindPerson, iam.AllGrants)
-	owner.Via = via
-	party := rig.writer.As(owner)
+	const token = "pat:0192f00d-0000-7000-8000-00000000000a"
+	sarah := principalNamed("sarah.chen", iam.KindPerson,
+		[]iam.Grant{iam.GrantTracker, iam.GrantKnowledge})
+	sarah.ID = uuid.MustParse(id)
+	sarah.Via = token
+	herToken := rig.writer.As(sarah)
+
+	const session = "session:0192f00d-0000-7000-8000-00000000000b"
+	admin := principalNamed("ana.admin", iam.KindPerson,
+		[]iam.Grant{iam.GrantAdmin})
+	admin.Via = session
+	byBrowser := rig.writer.As(admin)
+	admin.Via = "pat:0192f00d-0000-7000-8000-00000000000c"
+	adminToken := rig.writer.As(admin)
 
 	for _, step := range []struct {
 		reason  string
 		gesture func() error
 	}{
+		{"my laptop was stolen", func() error {
+			_, err := herToken.Revoke(t.Context(), id, "op-revoke",
+				"my laptop was stolen")
+			return err
+		}},
 		{"left the building", func() error {
-			_, err := party.SetStage(t.Context(), id, iam.StageSuspended,
+			_, err := byBrowser.SetStage(t.Context(), id, iam.StageSuspended,
 				"op-suspend", "left the building")
 			return err
 		}},
@@ -47,7 +68,7 @@ func TestAGestureMadeThroughATokenIsRecordedAsOneOnTheTrail(t *testing.T) {
 			return err
 		}},
 		{"left for good", func() error {
-			_, err := party.Remove(t.Context(), id, "op-remove", "left for good")
+			_, err := byBrowser.Remove(t.Context(), id, "op-remove", "left for good")
 			return err
 		}},
 	} {
@@ -56,6 +77,12 @@ func TestAGestureMadeThroughATokenIsRecordedAsOneOnTheTrail(t *testing.T) {
 		}
 		rig.drain()
 	}
+	if _, err := adminToken.SetStage(t.Context(), id, iam.StageSuspended,
+		"op-suspend-by-token", "suspended by a pipeline"); !errors.Is(err,
+		iamdomain.ErrTokenRefused) {
+		t.Errorf("a suspension through a token answered %v, want ErrTokenRefused", err)
+	}
+	rig.drain()
 
 	page, err := reader.History(t.Context(), iamdomain.HistoryQuery{Person: id})
 	if err != nil {
@@ -65,19 +92,23 @@ func TestAGestureMadeThroughATokenIsRecordedAsOneOnTheTrail(t *testing.T) {
 	for _, row := range page.Entries {
 		rows[row.Reason] = row
 	}
-	for reason, want := range map[string]string{
-		"left the building": via,
-		"came back":         "",
-		"left for good":     via,
+	if row, ok := rows["suspended by a pipeline"]; ok {
+		t.Errorf("a suspension refused through a token is on the trail: %+v", row)
+	}
+	for reason, want := range map[string]struct{ actor, via string }{
+		"my laptop was stolen": {"sarah.chen", token},
+		"left the building":    {"ana.admin", session},
+		"came back":            {"ana.admin", ""},
+		"left for good":        {"ana.admin", session},
 	} {
 		row, ok := rows[reason]
 		if !ok {
 			t.Errorf("the trail holds no row for %q: %+v", reason, page.Entries)
 			continue
 		}
-		if row.Actor != "ana.admin" || row.OperatorID != want {
-			t.Errorf("%q is on the trail as %q through %q, want ana.admin "+
-				"through %q", reason, row.Actor, row.OperatorID, want)
+		if row.Actor != want.actor || row.OperatorID != want.via {
+			t.Errorf("%q is on the trail as %q through %q, want %q through %q",
+				reason, row.Actor, row.OperatorID, want.actor, want.via)
 		}
 	}
 }
@@ -142,7 +173,7 @@ func TestAGestureAPersonMakesThroughTheNodeIsTheirsOnTheTrail(t *testing.T) {
 	id := uuid.Must(uuid.NewV7()).String()
 	enrolSarah(t, rig, id)
 	node := rig.writer.As(principalNamed("node-0", iam.KindMachine,
-		[]iam.Grant{iam.GrantFleetOperate, iamdomain.AdminGrant}))
+		[]iam.Grant{iam.GrantAdmin}))
 
 	sarah := principalNamed("sarah.chen", iam.KindPerson, nil)
 	sarah.ID = uuid.MustParse(id)

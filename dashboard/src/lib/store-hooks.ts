@@ -118,10 +118,10 @@ export function useTokens() {
  * These are the RESOLVED rows, which is the distinction that matters against
  * the other way to get a seat's schedules: `lib/seats.ts`'s `schedulesOf`
  * reads the `schedules:` a seat AUTHORED out of the company document, so it
- * takes `config:read` and carries name, cron and task. A row here carries the
+ * takes Admin and carries name, cron and task. A row here carries the
  * effective timezone, the engine's own `next_run`, the `runners` a fire
  * actually reaches, and `problem` when a cron or a zone cannot be read — and
- * it is pushed to every reader holding `state:read`.
+ * it is pushed to every signed-in reader, as the overview is.
  *
  * WHAT IT DOES NOT CARRY is the run ledger. `recent_runs` arrives only on the
  * `schedules` QUESTION, so `routes/agents/Schedules.tsx` polls that

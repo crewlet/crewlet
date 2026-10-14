@@ -50,6 +50,19 @@
 // unit's own space by the config loader, and both are named there rather than
 // here so an operator can move either.
 //
+// # The declared spaces
+//
+// A page is CREATED only in a container the company declares — a unit's or a
+// seat's `space:`, the root or the skills container ([Reserved.Declared]) —
+// and that, unlike the two rules above, binds a person exactly as it binds an
+// agent. A key nothing declares is no space at all: no lead tidies what is
+// filed there, no routing reaches it, and a typo of a real key splits a team's
+// knowledge in two with nothing to say so. It is the rule a task's create
+// holds an undeclared project to. Only a create asks, because every other
+// write is to a page already inside a space that was declared when it was
+// made; and a store that declares nothing creates nothing, so a surface wired
+// without the seam cannot file pages under keys nobody named.
+//
 // # The two-key sequences this no longer has
 //
 // Under the coordination bucket this domain grew up on, a page's identity was

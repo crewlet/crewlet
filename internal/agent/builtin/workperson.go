@@ -175,7 +175,7 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// A SEAT. Your own — by omission or by either of your names — is the
 	// record your writes are made under; it was sent through the fuzzy
 	// colleague resolver like anybody else's, so an unbound `jane.doe`
-	// holding the admin grant set the priorities of the seat `jane`. And
+	// holding admin set the priorities of the seat `jane`. And
 	// the same happened to an administrator naming `jane.doe` for somebody
 	// else: the route admitted the request on that name and the resolver
 	// wrote into the seat it resembled. A login is the identity directory's
@@ -513,7 +513,7 @@ func (d WorkDeps) writeInbox(ctx context.Context, actor Actor, writer PersonWrit
 // their own record, somebody else's login is their holder's record in the
 // identity directory, and anything else must be a seat the chart has EXACTLY
 // ([chartRecord]). The verb is asked on the record that resolves to — the
-// owner, or the admin grant — because it was decided on the path's name
+// owner, or an admin — because it was decided on the path's name
 // before, and that name was not the record: an administrator naming a bound
 // person's login was admitted and the write landed under the login, where no
 // screen of theirs reads it. It used to go the other way too: the fuzzy
@@ -571,8 +571,8 @@ func SetPinsFor(ctx context.Context, deps WorkDeps, name string,
 // # But the authority comes before the directory
 //
 // Somebody else's login is looked up only once [WorkDeps.mayLook] has let it
-// be: the verb decided on a record nobody has resolved yet. The admin grant
-// passes, a caller who could be admitted only as the lead of whoever holds the
+// be: the verb decided on a record nobody has resolved yet. Admin passes, a
+// caller who could be admitted only as the lead of whoever holds the
 // login passes, and everybody else — a caller who leads nobody, and any
 // non-admin on a verb only a record's owner may take — is refused with the
 // very refusal they would get on somebody's seat they do not lead, before the
@@ -591,7 +591,7 @@ func SetPinsFor(ctx context.Context, deps WorkDeps, name string,
 // # And a login that names nobody discloses nothing
 //
 // A login nobody holds, and a holder whose seat the chart no longer has, are
-// decided on the name AS TYPED — which nobody leads, so only the admin grant
+// decided on the name AS TYPED — which nobody leads, so only admin
 // passes — and only then refused as naming no record. A node that cannot say
 // is 503-shaped ([ErrUndecidable]) and says nothing either way: the
 // directory's own words go to the log, because they name the seat a login is

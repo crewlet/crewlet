@@ -242,7 +242,7 @@ Usage:
                               and as its metadata group counts them: list, and
                               remove a member that is gone for good
   crewlet seats <cmd>         Pause a seat (-stop also ends the turn it is on)
-                              or resume it: its holder, its lead, or fleet:operate
+                              or resume it: its holder, its lead, or an admin
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet iam <cmd>           The company's people, credentials and sessions:
@@ -948,8 +948,9 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// for the two refusals behind it.
 	devPrincipal := fs.String("dev-principal", "",
 		"DEVELOPMENT ONLY: resolve every unauthenticated request to this "+
-			"login, carrying api.auth.max_grants. Refused unless api.host "+
-			"binds loopback AND this is a development build")
+			"login, carrying every app, and admin where api.auth.admin is "+
+			"serve. Refused unless api.host binds loopback AND this is a "+
+			"development build")
 	// ASSIGNED, NOT DECLARED: this function's error is NAMED, so that a
 	// deferred recorder can put a boot failure in the log file before the
 	// file closes (see below), and a `:=` here would shadow it — harmless

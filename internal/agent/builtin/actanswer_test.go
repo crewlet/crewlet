@@ -505,7 +505,7 @@ func (f *ledgerFake) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
 	return f.written(opID)
 }
 
-func (f *ledgerFake) RestoreTask(_ context.Context, opID, _, _ string,
+func (f *ledgerFake) RestoreTask(_ context.Context, opID, _, _ string, _ bool,
 	_ *tracker.Notify) (tracker.WriteResult, error) {
 	return f.written(opID)
 }

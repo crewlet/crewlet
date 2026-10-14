@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -104,18 +105,19 @@ type Engine struct {
 	webhookBase    string
 	webhookBaseKey string
 
-	// grantCeilingHash is a digest of this node's own resolved
-	// `api.auth.max_grants`, published on every heartbeat. Tier A, so it
-	// is read once at boot: the whole reason a fleet compares these is
-	// that a rolling restart is how the values come to differ, and a
-	// value that could change inside a process would make the comparison
-	// meaningless. See [coord.NodeStatus.GrantCeilingHash].
-	grantCeilingHash string
+	// adminPosture is this node's own `api.auth.admin`, published on every
+	// heartbeat — and empty on a node that serves no API, which has no
+	// posture to state. Tier A, so it is read once at boot: the whole
+	// reason a fleet compares these is that a rolling restart is how the
+	// values come to differ, and a value that could change inside a
+	// process would make the comparison meaningless. See
+	// [coord.NodeStatus.AdminPosture].
+	adminPosture iam.AdminPosture
 
 	// tierATokens are the ids this node's `api.auth.tokens` declares — the
 	// holders of every `token:<id>` login this node can authenticate — for
 	// [Engine.HolderRecord], which answers a login no entry declares as
-	// nobody's. Tier A, so read once at boot like the ceiling beside it.
+	// nobody's. Tier A, so read once at boot like the posture beside it.
 	tierATokens map[string]struct{}
 
 	// identity is the three identity duties' loops, or nil on a node that
@@ -1111,14 +1113,16 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	}
 	// THE TIER A FACTS THE PROCESS HOLDS, read once and before anything below
 	// reads them — the address people and vendors reach this deployment at,
-	// this node's grant ceiling and the Tier A tokens it declares — because
+	// this node's admin posture and the Tier A tokens it declares — because
 	// each is fixed at boot and restart to change, and the first epoch built
 	// below already composes links on the first and resolves logins on the
 	// last.
 	e.externalBase = opts.Bootstrap.API.ExternalBase()
 	e.webhookBase = opts.Bootstrap.API.WebhookBase()
 	e.webhookBaseKey = opts.Bootstrap.API.WebhookBaseKey()
-	e.grantCeilingHash = opts.Bootstrap.API.Auth.CeilingHash()
+	if opts.Bootstrap.ServesAPI() {
+		e.adminPosture = opts.Bootstrap.API.Auth.Admin
+	}
 	e.tierATokens = make(map[string]struct{}, len(opts.Bootstrap.API.Auth.Tokens))
 	for _, token := range opts.Bootstrap.API.Auth.Tokens {
 		e.tierATokens[token.ID] = struct{}{}
@@ -2815,7 +2819,7 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 	// The MCP rows are this process's own record of what it started, read
 	// under a lock and never from a child.
 	status := coord.NodeStatus{
-		StartedAt: e.startedAt, GrantCeilingHash: e.grantCeilingHash,
+		StartedAt: e.startedAt, AdminPosture: e.adminPosture,
 		MCP: e.mcpStatus(),
 	}
 	if b := e.backends; b != nil && b.Queue != nil {

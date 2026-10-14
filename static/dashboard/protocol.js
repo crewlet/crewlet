@@ -46,6 +46,12 @@ var NOTHING_HELD = {
 	rounds: null
 };
 /**
+* The one heavy field that is STATUS — each round's timing and tokens — which
+* a call whose body is withheld from this reader still carries and versions.
+* Every other detail is the seat's BODY (`LiveCall.body_withheld`).
+*/
+var STATUS_DETAIL = /* @__PURE__ */ new Set(["rounds"]);
+/**
 * One seat's live call as a push states it, merged onto the copy a tab holds —
 * and whether the push says the tab missed a change it no longer carries.
 *
@@ -58,6 +64,12 @@ var NOTHING_HELD = {
 * yet. A push naming a version newer than the one held, without the field, is
 * a tab that missed the push which carried it: `stale`, and the field stays
 * what is held until the call is fetched whole.
+*
+* A CALL WHOSE BODY IS WITHHELD (`body_withheld`) names every body version
+* zero and carries no body field, so it is never `stale` for one — a status
+* reader is never sent a body, and asking for the call whole would only fetch
+* the same status again — and no body the tab held is kept: a reader who could
+* read this seat's trail a moment ago and cannot now is shown none of it.
 */
 function mergeLiveCall(held, next) {
 	if (!next) return {
@@ -65,10 +77,16 @@ function mergeLiveCall(held, next) {
 		stale: false
 	};
 	const same = !!held && sameCall(held, next);
+	const withheld = next.body_withheld === true;
 	const merged = { ...next };
 	const versions = {};
 	let stale = false;
 	for (const [detail, fields] of Object.entries(LIVE_CALL_DETAIL)) {
+		if (withheld && !STATUS_DETAIL.has(detail)) {
+			for (const f of fields) delete merged[f];
+			versions[detail] = 0;
+			continue;
+		}
 		const pushed = next.versions[detail];
 		const have = same ? held.versions[detail] : 0;
 		const carried = fields.every((f) => f in next);
@@ -106,6 +124,7 @@ function newerDetail(held, older) {
 	let merged = null;
 	const versions = { ...held.versions };
 	for (const [detail, fields] of Object.entries(LIVE_CALL_DETAIL)) {
+		if (held.body_withheld === true && !STATUS_DETAIL.has(detail)) continue;
 		const version = older.versions[detail];
 		if (version <= held.versions[detail] || !fields.every((f) => f in older)) continue;
 		merged ??= { ...held };
@@ -403,10 +422,10 @@ var Store = class {
 	*
 	* A REFUSAL DROPS WHAT THE ENGINE SERVED. It is a decision about who may
 	* read the company, so what an earlier socket sent stops being shown the
-	* moment it lands: a tab whose `state:read` was withdrawn went on naming the
-	* company, listing its agents and tools in the palette, from the snapshot it
-	* held — while a session that never held the grant, sent nothing, named and
-	* listed none of it. An outage keeps the last state on purpose ("showing the
+	* moment it lands: a tab whose seat was taken out of the chart went on
+	* naming the company, listing its agents and tools in the palette, from the
+	* snapshot it held — while a session refused at its first handshake, sent
+	* nothing, named and listed none of it. An outage keeps the last state on purpose ("showing the
 	* last state received"); a refusal is not an outage. `health` stays: it is
 	* the unguarded `/health`, not the company.
 	*/
@@ -1629,10 +1648,10 @@ var LiveSocket = class {
 	* Dial for the session the frame has just read (`app/Shell.tsx`), unless a
 	* dial is already open or under way.
 	*
-	* IT LIFTS WHAT AN EARLIER SESSION LATCHED: the frame calls this for an
-	* answer that holds the grant the socket needs — after a sign-in, or once an
-	* administrator has given it — and a refusal or a sign-out recorded under
-	* the last one no longer describes the browser.
+	* IT LIFTS WHAT AN EARLIER SESSION LATCHED: the frame calls this for every
+	* session it reads — after a sign-in, or once an admin has put a refusal
+	* right — and a refusal or a sign-out recorded under the last one no longer
+	* describes the browser.
 	*/
 	start() {
 		this.lift();
@@ -1935,9 +1954,8 @@ var LiveSocket = class {
 	* by the same decision every thirty seconds for as long as the tab stayed
 	* open, and a page that says "reconnecting" to somebody whose access was
 	* withdrawn is telling them to wait for something that will not happen.
-	* `reconnect()` is the way back, once an administrator has restored it —
-	* or `start()`, which the frame calls once the session it reads again
-	* holds the grant the socket needs.
+	* `reconnect()` is the way back, once an admin has put it right — or
+	* `start()`, which the frame calls once it reads the session again.
 	*/
 	accessRefused(reason) {
 		this.stopDialling();
@@ -2384,7 +2402,7 @@ var SessionKeepAlive = class {
 *    their own name, `company` for one that rewrites what every seat's tracker
 *    means (a project's settings, the catalogue), which a screen offers only
 *    where it says so. It is the authority table's: a write decided by a
-*    container's lead or by a deployment grant is `company`.
+*    container's lead or by admin is `company`.
 *
 * HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
 * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is

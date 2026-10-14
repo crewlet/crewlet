@@ -23,7 +23,7 @@ func inviteFor(t *testing.T, rig *writeRig, address, seat string) (
 	err := rig.draining(func() error {
 		var err error
 		issued, err = rig.writer.Invite(t.Context(), iamdomain.InviteMint{
-			Email: address, Grants: []iam.Grant{iam.GrantStateRead},
+			Email: address, Grants: []iam.Grant{iam.GrantTracker},
 			Seat: seat, ExpiresAt: brokerAt.Add(168 * time.Hour),
 			OpID: operationKey(), Reason: "onboarding",
 		})
@@ -51,7 +51,7 @@ func redeemAs(t *testing.T, rig *writeRig, issued iamdomain.InviteIssued,
 			PersonID: person, Stage: iam.StageActive,
 			Name: "A joiner", Email: address, Login: iam.LoginFromAddress(address),
 			Password:   aPassword(),
-			Grants:     []iam.Grant{iam.GrantStateRead},
+			Grants:     []iam.Grant{iam.GrantTracker},
 			Invitation: issued.ID, InvitationSecret: secret, Seat: seat,
 			OpID: "invite:" + issued.ID, Reason: "redeemed an invitation",
 		})
@@ -190,7 +190,7 @@ func TestARedemptionCarriesOnlyThePasswordItsInviteeChose(t *testing.T) {
 			_, err := nodeWriter(rig).Redeem(t.Context(), iamdomain.Redemption{
 				PersonID: uuid.Must(uuid.NewV7()).String(), Stage: iam.StageActive,
 				Name: "Sam", Email: "sam@example.com", Login: "sam.example",
-				Password: carried, Grants: []iam.Grant{iam.GrantStateRead},
+				Password: carried, Grants: []iam.Grant{iam.GrantTracker},
 				Invitation: issued.ID, InvitationSecret: issued.Secret, Seat: seat,
 				OpID: "invite:" + issued.ID, Reason: "redeemed an invitation",
 			})

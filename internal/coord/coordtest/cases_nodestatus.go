@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // nodeStatusCases certify [coord.NodeStatus] across a real store round trip.
@@ -19,7 +20,7 @@ import (
 var nodeStatusCases = []testCase{
 	{"a_node_status_round_trips_through_presence", func(h *harness) {
 		want := coord.NodeStatus{
-			InFlight: 2, Posture: "serve", GrantCeilingHash: "2f1a8c0d3b4e5f60",
+			InFlight: 2, Posture: "serve", AdminPosture: iam.AdminRefuse,
 			MCP: []coord.MCPServerStatus{
 				{Server: "github", Shared: true, Started: 1, Tools: 12},
 				// The seat a failed instance was launched for travels by its

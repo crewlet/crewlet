@@ -13,8 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// everything is an administrator holding every grant, a minute past proving
-// who they are — so a case about operation ids reaches every route's writes.
+// everything is an administrator holding every permission, a minute past
+// proving who they are — so a case about operation ids reaches every route's
+// writes.
 func everything() iam.Principal {
 	p := administrator()
 	p.Grants = iam.AllGrants
@@ -43,11 +44,11 @@ func TestEveryDirectoryWriteCarriesAnInstantItsLedgerCanVouchFor(t *testing.T) {
 	}{
 		{"a create with a seat", http.MethodPost, "/iam/people",
 			map[string]any{"login": "dana.sre", "email": "dana@example.com",
-				"seat": "sre"}},
+				"seat": "sre", "grants": iam.Apps}},
 		{"an edit moving a seat, a login and a stage", http.MethodPatch,
 			"/iam/people/" + bob.String(), map[string]any{"seat": "sre",
 				"login": "bob.ops", "stage": "suspended",
-				"grants": []string{"state:read"}}},
+				"grants": []string{"knowledge"}}},
 		{"a removal", http.MethodDelete, "/iam/people/" + bob.String(), nil},
 		{"ending somebody's sessions", http.MethodDelete,
 			"/iam/people/" + bob.String() + "/sessions", nil},
@@ -55,7 +56,7 @@ func TestEveryDirectoryWriteCarriesAnInstantItsLedgerCanVouchFor(t *testing.T) {
 			"/iam/people/" + bob.String() + "/mfa/reset", nil},
 		{"ending every session", http.MethodPost, "/iam/invalidate-all", nil},
 		{"an invitation", http.MethodPost, "/iam/invitations",
-			map[string]any{"email": "dana@example.com", "seat": "sre"}},
+			map[string]any{"email": "dana@example.com", "seat": "sre", "grants": iam.Apps}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -115,14 +116,14 @@ func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 		body                      any
 	}{
 		{"an edit", http.MethodPatch, "/iam/people/" + bob.String(), "retry-7",
-			map[string]any{"grants": []string{"state:read"}}},
+			map[string]any{"grants": []string{"knowledge"}}},
 		{"a removal", http.MethodDelete, "/iam/people/" + bob.String(),
 			"0192f00d-0000-4000-8000-000000000001", nil},
 		{"ending somebody's sessions", http.MethodDelete,
 			"/iam/people/" + bob.String() + "/sessions", "retry-7", nil},
 		{"a create", http.MethodPost, "/iam/people", "retry-1",
 			map[string]any{"login": "dana.sre", "email": "dana@example.com",
-				"seat": "sre"}},
+				"seat": "sre", "grants": iam.Apps}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -167,12 +168,12 @@ func TestAnUnvouchedUnknownSendsTheAdministratorElsewhere(t *testing.T) {
 	}{
 		{"a person's create", "create",
 			map[string]any{"login": "dana.sre", "email": "dana@example.com",
-				"seat": "sre"}, true},
+				"seat": "sre", "grants": iam.Apps}, true},
 		{"a service account's create", "create",
-			map[string]any{"kind": "machine", "login": "ci:release"}, true},
+			map[string]any{"kind": "machine", "login": "ci:release", "grants": []iam.Grant{}}, true},
 		{"a lost acknowledgement (the control)", "create",
 			map[string]any{"login": "dana.sre", "email": "dana@example.com",
-				"seat": "sre"}, false},
+				"seat": "sre", "grants": iam.Apps}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -215,7 +216,7 @@ func TestAWriteNamingARemovedPersonIsNotFound(t *testing.T) {
 		body                       any
 	}{
 		{"an edit", "update", http.MethodPatch, "/iam/people/" + bob.String(),
-			map[string]any{"grants": []string{"state:read"}}},
+			map[string]any{"grants": []string{"knowledge"}}},
 		{"ending their sessions", "revoke", http.MethodDelete,
 			"/iam/people/" + bob.String() + "/sessions", nil},
 		{"a seat binding", "identity", http.MethodPatch,
@@ -366,7 +367,7 @@ func TestTwoKeysSharingAUUIDCreateTwoPeople(t *testing.T) {
 		r := newRig(t)
 		got := r.asWith(administrator(), http.MethodPost, "/iam/people",
 			map[string]any{"login": "dana.sre", "email": "dana@example.com",
-				"seat": "sre"},
+				"seat": "sre", "grants": iam.Apps},
 			http.Header{opkey.Header: {key}})
 		if got.status/100 != 2 {
 			t.Fatalf("a create under %q answered %d: %v", key, got.status, got.body)

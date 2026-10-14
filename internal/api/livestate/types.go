@@ -462,6 +462,20 @@ type SandboxEntry struct {
 	Question string `json:"question,omitempty"`
 	Audience string `json:"audience,omitempty"`
 
+	// AudienceHandles are the seats the parked question may be answered by
+	// ([sandbox.PendingRun.AudienceHandles]), which is who is shown the
+	// question whatever their reach to the seat that asked it
+	// ([SandboxEntry.For]). NEVER ON THE WIRE: it names people, and what a
+	// reader is told is only whether they were shown the question. Filled
+	// from the durable run record; an entry built from the events alone
+	// holds none until the next reconcile reads it.
+	AudienceHandles []string `json:"-"`
+
+	// BodyWithheld is whether this entry reached its reader without what
+	// the run was asked, and the question it parked on, because neither is
+	// theirs to read — see [SandboxEntry.For].
+	BodyWithheld bool `json:"body_withheld,omitempty"`
+
 	// WorkItem is the item the launching turn is charged to, absent when
 	// it is on nothing — so a panel can say what a box is working on
 	// without joining back to a turn that may have parked days ago.

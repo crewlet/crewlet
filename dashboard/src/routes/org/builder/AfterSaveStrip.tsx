@@ -20,7 +20,9 @@
  * against the active revision, which the save now is), and the company as
  * YAML, which is what keeps a `company.yaml` in a repository in step with what
  * the dashboard wrote. Both read the company document, so a lead who saved
- * their unit without `config:read` is offered neither.
+ * their unit without Admin is offered neither — and is asked nothing of the
+ * fleet, which is Admin's too, so the strip follows the save by this node's
+ * own health push alone.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -166,10 +168,10 @@ export function AfterSaveStrip({
   onDismiss: () => void;
 }) {
   const [yaml, setYaml] = useState(false);
-  const readsCompany = useViewer().grants.includes("config:read");
+  const readsCompany = useViewer().admin;
   const [pollMs, setPollMs] = useState<number | undefined>(APPLYING_POLL_MS);
   const health = useEngineHealth();
-  const fleet = useQuery("fleet", undefined, { pollMs });
+  const fleet = useQuery("fleet", undefined, { pollMs, enabled: readsCompany });
   const state = useMemo(() => applyState(saved, health, fleet.data), [saved, health, fleet.data]);
 
   // The fleet's answer, read through a ref so the recheck window is armed once

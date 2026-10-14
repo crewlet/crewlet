@@ -18,12 +18,20 @@ import (
 type FindingKind string
 
 const (
-	// KindNoManageHolder is the one that locks a company out: no ACTIVE
-	// person holding an ENROLLED credential — a password, a second factor,
+	// KindNoAdminHolder is the one that locks a company out: no ACTIVE
+	// PERSON holding an ENROLLED credential — a password, a second factor,
 	// a token: a way in they have USED, so a link nobody has spent yet does
-	// not count — carries people:manage, so nobody can invite, grant or
-	// revoke ever again except through a Tier A token.
-	KindNoManageHolder FindingKind = "no_people_manage_holder"
+	// not count — holds admin, so nobody can invite, grant or revoke ever
+	// again except through a Tier A token.
+	//
+	// PERSONS ONLY. A service account may hold admin, and its live token is
+	// an enrolled credential — but no administrative identity record is
+	// ever written through a machine token (internal/iamdomain refuses it,
+	// and internal/authz's presence rows refuse the routes in front of it),
+	// so a company whose only admin is a service account is one nobody can
+	// invite into, grant in or revoke in. Counted, it would read as
+	// administrable while it is locked.
+	KindNoAdminHolder FindingKind = "no_admin_holder"
 
 	// KindNoCredential is somebody active who holds no live way in at all:
 	// a person whose first password link — from an administrator's create —
@@ -51,22 +59,25 @@ const (
 	// (ADR-0015).
 	KindDanglingBinding FindingKind = "binding_dangling"
 
-	// KindClampedGrant is a grant a person's row declares that this
-	// node's `api.auth.max_grants` withholds. A LEGAL state on a fleet
-	// mid-rollout — the ceiling is applied at decision time and never
-	// written — and worth saying, because the row and the behaviour
-	// differ and nothing else would say so.
-	KindClampedGrant FindingKind = "grant_clamped_by_ceiling"
+	// KindAdminClamped is a row holding admin on a node whose
+	// `api.auth.admin` is `refuse`: the row declares admin and this node
+	// does not honour it — every app it includes, it still does. A LEGAL
+	// state — the posture is applied at decision time and never written,
+	// and a node published to the people who use the company refuses
+	// admin by design — and worth saying, because the row and the
+	// behaviour differ and nothing else would say so.
+	KindAdminClamped FindingKind = "admin_clamped_by_node"
 )
 
 // FindingKinds are the four, in the order the report is SORTED in: what ends a
 // company's ability to administer itself first, then somebody who cannot get
-// in, a binding the chart lost, and a grant a ceiling withholds. The report sorts by it, stably — so within a kind the
+// in, a binding the chart lost, and an admin this node clamps away. The report
+// sorts by it, stably — so within a kind the
 // directory's own order holds — which is what makes the order this says true:
 // it was declared "the order the report renders them" and read by nothing,
 // while findings came out person by person.
 var FindingKinds = []FindingKind{
-	KindNoManageHolder, KindNoCredential, KindDanglingBinding, KindClampedGrant,
+	KindNoAdminHolder, KindNoCredential, KindDanglingBinding, KindAdminClamped,
 }
 
 // Finding is one row of the report.
@@ -105,12 +116,12 @@ type Bindings func(ctx context.Context, row iamdomain.PersonRow) (
 // # It walks the directory, which is why it is a route and not a validation
 //
 // Everything here is a live-fleet question: who holds what, who has never
-// signed in, whose seat went away, which node's ceiling clamps whom. None of
+// signed in, whose seat went away, whose admin this node clamps away. None of
 // it can be answered from a configuration file, which is why `crewlet
 // validate` says nothing about people.
 func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 	var findings []Finding
-	manage := 0
+	admins := 0
 	unchecked := 0
 	var position string
 	after := ""
@@ -135,9 +146,14 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 			if !checked {
 				unchecked++
 			}
-			if row.Stage == iam.StageActive &&
-				slices.Contains(row.Grants, iam.GrantPeopleManage) && held.enrolled {
-				manage++
+			// AN ACTIVE PERSON WHO HAS USED A WAY IN — see
+			// [KindNoAdminHolder] for why a service account never
+			// counts. Through [iam.Expand], the one comparison every
+			// permission goes through.
+			if row.Kind == iam.KindPerson && row.Stage == iam.StageActive &&
+				slices.Contains(iam.Expand(row.Grants), iam.GrantAdmin) &&
+				held.enrolled {
+				admins++
 			}
 		}
 		if page.Next == "" {
@@ -145,14 +161,16 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 		}
 		after = page.Next
 	}
-	if manage == 0 {
+	if admins == 0 {
 		// The one that is not somebody to fix but nobody left to fix them
 		// with — first in [FindingKinds], so first in the report.
 		findings = append(findings, Finding{
-			Kind: KindNoManageHolder,
-			Detail: "no active person holding an enrolled credential carries " +
-				string(iam.GrantPeopleManage) + ", so nobody can invite, " +
-				"grant or revoke except through a Tier A token",
+			Kind: KindNoAdminHolder,
+			Detail: "no active person holding an enrolled credential holds " +
+				string(iam.GrantAdmin) + ", so nobody can invite, grant or " +
+				"revoke except through a Tier A token; a service account " +
+				"holding admin does not count, because no administrative " +
+				"identity record is written through a token",
 		})
 	}
 	// STABLE, so within a kind the directory's order holds and two nodes
@@ -161,9 +179,10 @@ func (s *Service) GetCheck(w http.ResponseWriter, r *http.Request) {
 		return slices.Index(FindingKinds, a.Kind) - slices.Index(FindingKinds, b.Kind)
 	})
 	httpjson.Write(w, http.StatusOK, map[string]any{
-		"findings":                  findings,
-		"position":                  position,
-		"people_with_people_manage": manage,
+		"findings": findings,
+		"position": position,
+		// PERSONS ONLY — see [KindNoAdminHolder].
+		"people_with_admin": admins,
 		// SAID RATHER THAN SILENT: "no dangling binding" and "this
 		// node's org could not say" are different answers, and a
 		// report that folded the second into the first would print
@@ -211,16 +230,19 @@ func (s *Service) findingsFor(r *http.Request, row iamdomain.PersonRow,
 			})
 		}
 	}
-	for _, g := range row.Grants {
-		if !slices.Contains(s.ceiling, g) {
-			out = append(out, Finding{
-				Kind: KindClampedGrant, Person: row.ID, Login: row.Login,
-				Grant: g,
-				Detail: "this node's api.auth.max_grants withholds " +
-					string(g) + ", so the row declares it and this node " +
-					"does not honour it",
-			})
-		}
+	// ONLY ADMIN IS EVER CLAMPED: a refusing node keeps every app, and a
+	// name this build does not know is kept in the row and ignored by
+	// every node alike, so neither is a difference between this node and
+	// the row worth reporting.
+	if s.admin == iam.AdminRefuse && slices.Contains(row.Grants, iam.GrantAdmin) {
+		out = append(out, Finding{
+			Kind: KindAdminClamped, Person: row.ID, Login: row.Login,
+			Grant: iam.GrantAdmin,
+			Detail: "this node's api.auth.admin is refuse, so the row holds " +
+				"admin and this node does not honour it — they keep every " +
+				"app here; sign in through a node that serves admin to " +
+				"administer the company",
+		})
 	}
 	return out, bindingChecked
 }
@@ -235,9 +257,9 @@ type ways struct {
 
 	// enrolled is whether they hold a way in they have USED: any live
 	// credential but a link. The administrator count asks this, because a
-	// company whose only holder of people:manage is somebody created a
-	// minute ago, link unspent, is one nobody can administer yet — and the
-	// finding's own sentence says "enrolled".
+	// company whose only admin is somebody created a minute ago, link
+	// unspent, is one nobody can administer yet — and the finding's own
+	// sentence says "enrolled".
 	enrolled bool
 }
 

@@ -255,7 +255,7 @@ func TestAMoveWaitsForADescendantRemovedWhileItRan(t *testing.T) {
 	}
 
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "m-kid-b", "ENG",
-		nil); err != nil {
+		false, nil); err != nil {
 		t.Fatalf("RestoreTask: %v", err)
 	}
 	r.drain()
@@ -289,7 +289,7 @@ func TestARemovedRootMidMoveWaitsForItsRestore(t *testing.T) {
 	}
 
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "m-root", "OPS",
-		nil); err != nil {
+		false, nil); err != nil {
 		t.Fatalf("RestoreTask: %v", err)
 	}
 	r.drain()

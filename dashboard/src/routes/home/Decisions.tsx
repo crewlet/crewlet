@@ -60,9 +60,14 @@ export function Decisions({
       <Card.Header
         icon={<TriangleAlertGlyph size="sm" className="home-decisions-icon" />}
         actions={
-          <a className="t-link" href={decisionsHref()}>
-            Open inbox
-          </a>
+          // THE INBOX IS THE TRACKER'S: an asked person without Tracker
+          // answers here and on the task, and a link to a screen that would
+          // only say it is closed to them is not a way in.
+          viewer.tracker ? (
+            <a className="t-link" href={decisionsHref()}>
+              Open inbox
+            </a>
+          ) : undefined
         }
       >
         <Card.Title as="h3">

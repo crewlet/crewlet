@@ -17,7 +17,7 @@ crewlet retention status
 ```
 
 **Every `crewlet retention` command that talks to a node needs
-`fleet:operate`** — all of them but `verify --restore`, which opens a snapshot
+`admin`** — all of them but `verify --restore`, which opens a snapshot
 directory on disk — reads included:
 the `retention` question and every `/work/retention*` route take it, because a
 map of which machine holds what and the value a reanchor must echo describe the
@@ -1598,8 +1598,8 @@ of asking. There is no project to name: the task's own row says which project
 the record is filed under. The **reason is required** because it is the
 only thing that survives: the rows are destroyed, and the deletion marker's
 reason is the entire account of what used to be at that key. A purge is an
-**operator gesture** — `fleet:operate`, held by a person or a token, never an
-agent and never the engine — because nothing else can be asked to confirm it.
+**operator gesture** — `admin`, held by a person or a token (a person's
+session asks for a recent proof first), never an agent and never the engine — because nothing else can be asked to confirm it.
 
 It answers the same three-valued outcome every write here has. `pending` means
 the record is on the log and each node's rows go as it reaches them; do not run

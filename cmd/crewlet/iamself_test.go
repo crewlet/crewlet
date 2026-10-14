@@ -91,7 +91,7 @@ func newSelfNode(t *testing.T) *selfNode {
 		}
 		httpjson.Write(w, http.StatusCreated, map[string]any{
 			"id": "c-1", "person": "p-jane", "token": "cwl_pat_the-value",
-			"grants":     []string{"state:read"},
+			"grants":     []string{"tracker"},
 			"expires_at": "2026-07-01T00:00:00Z",
 		})
 	})
@@ -130,7 +130,7 @@ func runSelf(t *testing.T, n *selfNode, stdin string, extra ...string) (
 
 	t.Helper()
 	args := append([]string{"token", "-login", "jane.doe", "-label", "laptop",
-		"-grants", "state:read", "-config", selfConfig(t), "-api", n.server.URL},
+		"-grants", "tracker", "-config", selfConfig(t), "-api", n.server.URL},
 		extra...)
 	var out, errs bytes.Buffer
 	err := runIAM(noEnviron, args, strings.NewReader(stdin), &out, &errs)

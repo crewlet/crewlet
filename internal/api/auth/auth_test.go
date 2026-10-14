@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -504,9 +505,9 @@ func TestAnEmptyConfiguredTokenIsNotABypass(t *testing.T) {
 // one shape — no tokens with reads closed — because with reads open a
 // credential-less deployment was a working read-only one. There is no read
 // posture now, so a served API with no credential is unreachable full stop,
-// and three more facts became load-bearing at the same time: the ceiling the
-// directory is clamped by, the address the cookie's flags come from, and the
-// keyring that signs it.
+// and three more facts became load-bearing at the same time: whether this node
+// serves admin, the address the cookie's flags come from, and the keyring that
+// signs it.
 func TestConfigRefusesEveryPostureThisSurfaceCannotBeReachedUnder(t *testing.T) {
 	t.Parallel()
 	complete := func() config.Bootstrap {
@@ -516,10 +517,10 @@ func TestConfigRefusesEveryPostureThisSurfaceCannotBeReachedUnder(t *testing.T) 
 		b.Stream.StoreDir = "/var/lib/crewlet/stream"
 		b.API.Port = 8000
 		b.API.ExternalURL = "http://localhost:8000"
-		b.API.Auth.MaxGrants = iam.AllGrants
+		b.API.Auth.Admin = iam.AdminServe
 		b.API.Auth.Tokens = []config.APIToken{{
 			ID: "founder", Token: strings.Repeat("k", 32),
-			Grants: []iam.Grant{iam.GrantConfigWrite},
+			Grants: []iam.Grant{iam.GrantAdmin},
 		}}
 		b.Secrets = config.Secrets{
 			ActiveKeyID: "k1",
@@ -545,8 +546,8 @@ func TestConfigRefusesEveryPostureThisSurfaceCannotBeReachedUnder(t *testing.T) 
 		{"no credential at all", func(b *config.Bootstrap) {
 			b.API.Auth.Tokens = nil
 		}, "at least one token is required"},
-		{"no ceiling on what the directory may confer", func(b *config.Bootstrap) {
-			b.API.Auth.MaxGrants = nil
+		{"no word on whether this node serves admin", func(b *config.Bootstrap) {
+			b.API.Auth.Admin = ""
 		}, "required once this node serves the API"},
 		{"no address a browser reaches this on", func(b *config.Bootstrap) {
 			b.API.ExternalURL = ""
@@ -577,7 +578,7 @@ func TestConfigRefusesEveryPostureThisSurfaceCannotBeReachedUnder(t *testing.T) 
 // THE COUNTERFACTUAL. A node that serves no HTTP at all needs none of the
 // API's own rules — each is gated on this node SERVING the API (`api.port` set
 // and the ingress role among `node.roles`), and a worker node that had to
-// declare a ceiling, an address and a token for a surface it does not bind
+// declare an admin posture, an address and a token for a surface it does not bind
 // would be three settings of ceremony for nothing. The keyring is not one of
 // them: every node needs it, because every node runs state logs whose records
 // are signed under it, so this node carries one and nothing else.
@@ -690,5 +691,57 @@ func TestTokenIDsAreTheLabelsTheGuardAccepts(t *testing.T) {
 	}
 	if got := guard(t, withTokens()).TokenIDs(); len(got) != 0 {
 		t.Errorf("a guard with no Tier A token lists %v, want none", got)
+	}
+}
+
+// A TIER A TOKEN CARRIES WHAT THIS NODE'S ADMIN POSTURE LETS IT CARRY,
+// decided on every request it presents.
+//
+// `api.auth.admin` is a decision-time bound: nothing is written when it
+// changes, so the one place it can act is where the bearer is composed. On a
+// node that serves admin a token listing it carries admin and every app it
+// confers; on one that refuses admin the same token keeps every app and loses
+// admin, so a founder's break-glass token still reaches the tracker and the
+// knowledge base while the node withholds the administration this deployment
+// chose not to serve. A token listing apps alone is the same on both, and a
+// posture this build cannot name confers nothing at all.
+//
+// Mutation: compose the bearer from its own list, or under a fixed posture,
+// and this fails.
+func TestATierATokenCarriesWhatTheNodesAdminPostureAllows(t *testing.T) {
+	t.Parallel()
+	every := []iam.Grant{iam.GrantAdmin, iam.GrantTracker, iam.GrantKnowledge}
+	apps := []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}
+	for _, tc := range []struct {
+		posture iam.AdminPosture
+		listed  []iam.Grant
+		want    []iam.Grant
+	}{
+		{iam.AdminServe, []iam.Grant{iam.GrantAdmin}, every},
+		{iam.AdminRefuse, []iam.Grant{iam.GrantAdmin}, apps},
+		{iam.AdminServe, []iam.Grant{iam.GrantTracker}, []iam.Grant{iam.GrantTracker}},
+		{iam.AdminRefuse, []iam.Grant{iam.GrantTracker}, []iam.Grant{iam.GrantTracker}},
+		{"sometimes", []iam.Grant{iam.GrantAdmin}, []iam.Grant{}},
+	} {
+		g := guard(t, func(a *config.APIAuth) {
+			a.Admin = tc.posture
+			a.Tokens = []config.APIToken{{ID: "founder", Token: "secret-a",
+				Grants: tc.listed}}
+		})
+		var got []iam.Grant
+		handler := g.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if p, how := iam.From(r.Context()); how == iam.Resolved {
+				got = slices.Sorted(slices.Values(p.Grants))
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/agents", nil)
+		req.Header.Set("Authorization", "Bearer secret-a")
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+		want := slices.Sorted(slices.Values(tc.want))
+		if !slices.Equal(got, want) {
+			t.Errorf("api.auth.admin %q, a token listing %v carries %v, want %v",
+				tc.posture, tc.listed, got, want)
+		}
 	}
 }

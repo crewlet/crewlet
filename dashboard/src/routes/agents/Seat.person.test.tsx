@@ -2,20 +2,18 @@
  * Whose queue this screen asks for, and on whose authority.
  *
  * Somebody's work record — the claims on their plate, their inbox, the order
- * they mean to work in — is answered by the engine to its owner, whoever leads
- * them, and `fleet:operate`, the admin path of that rule. The screen asked for
- * it on `people:manage` instead, which is authority over person ROWS in the
- * identity directory and opens nobody's queue: an administrator holding it
- * alone was sent a refusal where the honest answer is "this is somebody
- * else's", and an operator holding `fleet:operate` alone was never shown a
- * record the engine would have given them.
+ * they mean to work in — is the TRACKER's, and the engine answers it to a
+ * Tracker holder who owns it or leads them, and to an admin, who holds every
+ * app. The screen asks on exactly that rule, the app first: Tracker alone
+ * asks nothing of somebody the reader does not lead, a lead asks once they
+ * hold Tracker, and a lead without it asks nothing at all — every one of
+ * those questions is the tracker's, so leading somebody opens none of them.
  *
  * Asserted on the QUESTION, not on rows: what this screen is responsible for is
- * whether it asks at all. Each grant is held ALONE, so neither case passes on
- * the other's back.
+ * whether it asks at all.
  */
 
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatScreen } from "./Seat.tsx";
@@ -124,39 +122,54 @@ async function askedAs(grants: string[], anaLeads = false): Promise<string[]> {
       </Router>
     </ClientContext.Provider>,
   );
-  // THE VIEWER HAS ANSWERED and the work tab has asked for its board, so
-  // whatever the screen was going to ask on the viewer's authority it has.
+  // THE VIEWER HAS ANSWERED and — for a Tracker holder — the work tab has
+  // asked for its board, so whatever the screen was going to ask on the
+  // viewer's authority it has.
   await waitFor(() => expect(asked).toContain("viewer"));
-  await waitFor(() => expect(asked).toContain("work_items"));
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  if (grants.includes("tracker") || grants.includes("admin")) {
+    await waitFor(() => expect(asked).toContain("work_items"));
+  }
+  for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
   return asked;
 }
 
-test("people:manage alone does not ask for a colleague's queue", async () => {
-  const asked = await askedAs(["state:read", "people:manage"]);
+test("Tracker alone does not ask for a colleague's queue", async () => {
+  const asked = await askedAs(["tracker"]);
   expect(
     asked,
-    "people:manage is authority over person rows, and the engine refuses a colleague's queue to it",
+    "a colleague's record is theirs, their lead's and an admin's to read",
   ).not.toContain("work_my_work");
 });
 
-test("fleet:operate alone does", async () => {
-  const asked = await askedAs(["state:read", "fleet:operate"]);
+test("Admin alone does", async () => {
+  const asked = await askedAs(["admin"]);
   await waitFor(() => expect(asked).toContain("work_my_work"));
 });
 
 // A LEAD IS ANSWERED A REPORT'S RECORD, and asked for it: the engine's rule is
-// owner, lead or `fleet:operate`, and a page that asked on the grant and the
-// owner alone told a lead the record needs "fleet:operate, or leading them"
-// about somebody they lead.
-test("a lead holding neither grant asks for a report's queue", async () => {
-  const asked = await askedAs(["state:read"], true);
+// owner, lead or Admin, and a page that asked on Admin and the owner alone
+// told a lead the record needs "Admin, or leading them" about somebody they
+// lead.
+test("a lead holding Tracker asks for a report's queue", async () => {
+  const asked = await askedAs(["tracker"], true);
   await waitFor(() => expect(asked).toContain("work_my_work"));
+});
+
+// THE APP COMES FIRST: the record is the tracker's, so a lead without Tracker
+// is asked nothing — leading somebody opens no app. The CONTROL is the case
+// above, the same lead holding it. Mutation: decide the lead before the app
+// and this reader asks for a queue the engine refuses them.
+test("a lead without Tracker asks nothing of a report's record", async () => {
+  location.hash = "#/agents/seats/ceo";
+  const asked = await askedAs(["knowledge"], true);
+  expect(asked).not.toContain("work_my_work");
+  expect(asked).not.toContain("work_person");
+  expect(asked).not.toContain("work_items");
 });
 
 // AND THE OVERVIEW'S DAY READS THE SAME RULE.
 test("a lead's overview of a report asks for their day", async () => {
   location.hash = "#/agents/seats/ceo";
-  const asked = await askedAs(["state:read"], true);
+  const asked = await askedAs(["tracker"], true);
   await waitFor(() => expect(asked).toContain("work_person"));
 });

@@ -39,8 +39,9 @@ type credentialView struct {
 	// Spent is a reset link its person used, which is revoked too.
 	Spent bool `json:"spent,omitempty"`
 
-	// Grants are what a machine token was minted carrying: the ceiling on
-	// what it does, re-cut to its owner's own grants on every request.
+	// Grants are what a machine token was minted carrying: the most it
+	// does, re-cut to its owner's own permissions and the node's admin
+	// posture on every request.
 	// Absent on every other method.
 	Grants []iam.Grant `json:"grants,omitempty"`
 }
@@ -90,7 +91,10 @@ type mintBody struct {
 
 	// Grants are what the token carries. They NARROW the owner's and never
 	// widen them — see [iamdomain.Writer.MintToken]. Omitted, the token
-	// carries every grant the owner holds that a token may carry.
+	// carries every permission the owner holds, admin included: a token
+	// acts as its owner, and what keeps it off a gesture that needs a
+	// person is the gesture's own row, not a permission it cannot carry.
+	// A name this build does not know is refused naming the set.
 	Grants []iam.Grant `json:"grants"`
 }
 
@@ -108,11 +112,21 @@ type mintBody struct {
 //
 // # What it may carry is the DOMAIN's decision
 //
-// A subset of the owner's CURRENT grants, never secrets:read or people:manage, and nothing the caller does not hold — read
-// in the snapshot the credential is formed in, so a demotion landing a moment
-// earlier cannot be minted past. This handler shapes the request and renders
-// the answer; internal/iamdomain is the last frame every path to a token goes
-// through, and it is where each of those is refused.
+// A subset of the owner's CURRENT permissions, admin among them, and nothing
+// the caller does not hold — read in the snapshot the credential is formed in,
+// so a demotion landing a moment earlier cannot be minted past. This handler
+// shapes the request and renders the answer; internal/iamdomain is the last
+// frame every path to a token goes through, and it is where each of those is
+// refused. The one thing judged here first is a name this build does not know,
+// refused `400` naming the set rather than `403` as a permission nobody holds.
+//
+// A token MAY carry admin (ADR-0033): it acts as its owner, cut on every
+// request to what they still hold and to the node's admin posture. What keeps
+// one off the gestures that need a person at a keyboard is not a permission it
+// could not carry — it is the authority table's `presence` rows, which refuse
+// a request that presented a token on every person-present verb, and
+// internal/iamdomain's own refusal of an administrative identity record
+// written through one ([iamdomain.ErrTokenRefused]).
 //
 // # A token does not mint a token
 //
@@ -122,8 +136,8 @@ type mintBody struct {
 //
 // # A person's token is theirs alone to mint
 //
-// The authority table admits the person themselves or `people:manage`, and
-// the second is for SERVICE ACCOUNTS: whoever mints a token is shown its value
+// The authority table admits the person themselves or admin, and the second
+// is for SERVICE ACCOUNTS: whoever mints a token is shown its value
 // and it acts as its owner, so an administrator minting on a person's account
 // is an administrator holding a credential that acts as them. The domain
 // refuses it in the owner's snapshot, on the minting party's id this handler
@@ -136,7 +150,7 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	// phrase a mint it may not make.
 	if _, fromToken := auth.PresentedToken(r.Context()); fromToken {
 		// `token_refused`, the code every gesture a token may not make
-		// answers — `unauthorized`'s sentence is about a grant the
+		// answers — `unauthorized`'s sentence is about access the
 		// credential lacks, which contradicted this detail.
 		detail := authz.RefusalDetail(authz.ReasonTokenRefused, nil)
 		detail["detail"] = "a machine token cannot mint another: one minted " +
@@ -160,6 +174,12 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	in, ok := readBody[mintBody](w, r)
 	if !ok {
+		return
+	}
+	// A NAME NOBODY KNOWS is never minted onto a credential that would
+	// carry it for a year: refused naming the set, before the owner is
+	// read, since no owner could make it one this build reads.
+	if !refuseUnknown(w, "grants", in.Grants, nil) {
 		return
 	}
 	owner := s.subjectOf(r)

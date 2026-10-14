@@ -83,16 +83,16 @@ func (e ProjectEdit) Empty() bool {
 // Both fields used to be inputs — `Lead` from an org-chart lookup and
 // `Operator` from "the actor is not a seat" — and every caller re-derived the
 // policy `Lead || Operator` for itself. That is two answers to one question,
-// which is what internal/authz exists to remove: a caller holding
-// fleet:operate was refused here while every HTTP route allowed, because this
-// package's copy consulted no grant at all. Now the caller asks
+// which is what internal/authz exists to remove: an admin was refused here
+// while every HTTP route allowed, because this package's copy consulted no
+// permission at all. Now the caller asks
 // [authz.ActionProjectPolicy] and [authz.ActionProjectArchive] and states what
 // came back, and this package enforces only which FACET each answer unlocks —
 // which is the half a chart cannot know.
 type ProjectAuthority struct {
 	// Policy reports a caller authorized to declare this project's
-	// fields, its default assignee and its target date: its lead, or the
-	// deployment grant that overrides every relation.
+	// fields, its default assignee and its target date: its lead, or an
+	// admin, whose permission overrides every relation.
 	Policy bool
 
 	// Archive reports a caller authorized to take the project out of
@@ -117,19 +117,18 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 			"chart, and the tags are write_project(tags.add)", key)
 	case !authority.Policy:
 		return WriteResult{}, forbidden("%s's field declarations, default "+
-			"assignee and target date are the project lead's, or a holder of "+
-			"fleet:operate — they decide how everybody's work in it is filed "+
-			"and when it is due, which is not a call anybody else makes for the "+
-			"team", key)
+			"assignee and target date are the project lead's, or an admin's — "+
+			"they decide how everybody's work in it is filed and when it is "+
+			"due, which is not a call anybody else makes for the team", key)
 	case edit.Archived != nil && !authority.Archive:
 		// NAMED SEPARATELY FROM THE LEAD GATE, because a lead who hit
 		// this one did have authority over the other facets and
 		// the useful answer is which facet, not "no".
 		return WriteResult{}, forbidden("archiving %s takes the project's "+
-			"lead or a holder of fleet:operate, acting as a person rather than "+
-			"as an agent — a project holds the company's tasks, and putting one "+
-			"out of circulation is a decision about the company rather than "+
-			"about how its work is filed", key)
+			"lead or an admin, acting as a person rather than as an agent — a "+
+			"project holds the company's tasks, and putting one out of "+
+			"circulation is a decision about the company rather than about how "+
+			"its work is filed", key)
 	}
 	if edit.Fields != nil {
 		// BEFORE THE SNAPSHOT, because it is a property of the argument:

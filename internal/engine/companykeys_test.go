@@ -50,7 +50,7 @@ func identityEngine(t *testing.T) (*engine.Engine, *fleetsecrets.Estate) {
 }
 
 // enrolAddress creates one person with an address on a human seat through the
-// node's own writer, which holds `people:manage` — the record an
+// node's own writer, which holds admin — the record an
 // administrator's create publishes, and the one that blinds the address.
 //
 // THE PERSON IS THE OPERATION'S, derived from its key as the create surface

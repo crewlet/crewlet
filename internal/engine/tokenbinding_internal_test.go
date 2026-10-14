@@ -42,7 +42,7 @@ func boundMachine() iamdomain.Sighting {
 		Seat: "platform-lead",
 		// A ROW'S GRANTS ARE NOT THE TOKEN'S, and a case below holds
 		// that they never travel.
-		Grants: []iam.Grant{iam.GrantPeopleManage},
+		Grants: []iam.Grant{iam.GrantAdmin},
 	}
 }
 

@@ -69,7 +69,7 @@
  *
  * Who invited whom, who signed in and when, whose grants changed, which
  * credential was revoked — `GET /iam/audit`, the directory's trail, behind the
- * same `audit:read` grant this screen takes. Its author is named the same way
+ * same Admin access this screen takes. Its author is named the same way
  * every other record's is; its KIND is the record's own word, the principal's
  * (`person`, `machine`, `seat`, `engine`), because that is what the identity
  * estate records and redrawing it in another vocabulary would claim a reading
@@ -112,7 +112,7 @@ import { indexOrg, kindOfAuthor, type SeatKind } from "~/lib/seats.ts";
 import { useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
 import { isLogRefusal, rest, RestError } from "~/protocol/index.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
-import { needsSentence } from "~/lib/refusal.ts";
+import { needsWords } from "~/lib/access.ts";
 import { throughOf } from "~/lib/attribution.ts";
 import type { FeedRow, SecretRow, WorkActivityRecord } from "~/protocol/index.ts";
 import { itemPath, subjectItem } from "~/lib/work.ts";
@@ -571,10 +571,11 @@ export function Audit() {
   const secrets = useSecrets();
   const identity = useIdentityTrail(windowParam(range.window), since);
   // A REFUSAL ON AUTHORITY WITHHOLDS ONE SOURCE; IT DOES NOT FAIL THE SCREEN.
-  // The section opens on `audit:read`, and the sources answer to different
-  // grants — the tracker's and the wiki's history to one, the configuration's
-  // revisions to another — so a reader holding some of them is an ordinary
-  // auditor. The banner replaces the whole grid, so one refused source hid
+  // The section opens on Admin, and the sources answer to different access —
+  // the tracker's history to Tracker, the wiki's to Knowledge, the
+  // configuration's revisions to Admin — so a source withheld from a reader
+  // the engine has narrowed (a node that refuses admin keeps every app) is an
+  // ordinary answer. The banner replaces the whole grid, so one refused source hid
   // every row of the sources the reader may read and had already read; each
   // says what it withheld instead, as the two REST reads do. The banner is for
   // the first read that failed for any other reason, its code and refusal
@@ -874,10 +875,7 @@ export function Audit() {
     ...reads
       .filter(({ read }) => read.error === "unauthorized")
       .map(({ read, gesture }) =>
-        needsSentence(
-          gesture,
-          read.refusal && !isLogRefusal(read.refusal) ? read.refusal.grants : [],
-        ),
+        needsWords(gesture, read.refusal && !isLogRefusal(read.refusal) ? read.refusal.grants : []),
       ),
     secrets.withheld,
     identity.withheld,
@@ -1083,7 +1081,7 @@ const IDENTITY_WITHHELD: Withheld = {
 function withheldSentence(source: Withheld, read: RestResult<unknown>): string {
   if (read.error === null) return "";
   if (read.error.unauthorized) {
-    return needsSentence(source.gesture, read.error instanceof RestError ? read.error.grants : []);
+    return needsWords(source.gesture, read.error instanceof RestError ? read.error.grants : []);
   }
   return read.data === null
     ? `${source.subject} could not be read, so none of ${source.rows} are listed here.`

@@ -106,7 +106,7 @@ func (d SeatPauseDeps) wired() bool {
 //
 // # Whose decision it is
 //
-// The seat's lead's, or the deployment's ([authz.ActionSeatPause]) — decided
+// The seat's lead's, or an admin's ([authz.ActionSeatPause]) — decided
 // here once the typed handle has resolved to a seat, on the seat's CURRENT
 // handle, because that is what the lead relation is asked about.
 //
@@ -319,7 +319,7 @@ type pauseTarget struct {
 // org first — `@sre` names it — and the authority is asked about the seat's
 // handle, which is the one the lead relation is asked about. A handle that
 // names no agent seat is decided on the name AS TYPED, which nobody leads, so
-// only the deployment's grant passes — and only then refused as naming no
+// only admin passes — and only then refused as naming no
 // seat, so the refusal a caller reads never depends on whether the seat
 // exists.
 func resolvePauseCall(ctx context.Context, deps SeatPauseDeps, authorize Authorizer,

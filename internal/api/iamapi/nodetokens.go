@@ -50,11 +50,12 @@ import (
 // than restated. It used to be its own question, `access`, beside the
 // directory's reads, which answered it to a grant the directory never asked.
 //
-// # The same grant as the directory's own reads
+// # The same rule as the directory's own reads
 //
-// Who can reach this company, and as whom, is the audit question as much as
-// the administrator's, so it is decided by [authz.ActionDirectoryRead] like
-// every other listing here: `people:manage` or `audit:read`.
+// Who can reach this company, and as whom, is an administrator's question, so
+// it is decided by [authz.ActionDirectoryRead] like every other listing here:
+// admin. It names no person, so the self arm that rule carries has nothing to
+// compare against, and nobody else reads it.
 
 // NodeToken is one of this node's Tier A tokens, joined to the directory row
 // holding its login.

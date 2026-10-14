@@ -1352,6 +1352,7 @@ function AssignToSeatDialog({
                 options={options}
                 emptyMessage={
                   search.tooLong ??
+                  search.withheld ??
                   (search.error ? (
                     <QueryState
                       error={search.error}

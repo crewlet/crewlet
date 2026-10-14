@@ -2,7 +2,7 @@
  * The guarded half of a seat, read once and never asked for without the
  * grant it is read under.
  *
- * The company document takes `config:read`, so a reader without it is refused
+ * The company document takes Admin, so a reader without it is refused
  * on every ask: the answer is known before the question. Asking anyway put a
  * refusal on the wire on every seat page such a reader opened, and a
  * `refused` banner over a page that never had a chance. And not asking is
@@ -22,8 +22,10 @@ vi.mock("./viewer.ts", () => ({ useViewer: vi.fn() }));
 
 const READER: ViewerState = {
   login: "jane.doe",
-  grants: ["state:read"],
-  operatesFleet: false,
+  grants: [],
+  admin: false,
+  tracker: false,
+  knowledge: false,
   handle: "",
   owner: "jane.doe",
   name: "",
@@ -94,7 +96,7 @@ async function settle() {
 // that came back empty, and told a person opening their own seat "No company
 // configuration is active" beside a company running. Mutation: leave such a
 // reader `unread` and the panel has nothing to tell the two apart by.
-test("a reader without config:read is withheld, and nothing is asked", async () => {
+test("a reader without Admin is withheld, and nothing is asked", async () => {
   const { asked, reading, setup } = probe();
   await settle();
   expect(asked).not.toContain("config");
@@ -115,8 +117,8 @@ test("before the viewer answers the read claims nothing, and is waiting", async 
   expect(setup().config.loading).toBe(true);
 });
 
-test("a reader holding config:read is read", async () => {
-  vi.mocked(useViewer).mockReturnValue({ ...READER, grants: ["state:read", "config:read"] });
+test("a reader holding Admin is read", async () => {
+  vi.mocked(useViewer).mockReturnValue({ ...READER, grants: ["admin"] });
   const { asked, reading } = probe();
   await settle();
   expect(asked).toContain("config");

@@ -32,6 +32,10 @@ func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return nil, nil
 }
 
+func (memorySandbox) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
+	return sandbox.PendingRun{}, false, nil
+}
+
 // roomQueries is every query kind a room asks for, mapped to the files that
 // ask — found in the rooms' own source, never a list kept here: a
 // hand-maintained one is exactly what drifts, and it would drift towards
@@ -237,6 +241,11 @@ func (emptyWork) TurnPlaces(context.Context, []string, statelog.Freshness) (
 
 func (emptyWork) Search(context.Context, tracker.SearchQuery) (tracker.SearchAnswer, error) {
 	return tracker.SearchAnswer{}, nil
+}
+
+func (emptyWork) Thread(context.Context, tracker.ThreadQuery, statelog.Freshness) (
+	tracker.ResolvedThread, error) {
+	return tracker.ResolvedThread{}, nil
 }
 
 type emptyPages struct{}

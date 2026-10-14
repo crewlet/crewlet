@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -461,20 +462,29 @@ func TestAWriterWithNoDeadlineStillReads(t *testing.T) {
 	}
 }
 
-// A KNOWN CALLER REFUSED IS TOLD ABOUT A GRANT, NOT A TOKEN.
+// A KNOWN CALLER REFUSED IS TOLD ABOUT THEIR ACCESS, NOT A TOKEN.
 //
 // `unauthorized` said "that query needs an operator token", which was true
 // while an operator token was the only credential and authority one yes-or-no.
 // It is the sentence the dashboard renders verbatim to a person signed in with
-// a session and refused one grant — who has no token to find, and whose
-// credential is fine. The remedy the sentence names is the one the code means.
+// a session and refused one permission — who has no token to find, and whose
+// credential is fine. The remedy the sentence names is the one the code means:
+// access, and EVERY PERMISSION THIS BUILD KNOWS by name, so a person reading it
+// knows what to ask an admin for — a permission added to the vocabulary and
+// left out of the sentence fails here.
 func TestAKnownCallerIsToldAboutTheGrantNotAToken(t *testing.T) {
 	t.Parallel()
 	message := httpjson.CodeUnauthorized.Message()
-	if !strings.Contains(message, "grant") || strings.Contains(message, "token") {
+	if !strings.Contains(message, "access") || strings.Contains(message, "token") {
 		t.Errorf("unauthorized says %q: a caller this node knows is refused "+
-			"for a grant, and a sentence about a token sends them to replace "+
-			"a credential that works", message)
+			"for their access, and a sentence about a token sends them to "+
+			"replace a credential that works", message)
+	}
+	for _, g := range iam.AllGrants {
+		if !strings.Contains(strings.ToLower(message), string(g)) {
+			t.Errorf("unauthorized says %q, which never names %s: a person "+
+				"refused cannot tell what to ask an admin for", message, g)
+		}
 	}
 }
 

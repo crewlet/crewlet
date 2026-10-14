@@ -358,6 +358,16 @@ func (d WorkDeps) resolveThread(ctx context.Context,
 		// comment an inference would apply to.
 		return d.inferOnly(ctx, q)
 	}
+	return d.readThread(ctx, q)
+}
+
+// readThread is [WorkDeps.resolveThread] without its best-effort arm: every
+// read failure is the refusal, inference included. The answer-only arm reads
+// this way, because there an inference nobody could make is not a remark that
+// answers nothing — it is the whole of what would have admitted the caller.
+func (d WorkDeps) readThread(ctx context.Context,
+	q tracker.ThreadQuery) (tracker.ResolvedThread, *tools.Result) {
+
 	resolved, err := d.Reader.Thread(ctx, q, seatRead)
 	if err != nil {
 		var ambiguous *tracker.ErrAmbiguousAnswer

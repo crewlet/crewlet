@@ -60,7 +60,8 @@ type Answer = { status: number; body: unknown; headers?: Record<string, string> 
  * the browser now holds. Answering "nobody" for ever, as the routes alone did,
  * sent every page the sign-in landed on straight back to the form — and the
  * cases still passed, because a poll caught the address on its way through.
- * It holds `state:read`, the grant the frame dials the socket for.
+ * It holds no app: the frame dials the socket for every signed-in principal,
+ * whatever they hold.
  */
 function engine(routes: Record<string, Answer | Answer[]>): Sent[] {
   const sent: Sent[] = [];
@@ -90,7 +91,7 @@ function engine(routes: Record<string, Answer | Answer[]>): Sent[] {
             person: cookie.person ?? "",
             login,
             kind: login.startsWith("token:") ? "machine" : "person",
-            grants: ["state:read"],
+            grants: [],
             status: cookie.status,
             expires_at: cookie.expires_at,
           }),
@@ -540,7 +541,7 @@ describe("a browser that is already signed in", () => {
           person: "p-1",
           login: "jane.doe",
           kind: "person",
-          grants: ["state:read"],
+          grants: [],
           status: "signed_in",
         },
       },

@@ -11,15 +11,19 @@
  * back; a value the engine shows once is shown once, and a link the engine no
  * longer has is said in its own words rather than drawn as nothing; a seat an
  * open invitation holds is never drawn as vacant; a read that failed is said;
- * and every gesture is drawn for `people:manage` alone.
+ * every gesture is drawn for an admin alone; and the access a write confers is
+ * picked as Admin — one switch that includes every app — and one box per app.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { useState } from "react";
 import {
+  AccessPicker,
+  AccessTags,
+  AppReachNote,
   canManagePeople,
-  canReadDirectory,
   CancelInvitation,
   CreatePersonDialog,
   holdingLine,
@@ -29,8 +33,6 @@ import {
   SeatHolding,
   seatOptions,
   useHumanSeats,
-  GrantTags,
-  GRANTS_IN_A_CELL,
 } from "./people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
 import { Router } from "~/app/router.tsx";
@@ -48,10 +50,10 @@ class InertWebSocket {
 
 const UUID7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-/** An administrator: every grant but `secrets:read`. */
-const ADMIN = ["state:read", "audit:read", "config:read", "work:write", "people:manage"];
-/** An auditor: reads the directory and changes none of it. */
-const AUDITOR = ["state:read", "audit:read"];
+/** An admin: every app is included. */
+const ADMIN = ["admin", "tracker", "knowledge"];
+/** A member holding both apps: reads the directory and changes none of it. */
+const MEMBER = ["tracker", "knowledge"];
 
 const SAM = { handle: "sam", name: "Sam Support" };
 
@@ -142,9 +144,10 @@ function mount(node: React.ReactNode) {
   );
 }
 
-/** A seat's holding as its page draws it, over the real listing hook. */
+/** A seat's holding as its page draws it, over the real listing hook — which
+ *  every signed-in reader asks, the engine masking what each may see. */
 function Holding({ seat, grants }: { seat: { handle: string; name: string }; grants: string[] }) {
-  const listing = useHumanSeats(canReadDirectory(grants));
+  const listing = useHumanSeats(true);
   return (
     <SeatHolding seat={seat} seats={listing} manages={canManagePeople(grants)} held={grants} />
   );
@@ -206,12 +209,13 @@ describe("what a seat says about what holds it", () => {
     expect(seatOptions([SAM], { none: true }).map((o) => o.value)).toEqual([NO_SEAT, "sam"]);
   });
 
-  test("the directory is read by an administrator or an auditor, and written by the first alone", () => {
-    expect(canReadDirectory(ADMIN)).toBe(true);
-    expect(canReadDirectory(AUDITOR)).toBe(true);
-    expect(canReadDirectory(["state:read"])).toBe(false);
+  // ADMIN WRITES THE DIRECTORY, however it was stored — a row of `[admin]`
+  // alone included — and no app does.
+  test("the directory is written by an admin alone", () => {
     expect(canManagePeople(ADMIN)).toBe(true);
-    expect(canManagePeople(AUDITOR)).toBe(false);
+    expect(canManagePeople(["admin"])).toBe(true);
+    expect(canManagePeople(MEMBER)).toBe(false);
+    expect(canManagePeople([])).toBe(false);
   });
 });
 
@@ -260,7 +264,7 @@ describe("a seat's holding", () => {
     expect(eng.reads("/iam/seats")).toBeGreaterThan(before);
   });
 
-  test("a vacant seat offers an administrator Invite and Create, and an auditor neither", async () => {
+  test("a vacant seat offers an admin Invite and Create, and anybody else neither", async () => {
     engine();
     mount(<Holding seat={SAM} grants={ADMIN} />);
     const note = (await screen.findByText("Nobody holds this seat.")).closest(
@@ -270,7 +274,7 @@ describe("a seat's holding", () => {
     expect(within(note).getByRole("button", { name: "Create person" })).toBeTruthy();
     cleanup();
     engine();
-    mount(<Holding seat={SAM} grants={AUDITOR} />);
+    mount(<Holding seat={SAM} grants={MEMBER} />);
     const read = (await screen.findByText("Nobody holds this seat.")).closest(
       ".crewlet-callout",
     ) as HTMLElement;
@@ -367,21 +371,30 @@ describe("an invitation onto a seat", () => {
     expect(within(dialog).queryByRole("combobox")).toBeNull();
     expect(within(dialog).queryByLabelText("Seat")).toBeNull();
     expect(dialog.textContent).toMatch(/For the seat Sam Support sam:/);
-    // A GRANT THE VIEWER DOES NOT HOLD is refused before it is sent.
-    expect(within(dialog).getByRole("checkbox", { name: "secrets:read" })).toHaveProperty(
-      "disabled",
+    // EVERY APP IS PRE-TICKED AND ADMIN IS NOT: a person invited works in the
+    // tracker and the knowledge base unless somebody says otherwise.
+    expect(within(dialog).getByRole("checkbox", { name: "Tracker" })).toHaveProperty(
+      "checked",
       true,
+    );
+    expect(within(dialog).getByRole("checkbox", { name: "Knowledge" })).toHaveProperty(
+      "checked",
+      true,
+    );
+    expect(within(dialog).getByRole("checkbox", { name: "Admin" })).toHaveProperty(
+      "checked",
+      false,
     );
     fireEvent.change(within(dialog).getByLabelText("Email address"), {
       target: { value: "dee@example.com" },
     });
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: "work:write" }));
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Knowledge" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
     await settle();
     const [sent] = eng.writes();
     expect(sent?.path).toBe("/iam/invitations");
     expect(sent?.key).toMatch(UUID7);
-    expect(sent?.body).toEqual({ email: "dee@example.com", grants: ["work:write"], seat: "sam" });
+    expect(sent?.body).toEqual({ email: "dee@example.com", grants: ["tracker"], seat: "sam" });
     expect(
       within(dialog).getByText("https://crewlet.example.com/dashboard#/invite/inv-2.s3cret"),
     ).toBeTruthy();
@@ -389,15 +402,20 @@ describe("an invitation onto a seat", () => {
     expect(within(dialog).getByRole("button", { name: "Done" })).toBeTruthy();
   });
 
-  // AN INVITATION WITHOUT `state:read` IS SAID BEFORE IT IS SENT: its person
-  // can open nothing but their own Account. The CONTROL is the same dialog
-  // with `state:read` ticked, which says nothing.
-  test("an invitation without state:read says its person can open only their Account", () => {
+  // WHAT A PERSON WILL FIND IS SAID BEFORE THE INVITATION IS SENT: without
+  // Tracker the work agents send to people never reaches them, and with no
+  // app at all they read the overview only. The CONTROL is the dialog as it
+  // opens, every app ticked, which says nothing.
+  test("an invitation without Tracker, or with no app, says what its person will miss", () => {
     engine();
     const dialog = invite();
-    expect(within(dialog).getByText(/can open nothing but their own/)).toBeTruthy();
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: "state:read" }));
-    expect(within(dialog).queryByText(/can open nothing but their own/)).toBeNull();
+    expect(within(dialog).queryByText(/Without Tracker/)).toBeNull();
+    expect(within(dialog).queryByText(/^Overview only:/)).toBeNull();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Tracker" }));
+    expect(within(dialog).getByText(/Without Tracker/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Knowledge" }));
+    expect(within(dialog).getByText(/^Overview only:/)).toBeTruthy();
+    expect(within(dialog).queryByText(/Without Tracker/)).toBeNull();
   });
 
   // AN UNKNOWN ANSWER IS RETRIED UNDER THE SAME KEY — the one the engine
@@ -458,7 +476,11 @@ describe("an invitation onto a seat", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Try again" }));
     await settle();
     const [first, second] = eng.writes();
-    expect(second?.body).toEqual({ email: "jane@example.com", grants: [], seat: "sam" });
+    expect(second?.body).toEqual({
+      email: "jane@example.com",
+      grants: ["tracker", "knowledge"],
+      seat: "sam",
+    });
     expect(second?.key).toMatch(UUID7);
     expect(second?.key).not.toBe(first?.key);
     expect(second?.key).not.toBe("0192f4c8-0000-7000-8000-000000000001");
@@ -473,7 +495,7 @@ describe("an invitation onto a seat", () => {
           error: "unauthorized",
           message: "The credential you presented does not carry the grant this request needs.",
           reason: "directory",
-          grants: ["people:manage"],
+          grants: ["admin"],
         }),
       ],
     });
@@ -485,7 +507,7 @@ describe("an invitation onto a seat", () => {
     await settle();
     const alert = within(dialog).getByRole("alert");
     expect(alert.textContent).toMatch(/does not carry the grant/);
-    expect(alert.textContent).toMatch(/people:manage would admit you/);
+    expect(alert.textContent).toMatch(/Admin access would admit you/);
     fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
     await settle();
     const [first, second] = eng.writes();
@@ -522,17 +544,17 @@ describe("a person created on a seat", () => {
     fireEvent.change(within(dialog).getByLabelText("Email address"), {
       target: { value: "dee.ray@example.com" },
     });
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: "state:read" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
     await settle();
     const [sent] = eng.writes();
     expect(sent?.path).toBe("/iam/people");
     expect(sent?.key).toMatch(UUID7);
+    // EVERY APP, AS AN INVITATION PRE-TICKS IT.
     expect(sent?.body).toEqual({
       kind: "person",
       seat: "sam",
       email: "dee.ray@example.com",
-      grants: ["state:read"],
+      grants: ["tracker", "knowledge"],
     });
     expect(within(dialog).getByText("dee.ray")).toBeTruthy();
     expect(dialog.textContent).toMatch(/dee\.ray is on the seat Sam Support/);
@@ -572,7 +594,7 @@ describe("a person created on a seat", () => {
         email: "dee.ray@example.com",
         login: "dee.ray",
         name: "Dee Ray",
-        grants: [],
+        grants: ["tracker", "knowledge"],
       },
     ]);
   });
@@ -706,44 +728,82 @@ describe("cancelling an invitation", () => {
   });
 });
 
-// A LIST ROW IS A LINE TO SCAN: an administrator's eleven grants drawn whole
-// stacked one per line in a list cell, so a cell draws GRANTS_IN_A_CELL and
-// counts the rest in one tag that still names every one of them. Mutation:
-// drop the cap and the first case finds eleven tags.
-describe("grants drawn in a list cell", () => {
-  const all = [
-    "state:read",
-    "audit:read",
-    "config:read",
-    "secrets:read",
-    "work:write",
-    "knowledge:write",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "sandbox:run",
-  ];
-
-  test("a cell draws the cap and counts the rest, naming each", () => {
-    const { container } = render(<GrantTags grants={all} cap={GRANTS_IN_A_CELL} />);
-    const shown = [...container.querySelectorAll(".mono")].map((n) => n.textContent);
-    expect(shown).toEqual(all.slice(0, GRANTS_IN_A_CELL));
-    const rest = all.slice(GRANTS_IN_A_CELL);
-    const more = screen.getByTitle(rest.join(", "));
-    expect(more.textContent).toContain(`+${rest.length}`);
-    expect(more.querySelector(".sr-only")?.textContent).toBe(
-      `and ${rest.length} more: ${rest.join(", ")}`,
-    );
-  });
-
-  test("a field draws every grant, and a short list is never counted", () => {
-    const { container, unmount } = render(<GrantTags grants={all} />);
-    expect(container.querySelectorAll(".mono")).toHaveLength(all.length);
+// ACCESS IS SAID AS WHAT IT IS: Admin alone where it is held (every app is
+// included, and naming them beside it read as if they were separate), the
+// apps otherwise, "Overview only" for none — and a name this build has no
+// word for is drawn as itself rather than dropped.
+describe("access drawn as words", () => {
+  const tags = (grants: string[]) => {
+    const { container, unmount } = render(<AccessTags grants={grants} />);
+    const words = [...container.querySelectorAll(".crewlet-tag")].map((n) => n.textContent);
     unmount();
-    const few = all.slice(0, GRANTS_IN_A_CELL);
-    const short = render(<GrantTags grants={few} cap={GRANTS_IN_A_CELL} />);
-    expect(short.container.querySelectorAll(".mono")).toHaveLength(few.length);
-    expect(short.container.textContent).not.toContain("+");
+    return words;
+  };
+
+  test("admin is one tag, apps one each, nothing the overview", () => {
+    expect(tags(["admin", "tracker", "knowledge"])).toEqual(["Admin"]);
+    expect(tags(["tracker", "knowledge"])).toEqual(["Tracker", "Knowledge"]);
+    expect(tags([])).toEqual(["Overview only"]);
+    expect(tags(["tracker", "later"])).toEqual(["Tracker", "later"]);
   });
+});
+
+// ADMIN IS ONE SWITCH: ticking it ticks every app and locks them as
+// "Included with Admin", and stores them, so taking Admin away later leaves
+// the apps rather than nothing. A permission the writer does not hold is
+// offered disabled, with why. Mutation: leave the apps unlocked under Admin
+// and the first assertion on `disabled` fails; drop the stored apps and the
+// value after unticking Admin is empty.
+describe("the access picker", () => {
+  function Picker({ initial, held }: { initial: string[]; held: string[] }) {
+    const [value, setValue] = useState<string[]>(initial);
+    return (
+      <>
+        <AccessPicker value={value} onChange={setValue} held={held} />
+        <output data-testid="value">{value.join(",")}</output>
+      </>
+    );
+  }
+  const box = (name: string) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
+  const value = () => screen.getByTestId("value").textContent;
+
+  test("Admin locks the apps in the picker", () => {
+    render(<Picker initial={[]} held={ADMIN} />);
+    fireEvent.click(box("Admin"));
+    expect(box("Tracker").checked).toBe(true);
+    expect(box("Tracker").disabled).toBe(true);
+    expect(box("Knowledge").checked).toBe(true);
+    expect(box("Knowledge").disabled).toBe(true);
+    expect(screen.getAllByText("Included with Admin.")).toHaveLength(2);
+    expect(value()).toBe("admin,tracker,knowledge");
+    fireEvent.click(box("Admin"));
+    expect(box("Tracker").disabled).toBe(false);
+    expect(box("Tracker").checked).toBe(true);
+    expect(value()).toBe("tracker,knowledge");
+  });
+
+  // A ROW STORED AS ADMIN ALONE keeps its apps when Admin is taken away.
+  test("a row stored as admin alone keeps every app when Admin is unticked", () => {
+    render(<Picker initial={["admin"]} held={ADMIN} />);
+    expect(box("Tracker").checked).toBe(true);
+    fireEvent.click(box("Admin"));
+    expect(value()).toBe("tracker,knowledge");
+  });
+
+  test("a permission the writer does not hold is offered disabled, with why", () => {
+    render(<Picker initial={[]} held={["tracker"]} />);
+    expect(box("Admin").disabled).toBe(true);
+    expect(box("Knowledge").disabled).toBe(true);
+    expect(box("Tracker").disabled).toBe(false);
+    expect(screen.getByText("You do not hold Admin, so you cannot give it.")).toBeTruthy();
+  });
+});
+
+// WHAT A PERSON WILL MISS, said to the reader about themselves as well.
+test("the reach note speaks to the reader about their own access", () => {
+  render(<AppReachNote grants={["knowledge"]} you />);
+  expect(screen.getByText(/never reaches you/)).toBeTruthy();
+  cleanup();
+  render(<AppReachNote grants={["admin"]} you />);
+  expect(document.body.textContent).toBe("");
 });

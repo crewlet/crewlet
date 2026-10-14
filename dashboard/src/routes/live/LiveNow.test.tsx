@@ -46,17 +46,7 @@ afterEach(() => {
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -169,6 +159,16 @@ function mount({
 const cardOf = (title: string) =>
   screen.getByRole("heading", { name: title }).closest(".crewlet-card") as HTMLElement;
 
+/**
+ * The Recent phases card once it is the trail's: every seat's settled phases
+ * are Admin's, so until the viewer has answered the card is drawn as a lock
+ * being checked, and the card that asks for phases replaces it.
+ */
+async function phasesCard(asked: { kind: string }[]): Promise<HTMLElement> {
+  await waitFor(() => expect(asked.some((q) => q.kind === "phases")).toBe(true));
+  return cardOf("Recent phases");
+}
+
 // A TURN THAT HAS ONLY STARTED IS ON ITS CONTEXT STEP, AND IS TIMED FROM ITS
 // START. `agent_turn_started` stamps the turn before any phase runs, so a seat
 // gathering its context has a turn and no live call — and the row draws it
@@ -189,7 +189,7 @@ test("a turn that has only started is on its Context step, timed from its start"
     ],
   });
   const card = cardOf("Running turns");
-  const row = within(card).getByRole("link", { name: /Search Engineer/ });
+  const row = await within(card).findByRole("link", { name: /Search Engineer/ });
   expect(row.getAttribute("href")).toBe("#/live/turns/t-start");
   expect(row.querySelector("[aria-current='step']")?.textContent).toContain("Context");
   expect(row.textContent).toMatch(/2m/);
@@ -243,7 +243,7 @@ test("a quiet round is marked on its row, and a parked turn is not", async () =>
     ],
   });
   const card = cardOf("Running turns");
-  const quiet = within(card).getByRole("link", { name: /Search Engineer/ });
+  const quiet = await within(card).findByRole("link", { name: /Search Engineer/ });
   expect(quiet.textContent).toMatch(/stalled/);
   const parked = within(card).getByRole("link", { name: /Payments Engineer/ });
   expect(parked.textContent).not.toMatch(/stalled|no update/);
@@ -292,13 +292,13 @@ test("a finished phase is held back under a reader, unless it was running above"
       updated_at: ago(1_000),
     },
   };
-  const { store } = mount({
+  const { store, asked } = mount({
     agents: [running],
     answers: {
       phases: { phases: [phaseEvent("p-old", "t-old", "id-search")], next: {}, exhausted: true },
     },
   });
-  const card = cardOf("Recent phases");
+  const card = await phasesCard(asked);
   await within(card).findByText("delivered");
   expect(within(card).getAllByRole("row").length).toBeGreaterThan(0);
   const rowsBefore = card.querySelectorAll("[data-row-index]").length;
@@ -410,7 +410,7 @@ test("Load older asks phases again with the cursor the page carried", async () =
             },
     },
   });
-  const card = cardOf("Recent phases");
+  const card = await phasesCard(asked);
   const more = await within(card).findByRole("button", { name: `Load ${PHASE_PAGE} older` });
   act(() => more.click());
   await within(card).findByText("Start of the record.");
@@ -538,7 +538,7 @@ test("a running turn on no item names what woke it after the verb", async () => 
       },
     ],
   });
-  const row = within(cardOf("Running turns")).getByRole("link", { name: /Search Engineer/ });
+  const row = await within(cardOf("Running turns")).findByRole("link", { name: /Search Engineer/ });
   expect(row.textContent).toContain("Drafting the 2.4 launch brief");
   // AND THE ROUND IS ONE FROM THE OPENING FRAME, before the model answers.
   expect(row.textContent).toContain("round 1 of 24");

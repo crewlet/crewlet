@@ -2,291 +2,143 @@ package iam
 
 import "slices"
 
-// Access is the read/write classification a route, a query or a tool declares.
+// Grant is one permission a principal carries: ADMIN, or ONE APP.
 //
-// A NAMED STRING RATHER THAN A BOOL, and the zero is invalid, because a bool
-// here has two readings that drift apart — `write` reads as "may write" at a
-// gate and "is a write" at a route table — and because a bool's zero is a
-// valid setting, which is exactly what the tree's zero-value rule refuses: a
-// surface somebody forgot to classify would ship as a read.
+// A CLOSED SET OF THREE (ADR-0033), and the set is the whole point. Eleven
+// grants carved the engine by surface — a read of the board, a read of the
+// trail, a read of the document, a write of work, a write of pages, the
+// credential store twice, the deployment, the directory, a coding run — and a
+// company had to compose those eleven into the three or four things it meant
+// to say about a person. Nobody could: an operator inviting a teammate faced a
+// list of capabilities that each opened part of a screen, and a person handed
+// none of the right ones landed on an engine that showed them nothing at all.
+// What a company actually says about somebody is whether they RUN it, and
+// which of its apps they USE, so that is the vocabulary:
 //
-// It is DECLARED, never derived from an HTTP method here. internal/api/auth
-// already owns that mapping (GET/HEAD/OPTIONS), and a second copy of it in a
-// package with no HTTP in it is how the two come to disagree about a verb.
-type Access string
-
-const (
-	// AccessRead changes nothing and starts nothing. It is the class a
-	// narrow service account is cut down to: a deliberately public read
-	// surface is a credential holding read grants and nothing else, which
-	// is listable, revocable and present in the audit log — none of which
-	// the `allow_anonymous_read` posture this replaced could be.
-	AccessRead Access = "read"
-
-	// AccessWrite changes something, starts something, or hands out a
-	// value that cannot be taken back.
-	AccessWrite Access = "write"
-)
-
-// Accesses are the two.
-var Accesses = []Access{AccessRead, AccessWrite}
-
-// Valid reports whether an access off the wire is one this build knows.
-func (a Access) Valid() bool { return slices.Contains(Accesses, a) }
-
-// Grant is one capability a principal carries.
+//   - [GrantAdmin] runs the company and the engine, and includes every app;
+//   - [GrantTracker] uses the native work tracker, read and write;
+//   - [GrantKnowledge] uses the native knowledge base, read and write.
 //
-// A CLOSED SET OF ELEVEN, drawn from the surfaces this engine actually has to
-// authorize — internal/api's route table, configapi, secretsapi, setupapi and
-// the builtin tool set — rather than from a taxonomy invented to look tidy.
-// Each constant below says which surface it covers and why it is not folded
-// into its neighbour.
-//
-// The wire strings are `<domain>:<verb>`, but [Grant.Access] does NOT split
-// them: `fleet:operate` has no verb a split could classify, and a classifier
-// that works for nine values out of ten is a classifier that fails silently on
-// the tenth. The table is the answer.
+// Everything else a person sees — the org chart, the agents' status, spend,
+// schedules — is EVERYBODY's, and asks no permission at all; what a team lead
+// may do inside their own team is a RELATION internal/authz asks the chart
+// about, never a grant.
 //
 // THE ZERO IS INVALID, and that is load-bearing rather than decorative: a gate
 // somebody forgot to fill in holds the zero Grant, and a zero that validated
 // would ship that gate as "granted".
 //
-// IT IS THE ONLY AUTHORITY A PRINCIPAL CARRIES. The company's own work is
-// reached through [GrantWorkWrite] and [GrantKnowledgeWrite] exactly as the
-// deployment is reached through the rest — internal/authz's colleague-write
-// class decides on those two and on nothing else. A second ladder beside the
-// grants, a "colleague level" stored on every person, invitation and token,
-// was carried everywhere and decided on nowhere, so a value somebody set
-// changed nothing; it is gone rather than kept as a setting that lies.
+// A NAME THIS BUILD DOES NOT KNOW IS KEPT AND IGNORED. One arrives in a
+// replicated row — a person's, an invitation's, a machine token's — from a
+// newer peer during a rolling upgrade, or from an older estate this build
+// renamed out of the vocabulary. It stays in the row, [Grant.Valid] answers
+// false for it, [Principal.Can] never matches it and [Expand] carries it
+// through unchanged. A writer may REMOVE it from a row and never ADD it
+// (internal/iamdomain's MayConfer enforces that at the record), and Tier A's
+// configuration refuses it outright, naming [AllGrants], because a file an
+// operator wrote is a typo rather than an upgrade.
 type Grant string
 
 const (
-	// GrantStateRead reads what the company is DOING: the board, the
-	// pages, the roster, the org chart, the fleet, budgets, schedules —
-	// every named read route in internal/api/rest.go and the socket
-	// frames built from the same functions. The ordinary dashboard read.
-	GrantStateRead Grant = "state:read"
-
-	// GrantAuditRead reads the RECORD of what happened, whoever or
-	// whatever it happened to: /events, /agents/{id}/memory and the turn
-	// frames on /ws/stream, which carry full prompts, tool arguments and
-	// diary entries — and the identity estate's own trail, /iam/audit,
-	// beside them. Separate from [GrantStateRead] because showing
-	// somebody the board and showing them every prompt an agent was ever
-	// given are not one decision.
+	// GrantAdmin runs the company and the engine: the company document,
+	// its integrations, models, settings and budgets, the workspace
+	// catalogue, the tool-skill pages, the credential store, the identity
+	// directory, the deployment's own controls, the company-wide audit
+	// trail and the purges. And it INCLUDES EVERY APP, through [Expand], so
+	// an administrator is never told they lack a permission an app opens.
 	//
-	// ONE GRANT OVER BOTH TRAILS rather than a transcript read and an
-	// audit read, because they have one audience and one question — what
-	// did this company do, and who asked it to — and the two answers are
-	// the same answer read from two tables: an agent's turn names the
-	// principal that woke it, and a sign-in names the session every later
-	// turn carried. A reader holding one and refused the other could
-	// establish neither half of that.
-	GrantAuditRead Grant = "audit:read"
-
-	// GrantConfigRead reads the company document. Its own grant, and not
-	// [GrantStateRead], for the reason /config is guarded even for reads:
-	// the document is the org chart, every integration and the SHAPE of
-	// every credential the company holds, which is a map of what to
-	// attack. The same reason covers /setup's and /secrets' listings —
-	// the names of the credentials a company has NOT configured are worth
-	// as much as the configuration.
-	GrantConfigRead Grant = "config:read"
-
-	// GrantSecretRead reveals a stored credential's VALUE — the one
-	// /secrets route that answers with one, which takes an explicit
-	// ?reveal=true and logs the access. Split from [GrantSecretWrite]
-	// because rotating a credential and reading one out are opposite
-	// risks: an automation that reseals keys nightly needs the write and
-	// must never hold the read.
-	GrantSecretRead Grant = "secrets:read"
-
-	// GrantWorkWrite files and moves work: create, update, comment, merge
-	// and the project facets a writer may declare — the tracker half of
-	// both /operator and a seat's own builtins. It is the tracker's
-	// `operator` author kind made into a capability, and it stays
-	// separate from [GrantKnowledgeWrite] because a company routinely
-	// wants an automation that files bugs and may not edit the handbook.
-	GrantWorkWrite Grant = "work:write"
-
-	// GrantKnowledgeWrite authors the company's own pages: write_page,
-	// save_page and comment_on_page, and the same tools offered over
-	// /operator. A page is an ADDRESS other pages and prompts resolve, so
-	// a write here changes what every seat reads next turn.
-	GrantKnowledgeWrite Grant = "knowledge:write"
-
-	// GrantConfigWrite changes the company: PATCH /config and the epoch
-	// activation that follows, which rebuilds every seat's tools,
-	// providers and MCP children — the org chart included, all of it. A
-	// unit's LEAD may change the seats and units inside it without this
-	// grant (internal/authz's subtree rule), every field but a
-	// credential's; what lies outside every lead's subtree, every setting
-	// and every credential the chart names are this grant's alone.
-	//
-	// IT IS HOST ACCESS, and it is ONE grant by decision rather than by
+	// IT IS HOST ACCESS, and it is ONE permission by decision rather than by
 	// oversight. The configuration it writes runs code: an `mcp_servers`
-	// entry is a command every engine host executes, a seat's `mcp_env`
-	// and its per-phase model keys (`llm_*`, a `cli-agent` provider among
-	// them) choose what the seat's children run and which credentials they
-	// are handed, a `sandbox` cell of `run_in: self` runs a coding agent on
-	// the engine host, and a seat's worker grants decide which tools a
-	// worker runs with. So a holder can run anything on every engine host
-	// and read whatever a process there can — the keyring included — and
-	// every grant below is transitively theirs. A split grant for "the
+	// entry is a command every engine host executes, a seat's `mcp_env` and
+	// its per-phase model keys (`llm_*`, a `cli-agent` provider among them)
+	// choose what the seat's children run and which credentials they are
+	// handed, a `sandbox` cell of `run_in: self` runs a coding agent on the
+	// engine host, and a seat's worker grants decide which tools a worker
+	// runs with. So a holder can run anything on every engine host and read
+	// whatever a process there can — the keyring included — and every
+	// other permission is transitively theirs. A split permission for "the
 	// part that runs code" was weighed and declined: it would be the whole
-	// of this grant's practical reach under a second name, and a ceiling
-	// that withheld it would withhold every settings edit with it. It is
-	// conferred the way shell on those hosts is.
+	// of this one's practical reach under a second name. It is conferred
+	// the way shell on those hosts is.
 	//
-	// /setup gets NO GRANT OF ITS OWN, deliberately. It performs no write
-	// of its own — a credential goes through the store /secrets serves
-	// and a pointer through the merge and compare-and-set /config
-	// performs — so connecting an integration is exactly this grant plus
-	// [GrantSecretWrite]. A third grant beside them would be a second
-	// answer to one question, and the day the two answers differ is the
-	// day one of them stops being consulted.
-	GrantConfigWrite Grant = "config:write"
+	// A UNIT'S LEAD changes the seats and units inside it without this
+	// permission (internal/authz's subtree rule), every field but a
+	// credential's; what lies outside every lead's subtree, every setting
+	// and every credential the chart names are this permission's alone.
+	GrantAdmin Grant = "admin"
 
-	// GrantSecretWrite seals, rotates and deletes the fleet's
-	// credentials, and re-keys the store: everything /secrets serves bar
-	// the reveal. A write here is irreversible in the direction that
-	// matters — a deleted credential is gone from every node at once.
-	GrantSecretWrite Grant = "secrets:write"
+	// GrantTracker uses the native work tracker: every tracker read and
+	// write, a project's files, the views and the catalogue, and the
+	// holder's own inbox, queue and person view — plus a report's, as their
+	// lead, which internal/authz decides on the relation.
+	GrantTracker Grant = "tracker"
 
-	// GrantFleetOperate is the node's own controls, which change no
-	// company data and can stop the company dead: POST /backup (which
-	// copies every credential and every seat's memory to a path the
-	// caller names), the retention floor, the capacity window, the
-	// maintenance gestures, evict and readmit, and pausing, resuming or
-	// steering a seat the caller neither holds nor leads — and the purges,
-	// a work item's and a page's, which nothing undoes.
-	// One grant rather than one per gesture because they share a blast
-	// radius and an audience — whoever runs the deployment — and
-	// splitting them would invite a gate that holds all of them but one.
-	//
-	// IT IS HALF OF ONE MORE, asked beside a second grant because it is
-	// the deployment's reach over somebody else's subject: ending every
-	// session in the company takes it with [GrantPeopleManage].
-	//
-	// AND IT IS THE ADMIN PATH over the relation classes internal/authz
-	// decides somebody's WORK by — a colleague's queue, a project's
-	// policy — though not over the org chart, which is
-	// [GrantConfigWrite]'s.
-	GrantFleetOperate Grant = "fleet:operate"
-
-	// GrantPeopleManage is authority over PERSON ROWS: inviting somebody,
-	// changing what they carry, suspending them, revoking their sessions,
-	// resetting a second factor, removing them.
-	//
-	// THE GRANT THAT CAN GRANT, and its own grant rather than a part of
-	// [GrantConfigWrite] so that a DIRECTORY change is its own gesture:
-	// changing the company document rebuilds every seat's tools and
-	// providers, changing a person's row decides who may do that tomorrow,
-	// and the two are reviewed by different people for different reasons.
-	// The person who onboards a team has no business editing `mcp_servers`.
-	//
-	// IT IS NOT A BOUND ON A config:write HOLDER, and must not be read as
-	// one. That grant is host access ([GrantConfigWrite]): a holder can run
-	// code on every engine host and reach whatever a process there can,
-	// the keyring and the store this grant writes to included. What the
-	// separation buys is that the ORDINARY path — the one a review, an
-	// audit row and a revocation all watch — puts directory changes in
-	// somebody else's hands, not that the other path is closed.
-	//
-	// IT IS ALSO THE ONE GRANT THAT BOUNDS ITSELF. A caller may not
-	// confer a grant they do not hold — on anybody, themselves included —
-	// so holding this does not reach past whatever else the holder
-	// carries. internal/iamdomain enforces that at the RECORD, because a
-	// record can be published by a CLI, a duty and a migration, none of
-	// which passes through a route.
-	GrantPeopleManage Grant = "people:manage"
-
-	// GrantSandboxRun starts a detached coding run and holds the per-run
-	// credential the MCP bridge mints for the box. The one grant that
-	// puts generated code on a machine and hands it a seat's whole tool
-	// surface, which is why it is not folded into [GrantWorkWrite] even
-	// though a coding run is usually how work gets done.
-	GrantSandboxRun Grant = "sandbox:run"
+	// GrantKnowledge uses the native knowledge base: reading, searching,
+	// writing, saving and commenting on the company's own pages. A page is
+	// an ADDRESS other pages and prompts resolve, so a write here changes
+	// what every seat reads next turn — which is why the tool-skill pages,
+	// injected into every seat's prompt, are [GrantAdmin]'s and not this.
+	GrantKnowledge Grant = "knowledge"
 )
 
-// AllGrants are the eleven, in the order the constants declare them.
+// AllGrants are every permission this build knows, in declaration order.
 //
 // Named AllGrants rather than Grants because [Principal.Grants] is the field a
 // reader meets first, and one name for the company's whole vocabulary and for
 // one principal's slice of it is a sentence that reads wrong either way.
-var AllGrants = []Grant{
-	GrantStateRead,
-	GrantAuditRead,
-	GrantConfigRead,
-	GrantSecretRead,
-	GrantWorkWrite,
-	GrantKnowledgeWrite,
-	GrantConfigWrite,
-	GrantSecretWrite,
-	GrantFleetOperate,
-	GrantPeopleManage,
-	GrantSandboxRun,
-}
+var AllGrants = []Grant{GrantAdmin, GrantTracker, GrantKnowledge}
 
-// PersonPresentGrants are the grants whose gestures need a PERSON present, and
-// which a machine token therefore never carries, whatever its owner holds:
-// revealing a credential's value, and deciding who may do anything at all.
+// Apps are the permissions that open one APP each, and THE ONE PLACE AN APP IS
+// DECLARED.
 //
-// [GrantConfigWrite] IS DELIBERATELY NOT HERE, although it is host access and
-// strictly stronger than either: applying a configuration from a pipeline —
-// `crewlet config import` in a deploy job — is exactly the work a machine token
-// exists for, and a token that could not carry it would send that pipeline back
-// to a Tier A token, which answers to no person and ends only when somebody
-// edits the deployment's own configuration. So a token may be minted with it,
-// and minting one is handing a pipeline shell on every engine host: its owner
-// decides that at the mint, and the token's row says what it carries. This list
-// is for the gestures a pipeline has no business making at all, not a ranking
-// of how dangerous a grant is.
-//
-// HERE, IN THE LEAF, because two packages that cannot see each other both have
-// to enforce it: internal/iamdomain refuses them at a token's mint, and
-// internal/iam/credential drops them from what a token carries on every
-// request. The second is not redundant — a rule that held only at the mint
-// would be a rule a row from anywhere else could step round. They are one of
-// the two locks between a token and the gestures that need a person present —
-// a token is stepped up by construction, so a proof's age is neither ([Recency])
-// — and the other is internal/authz's: every such gesture's row says so, and
-// the table refuses a principal acting through a token
-// ([Principal.MachineToken]), which is what closes the gestures a person makes
-// about THEMSELVES on no grant. A token is what an attacker holding a
-// pipeline's environment already has.
-var PersonPresentGrants = []Grant{GrantSecretRead, GrantPeopleManage}
+// Everything that has to know which permissions are apps reads this list: an
+// agent seat holds exactly these (it uses the company's apps and never runs
+// the company), [Expand] adds them to an administrator, the dashboard's access
+// picker ticks and locks them under Admin, and internal/authz's walks hold
+// every one of them to a verb a person can take. The dashboard's own copy is
+// held to this one by a gate, so a third app added here and nowhere else fails
+// the build rather than shipping a permission no screen offers.
+var Apps = []Grant{GrantTracker, GrantKnowledge}
 
-// grantAccess classifies every grant. A map rather than a string split, for
-// the reason [Grant] gives; and every member of [AllGrants] appears, which
-// grant_test.go asserts in both directions so a new grant cannot be added
-// without a reader deciding what class it is in.
-var grantAccess = map[Grant]Access{
-	GrantStateRead:      AccessRead,
-	GrantAuditRead:      AccessRead,
-	GrantConfigRead:     AccessRead,
-	GrantSecretRead:     AccessRead,
-	GrantWorkWrite:      AccessWrite,
-	GrantKnowledgeWrite: AccessWrite,
-	GrantConfigWrite:    AccessWrite,
-	GrantSecretWrite:    AccessWrite,
-	GrantFleetOperate:   AccessWrite,
-	GrantPeopleManage:   AccessWrite,
-	GrantSandboxRun:     AccessWrite,
-}
-
-// Valid reports whether a grant off the wire is one this build knows.
+// Valid reports whether a permission off the wire is one this build knows.
 //
-// An unknown grant is an ordinary event on a rolling upgrade — a newer peer
-// writes a capability string this build has never heard of — so this answers
-// false and NOTHING ELSE HAPPENS: see [Principal.Can] for what that buys and
+// An unknown name is an ordinary event on a rolling upgrade — a newer peer
+// writes one this build has never heard of — so this answers false and
+// NOTHING ELSE HAPPENS: see [Principal.Can] for what that buys and
 // [Principal.Validate] for what it deliberately does not cost.
 func (g Grant) Valid() bool { return slices.Contains(AllGrants, g) }
 
-// Access reports whether this grant covers reading or changing.
+// IsApp reports whether g opens one app, rather than running the company.
+func (g Grant) IsApp() bool { return slices.Contains(Apps, g) }
+
+// Expand is set as it is compared: set's own members, plus every app when set
+// holds [GrantAdmin].
 //
-// An unknown grant has no access class — this build cannot know what a
-// capability it has never heard of would open — so it answers the zero
-// [Access], which is invalid and which every gate must therefore refuse rather
-// than read as "read".
-func (g Grant) Access() Access { return grantAccess[g] }
+// EVERY COMPARISON OF PERMISSIONS GOES THROUGH IT — [Principal.Can], a node's
+// admin posture ([AdminPosture.Effective]), a machine token's mint against its
+// owner, what a writer may confer, an invitation's bound and Tier A's token
+// check — because "admin includes every app" stated at each of those would be
+// six copies of one rule, and the day one of them forgot, an administrator
+// would be refused a page by the one comparison that did.
+//
+// A FRESH SLICE THAT NEVER ALIASES set, so a caller that appends to the answer
+// never edits a row it read. It holds set's own members in their order —
+// unknown names kept, duplicates kept as given, because what a row says is the
+// row's business — and then, when set holds admin, every member of [Apps] set
+// does not already hold, in [Apps] order. It adds nothing otherwise, and
+// Expand(Expand(s)) equals Expand(s).
+func Expand(set []Grant) []Grant {
+	out := slices.Clone(set)
+	if out == nil {
+		out = []Grant{}
+	}
+	if !slices.Contains(set, GrantAdmin) {
+		return out
+	}
+	for _, app := range Apps {
+		if !slices.Contains(out, app) {
+			out = append(out, app)
+		}
+	}
+	return out
+}

@@ -63,7 +63,7 @@ func (u *unknownWriter) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
 	return u.answer(opID)
 }
 
-func (u *unknownWriter) RestoreTask(_ context.Context, opID, _, _ string,
+func (u *unknownWriter) RestoreTask(_ context.Context, opID, _, _ string, _ bool,
 	_ *tracker.Notify) (tracker.WriteResult, error) {
 	return u.answer(opID)
 }

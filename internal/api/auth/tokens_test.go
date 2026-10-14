@@ -39,7 +39,7 @@ type machineRig struct {
 	row       credential.TokenRow
 	dirErr    error
 	chart     *fakeChart
-	ceiling   []iam.Grant
+	admin     iam.AdminPosture
 	at        time.Time
 }
 
@@ -55,19 +55,18 @@ func newMachineRig(t *testing.T) *machineRig {
 	}
 	return &machineRig{
 		t: t, presented: presented, at: at,
-		ceiling: iam.AllGrants,
+		admin: iam.AdminServe,
 		row: credential.TokenRow{
 			Applied: 50, Found: true, IsToken: true,
 			Verifier:  credential.TokenVerifier(presented.ID, secret),
 			ExpiresAt: at.Add(24 * time.Hour),
-			Grants:    []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
+			Grants:    []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
 			Epoch:     2,
 			Owner: credential.TokenOwner{
 				Found: true, ID: tokenOwner, Kind: iam.KindPerson,
 				Stage: iam.StageActive, Login: "sarah.chen",
-				Grants: []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite,
-					iam.GrantConfigRead},
-				Epoch: 2,
+				Grants: []iam.Grant{iam.GrantAdmin},
+				Epoch:  2,
 			},
 		},
 		chart: &fakeChart{seats: map[string]session.Seat{
@@ -90,7 +89,7 @@ func (m *machineRig) MachineToken(_ context.Context, id string) (credential.Toke
 func (m *machineRig) guard(tr *trail) *auth.Guard {
 	m.t.Helper()
 	b := config.DefaultBootstrap()
-	b.API.Auth.MaxGrants = m.ceiling
+	b.API.Auth.Admin = m.admin
 	arm, err := auth.NewTokens(auth.TokensDeps{
 		Directory: m, Chart: m.chart,
 		Now: func() time.Time { return m.at },
@@ -129,14 +128,16 @@ func present(t *testing.T, g *auth.Guard, method, path, value string) (
 }
 
 // A TOKEN ACTS AS ITS OWNER, carrying what the mint conferred that the owner
-// still holds, cut to this node's ceiling.
+// still holds, under this node's admin posture.
 //
 // The control for every case below. Three narrowings compose and each is
-// load-bearing: the mint's own grants (the owner's config:read was never put
-// on the token), the owner's CURRENT grants (work:write withdrawn since), and
-// the ceiling (state:read is all this node lets anybody carry). Mutation: take
-// row.Grants instead of the effective set and work:write survives; drop the
-// ceiling and so does anything the node forbids.
+// load-bearing: the mint's own permissions (the owner's admin was never put on
+// the token), the owner's CURRENT permissions (the knowledge base withdrawn
+// since), and the node's posture (a node refusing admin clamps a token minted
+// with it to the apps). And admin MAY be minted onto a token, which on a
+// serving node carries it whole. Mutation: take row.Grants instead of the
+// effective set and the knowledge base survives its withdrawal; drop the
+// posture and admin survives a refusing node.
 func TestATokenActsAsItsOwnerWithTheNarrowestOfThreeGrantSets(t *testing.T) {
 	t.Parallel()
 	m := newMachineRig(t)
@@ -151,7 +152,7 @@ func TestATokenActsAsItsOwnerWithTheNarrowestOfThreeGrantSets(t *testing.T) {
 		p.Kind != iam.KindPerson {
 		t.Errorf("acts as %s %s %q, want the owner", p.Kind, p.ID, p.Login)
 	}
-	if !slices.Equal(p.Grants, []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite}) {
+	if !slices.Equal(p.Grants, []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}) {
 		t.Errorf("grants %v, want exactly what the mint conferred", p.Grants)
 	}
 	if token != m.presented.ID {
@@ -159,23 +160,38 @@ func TestATokenActsAsItsOwnerWithTheNarrowestOfThreeGrantSets(t *testing.T) {
 			"cannot refuse a token it cannot see", token, m.presented.ID)
 	}
 
-	// THE OWNER LOST work:write, and the token with them.
+	// THE OWNER LOST the knowledge base, and the token with them.
 	withdrawn := newMachineRig(t)
-	withdrawn.row.Owner.Grants = []iam.Grant{iam.GrantStateRead}
+	withdrawn.row.Owner.Grants = []iam.Grant{iam.GrantTracker}
 	got, _ = present(t, withdrawn.guard(nil), http.MethodGet, "/agents",
 		withdrawn.presented.Value())
-	if slices.Contains(got.principal.Grants, iam.GrantWorkWrite) {
-		t.Errorf("grants %v: a grant the owner no longer holds survived on "+
-			"their token", got.principal.Grants)
+	if !slices.Equal(got.principal.Grants, []iam.Grant{iam.GrantTracker}) {
+		t.Errorf("grants %v: a permission the owner no longer holds survived "+
+			"on their token", got.principal.Grants)
 	}
 
-	// THE NODE'S CEILING clamps a token exactly as it clamps everything.
+	// ADMIN MINTED ONTO A TOKEN is carried whole where the node serves it.
+	minted := newMachineRig(t)
+	minted.row.Grants = []iam.Grant{iam.GrantAdmin}
+	got, _ = present(t, minted.guard(nil), http.MethodGet, "/agents",
+		minted.presented.Value())
+	if !slices.Equal(got.principal.Grants, []iam.Grant{iam.GrantAdmin,
+		iam.GrantTracker, iam.GrantKnowledge}) {
+		t.Errorf("grants %v, want admin and every app it includes",
+			got.principal.Grants)
+	}
+
+	// THE NODE'S POSTURE clamps a token exactly as it clamps everything,
+	// and takes admin alone.
 	clamped := newMachineRig(t)
-	clamped.ceiling = []iam.Grant{iam.GrantStateRead}
+	clamped.row.Grants = []iam.Grant{iam.GrantAdmin}
+	clamped.admin = iam.AdminRefuse
 	got, _ = present(t, clamped.guard(nil), http.MethodGet, "/agents",
 		clamped.presented.Value())
-	if !slices.Equal(got.principal.Grants, []iam.Grant{iam.GrantStateRead}) {
-		t.Errorf("grants %v past a ceiling of state:read", got.principal.Grants)
+	if !slices.Equal(got.principal.Grants, []iam.Grant{iam.GrantTracker,
+		iam.GrantKnowledge}) {
+		t.Errorf("grants %v on a node refusing admin, want every app and no "+
+			"admin", got.principal.Grants)
 	}
 }
 
@@ -438,7 +454,7 @@ func TestATokensWriteIsAttributedToTheToken(t *testing.T) {
 	// both the author and the credential a write records.
 	b := config.Bootstrap{}
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "ops-token-value-long-enough-26",
-		Grants: []iam.Grant{iam.GrantStateRead}}}
+		Grants: []iam.Grant{iam.GrantTracker}}}
 	got, _ := present(t, auth.New(&b), http.MethodGet, "/agents",
 		"ops-token-value-long-enough-26")
 	by := auth.AttributionOf(iam.WithPrincipal(t.Context(), got.principal))
@@ -482,7 +498,7 @@ func TestATokenIsOnlyAsGoodAsTheArmThatChecksIt(t *testing.T) {
 	t.Parallel()
 	m := newMachineRig(t)
 	b := config.DefaultBootstrap()
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	got, _ := present(t, auth.New(&b), http.MethodGet, "/agents",
 		m.presented.Value())
 	if got.status != http.StatusUnauthorized {

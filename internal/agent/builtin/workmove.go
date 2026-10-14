@@ -33,9 +33,10 @@ import (
 //
 // Moving work to another project hands it to another team's board, which is
 // the decision `routing_unit` already puts behind the project's LEAD — a
-// re-route is this without the re-key — so it is decided by the same class
-// ([authz.ClassContainer]): the lead of the project the item is in, or a
-// holder of the admin grant. Which project that is comes out of the stored
+// re-route is this without the re-key — so it is decided by the same
+// relation ([authz.ClassDestructive], as a re-route's [authz.ClassContainer]
+// is): the lead of the project the item is in, or an admin, with the
+// tracker. Which project that is comes out of the stored
 // row rather than the arguments, so the tool asks its own action once it has
 // read the item, exactly as the trash does ([subjectOf] marks it `inTool`).
 //

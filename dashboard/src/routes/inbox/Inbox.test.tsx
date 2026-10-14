@@ -45,17 +45,7 @@ const EVERY_TOOL = [
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -762,7 +752,7 @@ describe("who is looking", () => {
   const NOBODY = { login: "", grants: [], handle: "", owner: "", name: "", kind: "", acts: [] };
   const UNBOUND = {
     login: "svc:ops",
-    grants: ["work:write"],
+    grants: ["tracker"],
     handle: "",
     owner: "svc:ops",
     name: "",

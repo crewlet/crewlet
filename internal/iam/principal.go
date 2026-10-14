@@ -115,11 +115,15 @@ type Principal struct {
 	// and a principal only ever carries one the chart already holds.
 	Seat string
 
-	// Grants are the capabilities this principal carries. A slice rather
+	// Grants are the permissions this principal carries. A slice rather
 	// than a set, because it is a row's own list and the order it was
 	// written in is what an operator sees when they read it back.
 	//
-	// IT MAY HOLD STRINGS THIS BUILD DOES NOT KNOW. See [Principal.Can].
+	// IT MAY HOLD NAMES THIS BUILD DOES NOT KNOW, which grant nothing — see
+	// [Principal.Can] — and [GrantAdmin] in it implies every app in [Apps]
+	// through [Expand], whether or not the app is listed beside it. A
+	// principal the request guard composed carries its node's EFFECTIVE set
+	// ([AdminPosture.Effective]): known names only, apps spelled out.
 	Grants []Grant
 
 	// Position is where this principal sits in the chart: the unit path
@@ -135,8 +139,8 @@ type Principal struct {
 	//
 	// AN INSTANT RATHER THAN THE PROOF AND THE WINDOW, because the window
 	// is THIS NODE's setting and the node that composed the principal is
-	// the one whose window applies — exactly as its ceiling is the one cut
-	// into the grants.
+	// the one whose window applies — exactly as the node's admin posture
+	// (`api.auth.admin`) is the one cut into the grants.
 	//
 	// ZERO IS NOT "NEVER" — see [Principal.Fresh]. A zero deadline read
 	// as "never expires" is a session somebody forgot to bound, which is
@@ -170,49 +174,22 @@ type Principal struct {
 	Via string
 }
 
-// Can reports whether this principal carries g.
+// Can reports whether this principal carries g, counting every app an
+// administrator carries through [Expand].
 //
-// AN UNKNOWN GRANT IS IGNORED FOR ITS CAPABILITY, NEVER A REASON TO REJECT THE
-// PRINCIPAL. A rolling upgrade puts a newer build's grant strings in front of
-// an older node — that is what additive evolution means on a shared store —
-// and refusing the whole principal over one string it cannot parse would log
-// every person in the company out for the length of the deploy. So the string
-// simply grants nothing here: this build cannot open a door it has never heard
-// of, and it does not need to in order to open the doors it has.
+// AN UNKNOWN NAME IS IGNORED FOR ITS CAPABILITY, NEVER A REASON TO REJECT THE
+// PRINCIPAL. A rolling upgrade puts a newer build's names in front of an older
+// node — that is what additive evolution means on a shared store — and
+// refusing the whole principal over one string it cannot parse would log every
+// person in the company out for the length of the deploy. So the string simply
+// grants nothing here: this build cannot open a door it has never heard of,
+// and it does not need to in order to open the doors it has.
 //
-// The asked-for grant is checked too, so a caller that composes one from a
-// string cannot accidentally match an unknown one a principal happens to hold.
+// The asked-for permission is checked too, so a caller that composes one from
+// a string cannot accidentally match an unknown one a principal happens to
+// hold.
 func (p Principal) Can(g Grant) bool {
-	if !g.Valid() {
-		return false
-	}
-	return slices.Contains(p.Grants, g)
-}
-
-// KnownGrants are the carried grants this build can act on.
-func (p Principal) KnownGrants() []Grant {
-	known := make([]Grant, 0, len(p.Grants))
-	for _, g := range p.Grants {
-		if g.Valid() {
-			known = append(known, g)
-		}
-	}
-	return known
-}
-
-// UnknownGrants are the carried grants this build cannot act on.
-//
-// Returned rather than dropped silently so a log line can NAME them: "this
-// node ignored two capabilities" is an upgrade in progress, and "this node
-// ignored two capabilities" repeated for a week is a node nobody upgraded.
-func (p Principal) UnknownGrants() []Grant {
-	unknown := make([]Grant, 0)
-	for _, g := range p.Grants {
-		if !g.Valid() {
-			unknown = append(unknown, g)
-		}
-	}
-	return unknown
+	return g.Valid() && slices.Contains(Expand(p.Grants), g)
 }
 
 // Fresh reports whether this principal's proof of identity still holds at now.

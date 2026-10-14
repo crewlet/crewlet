@@ -3,18 +3,20 @@
 //
 // # Why it is not part of /integrations
 //
-// `GET /integrations` is registered as an ordinary read, so on the default
-// posture it serves without a token. What this surface answers is a different
-// class of thing: the NAMES of the credentials a company holds, which are
-// unset, the third-party app pages an administrator would visit, and the fields a
-// caller can write — a map of what to attack. So it is its own prefix, and
-// every route takes a grant, reads included.
+// `GET /integrations` is a question — what each surface's last reconcile
+// reported — answered through the query registry like every other read. What
+// this surface answers is a different class of thing: the NAMES of the
+// credentials a company holds, which are unset, the third-party app pages an
+// administrator would visit, and the fields a caller can write — a map of what
+// to attack — beside the writes that change them. So it is its own prefix,
+// mounted through the authority table route by route, and every route is
+// admin's, reads included.
 //
-// # Connecting is config:write AND secrets:write
+// # Connecting is a company write AND a credential write
 //
 // Each route is mounted through [authz.Router]: the listings and a pass's
-// record are `setup.read` (`config:read`), and every route that changes the
-// company is `setup.connect` (`config:write`). A route that SEALS a credential
+// record are `setup.read`, and every route that changes the company is
+// `setup.connect` — both admin's (ADR-0033). A route that SEALS a credential
 // asks `secrets.write` on top — a submission carrying a secret field, a
 // provisioning pass (which is handed a sink that mints and seals), and a
 // GitHub App (whose private key is sealed on the return) — because this
@@ -23,9 +25,14 @@
 // able to write it here. The pattern cannot see whether a submission carries
 // one, so that half is asked once the body is read, through the same guard.
 //
+// TODAY THE TWO ASK THE SAME PERMISSION, and the second is kept anyway: it is
+// the surface stating that a sealed credential is a `/secrets` write, decided
+// by that verb's own row, so the day the table decides the two verbs apart
+// this surface follows the table rather than a second copy of it.
+//
 // THE ROUTES USED TO DECIDE NOTHING, which was sound while the only credential
 // was an operator token and stopped being sound the day a person could sign
-// in holding `state:read` alone.
+// in holding a read-only permission alone.
 //
 // # A managed document is refused before every side effect
 //
@@ -2047,8 +2054,8 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// A CREDENTIAL IN THE SUBMISSION IS `secrets:write` on top of the
-	// route's `config:write`, decided once the body says whether there is
+	// A CREDENTIAL IN THE SUBMISSION IS `secrets.write` on top of the
+	// route's `setup.connect`, decided once the body says whether there is
 	// one and before anything is sealed.
 	if carriesCredential(values, against) && !s.mayWriteCredentials(w, r) {
 		return

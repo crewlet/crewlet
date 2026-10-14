@@ -1,38 +1,29 @@
 /**
  * The identity directory's closed sets that People & access offers back to the
- * engine — the grants a person, an invitation or a token may carry, the login
- * grammars, the kinds of finding the directory reports — and the shapes of the
- * answers the seat surfaces and the reset screen read.
+ * engine — the permissions a person, an invitation or a token may carry, the
+ * login grammars, the kinds of finding the directory reports — and the shapes
+ * of the answers the seat surfaces and the reset screen read.
  *
- * EXACTLY THE ENGINE'S — each held by the gate its doc names. A grant the
+ * EXACTLY THE ENGINE'S — each held by the gate its doc names. A permission the
  * engine grew that this lacks is one no administrator can confer from the
  * dashboard; one this keeps that the engine dropped is a checkbox every write
  * refuses; and a seat listing's member renamed on one side alone draws every
  * invited seat as vacant.
  */
 
-/** Every grant, in the engine's own order (`iam.AllGrants`). */
-export const GRANTS = [
-  "state:read",
-  "audit:read",
-  "config:read",
-  "secrets:read",
-  "work:write",
-  "knowledge:write",
-  "config:write",
-  "secrets:write",
-  "fleet:operate",
-  "people:manage",
-  "sandbox:run",
-] as const;
+/**
+ * Every permission, in the engine's own order (`iam.AllGrants`): admin, which
+ * runs the company and includes every app, then one per app. The wire field is
+ * still `grants`; the dashboard calls the concept "Access".
+ */
+export const GRANTS = ["admin", "tracker", "knowledge"] as const;
 
 /**
- * The grants a machine token never carries, whatever its owner holds
- * (`iam.PersonPresentGrants`): revealing a credential's value, and deciding who
- * may do anything at all, need a person present. A token mint naming one is
- * refused, so the dialog says so before it is sent.
+ * The apps (`iam.Apps`) — the one place the engine declares one. Admin
+ * includes every one of them, so the access picker ticks and locks these when
+ * Admin is ticked, and an invitation or a create offers them all by default.
  */
-export const TOKEN_WITHHELD_GRANTS = ["secrets:read", "people:manage"] as const;
+export const APPS = ["tracker", "knowledge"] as const;
 
 /**
  * The two login grammars, as the engine holds them (`iam.ValidLoginFor`):
@@ -88,16 +79,17 @@ export const TOKEN_MAX_DAYS = 365;
  * compile); a kind the engine grew that this lacks is drawn as its raw code.
  */
 export const FINDING_KINDS = [
-  "no_people_manage_holder",
+  "no_admin_holder",
   "person_without_credential",
   "binding_dangling",
-  "grant_clamped_by_ceiling",
+  "admin_clamped_by_node",
 ] as const;
 
 /**
  * `GET /iam/seats`: every human seat of the running company and what holds it
- * (`?unheld=true`: only the seats nothing holds — no person, no open
- * invitation — which are exactly the ones a bind may name).
+ * — everybody's, as the org chart is, and masked per reader (`?unheld=true`,
+ * an admin's: only the seats nothing holds — no person, no open invitation —
+ * which are exactly the ones a create, an invitation or a move may name).
  *
  * THE SEAT LISTING'S SHAPES are held by
  * `internal/api/iamapi.TestTheSeatSurfacesReadWhatTheSeatListingSends`, which
@@ -123,9 +115,11 @@ export interface HumanSeat {
    */
   holder?: SeatHolder;
   /**
-   * The open invitation that names the seat, absent where none does. It holds
-   * the seat as surely as a person would: nothing else may be bound to it or
-   * invited onto it until it is redeemed, cancelled or lapses.
+   * The open invitation that names the seat, absent where none does — and
+   * absent for every reader but an admin, since it carries the address it was
+   * sent to. It holds the seat as surely as a person would: nothing else may
+   * be bound to it or invited onto it until it is redeemed, cancelled or
+   * lapses.
    */
   invitation?: SeatInvitation;
 }
@@ -133,18 +127,27 @@ export interface HumanSeat {
 /**
  * Who holds a human seat (`iamapi.SeatHolding`) — declared once and composed
  * into [HumanSeat], which is the name a screen reads.
+ *
+ * EVERYBODY IS SENT THE NAME AND THE KIND, because the org chart is the
+ * overview; the account — `person`, `login`, `stage` — reaches an admin and the
+ * holder themselves, and is absent for everybody else.
  */
 interface SeatHolder {
-  /** Their id, which every `/iam` write about them names. */
-  person: string;
+  /** Their id, which every `/iam` write about them names — an admin's and their own. */
+  person?: string;
+  /** The name they go by, opened on the engine's keyring. */
+  name?: string;
+  /** A name the engine's keyring cannot open — a state, never a blank. */
+  sealed?: boolean;
   /**
    * `person` or `machine` (`iam.Kind`). A person holds exactly one human seat
    * for as long as they exist; a service account — a Tier A token's row
    * among them — may hold one, and is the only holder a seat is unbound from.
    */
   kind: string;
+  /** The login they sign in with — an admin's and their own. */
   login?: string;
-  /** How far through enrolment they are (`iam.Stage`). */
+  /** How far through enrolment they are (`iam.Stage`) — an admin's and their own. */
   stage?: string;
 }
 

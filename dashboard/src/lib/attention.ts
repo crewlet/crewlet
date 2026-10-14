@@ -27,6 +27,7 @@ import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { activityOf, roundLabel, staleness, stoppedLine, type NameOf } from "./seats.ts";
+import { QUESTION_WITHHELD, questionWithheld } from "./access.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -426,7 +427,11 @@ export function attentionQueue(input: AttentionInput): Attention[] {
  * sentence simply ends.
  */
 function waitingDetail(run: SandboxRun, now: number): string {
-  const asked = run.question || "A coding run needs your answer to continue.";
+  const asked =
+    run.question ||
+    (questionWithheld(run)
+      ? `${QUESTION_WITHHELD}.`
+      : "A coding run needs your answer to continue.");
   if (run.status === "reseed") return `${asked} Answering restarts the work.`;
   const ttl = run.pause_ttl_seconds;
   const parked = run.paused_at ? Date.parse(run.paused_at) : NaN;

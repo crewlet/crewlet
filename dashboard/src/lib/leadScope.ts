@@ -1,5 +1,5 @@
 /**
- * The part of the organization a person may change without `config:write`:
+ * The part of the organization a person may change without Admin:
  * the units they lead, and everything inside them.
  *
  * THE RULE IS THE ENGINE'S (`authz`' subtree class, `configapi`'s admission):

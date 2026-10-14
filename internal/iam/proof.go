@@ -87,9 +87,11 @@ const MinPasswordChars = 12
 // ending every session in the company, writing the configuration — for the
 // reason internal/config gives at the setting: a second, shorter window beside
 // it sent people to re-prove inside the hour they had already proved in, and
-// the gestures it guarded are bounded by what no proof's age can change — a
-// grant no machine token may carry, and a refusal of any request a machine
-// token presented.
+// what keeps a machine token — fresh by construction — off the gestures that
+// need a person present was never a proof's age: it is internal/authz's
+// `presence` on the row, which refuses any request a token presented there,
+// and internal/iamdomain's refusal of an administrative identity record
+// written through one.
 //
 // A NAMED STRING WHOSE ZERO VALUE IS INVALID, and the zero is the one that
 // would be dangerous: read as "no proof needed", a rule somebody wrote without

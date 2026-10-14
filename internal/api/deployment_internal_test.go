@@ -32,11 +32,11 @@ func TestEveryDeploymentWriteAsksForARecentProofAndNoReadDoes(t *testing.T) {
 	reads := 0
 	for _, pattern := range patterns {
 		policy := deploymentPolicy(pattern)
-		grant, _ := authz.GrantOf(policy.Action)
+		class, _ := authz.ClassOf(policy.Action)
 		recency, _ := authz.RecencyOf(policy.Action)
-		if grant != iam.GrantFleetOperate {
-			t.Errorf("%s is decided on %s, want the deployment's own grant",
-				pattern, grant)
+		if class != authz.ClassAdmin {
+			t.Errorf("%s is decided as %s, want the admin class — the "+
+				"deployment is admin's alone", pattern, class)
 		}
 		read := strings.HasPrefix(pattern, http.MethodGet+" ")
 		if read {

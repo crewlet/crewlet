@@ -82,6 +82,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     maxRounds: 0,
     roundStartedAt: "",
     runningCall: null,
+    bodyWithheld: false,
     steers: [],
     node: "",
     clockStart: "",
@@ -973,5 +974,19 @@ describe("a phase a round did not finish", () => {
     const rounds = container.querySelectorAll(".round");
     expect(rounds.length).toBe(1);
     expect(rounds[0]!.querySelector(".round-note.critical")?.textContent).toMatch(/declined/);
+  });
+});
+
+// A WITHHELD BODY IS SAID, never drawn as a phase that was told nothing and
+// answered nothing: the engine sent this reader its status alone. The CONTROL
+// is the same phase sent whole, which says nothing of the kind. Mutation:
+// drop the notice and the first assertion fails.
+describe("a phase whose body was withheld", () => {
+  test("says it is not shown to you, and why", () => {
+    render(<PhaseCard record={phase({ bodyWithheld: true })} defaultOpen />);
+    expect(screen.getByText(/^Not shown to you\. What a seat says is its trail/)).toBeDefined();
+    cleanup();
+    render(<PhaseCard record={phase()} defaultOpen />);
+    expect(screen.queryByText(/Not shown to you/)).toBeNull();
   });
 });

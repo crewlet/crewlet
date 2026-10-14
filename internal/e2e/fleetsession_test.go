@@ -136,10 +136,10 @@ const (
 	janeSeat = "founder"
 )
 
-// janeGrants are what the invitation confers: enough to read the company's
-// state — the socket needs it — and to file work, and nothing else, so no
-// phase passes on a grant it did not ask for.
-var janeGrants = []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite}
+// janeGrants are what the invitation confers: the tracker, to file work, and
+// nothing else — the socket is the overview, which is everybody's — so no
+// phase passes on a permission it did not ask for.
+var janeGrants = []iam.Grant{iam.GrantTracker}
 
 // signIn invites Jane under the deployment's Tier A token, redeems the link
 // and signs her in with her password, all on one member — which leaves her

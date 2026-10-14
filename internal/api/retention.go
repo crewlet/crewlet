@@ -40,9 +40,9 @@ import (
 //
 // # Who may make them
 //
-// `fleet:operate`, decided by the authority table where [App.mountDeployment]
-// mounts them — every route in this file, the two reads included. The handlers
-// resolve the caller for the audit line and decide nothing themselves.
+// `admin`, decided by the authority table where [App.mountDeployment] mounts
+// them — every route in this file, the two reads included. The handlers resolve
+// the caller for the audit line and decide nothing themselves.
 
 // retentionWriter is the slice of the fleet these routes need.
 //

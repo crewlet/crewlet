@@ -22,6 +22,7 @@ import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { isLogRefusal } from "~/protocol/index.ts";
 import { goSignIn } from "~/lib/session.ts";
+import { needsWords } from "~/lib/access.ts";
 import {
   activityOf,
   activityWord,
@@ -342,17 +343,18 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
       icon={<KeyGlyph size="md" />}
       action={
         // A BANNER THAT NAMES A REPAIR OFFERS IT. The sign-in comes back to
-        // this screen, so somebody who holds the grant lands where the
+        // this screen, so somebody who holds the access lands where the
         // refusal was.
         <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={goSignIn}>
           Sign in
         </Button>
       }
     >
-      {/* ABOUT THE GRANT, NOT A TOKEN: what a signed-in reader refused here
-          lacks is a grant, and an answer that names it is drawn by
-          `RefusedOnAuthority` below instead. */}
-      This needs a grant you don’t hold. Sign in as somebody who holds it.
+      {/* ABOUT ACCESS, NOT A TOKEN: what a signed-in reader refused here
+          lacks is access — Admin or an app's — and an answer that names it
+          is drawn by `RefusedOnAuthority` below instead. */}
+      This needs access you don’t hold. An admin can give it to you, or sign in as somebody who
+      holds it.
     </Callout>
   ),
   // NO `icon` ON THIS ONE, OR ON THE THREE BELOW IT. A Callout draws its
@@ -389,14 +391,15 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
 };
 
 /**
- * A refusal on authority that says WHY: the grants any one of which would have
- * admitted the reader, or — an empty list — that none would, because what is
- * missing is a relation the org chart does not hold.
+ * A refusal on authority that says WHY: the access any one of which would
+ * have admitted the reader ("needs Tracker access"), or — an empty list — that
+ * none would, because what is missing is a relation the org chart does not
+ * hold.
  *
  * FROM THE ANSWER, NEVER WRITTEN HERE. The engine's error frame carries the
  * deciding rule's own reason and grants under the keys its REST envelope uses;
- * a sentence naming a grant typed into this file is a second statement of the
- * rule, and it is the one that goes stale the day the rule's grant moves.
+ * a sentence naming a permission typed into this file is a second statement
+ * of the rule, and it is the one that goes stale the day the rule moves.
  */
 function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
   return (
@@ -410,20 +413,10 @@ function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
       }
     >
       {refusal.grants.length > 0 ? (
-        <>
-          You may not read this: the answer needs{" "}
-          {refusal.grants.map((grant, i) => (
-            <span key={grant}>
-              {i > 0 ? " or " : ""}
-              <code className="inline">{grant}</code>
-            </span>
-          ))}
-          , and the credential you presented carries none of them. Sign in as somebody who holds
-          one.
-        </>
+        needsWords("This answer", refusal.grants)
       ) : (
         <>
-          You may not read this, and no grant would change that: the rule that decided asks a
+          You may not read this, and no access would change that: the rule that decided asks a
           relation the org chart does not hold — leading this person, or the record being your own.
         </>
       )}{" "}

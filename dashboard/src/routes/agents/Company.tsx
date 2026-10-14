@@ -39,6 +39,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useAgents, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { projectsByUnit } from "~/lib/orgchart.ts";
 import {
   handleLabel,
@@ -66,10 +67,16 @@ const PROJECT_PAGE = 200;
 /**
  * Every live project filed to each unit, by unit key, from the tracker. A
  * company on another tracker answers nothing, and a unit then carries no key
- * rather than a wrong one.
+ * rather than a wrong one — as it does for a reader without Tracker, who is
+ * not asked.
  */
 function useUnitProjects(): Map<string, string[]> {
-  const projects = useQuery("work_projects", { limit: PROJECT_PAGE }, { pollMs: 120_000 });
+  const { tracker } = useViewer();
+  const projects = useQuery(
+    "work_projects",
+    { limit: PROJECT_PAGE },
+    { pollMs: 120_000, enabled: tracker },
+  );
   const rows = projects.error ? undefined : projects.data?.projects;
   return useMemo(() => projectsByUnit(rows ?? []), [rows]);
 }

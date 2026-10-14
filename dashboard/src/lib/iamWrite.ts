@@ -49,6 +49,7 @@
 import { useCallback, useState } from "react";
 import { isAbort, newActOpID, rest, RestError, type QueryValue } from "~/protocol/index.ts";
 import { refusalText } from "./refusal.ts";
+import { accessNames } from "./access.ts";
 
 /** What one `/iam` write came to. */
 export type IamAnswer =
@@ -142,11 +143,11 @@ function refusalOf(err: unknown, sent: string): IamAnswer {
     return { kind: "unknown", key, text: `${said}${changed} ${next}` };
   }
   const parts = [refusalText(err)];
-  // ONLY A RULE'S REFUSAL names grants the caller lacks. A step-up refusal
-  // names the grants that ADMITTED them, so said here it told somebody holding
-  // people:manage that people:manage would admit them.
+  // ONLY A RULE'S REFUSAL names access the caller lacks. A step-up refusal
+  // names the access that ADMITTED them, so said here it told an admin that
+  // Admin access would admit them.
   if (err.code === "unauthorized" && err.grants.length > 0) {
-    parts.push(`Any one of ${err.grants.join(", ")} would admit you.`);
+    parts.push(`${accessNames(err.grants)} access would admit you.`);
   }
   return {
     kind: "refused",

@@ -30,15 +30,17 @@ const query = vi.hoisted(() => ({
 vi.mock("~/lib/useQuery.ts", () => ({
   useQuery: () => ({ data: query.data, loading: false, error: null, refetch: query.refetch }),
 }));
-// THE READER HOLDS `fleet:operate`, which every gate gesture is decided under.
+// THE READER HOLDS Admin, which every gate gesture is decided under.
 vi.mock("~/lib/viewer.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/viewer.ts")>("~/lib/viewer.ts");
   return {
     ...actual,
     useViewer: () => ({
       login: "ops",
-      grants: ["fleet:operate"],
-      operatesFleet: true,
+      grants: ["admin"],
+      admin: true,
+      tracker: true,
+      knowledge: true,
       handle: "",
       owner: "ops",
       name: "",

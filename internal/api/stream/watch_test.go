@@ -28,7 +28,8 @@ import (
 // A watch installs this node's routing for a seat's `inbox_changed` frames —
 // whose inbox moved, when, under which reason — so it takes the rule the
 // `work_inbox` question takes about that seat: the seat's own holder, whoever
-// leads it through the chart, or the admin grant. Any resolved caller could
+// leads it through the chart, or an admin — each with the tracker, whose
+// frames these are. Any resolved caller could
 // watch any seat before, which made the routing index a way to follow somebody
 // else's inbox the question itself refused.
 //
@@ -43,7 +44,7 @@ func TestAWatchIsDecidedLikeTheInboxQuestion(t *testing.T) {
 		"token:lead":     "platform-lead",
 		"token:stranger": "ops-lead",
 	}, config.APIToken{ID: "admin", Token: "admin-token-long-enough-to-pass",
-		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantFleetOperate}})
+		Grants: []iam.Grant{iam.GrantAdmin}})
 
 	for _, tc := range []struct {
 		name, token string
@@ -51,7 +52,7 @@ func TestAWatchIsDecidedLikeTheInboxQuestion(t *testing.T) {
 	}{
 		{"their own seat", "sarah-token-long-enough-to-pass", true},
 		{"a lead's report", "lead-token-long-enough-to-pass", true},
-		{"the admin grant", "admin-token-long-enough-to-pass", true},
+		{"an admin", "admin-token-long-enough-to-pass", true},
 		{"a stranger", "stranger-token-long-enough-to-pass", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -265,12 +266,12 @@ func newWatchSocketOver(t *testing.T, chart authz.Chart, holders iam.Holders,
 
 	t.Helper()
 	b := config.DefaultBootstrap()
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	for login := range bound {
 		id := strings.TrimPrefix(login, "token:")
 		b.API.Auth.Tokens = append(b.API.Auth.Tokens, config.APIToken{
 			ID: id, Token: id + "-token-long-enough-to-pass",
-			Grants: []iam.Grant{iam.GrantStateRead},
+			Grants: []iam.Grant{iam.GrantTracker},
 		})
 	}
 	b.API.Auth.Tokens = append(b.API.Auth.Tokens, extra...)
@@ -388,7 +389,7 @@ func TestAWatchOfSomebodysLoginIsInstalledOnTheirRecord(t *testing.T) {
 		"token:stranger": "ops-lead",
 	}
 	admin := config.APIToken{ID: "admin", Token: "admin-token-long-enough-to-pass",
-		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantFleetOperate}}
+		Grants: []iam.Grant{iam.GrantAdmin}}
 	records := map[string]string{"sarah.chen": "sarah-chen"}
 
 	t.Run("a lead's report, by login", func(t *testing.T) {

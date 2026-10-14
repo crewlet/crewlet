@@ -49,17 +49,16 @@ type exchangeRig struct {
 }
 
 // tokenBoot is a Tier A holding two tokens, one of which the identity
-// directory binds to a seat, under a ceiling that withholds one grant the
-// first token declares.
+// directory binds to a seat, on a node that serves admin: the founder's token
+// lists admin alone, and the session it opens carries every app admin
+// includes beside it.
 func tokenBoot(t *testing.T) config.Bootstrap {
 	t.Helper()
 	b := bootstrapFor(t)
-	b.API.Auth.MaxGrants = slices.DeleteFunc(slices.Clone(iam.AllGrants),
-		func(g iam.Grant) bool { return g == iam.GrantSandboxRun })
+	b.API.Auth.Admin = iam.AdminServe
 	b.API.Auth.Tokens = []config.APIToken{
-		{ID: "ops", Token: opsValue, Grants: []iam.Grant{
-			iam.GrantStateRead, iam.GrantPeopleManage, iam.GrantSandboxRun}},
-		{ID: "lead", Token: boundValue, Grants: []iam.Grant{iam.GrantWorkWrite}},
+		{ID: "ops", Token: opsValue, Grants: []iam.Grant{iam.GrantAdmin}},
+		{ID: "lead", Token: boundValue, Grants: []iam.Grant{iam.GrantTracker}},
 	}
 	return b
 }
@@ -164,12 +163,13 @@ func TestAnExchangedTierATokenIsASessionThatWorks(t *testing.T) {
 		t.Errorf("the session acts as %v/%v, want the token itself",
 			who["login"], who["kind"])
 	}
-	// THE ENTRY'S GRANTS CUT TO THE CEILING, on this request: the token
-	// declares sandbox:run and this node's ceiling withholds it.
+	// THE ENTRY'S GRANTS AS THIS NODE'S POSTURE LETS IT CARRY THEM, on
+	// this request: the token lists admin, this node serves it, and admin
+	// includes every app — composed by the one function the bearer is.
 	got, _ := json.Marshal(who["grants"])
-	if string(got) != `["state:read","people:manage"]` {
-		t.Errorf("the session carries grants %s, want the entry's cut to "+
-			"the ceiling", got)
+	if string(got) != `["admin","tracker","knowledge"]` {
+		t.Errorf("the session carries grants %s, want the entry's admin and "+
+			"every app it includes", got)
 	}
 	// STEPPED UP BY CONSTRUCTION, as the bearer is.
 	if who["fresh"] != true {
@@ -247,8 +247,8 @@ func TestAnExchangedSessionAnswersToItsTokensID(t *testing.T) {
 	}{
 		{"the value is rotated under the same id", func(tok *config.APIToken) {
 			tok.Token = "a-rotated-tier-a-token-for-ops-0003"
-			tok.Grants = []iam.Grant{iam.GrantStateRead}
-		}, http.StatusOK, []any{string(iam.GrantStateRead)}},
+			tok.Grants = []iam.Grant{iam.GrantTracker}
+		}, http.StatusOK, []any{string(iam.GrantTracker)}},
 		{"the token is given a new id", func(tok *config.APIToken) {
 			tok.ID = "ops-2"
 			tok.Token = "a-rotated-tier-a-token-for-ops-0003"
@@ -452,7 +452,7 @@ func TestSigningOutOfAnExchangedSessionEndsIt(t *testing.T) {
 // A session exchanged from a Tier A token is opened under the token's LOGIN,
 // and the authority table's self arm compares the principal's id — so the
 // named sign-out hands the table the caller's own id for a session whose owner
-// is the caller's own subject. The `lead` token holds no `people:manage`, so
+// is the caller's own subject. The `lead` token holds no admin, so
 // read as anybody else's its own session would be refused. Mutation: ask the
 // table about the owner as stored and the sign-out is refused 403.
 func TestATokensSessionEndsAnotherOfItsOwnByName(t *testing.T) {

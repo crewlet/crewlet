@@ -9,25 +9,31 @@
  * So every control asks here, is drawn for everybody, and is DISABLED with
  * the reason when it cannot act: the sentence is the instruction.
  *
- * SIX REASONS, in the order a person has to clear them:
+ * SEVEN REASONS, in the order a person has to clear them:
  *
  *  - REFUSED — the engine knows who this browser is and will not serve it the
- *    company: a session without `state:read`, or a person whose seat was taken
- *    out of the chart (`store.accessRefused`). Before OFFLINE, because a
- *    socket that is not open for that reason is not one a reconnect brings
- *    back, and "reconnect to make changes" sent a person invited with no
- *    grants — online, and refused — looking for a network fault;
+ *    company: a person whose seat was taken out of the chart
+ *    (`store.accessRefused`). Before OFFLINE, because a socket that is not
+ *    open for that reason is not one a reconnect brings back, and "reconnect
+ *    to make changes" sent a person — online, and refused — looking for a
+ *    network fault;
  *  - OFFLINE — the socket is down. A change is never queued for later: a
  *    queued write is one the person has walked away from believing it
  *    happened, and the company may have moved under it by the time it goes;
  *  - LOADING — nobody has said who this browser is yet;
  *  - ANONYMOUS — nobody is signed in, so there is nobody to record the
  *    change under;
+ *  - NO ACCESS — the change is an app's and the reader does not hold that
+ *    app: "This change needs Tracker access. An admin can give it to you."
+ *    Decided only for a change `viewer.acts` leaves out, and only where the
+ *    app the change writes to ([actionApp]) is one the reader lacks — so a
+ *    change the engine DOES offer without the app (answering an ask you were
+ *    asked) is never held by it;
  *  - NOT SERVED — the engine does not make this change for this person at
  *    all: a company whose tracker is Jira has no native writer, and a caller
  *    the authority table admits to it under no object at all is not offered
  *    it. `viewer.acts` is the engine's own list, never a guess from the
- *    tool's name or from the grants;
+ *    tool's name or from the access;
  *  - HELD — the screen is showing somebody ELSE's record, and says so
  *    ([HoldWrites]). My work read on a report's day is the case it exists
  *    for: the questions there are asked of the report, the queue is theirs,
@@ -50,12 +56,15 @@ import { useLeadScope, type LeadScope } from "./leadScope.ts";
 import { isOwnSeat } from "./seats.ts";
 import { useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
+import { ADMIN, KNOWLEDGE, TRACKER, holds, needsWords, type App } from "./access.ts";
 import type { ActionTool } from "~/protocol/act.ts";
+import { ACTIONS } from "~/contract/actions.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { managedSentence } from "~/protocol/configAnswer.ts";
 
 /** Why a control cannot act, as a value a test can name. */
-export type WriteBlock = "refused" | "offline" | "loading" | "anonymous" | "not_served" | "held";
+export type WriteBlock =
+  "refused" | "offline" | "loading" | "anonymous" | "no_access" | "not_served" | "held";
 
 /**
  * What the socket says about this browser: open, down — which a reconnect
@@ -86,16 +95,38 @@ export type WriteAccess =
 /**
  * The sentence each block is shown as, second person, with its remedy — every
  * block but [HoldWrites]', whose sentence the holding screen writes, because it
- * names whose record is on screen.
+ * names whose record is on screen, and NO ACCESS, whose sentence names the app
+ * ([noAccessReason]).
  */
-export const WRITE_REASONS: Readonly<Record<Exclude<WriteBlock, "held">, string>> = {
+export const WRITE_REASONS: Readonly<Record<Exclude<WriteBlock, "held" | "no_access">, string>> = {
   refused:
-    "The engine is not serving you the company, so nothing in it can be changed here — your Account says what you hold.",
+    "The engine is not serving you the company, so nothing in it can be changed here — your Account says who you are signed in as.",
   offline: "Offline. Reconnect to make changes.",
   loading: "Checking who you are before anything can be changed.",
   anonymous: "Sign in to make changes.",
   not_served: "This engine does not make this change for you.",
 };
+
+/**
+ * The app a change writes to — the tracker for a change landing in the
+ * tracker's log, the knowledge base for one landing in its pages — or null
+ * for a change that is no app's (pausing a seat, answering a coding run).
+ *
+ * READ OFF THE ROW'S OWN `domain` (`contract/actions.ts`), the log the
+ * engine says the write lands in, never a list of tool names kept here: a
+ * change lands in an app's log exactly when it is that app's to make.
+ */
+export function actionApp(tool: ActionTool): App | null {
+  const domain: string | null = ACTIONS[tool].domain;
+  if (domain === "tracker") return TRACKER;
+  if (domain === "pages") return KNOWLEDGE;
+  return null;
+}
+
+/** The sentence a change is held with when the reader lacks its app. */
+export function noAccessReason(app: App): string {
+  return needsWords("This change", [app]);
+}
 
 /** The decision itself, over values — what the hook reads, and what a test pins. */
 export function writeAccess(
@@ -105,7 +136,7 @@ export function writeAccess(
   /** The hold the nearest [HoldWrites] placed, or null where none is. */
   held: string | null = null,
 ): WriteAccess {
-  const blocked = (block: Exclude<WriteBlock, "held">): WriteAccess => ({
+  const blocked = (block: Exclude<WriteBlock, "held" | "no_access">): WriteAccess => ({
     can: false,
     block,
     reason: WRITE_REASONS[block],
@@ -113,7 +144,17 @@ export function writeAccess(
   if (link !== "open") return blocked(link);
   if (viewer.loading) return blocked("loading");
   if (viewer.anonymous) return blocked("anonymous");
-  if (!viewer.acts.includes(tool)) return blocked("not_served");
+  if (!viewer.acts.includes(tool)) {
+    // THE APP FIRST, where the reader lacks it: "needs Tracker access" is a
+    // remedy they can ask an admin for, and "this engine does not make this
+    // change for you" about a change it would make once they held it sends
+    // them nowhere.
+    const app = actionApp(tool);
+    if (app !== null && !holds(viewer.grants, app)) {
+      return { can: false, block: "no_access", reason: noAccessReason(app) };
+    }
+    return blocked("not_served");
+  }
   if (held) return { can: false, block: "held", reason: held };
   return { can: true, as: viewer.owner || viewer.login, acts: viewer.acts };
 }
@@ -203,10 +244,10 @@ export function useMessageSeatAccess(handle: string): WriteAccess {
  * seat, a server — as opposed to acting in it.
  *
  * A DIFFERENT GATE FROM AN ACT, and the difference is the engine's: a
- * `/config` write is decided by the `config:write` GRANT, not by the act
- * catalogue and not by a seat binding — so a person bound to no
- * seat who holds it may change a ceiling, and a bound person without it may
- * not. `viewer.grants` is the engine's own answer to exactly that question,
+ * `/config` write is decided by ADMIN, not by the act catalogue and not by a
+ * seat binding — so a credential bound to no seat that holds it may change a
+ * ceiling, and a bound person without it may not. `viewer.grants` is the
+ * engine's own answer to exactly that question,
  * read here rather than guessed per screen. The step-up such a write may
  * ask for is the transport's to replay (`protocol/rest.ts`), not a block: a
  * person asked to confirm who they are can, on the spot.
@@ -230,8 +271,8 @@ export type ConfigWriteBlock =
 export type ConfigWriteAccess =
   { can: true } | { can: false; block: ConfigWriteBlock; reason: string };
 
-/** The grant a configuration write is decided by (`iam.GrantConfigWrite`). */
-export const CONFIG_WRITE_GRANT = "config:write";
+/** The access a configuration write is decided by (`iam.GrantAdmin`). */
+export const CONFIG_WRITE_GRANT = ADMIN;
 
 /**
  * The sentence each block is shown as — every block but a [HoldWrites]', a
@@ -245,17 +286,17 @@ export const CONFIG_WRITE_REASONS: Readonly<
   offline: WRITE_REASONS.offline,
   loading: WRITE_REASONS.loading,
   anonymous: "Sign in to change the configuration.",
-  no_grant: "Needs the config:write grant. An administrator with people:manage can give it to you.",
+  no_grant: needsWords("Changing the configuration", [ADMIN]),
 };
 
 /**
  * What a `/config` write the engine refused on AUTHORITY says, in one
  * sentence — the one reading every writer of the company document shows.
  *
- * BY THE REFUSAL'S CODE. Most are the grant this module gates on, and say so
+ * BY THE REFUSAL'S CODE. Most are the access this module gates on, and say so
  * in the gate's own words. But a step-up the person declined and a write sent
- * from another site are refused 403 too, and "you do not hold config:write"
- * about either sends somebody to an administrator for nothing — so every
+ * from another site are refused 403 too, and "you do not hold Admin" about
+ * either sends somebody to an admin for nothing — so every
  * other code the request guard writes is said in the act surface's words
  * for it (`ACT_ERRORS`), which are the same refusals. A 401 has already sent
  * the reader to sign in (`protocol/rest.ts`); its sentence says the same.
@@ -288,9 +329,8 @@ export function useManagedConfig(): string | null {
 }
 
 /**
- * Whether this reader may change the company's configuration at all — the
- * `config:write` grant, and on a managed document a credential it names as a
- * writer.
+ * Whether this reader may change the company's configuration at all — Admin,
+ * and on a managed document a credential it names as a writer.
  *
  * THE STANDING ANSWER, apart from this moment's connection or a screen's
  * hold: what a screen asks when it decides whether a change is the reader's
@@ -300,7 +340,7 @@ export function useManagedConfig(): string | null {
  * disagree about who may write.
  */
 export function mayChangeConfig(viewer: ViewerState): boolean {
-  return viewer.grants.includes(CONFIG_WRITE_GRANT) && managedBlock(viewer) === null;
+  return holds(viewer.grants, CONFIG_WRITE_GRANT) && managedBlock(viewer) === null;
 }
 
 /** The decision over values — what the hook reads, and what a test pins. */
@@ -319,8 +359,8 @@ export function configWriteAccess(
   if (link !== "open") return blocked(link);
   if (viewer.loading) return blocked("loading");
   if (viewer.anonymous) return blocked("anonymous");
-  if (!viewer.grants.includes(CONFIG_WRITE_GRANT)) return blocked("no_grant");
-  // AFTER THE GRANT, because a reader who could not write anyway is told the
+  if (!holds(viewer.grants, CONFIG_WRITE_GRANT)) return blocked("no_grant");
+  // AFTER ADMIN, because a reader who could not write anyway is told the
   // thing they can clear; and BEFORE A HOLD, because no screen can release
   // it. The engine's own answer decides — `config_writer` — and only a
   // document somebody manages is managed.
@@ -353,25 +393,25 @@ export type OrgTarget =
 
 /**
  * The sentence a lead reads where a change reaches outside what they lead:
- * which units those are, and the grant that reaches the rest.
+ * which units those are, and the access that reaches the rest.
  */
 export function outsideScopeReason(scope: LeadScope): string {
   const names = scope.tops.map((t) => t.name);
   const led =
     names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-  return `You lead ${led}, and this is outside ${names.length === 1 ? "it" : "them"}: changing it takes the config:write grant.`;
+  return `You lead ${led}, and this is outside ${names.length === 1 ? "it" : "them"}: changing it takes Admin access.`;
 }
 
 /**
  * Whether this browser may change one part of the org chart, and why not.
  *
- * THE COMPANY'S GRANT, OR A LEAD INSIDE THEIR OWN SUBTREE — the engine's rule
- * (`lib/leadScope.ts`): without `config:write`, a person may still change the
+ * ADMIN, OR A LEAD INSIDE THEIR OWN SUBTREE — the engine's rule
+ * (`lib/leadScope.ts`): without Admin, a person may still change the
  * seats and units inside a unit they lead, through the per-seat and per-unit
  * writes (`/config/roles/{handle}`, `/config/units/{key}`), and the engine
  * refuses whatever such a write reaches outside it. A control about a seat
  * or a unit OUTSIDE what they lead says so in its own words rather than as a
- * missing grant, since the person may well know they lead something. And on a
+ * missing access, since the person may well know they lead something. And on a
  * managed document (ADR-0030) a lead's write is refused like everybody's but
  * its writers', so the lead path ends at [managedBlock] too.
  */
@@ -391,7 +431,7 @@ export function orgWriteAccess(
   if (!inside) return { can: false, block: "outside_scope", reason: outsideScopeReason(scope) };
   // A LEAD IS NO WRITER OF A MANAGED DOCUMENT either: the engine refuses
   // every credential its writers list does not name, a lead's subtree write
-  // included (ADR-0030). After the scope, for the grant's reason above.
+  // included (ADR-0030). After the scope, for Admin's reason above.
   const managed = managedBlock(viewer);
   if (managed !== null) return { can: false, block: "managed", reason: managed };
   if (held) return { can: false, block: "held", reason: held };

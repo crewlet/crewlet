@@ -31,8 +31,8 @@ func handedOnly(t *testing.T, variable, value string) func(string) (string, bool
 
 // A COLLEAGUE IS FOUND BY AN ID THE HANDED LOOKUP HOLDS, as the agent's own
 // lookup_colleague finds them: the same people, by the same ids, whichever
-// surface asks. Asked by a reader holding `config:read`, the one the exact-id
-// tier answers at all.
+// surface asks. Asked by an admin, the one reader the exact-id tier answers at
+// all.
 //
 // Mutation: build the corpus with a nil lookup (the process environment), and
 // the reference resolves to nothing and nobody is found.

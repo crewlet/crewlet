@@ -37,7 +37,7 @@ export function Hero({
   budget: OrgBudget | null;
   /**
    * Whether the reader may set a ceiling: `mayChangeConfig` — they hold
-   * `config:write` and, on a managed document, are one of its writers.
+   * Admin and, on a managed document, are one of its writers.
    */
   mayConfigure: boolean;
 }) {

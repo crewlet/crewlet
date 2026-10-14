@@ -35,9 +35,9 @@ func post(t *testing.T, a *api.App, path, token string) (int, map[string]any) {
 //
 // IT CARRIED NO GRANTS, and every case over it passed: the deployment's own
 // controls asked only whether somebody resolved, so a token declaring nothing
-// under a ceiling of nothing took backups. They take `fleet:operate` now, so
-// the fixture states the authority its cases are about — and
-// TestThePostureMatrix states what a narrower one is refused.
+// on a node conferring nothing took backups. They take `admin` now, so the
+// fixture states the authority its cases are about — and TestThePostureMatrix
+// states what a narrower one is refused.
 func guarded() *config.Bootstrap {
 	b := config.DefaultBootstrap()
 	authorize(&b, config.APIToken{ID: "ops", Token: "t0ken"})

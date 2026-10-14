@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // ABSENT IS NOT ZERO. A node that publishes no status (its status hook overran
@@ -38,7 +39,7 @@ func TestAPublishedStatusRoundTrips(t *testing.T) {
 	pm := uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8")
 	want := coord.NodeStatus{
 		InFlight: 3, Draining: true, Posture: "shed", StartedAt: started,
-		GrantCeilingHash: "2f1a8c0d3b4e5f60",
+		AdminPosture: iam.AdminServe,
 		MCP: []coord.MCPServerStatus{
 			{Server: "github", Shared: true, Started: 1, Tools: 12},
 			{Server: "jira", Started: 2, Failed: 1, Tools: 9,
@@ -146,39 +147,45 @@ func TestAnUnsetPostureIsNotPublished(t *testing.T) {
 	}
 }
 
-// THE GRANT CEILING IS ABSENT RATHER THAN EMPTY on a node that declares none.
+// THE ADMIN POSTURE IS ABSENT RATHER THAN EMPTY on a node that declares none.
 //
 // It is the same rule as the posture above and it matters more here, because
 // what an empty cell would mean is the opposite of the truth: a worker node
-// binds no API and therefore has no ceiling to state, while an empty string on
-// the wire reads as a peer whose ceiling differs from every other node's — a
-// disagreement drawn across a fleet that has none, on exactly the signal an
-// operator is meant to trust.
-func TestANodeWithNoGrantCeilingPublishesNone(t *testing.T) {
+// binds no API and therefore has no admin posture to state, while an empty
+// string on the wire reads as a peer whose posture differs from every other
+// node's — a disagreement drawn across a fleet that has none, on exactly the
+// signal an operator is meant to trust. And each posture survives the JSON
+// round trip the lease store does, under the key `/query/fleet` reads.
+// Mutation: publish the field whatever its value and the first assertion
+// goes red.
+func TestANodeWithNoAdminPosturePublishesNone(t *testing.T) {
 	t.Parallel()
 	meta := coord.NodeStatus{InFlight: 1}.Meta()
-	if _, present := meta["grant_ceiling"]; present {
-		t.Errorf("a node with no ceiling published one: %+v", meta)
+	if _, present := meta["admin"]; present {
+		t.Errorf("a node with no posture published one: %+v", meta)
 	}
-	// The counterfactual: a node that HAS one publishes it, and it
-	// survives the JSON round trip the lease store does.
-	raw, err := json.Marshal(map[string]any{
-		coord.StatusKey: coord.NodeStatus{GrantCeilingHash: "abc123"}.Meta(),
-	})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var round map[string]any
-	if err := json.Unmarshal(raw, &round); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	got, ok := coord.StatusFromMeta(round)
-	if !ok {
-		t.Fatal("a published status read as absent")
-	}
-	if got.GrantCeilingHash != "abc123" {
-		t.Errorf("grant ceiling = %q, want it carried across the round trip",
-			got.GrantCeilingHash)
+	for _, posture := range iam.AdminPostures {
+		raw, err := json.Marshal(map[string]any{
+			coord.StatusKey: coord.NodeStatus{AdminPosture: posture}.Meta(),
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !strings.Contains(string(raw), `"admin":"`+string(posture)+`"`) {
+			t.Errorf("the wire carries %s, want the posture under \"admin\"", raw)
+		}
+		var round map[string]any
+		if err := json.Unmarshal(raw, &round); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		got, ok := coord.StatusFromMeta(round)
+		if !ok {
+			t.Fatal("a published status read as absent")
+		}
+		if got.AdminPosture != posture {
+			t.Errorf("admin posture = %q, want %q carried across the round trip",
+				got.AdminPosture, posture)
+		}
 	}
 }
 

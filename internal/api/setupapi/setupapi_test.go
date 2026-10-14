@@ -2219,18 +2219,20 @@ func (v *vault) forget(names ...string) {
 	}
 }
 
-// CONNECTING IS config:write AND secrets:write, and reading is config:read.
+// EVERY ROUTE HERE IS ADMIN'S, reading it included.
 //
 // These routes decided nothing: the guard in front of them answers only
 // whether somebody resolved, which meant "the operator" while an operator token
-// was the only credential. A person signed in holding `state:read` alone could
-// then seal credentials into the fleet's store and point the company document
-// at them. This surface performs no write of its own — the credential goes
-// through the store /secrets serves — so a caller who could not write it there
-// must not be able to write it here: a submission CARRYING a credential takes
-// `secrets:write` on top of the route's `config:write`, and one carrying none
-// does not.
-func TestConnectingTakesTheConfigWriteAndTheCredentialWrite(t *testing.T) {
+// was the only credential. A person signed in holding a read-only permission
+// alone could then seal credentials into the fleet's store and point the
+// company document at them. So every route is stated against a caller holding
+// admin and against one holding EVERY APP — the most a caller can carry
+// without admin — which is refused naming admin alone (ADR-0033: which
+// credentials a company has not configured is a map of what to attack, and no
+// app opens it). A submission CARRYING a credential, a provisioning pass and a
+// GitHub App each also ask `secrets.write`, which admin opens too; refused on
+// the route, none of them reaches it, and nothing is sealed.
+func TestEverySetupRouteIsAdmins(t *testing.T) {
 	t.Parallel()
 	sealing := `{
 		"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com",
@@ -2239,57 +2241,41 @@ func TestConnectingTakesTheConfigWriteAndTheCredentialWrite(t *testing.T) {
 	}`
 	for _, c := range []struct {
 		name         string
-		grants       []iam.Grant
 		method, path string
 		body         string
-		refusedFor   iam.Grant // "" when the caller is admitted
 	}{
-		{"the listing, as a reader", []iam.Grant{iam.GrantConfigRead},
-			http.MethodGet, "/setup/integrations", "", ""},
-		{"the listing, without the read", []iam.Grant{iam.GrantStateRead},
-			http.MethodGet, "/setup/integrations", "", iam.GrantConfigRead},
-		{"a credential, with only the config write", []iam.Grant{iam.GrantConfigWrite},
-			http.MethodPost, "/setup/integrations/datadog/inputs", sealing,
-			iam.GrantSecretWrite},
-		{"a credential, without the config write",
-			[]iam.Grant{iam.GrantSecretWrite, iam.GrantConfigRead},
-			http.MethodPost, "/setup/integrations/datadog/inputs", sealing,
-			iam.GrantConfigWrite},
-		{"a credential, with both",
-			[]iam.Grant{iam.GrantConfigWrite, iam.GrantSecretWrite},
-			http.MethodPost, "/setup/integrations/datadog/inputs", sealing, ""},
-		{"no credential, with only the config write", []iam.Grant{iam.GrantConfigWrite},
-			http.MethodPost, "/setup/integrations/datadog/inputs",
-			`{"values": {"site": "datadoghq.com"}}`, ""},
+		{"the listing", http.MethodGet, "/setup/integrations", ""},
+		{"a credential", http.MethodPost, "/setup/integrations/datadog/inputs", sealing},
+		{"no credential", http.MethodPost, "/setup/integrations/datadog/inputs",
+			`{"values": {"site": "datadoghq.com"}}`},
 		// A PASS IS HANDED A SINK THAT MINTS AND SEALS, so it is a
 		// credential write whether or not this one mints anything — and
 		// it is refused before its body is read.
-		{"a provisioning pass, with only the config write",
-			[]iam.Grant{iam.GrantConfigWrite},
-			http.MethodPost, "/setup/integrations/datadog/provision", `{}`,
-			iam.GrantSecretWrite},
-		{"a GitHub App, with only the config write", []iam.Grant{iam.GrantConfigWrite},
-			http.MethodPost, "/setup/integrations/github/app", `{"seat": "sre-lead"}`,
-			iam.GrantSecretWrite},
+		{"a provisioning pass", http.MethodPost,
+			"/setup/integrations/datadog/provision", `{}`},
+		{"a GitHub App", http.MethodPost, "/setup/integrations/github/app",
+			`{"seat": "sre-lead"}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
+			admitted := newSurface(t)
+			admitted.seed(t)
+			admitted.grants = []iam.Grant{iam.GrantAdmin}
+			if res := admitted.do(t, c.method, c.path, c.body, nil); res.Code == http.StatusForbidden {
+				t.Errorf("holding admin: refused %s", res.Body)
+			}
+
 			s := newSurface(t)
 			s.seed(t)
-			s.grants = c.grants
+			s.grants = slices.Clone(iam.Apps)
 			res := s.do(t, c.method, c.path, c.body, nil)
-			if c.refusedFor == "" {
-				if res.Code == http.StatusForbidden {
-					t.Errorf("holding %v: refused %s", c.grants, res.Body)
-				}
-				return
-			}
 			if res.Code != http.StatusForbidden {
-				t.Fatalf("holding %v: %d %s, want 403", c.grants, res.Code, res.Body)
+				t.Fatalf("holding every app and not admin: %d %s, want 403",
+					res.Code, res.Body)
 			}
 			grants, _ := decode(t, res)[authz.DetailGrants].([]any)
-			if len(grants) != 1 || grants[0] != string(c.refusedFor) {
-				t.Errorf("refused naming %v, want %s", grants, c.refusedFor)
+			if len(grants) != 1 || grants[0] != string(iam.GrantAdmin) {
+				t.Errorf("refused naming %v, want [admin]", grants)
 			}
 			if _, sealed := s.vault.get("DATADOG_WEBHOOK_TOKEN"); sealed {
 				t.Error("a refused submission sealed a value")

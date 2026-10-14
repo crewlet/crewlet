@@ -76,14 +76,13 @@ import (
 // surface for `set_priorities` refused the founder every time.
 //
 // Both are gone because the premise is: an actor is a PRINCIPAL now, an
-// operator holds grants, and [authz.ClassOwnOrLead] answers "the owner, their
-// lead, or the admin path" in one place for every surface. What is left here
-// is the half a chart cannot know — which VERB each answer unlocks — and one
+// operator holds permissions, and [authz.ClassOwnOrLead] answers "the owner,
+// their lead, or the admin path" in one place for every surface. What is left
+// here is the half a chart cannot know — which VERB each answer unlocks — and one
 // invariant no caller may waive: a seat never writes a colleague's record.
 type PersonAuthority struct {
 	// Authorized reports a caller the authority table admitted for this
-	// person's record: the owner, whoever leads them, or the deployment
-	// grant.
+	// person's record: the owner, whoever leads them, or an admin.
 	Authorized bool
 
 	// Agent reports a caller acting AS A SEAT rather than as a human.

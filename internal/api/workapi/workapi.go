@@ -436,8 +436,8 @@ func (s *Service) onPages(h servedHandler) http.HandlerFunc {
 // mounter is the one registration shape both halves use.
 type mounter func(pattern string, p authz.Policy, h http.HandlerFunc)
 
-// kinded is a policy naming only its object's KIND: the colleague writes,
-// decided by capability, and the preconditions a row-decided route admits on.
+// kinded is a policy naming only its object's KIND: an app's own verbs,
+// decided on the app, and the preconditions a row-decided route admits on.
 func kinded(a authz.Action, kind authz.ObjectKind) authz.Policy {
 	return authz.Policy{Action: a, Object: func(*http.Request) authz.Object {
 		return authz.Object{Kind: kind}

@@ -55,13 +55,14 @@ type colleagueAnswer struct {
 // colleague on the strength of a suggestion was guessed at, and the engine
 // does not guess (`agent/colleague`'s rule).
 //
-// THE CHAT-ID TIER NEEDS THE CONFIGURATION READ. A seat's contact identities
-// are read only through the grant the company document is read under
-// (organization-model.md, "What a signed-in reader can see about a seat"),
-// and an exact-id tier answered to anybody holding the board's read would be
-// an oracle for them: paste an id, learn whose it is. So a caller
-// without `config:read` resolves over handles and names alone, and one holding
-// it over everything the agent's lookup reads.
+// THE CHAT-ID TIER IS AN ADMIN'S. A seat's contact identities are read only
+// by whoever reads the company document — an admin (organization-model.md,
+// "What a signed-in reader can see about a seat") — and an exact-id tier
+// answered to everybody the overview is would be an oracle for them: paste an
+// id, learn whose it is. So a caller who is not an admin resolves over handles
+// and names alone, and an admin over everything the agent's lookup reads. An
+// AGENT's own `lookup_colleague` keeps every tier, because a seat mentions a
+// person by the id the chat surface knows them by and could not otherwise.
 //
 // AND A WITHHELD PERSON IS WITHHELD HERE TOO: the corpus is built with the
 // identity directory's withholding ([Sources.WithheldContacts]), exactly as a
@@ -91,7 +92,7 @@ func (s Sources) colleague(ctx context.Context, p Params) (any, error) {
 	// the secret store, read here from the process environment, was a person
 	// the exact-id tier could not find.
 	corpus := builtin.Corpus(s.organization(), s.Env, withheld)
-	if !principal.Can(iam.GrantConfigRead) {
+	if !principal.Can(iam.GrantAdmin) {
 		for i := range corpus {
 			corpus[i].External = nil
 		}

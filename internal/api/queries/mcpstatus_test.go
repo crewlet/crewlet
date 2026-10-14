@@ -261,15 +261,14 @@ func TestTheServerStatusCarriesNoCredential(t *testing.T) {
 	}
 }
 
-// ON THE CONFIGURATION READ: launch commands and each failure's first line are
-// the configuration and what became of it, which `/config` shows the same
-// reader. And an unreadable lease table is an error, not a fleet with no
-// nodes.
-func TestTheServerStatusIsReadOnTheConfigurationGrantAndNeverGuesses(t *testing.T) {
+// ADMIN'S: launch commands and each failure's first line are the
+// configuration and what became of it, which `/config` shows the same reader.
+// And an unreadable lease table is an error, not a fleet with no nodes.
+func TestTheServerStatusIsAdminsAndNeverGuesses(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, mcpSources(t, mcpFleet(t)))
-	needsExactly(t, r, "mcp_servers_status", iam.GrantConfigRead)
+	requiresExactly(t, r, "mcp_servers_status", iam.GrantAdmin)
 
 	broken := queries.NewRegistry()
 	queries.Register(broken, queries.Sources{Coord: unreadableLeases{coordmemory.New()}})

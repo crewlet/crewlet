@@ -315,7 +315,7 @@ function AddNodeFields({ form }: { form: AddForm }) {
         ) : (
           <p className="t-caption">
             They’re reached only through the dashboard. Another system finds a person by their
-            contact identity, so adding one takes the config:write grant.
+            contact identity, so adding one takes Admin access.
           </p>
         ))}
     </>

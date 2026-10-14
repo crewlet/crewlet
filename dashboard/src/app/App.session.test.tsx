@@ -74,27 +74,22 @@ afterEach(() => {
 // at boot, so the sign-in, an invitation's and a reset link's page each sent a
 // refused handshake, a refused probe of it and a refused degraded-mode
 // snapshot — console errors on a page that needs nobody. The frame dials it
-// now, and only once `GET /auth/session` has said somebody is signed in who
-// holds `state:read`: a browser that opened `/dashboard` signed out still sent
-// all three on its way to the sign-in, and a person invited with no grants
-// sent them twice on landing. The CONTROL is a screen in the frame with a
-// session that holds it, which dials. Mutation: dial at boot again, from the
-// frame before the session has answered or whatever it holds, or not at all,
-// and one side goes red.
+// now, and only once `GET /auth/session` has said somebody is signed in: a
+// browser that opened `/dashboard` signed out still sent all three on its way
+// to the sign-in. WHATEVER THE SESSION HOLDS IT IS DIALLED — the socket serves
+// every principal the overview — so a person holding no app dials as one
+// holding Admin does. Mutation: dial at boot again, from the frame before the
+// session has answered, or only for a session holding some access, and one
+// side goes red.
 describe("the socket", () => {
   test.each([
-    ["the sign-in", "#/login", ["state:read"], 0],
-    ["an invitation's page", "#/invite/abc.def", ["state:read"], 0],
-    ["a reset link's page", "#/reset/abc.def", ["state:read"], 0],
+    ["the sign-in", "#/login", [], 0],
+    ["an invitation's page", "#/invite/abc.def", [], 0],
+    ["a reset link's page", "#/reset/abc.def", [], 0],
     ["a screen in the frame, nobody signed in", "#/inbox", null, 0],
-    ["a screen in the frame, signed in holding no grants", "#/inbox", [], 0],
-    ["a screen in the frame, signed in without state:read", "#/inbox", ["audit:read"], 0],
-    [
-      "a screen in the frame, signed in holding state:read (the control)",
-      "#/inbox",
-      ["state:read"],
-      1,
-    ],
+    ["a screen in the frame, signed in holding no app", "#/inbox", [], 1],
+    ["a screen in the frame, signed in holding one app", "#/inbox", ["knowledge"], 1],
+    ["a screen in the frame, signed in holding Admin", "#/inbox", ["admin"], 1],
   ])("%s, at %s, holding %j, dials %d times", async (_, hash, grants, dials) => {
     const dialled: string[] = [];
     Object.defineProperty(globalThis, "WebSocket", {

@@ -190,7 +190,7 @@ test("a human seat is added with no contact when none is typed", () => {
 test("a lead adds a person with no contact identity, and is told why none is asked for", () => {
   const view = open(scopedState(fixtureCompany(), "engineering"), "unit:engineering", "human");
   expect(screen.queryByLabelText("Contact")).toBeNull();
-  expect(screen.getByText(/adding one takes the config:write grant/)).toBeDefined();
+  expect(screen.getByText(/adding one takes Admin access/)).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Add human seat" }));
   expect(view.state().log.ops[0]).toMatchObject({ type: "addSeat", data: { kind: "human" } });
   cleanup();

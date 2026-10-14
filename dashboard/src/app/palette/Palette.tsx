@@ -205,8 +205,7 @@ export function CommandPalette({
   const tools = useTools();
   const toast = useToast();
   const index = useMemo(() => indexOrg(org), [org]);
-  // A BROWSER THE ENGINE SERVES NO COMPANY ASKS IT NOTHING: no access yet, or
-  // refused. Its questions would wait on a socket nobody dials, drawn as
+  // A BROWSER THE ENGINE REFUSED ASKS IT NOTHING. Its questions would wait on a socket nobody dials, drawn as
   // searches that never finish; the seats and tools a refusal dropped are not
   // here to list (`Store.setAccessRefused`); and the writes say why they are
   // held, through the gate every write reads.
@@ -300,15 +299,22 @@ export function CommandPalette({
   const names = useQuery("colleague", { q: nameTerm }, { enabled: wantsNames });
   // THE COMPANY'S PROJECTS, once: to name the project a create lands in, and
   // to offer them when nothing on screen or in the chart says which.
-  const projectsRead = useQuery("work_projects", { limit: PROJECT_PAGE }, { enabled: served });
+  // A TRACKER QUESTION, asked only of a reader holding Tracker: without it the
+  // engine refuses the list, and nothing a reader without it can do here
+  // files a task anyway.
+  const projectsRead = useQuery(
+    "work_projects",
+    { limit: PROJECT_PAGE },
+    { enabled: served && viewer.tracker },
+  );
   const projects: WorkProjectRow[] | null = projectsRead.data?.projects ?? null;
   const projectName = (key: string) => projects?.find((p) => p.key === key)?.name ?? "";
   // THE SWITCHER, which "Switch project…" opens over whatever the palette
   // leaves behind it as it closes.
   const openSwitcher = useOpenProjectSwitcher();
-  // NOT OFFERED WHERE THE ENGINE SERVES NO COMPANY: the switcher lists
-  // projects this browser is not served, and asks nothing for it.
-  const switchHits = served ? [switchProjectHit(openSwitcher)] : [];
+  // NOT OFFERED WHERE THE ENGINE SERVES NO COMPANY, NOR TO A READER WITHOUT
+  // TRACKER: the switcher lists projects, which is the tracker's question.
+  const switchHits = served && viewer.tracker ? [switchProjectHit(openSwitcher)] : [];
 
   // WHICH TERM EACH ANSWER ON HAND IS FOR. `useQuery` keeps the previous
   // answer across a change of parameters — right for a polled table, wrong
@@ -332,7 +338,11 @@ export function CommandPalette({
   const assign = useAct("update_work_item");
   const create = useAct("create_work_item");
   const pickItem = pick?.kind === "assign" ? pick.item : "";
-  const itemRead = useQuery("work_item", { id: pickItem }, { enabled: pickItem !== "" });
+  const itemRead = useQuery(
+    "work_item",
+    { id: pickItem },
+    { enabled: pickItem !== "" && viewer.tracker },
+  );
 
   // The task at hand: the one on screen, else the best task hit for this term.
   const onScreen = routeTask(route.path);
@@ -1010,6 +1020,8 @@ export function CommandPalette({
     if (picking)
       return pickTerm ? `No agent matches “${pickTerm}”.` : "This company has no agents.";
     if (scope === "tasks") {
+      // WITHHELD FIRST: no term a reader without Tracker types finds a task.
+      if (tasks.withheld) return tasks.withheld;
       if (term.length < SEARCH_MIN) return "Type two or more characters.";
       if (tooLong) return tooLong;
       if (taskAnswer.error) return "Task search did not run.";
@@ -1020,6 +1032,7 @@ export function CommandPalette({
       return `No task matches “${term}”.`;
     }
     if (scope === "pages") {
+      if (pages.withheld) return pages.withheld;
       if (term.length < SEARCH_MIN) return "Type two or more characters.";
       if (tooLong) return tooLong;
       if (pageAnswer.error) return "Knowledge search did not run.";

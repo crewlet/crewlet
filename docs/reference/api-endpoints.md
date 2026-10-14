@@ -141,7 +141,7 @@ one JSON object, and it always has the same three parts in the same places:
 - **A `500 internal_error` carries no reason.** Its sentence says the reason
   is in this node's log, and that is where it is: a fault's own words are a
   store's or a driver's — a database path, a connection string — and holding
-  a grant does not make a caller somebody they are meant for. A route may
+  a permission does not make a caller somebody they are meant for. A route may
   still say what the request itself carried and what of it already landed
   (`/iam` does, beside the code), never what failed underneath.
 
@@ -231,19 +231,19 @@ node means nothing was done.
 | `GET` | `/tokens/series` | The same spend **with a time axis** — one bucket per company day or ISO week, split into bands (see [below](#get-tokensseries)) |
 | `GET` | `/agents/activity` | Every seat's turns over a window of company days — counts, the first-pass rate over reviewed turns, turn-duration quantiles and a day-by-day series (see [`seat_activity`](#queries)) |
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
-| `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, per-node config epoch, and where the company's files are kept with what the object store's collector last found. **Always needs a credential carrying `fleet:operate`** — a signed-in session or a bearer, like every route here — because it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
+| `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, per-node config epoch, and where the company's files are kept with what the object store's collector last found. **Always needs a credential carrying `admin`** — a signed-in session or a bearer, like every route here — because it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against — per calendar window — and which scopes are being refused (see [below](#get-budgets)) |
-| `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Takes `fleet:operate`** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
-| `GET` | `/fleet/broker` | The fleet broker's membership: every live node's broker kind as its presence advertises it, the JetStream metadata group as a member reports it, and every disagreement between the two — a member gone for good first among them. **Takes `fleet:operate`** (see [The broker's membership](#the-brokers-membership)) |
-| `POST` | `/fleet/broker/remove/{node}` | Remove a member from the metadata group through a live member's system account. `?confirm=` repeats the node id; refused while the node holds a live presence lease as a member unless `?force=true`. **Takes `fleet:operate`** and a [recent proof](#some-gestures-ask-how-recently-you-proved-who-you-are) |
-| `POST` | `/fleet/broker/remove-peer/{peer}` | The same removal, naming the voter by the raft peer id `GET /fleet/broker` shows — for a voter whose name no member has heard. `?confirm=` repeats the peer id. **Takes `fleet:operate`** and a recent proof, as the removal by name does |
+| `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Takes `admin`** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
+| `GET` | `/fleet/broker` | The fleet broker's membership: every live node's broker kind as its presence advertises it, the JetStream metadata group as a member reports it, and every disagreement between the two — a member gone for good first among them. **Takes `admin`** (see [The broker's membership](#the-brokers-membership)) |
+| `POST` | `/fleet/broker/remove/{node}` | Remove a member from the metadata group through a live member's system account. `?confirm=` repeats the node id; refused while the node holds a live presence lease as a member unless `?force=true`. **Takes `admin`** and a [recent proof](#some-gestures-ask-how-recently-you-proved-who-you-are) |
+| `POST` | `/fleet/broker/remove-peer/{peer}` | The same removal, naming the voter by the raft peer id `GET /fleet/broker` shows — for a voter whose name no member has heard. `?confirm=` repeats the peer id. **Takes `admin`** and a recent proof, as the removal by name does |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
-| `GET` | `/credential-pool` | Every `providers.llm` entry, each key it rotates through by variable name, and which of them a vendor is refusing and until when — this node's pools beside the fleet's cooldown ledger (never a value). **Takes `config:read`** (see [below](#get-credential-pool)) |
-| `GET` | `/backups` | What the fleet has backed up: each owner's newest point as the trim reads it, and every backup a person asked a node for, failures included. **Takes `fleet:operate`** (see [below](#get-backups)) |
-| `GET` | `/mcp-servers` | What each configured MCP server did on each live node — started, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Takes `config:read`** (see [below](#get-mcp-servers)) |
+| `GET` | `/credential-pool` | Every `providers.llm` entry, each key it rotates through by variable name, and which of them a vendor is refusing and until when — this node's pools beside the fleet's cooldown ledger (never a value). **Takes `admin`** (see [below](#get-credential-pool)) |
+| `GET` | `/backups` | What the fleet has backed up: each owner's newest point as the trim reads it, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
+| `GET` | `/mcp-servers` | What each configured MCP server did on each live node — started, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Takes `admin`** (see [below](#get-mcp-servers)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
-| `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Takes `fleet:operate`, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
+| `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
 | `POST` | `/work/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
 | `POST` | `/work/retention/evict/{node}` | Install the eviction gate on a node on every log the trim counts nodes on — the tracker's, the knowledge base's and the identity estate's — so the trim can pass a floor it is pinning. Refused `409` while the node holds a live presence lease; answers per log (see [below](#the-three-retention-gestures-that-write)) |
 | `POST` | `/work/retention/readmit/{node}` | Lift it on every one of those logs — the inverse commit rather than a delete. Refused `409` while the node still lacks records a trim floor lets the log delete |
@@ -260,10 +260,10 @@ node means nothing was done.
 | `GET` | `/work/projects/{key}` | One project in **full**: the six statuses with their labels, groups and descriptions; the effective types; the custom fields grouped by which type they apply to, required first, with the workspace ids this project **shadows** named; its tags; its default assignee, lead and owning unit. `?for_type=` narrows the fields to one type plus the ones that apply to every type. Unknown key answers 404 naming the nearest three; a `for_type` the company does not file answers 400 `bad_params`, not 404 — the project is there and the argument is what to change |
 | `GET` | `/work/files` | One project's **files**, in path order: `?project=` (required), `?folder=` to narrow to the paths under one folder, `?removed=true` to include removed files, `?limit=` (default 200, max 1000) and `?after=`, the `next` the previous page answered. An unknown project is `404 no_project`, never an empty page (see [below](#project-files)) |
 | `GET` | `/work/files/{project}/{path...}` | One file's **bytes**, streamed, with its version as the `ETag`. `503 content_unavailable` where the file is listed and its content could not be read right now (see [below](#project-files)) |
-| `PUT` | `/work/files/{project}/{path...}` | Write a file: the request body is its content, `Content-Type` its type, `If-Match` the version it replaces and an `Idempotency-Key` how an `unknown` answer is retried. **Takes `work:write`**, and the write is attributed to whoever the request resolved to (see [below](#project-files)) |
-| `DELETE` | `/work/files/{project}/{path...}` | Remove a file. `If-Match` and `Idempotency-Key` as the write. **Its project's lead, or `fleet:operate`** — taking a file out of a project is the project's, as removing a work item is |
+| `PUT` | `/work/files/{project}/{path...}` | Write a file: the request body is its content, `Content-Type` its type, `If-Match` the version it replaces and an `Idempotency-Key` how an `unknown` answer is retried. **Takes `tracker`**, and the write is attributed to whoever the request resolved to (see [below](#project-files)) |
+| `DELETE` | `/work/files/{project}/{path...}` | Remove a file. `If-Match` and `Idempotency-Key` as the write. **Its project's lead, or `admin`**, either with `tracker` — taking a file out of a project is the project's, as removing a work item is |
 | `GET` | `/work/activity` | The **activity feed** — one durable row per applied commit, quiet ones included, at any age with no live/archive boundary to cross. Ordered by the COMPOSED LOG POSITION rather than by any clock, so `?since=` and `?cursor=` are both positions written `<stream>@<generation>:<sequence>` — which is what lets a cursor span a reanchor with no gap and no repeat. `?task=` (by key, id or a FORMER key), `?container=`, `?kinds=`, `?actor=`, `?assignee=`, `?notified=`, `?from=`/`?to=` (RFC3339, bounding the AUTHORED instants), `?limit=` ≤200. `?q=` is an escaped `LIKE` over the excerpt and is REFUSED unless it names a task, or a project **and** a `since` inside 90 days. Each record carries `fields` — what MOVED, as `{"<field>": {"from": …, "to": …}}`, and for a SET (`tags`, `watchers`, `muted`, `collaborators`, each link kind, `blocking`, a catalogue's or tag set's declarations, a person's favorites) the members that joined and left, as `{"<field>": {"from": "", "to": "", "added": […], "removed": […]}}`, each sorted and every member whole — for every kind and not only the ones about a task: a project reconcile names the name, purpose, unit or epoch that changed, a view save the query parameters, a priorities write the order before and after, and a dependency the item it now waits on. A task's own row draws on twenty-eight names: `title`, `status`, `assignee`, `priority`, `project`, `type`, `tags`, `due`, `due_all_day`, `start`, `estimate`, `points`, `reporter`, `watchers`, `muted`, `collaborators`, `parent`, `routing_unit`, `archived`, `removed_with`, `waiting_on`, `linked`, `duplicates`, `page`, `blocking`, `checklists`, `fields` and `body`. Values are the STORED form (a status slug, a whole RFC3339 instant, an item's id) rather than a rendering, because every node writes the row identically and a rendering would depend on the reader's zone and the company's live vocabulary. Nothing is cut: an ordered list (`priorities`, `pinned_views`, `checklists`) is carried whole, free text past 600 bytes (a project's `purpose`, say) is described as `<N> bytes`, and every field a change moved is on the row — only a notification card stops at 32, saying how many it left off (`fields_omitted`). The two largest are MARKED rather than carried: `body` is `<N> bytes` on each side (empty where there was none) and never the prose, and `checklists` is `<list>: <done> of <total> done` per named list. `fields` names each custom value by its SLUG — resolved against the project's catalogue by the node applying the change, which is why a NOTIFICATION carries every other delta and not this one — with a choice as its option's slug, a multi-valued field's members joined with `/`, a value past 150 bytes as `<N> bytes`, and a count of any whose field the project no longer declares. The ANSWER also carries `keys`, an id-to-item-key map naming the tasks those deltas point at — `waiting_on`, `linked` and `duplicates` but never `page`, which names a knowledge-base page; the `blocking` mirror; a person's `priorities` queue; and the two scalars that name a task, `parent` and `removed_with` — resolved on the answering node: a delta records another task by its ID, because a key belongs to that task's own row and a history row is written once and never repaired. An id this node holds no row for is absent rather than empty, and a renderer falls back to the id |
-| `GET` | `/work/my-work` | Everything one person is expected to look at, in seven bounded lists: `priorities` in the stored order, `assigned`, `asked_of_me` (each with the literal call that answers it, whether it is `open`, and the `decision` it carries when it asks somebody to choose — see [Asking for a decision](../guides/work-tracker.md#asking-for-a-decision)), `checklist_items` (which live on other people's tasks and no assignee filter reaches), `collaborating`, `watching_recent` and `unblocked_recent`. `?handle=` is whose, and it **defaults to the caller's own record** — see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for). Naming somebody else's takes whoever leads them, or `fleet:operate` |
+| `GET` | `/work/my-work` | Everything one person is expected to look at, in seven bounded lists: `priorities` in the stored order, `assigned`, `asked_of_me` (each with the literal call that answers it, whether it is `open`, and the `decision` it carries when it asks somebody to choose — see [Asking for a decision](../guides/work-tracker.md#asking-for-a-decision)), `checklist_items` (which live on other people's tasks and no assignee filter reaches), `collaborating`, `watching_recent` and `unblocked_recent`. `?handle=` is whose, and it **defaults to the caller's own record** — see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for). Naming somebody else's takes whoever leads them, or `admin` — and `tracker` either way |
 | `GET` | `/work/inbox` | One person's **inbox**: the notices a change wrote to them, each naming the ONE [reason](../guides/work-tracker.md) of eighteen it found them under, whether it **asks** something or merely informs, whether it arrived only because nobody better was found, and their own read and snooze marks — plus the comment and turn the change came from, and the `ask` it is about, read as it stands now. Same scope rule as `/work/my-work`. `?unread=`, `?primary_only=`, `?snoozed=` — `exclude` (the default: a snooze means *not now*), `include` or `only`, anything else refused naming the three — `?reasons=` (comma-separated, refused naming the eighteen); every one of them narrows the SCAN, so a page is full whenever the scope holds 50 notices and `next_cursor` is never a cursor past an empty page, `?limit=` ≤50, `?cursor=`, and `?since=` — a LOG POSITION written `<stream>@<generation>:<sequence>`, which is what `seen_through` reports back, never a bare sequence: the comparison is on the packed `(generation << 40) | seq`, so a sequence with no generation re-delivers everything after a reanchor |
 | `GET` | `/work/people/{handle}` | One human's **own state**: their inbox (unread, read, snoozed, and which snoozes are now **due**), the order they mean to work in and who set it, and their pinned views. Same scope rule as `/work/my-work`, with the handle always named here because it is the path: your own seat's is yours, and anybody else's takes the same owner-or-lead rule. A person nobody has written yet answers the EMPTY state with `held: false`, not a 404 — every human starts this way and the first write is what creates the record |
 | `GET` | `/work/{id}` | One item with its description, thread, history and links. `{id}` is either the key (`ENG-42`) or the id — a person holds the first and every internal link the second |
@@ -279,7 +279,7 @@ node means nothing was done.
 | `GET` | `/auth/invite/{id}` | **Renders an invitation and never spends it** — a link is followed by mail clients prefetching, scanners and preview cards, and one spent by a GET is an account created for somebody who never saw it. **Unguarded**: holding the link is the credential — the **secret** it carries after the id, presented in the `X-Crewlet-Invite-Secret` header and never in the URL. The link a person follows is the dashboard's screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`, whose fragment no browser sends to a server; the screen calls this route with the two halves apart. Answers the address it is for, who sent it (`invited_by` — a person by their seat's name as the chart gives it, since a person writes as their seat's handle, and absent for a machine — a Tier A token or a service account — whose coloned login, `token:founder`, is nothing the person holding the link would recognise), the password floor, the `seat` redeeming it binds (**always present**, because every invitation names the human seat its invitee will hold: `{handle, name}` as the chart calls it now, or `{}` where the company this node runs no longer holds it as a human seat, which the redemption refuses as a link that no longer works), a `login` **proposed** from the address in the person grammar (`jane.doe@example.com` → `jane.doe`, `jane@example.com` → `jane.example`) for the form to pre-fill, and `signed_in_as` — the login of the session the browser asking is already signed in with, absent for one signed in as nobody — because redeeming ends that session, and the form says so first. Absent, redeemed, expired and a missing or wrong secret are one `410` — the same bytes, so a guessed secret against a leaked id does not say the id exists — and an id nobody issued or a secret that is not the link's is a **failed attempt**, counted on the audit trail's per-minute failure row (`iam_login_failures`) under the source it came from: walking ids or secrets is guessing at a link, and that source's count climbing is what shows it. It meets no [curve](#a-failure-costs-a-wait-never-a-lockout) — the secret is 256 bits nobody walks, and a curve keyed on the address a link came from is one a stranger there holds shut for everybody else. A link that **proved itself** and is spent — redeemed, expired, its address enrolled — is the same `410` and is not counted: that is the link's holder, or a mail scanner re-reading it, and a guesser who does not hold the link can never reach the difference. A node whose identity rows cannot **vouch** for a link that does not open — behind the identity log, or holding a record it could not apply — answers `503 identity_unavailable` instead, for an id it does not hold and a wrong secret alike, and counts nothing: the link may have been issued through a peer |
 | `POST` | `/auth/invite/{id}` | Redeems it, conferring exactly the grants and seat whoever issued it decided — the enrolment names the invitation as its authority and presents the link's secret, and the record refuses anything the invitation does not cover, so a link spent or aged out between the form and the post is `410 invite_spent`. **Unguarded**. `{secret, login, name, password}`: `secret` is the half of the link after the id, checked exactly as the view checks it; the login is **required** — every person enrols with one: it is what they sign in with, the name a lead finds them by, and the `by jane.doe` in every trail reason about what they do; the view proposes one. An absent login, or one outside a person's grammar (dotted, `jane.doe`), is `400` naming the rule and a login somebody already holds is `409` — without saying who, because a link is evidence of who the caller is and of nothing about anybody else. The redemption is **one record** — the person, their address, their login, the seat the invitation binds and the spent link — so every refusal writes nothing: a seat removed or made an agent's since the issue is `410`, and one a person holds since — a residue only a retained record or a restore leaves, because an open invitation holds its seat until it is redeemed — is `409` saying the seat is taken, naming nobody. Only a person holding the seat refuses it: an older open invitation on the same seat, which a restore can leave, does not. Only a record that could not land is `503`. **Retry until it lands**: a redeemer told their login is taken posts another. A link whose address somebody is already enrolled under is `410`, like a redeemed one. A browser that already holds a session — somebody else's, or the redeemer's own — has it **ended** as `POST /auth/logout` ends it, before the new one opens: its cookie is replaced, and the session it named was left live with no browser holding it. Every sign-in that opens a fresh session does the same (`POST /auth/login`, `POST /auth/token`). The company's **first person** redeems exactly this way: a Tier A token issues their invitation into a human seat the company declares — see [How the first person exists](../concepts/identity-and-access.md#how-the-first-person-exists) |
 | `GET` | `/auth/session` | **Who you are**: your id, login, seat, kind, stage and grants; your own `name` as your directory row holds it — absent for a Tier A token, which has no row, and where this node cannot read or open it, which never fails the answer; for a session cookie its `expires_at` and its `lineage` — the id a listing of your sessions names it by, so a client can tell which of them is this browser; and `reauth_at`, the instant your proof of identity stops counting for a [step-up](#some-gestures-ask-how-recently-you-proved-who-you-are) gesture — with `step_up_due` saying whether the next one will ask you to confirm it — and `status`: `signed_in`, or `second_factor_enrolment_required` for a session that may only enrol a second factor, which is one of the routes such a session reaches |
-| `POST` | `/auth/token` | Exchanges a **Tier A bearer** — presented as `Authorization: Bearer`, never a cookie — for a one-hour session cookie. The session **is the token**: it names the token's login, and every request re-composes it from the entry this node holds now — the entry's grants cut to the ceiling, the seat the identity directory binds the token to, stepped up by construction as the bearer is. Removing or renaming the entry ends it on the next request. It answers to the token's **id**, not its value: a new value put under the same id leaves the sessions the old value opened working until their hour ends, so to cut a leaked value's sessions off at once, rotate by giving the token a **new id** — see [Identity and access](../concepts/identity-and-access.md#the-three-credential-shapes-meet-at-one-frame). `POST /auth/logout` from it closes it as it closes a person's, and `POST /auth/logout/all` from it and `crewlet iam invalidate-all` end it too. A refused bearer here is answered exactly as on every guarded route: `401`, counted on the audit trail's per-minute failure row, and never slowed or refused on its address — see [A bearer is its own protection](#a-bearer-is-its-own-protection) |
+| `POST` | `/auth/token` | Exchanges a **Tier A bearer** — presented as `Authorization: Bearer`, never a cookie — for a one-hour session cookie. The session **is the token**: it names the token's login, and every request re-composes it from the entry this node holds now — the entry's permissions under this node's `api.auth.admin` posture, the seat the identity directory binds the token to, stepped up by construction as the bearer is. Removing or renaming the entry ends it on the next request. It answers to the token's **id**, not its value: a new value put under the same id leaves the sessions the old value opened working until their hour ends, so to cut a leaked value's sessions off at once, rotate by giving the token a **new id** — see [Identity and access](../concepts/identity-and-access.md#the-three-credential-shapes-meet-at-one-frame). `POST /auth/logout` from it closes it as it closes a person's, and `POST /auth/logout/all` from it and `crewlet iam invalidate-all` end it too. A refused bearer here is answered exactly as on every guarded route: `401`, counted on the audit trail's per-minute failure row, and never slowed or refused on its address — see [A bearer is its own protection](#a-bearer-is-its-own-protection) |
 | `POST` | `/auth/step-up` | Confirm who you are on a session that is already valid. The only route here that is **both guarded and throttled**: the caller is known, and unbounded retries against a known person is a password oracle with the enumeration already done. It answers a **fresh session cookie** and **ends the session it replaces** first — a close that does not land is `503` with a `Retry-After` and opens nothing, and a presented session that is no longer live is `401`. The replacement confirms the sign-in rather than repeating it, so it keeps the replaced session's absolute deadline |
 | `POST` | `/auth/totp` | Enrol a second factor, replacing any you hold. **Two requests**: the first answers a seed and stores nothing, the second presents a code derived from it — which is the only evidence the authenticator app works. Needs a proof inside `step_up`, the second-factor reset's window, and an older one is `403 step_up_required` naming it (`reason`, `window`) as every step-up refusal does. **Never through a machine token**: one is `403 token_refused`, whatever its owner may do, because a token proves nobody is present. A factor nobody can confirm is stored is `503` with its `op_id`, never "enrolled". The second leg answers `{"status": "enrolled"}` — and, through a session that could only enrol a second factor, **replaces that session**: the restricted one is ended first, a whole one opens keeping its absolute deadline and its proof instant (the password's — the enrolment's code proves a seed, not who holds it, so it opens no fresh step-up window), its cookie is on the response and it is answered beside the status as `session` (the sign-in's own shape, `status: signed_in`). Such a session enrols only while its person holds **no** second factor — decided in the write's own snapshot — so one that has come to hold one since the session opened is `403 second_factor_required` and nothing is stored: a password alone never replaces a factor. The seed is sealed under your own key before it is stored, and opened only to check a code |
 | `POST` | `/auth/totp/recovery` | Issue ten fresh single-use codes, retiring the old set. Answered **once**, in the clear; what is stored is their hashes, so a lost set is regenerated rather than recovered. Needs a proof inside `step_up`, refused as `POST /auth/totp` is, a machine token included. Issued only beside an authenticator app: a person who holds none is refused `409 invalid` and issued nothing, because recovery codes held alone are a second factor every sign-in would ask for with only those ten single-use answers — the first set comes with the first enrolment. A set nobody can confirm is stored is `503` with its `op_id`, and the codes are not shown |
@@ -288,8 +288,8 @@ node means nothing was done.
 | `GET` | `/auth/reset/{id}` | **Says whose password a reset link sets, and never spends it** — the invitation view's rule, for its reason. The same route opens a person's **first password link**, which `POST /iam/people` hands back when an administrator creates them on their seat: the same kind of credential, opened and spent here identically. **Unguarded**: the link is the credential, its **secret** presented in the `X-Crewlet-Reset-Secret` header and never in the URL; the link a person follows is the dashboard's screen, `<api.external_url>/dashboard#/reset/<id>.<secret>`. Answers `{login, expires_at, min_password_length, first}`: `first` is `true` when the person holds no password yet, so the screen asks them to choose their password rather than a new one and warns of no sessions ending — it is derived from what the person holds, not stored on the link, so a reset link issued to somebody whose first link lapsed unspent is a first password too. Every way a link fails to open — an id that is no link, a secret that is not its link's, a link spent, revoked, ended by a counter or aged out, a person suspended, retired or removed since — is one `410 reset_spent` in the same bytes, and only a link that did **not** prove itself is a failed attempt on the per-minute failure row (method `reset`). A node whose identity rows cannot vouch for a link that does not open is `503 identity_unavailable` instead, counting nothing, as the invitation's view is. It meets no [curve](#a-failure-costs-a-wait-never-a-lockout) |
 | `POST` | `/auth/reset/{id}` | **Sets a new password from a reset link, once.** **Unguarded**. `{secret, password}`, the password held to the floor (`422 invalid`, naming the rule). One record sets it, spends the link with every other the person held and moves their revocation epoch — every session and machine token they held ends — judged by the link again in that record's own snapshot, so a link spent from another tab in between is the same `410 reset_spent`. Answers `{status: "password_set", login}` and **no session**: the person signs in next, where a second factor they hold still applies. A first password link is spent by the same record, and for somebody who never held a password it has nothing to end. Each spend is its own operation, so a second one — another tab, or a retry of a spend whose answer was lost — decides again, finds the link spent and is the same `410 reset_spent`, never a `password_set` for a password nothing set; the password the first spend set is the one that works. Issued by an administrator — `POST /iam/people/{id}/password-reset`, or, for a person's first password, the create itself (`POST /iam/people`) |
 | `POST` | `/auth/password` | **Change your own password.** Takes `{current_password, new_password, code}`, and the proof is a step-up's, taken in this request — so no step-up is asked first. The current password is verified on the step-up's terms — on the throttle's curve for the login you are signed in as, a wrong one the `401 sign_in_refused` every failed sign-in answers, with `field: current_password` and a `detail` saying so, since the caller is already signed in as the person it is checked for. **`code` is asked of anybody who holds a second factor** — the current code from their authenticator app, or one of their recovery codes — exactly as a step-up asks it: absent, `401 second_factor_required`, which changes nothing and counts as no attempt; wrong or already spent, `401 sign_in_refused`, counted on the person's own curve as well as the pair's (a wait past five seconds is `429` with a `Retry-After`); right, it is spent. Without it, somebody holding your session cookie and your password but not your authenticator could end every session you held and lock you out. Somebody who holds no second factor sends no `code`. The new password is held to the password floor (`422 invalid`, naming the rule). Needs a person present: a machine token is `403 token_refused`, and a session exchanged from a Tier A token, which is no person's, is `403 forbidden`. **One record** sets the password and moves the person's revocation epoch, ending every session and machine token they held and every outstanding reset link; this browser is then handed a new session, proved now and answered in the sign-in's own shape. A change this node has not applied yet is `202` with `status: password_changed` and no session — sign in again with the new password — and one that finds the password changed by somebody else since it was verified is `409 stale` with the cookie cleared, because that change ended this session too. See [Changing your own password ends everything else](../concepts/identity-and-access.md#changing-your-own-password-ends-everything-else) |
-| `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows, and whether you may end it is the authority table's — the same rule as `DELETE /iam/people/{id}/sessions`, so ending one session and ending all of somebody's never answer differently: your **own** on no proof at all (a session exchanged from a Tier A token counts the token's other sessions as its own), and **anybody else's** on `people:manage`, a proof inside `step_up` and a person present. A refusal is the table's own envelope — `403 unauthorized` naming `people:manage`, `403 step_up_required`, or `403 token_refused` for a machine token. A lineage nobody holds answers `ended`, as a session already over does — ended by a record, past its absolute deadline, revoked or invalidated — with nothing written or announced; "nobody holds it" is **proved** against the identity log's end, so a node whose rows have not applied every record the log holds (it is behind, or holds one it could not apply) does not say it — a session opened through a peer is a row such a node is still missing, and `ended` would be a lie about a session still running. That node, and one that cannot read its rows at all, answers `503 identity_unavailable` with a `Retry-After` and writes nothing, because the owner the caller is checked against is one of those rows — unlike `POST /auth/logout`, whose lineage comes off the cookie's own signature. A close nobody can confirm is `503` with its `op_id`; asking again is a fresh close, and one that finds the first had landed answers `ended` |
-| `GET` | `/viewer` | **Who is asking.** The caller's `login`, the `grants` they hold, the seat the identity directory binds them to — its `handle`, `name` and `kind`, all empty for a credential nobody is bound through — and `owner`, the name the caller's own record (inbox, pins, priorities, personal views) is kept under: the seat for a person, or for a token or service account the directory binds to one, and the login for a credential bound to none. `acts` names the tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller — the catalogue's writes the authority table can admit them to before any object is named, always an array — and `project` is where a create of theirs that names no project files, `""` for a caller bound to no seat or a seat whose team owns no project. A node that cannot yet decide `acts` answers `503` rather than an empty list, which would lock every control the caller holds the authority for. A credential bound to no seat — a Tier A token's session, a service account bound to none — is an **ordinary state**, not an error: a pipeline's token acts under its own login, and binding it to a seat is a directory row rather than a different credential. A person always holds a human seat, so a person is never answered unbound. `config_writer` is whether the caller's credential may change the company document — false for an anonymous caller and for every credential a [managed document's](../concepts/configuration.md#managed-configuration) `api.auth.company_writers` does not list, a person's session, a machine token and a lead's among them; it says nothing about authority, which a grant or a lead's subtree still decides — and `config_managed_by` the Tier A token ids that alone may change it when another system manages it, empty when nothing does and for an anonymous caller |
+| `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows, and whether you may end it is the authority table's — the same rule as `DELETE /iam/people/{id}/sessions`, so ending one session and ending all of somebody's never answer differently: your **own** on no proof at all (a session exchanged from a Tier A token counts the token's other sessions as its own), and **anybody else's** on `admin`, a proof inside `step_up` and a person present. A refusal is the table's own envelope — `403 unauthorized` naming `admin`, `403 step_up_required`, or `403 token_refused` for a machine token. A lineage nobody holds answers `ended`, as a session already over does — ended by a record, past its absolute deadline, revoked or invalidated — with nothing written or announced; "nobody holds it" is **proved** against the identity log's end, so a node whose rows have not applied every record the log holds (it is behind, or holds one it could not apply) does not say it — a session opened through a peer is a row such a node is still missing, and `ended` would be a lie about a session still running. That node, and one that cannot read its rows at all, answers `503 identity_unavailable` with a `Retry-After` and writes nothing, because the owner the caller is checked against is one of those rows — unlike `POST /auth/logout`, whose lineage comes off the cookie's own signature. A close nobody can confirm is `503` with its `op_id`; asking again is a fresh close, and one that finds the first had landed answers `ended` |
+| `GET` | `/viewer` | **Who is asking.** The caller's `login`, the `grants` they carry **on this node** — the effective set: every app an admin holds spelled out, unknown names dropped, and `admin` only where this node's `api.auth.admin` serves it, so a client reads what it holds without expanding anything itself — the seat the identity directory binds them to — its `handle`, `name` and `kind`, all empty for a credential nobody is bound through — and `owner`, the name the caller's own record (inbox, pins, priorities, personal views) is kept under: the seat for a person, or for a token or service account the directory binds to one, and the login for a credential bound to none. `acts` names the tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller — the catalogue's writes the authority table can admit them to before any object is named, always an array — and `project` is where a create of theirs that names no project files, `""` for a caller bound to no seat or a seat whose team owns no project. A node that cannot yet decide `acts` answers `503` rather than an empty list, which would lock every control the caller holds the authority for. A credential bound to no seat — a Tier A token's session, a service account bound to none — is an **ordinary state**, not an error: a pipeline's token acts under its own login, and binding it to a seat is a directory row rather than a different credential. A person always holds a human seat, so a person is never answered unbound. `config_writer` is whether the caller's credential may change the company document — false for an anonymous caller and for every credential a [managed document's](../concepts/configuration.md#managed-configuration) `api.auth.company_writers` does not list, a person's session, a machine token and a lead's among them; it says nothing about authority, which `admin` or a lead's subtree still decides — and `config_managed_by` the Tier A token ids that alone may change it when another system manages it, empty when nothing does and for an anonymous caller |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
@@ -354,10 +354,11 @@ node means nothing was done.
 > — a node that cannot read its identity estate yet — and dials again when its
 > `Retry-After` says rather than on its own backoff.
 >
-> **`api.auth.max_grants` clamps a person exactly as it clamps a token.** The
-> ceiling is applied when the request is resolved, not written anywhere, so
-> lowering it takes effect on this node's next request — including for
-> somebody already signed in.
+> **`api.auth.admin` clamps a person exactly as it clamps a token.** On a node
+> whose posture is `refuse`, every principal composed there loses `admin` and
+> keeps every app. The posture is applied when the request is resolved, not
+> written anywhere, so a restart that changes it takes effect on this node's
+> next request — including for somebody already signed in.
 >
 > **A person whose seat is gone is `403 seat_unavailable`, naming the seat** —
 > and so is a Tier A token the identity directory binds to one, since both
@@ -514,19 +515,20 @@ same wait — and every audit row names the proxy.
 `crewlet validate` warns when `api.external_url` is `https` and no proxy is
 trusted, because the engine never terminates TLS itself.
 
-### Which grant a route needs
+### Which permission a route needs
 
 Holding a credential is not the same as being allowed to use it here. Every
-route and every socket question declares one of the
-[eleven grants](../concepts/identity-and-access.md#grants-the-eleven-things-there-are-to-allow),
-and a principal that does not carry it is refused — including a Tier A token,
-whose declared grants are intersected with `api.auth.max_grants` on every
-request.
+route and every socket question declares who may ask it — **everybody**, one
+of the [three permissions](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
+(`admin`, `tracker`, `knowledge`), or a verb of the authority table that the
+answer decides record by record — and a principal that does not carry what it
+declares is refused, a Tier A token included, whose declared permissions are
+read through the node's `api.auth.admin` posture on every request.
 
 **`403`, not `401`**, and the difference matters to a client: `401` means
 *present a credential* and `403` means *the one you presented does not carry
-this grant*. A narrow reader meets the second the moment they open a screen
-outside their grants, which is the ordinary case — so it must not be reported
+what this needs*. A person using one app meets the second the moment they open
+a screen of the other, which is the ordinary case — so it must not be reported
 as the first, which tells them to go and get a new credential.
 
 **A `403` says which rule refused, and what would have admitted you.** Beside
@@ -538,58 +540,75 @@ table made the refusal — every question, the policy every `/config/*` and
 {
   "error": "unauthorized",
   "message": "…",
-  "reason": "not_self",
-  "grants": ["fleet:operate"]
+  "reason": "no_grant",
+  "grants": ["tracker"]
 }
 ```
 
 `reason` is the authority table's own word for the rule that decided —
 `no_grant`, `not_self`, `not_lead`, `not_author`, `stage`, `seat_refused`,
+`seat_only` (a person or a token asking for a verb only an agent seat takes),
 `token_refused` (a [machine token](#post-iamcredentials-mints-a-machine-token)
 on a gesture that needs a person present, answered under the code
 `token_refused` rather than `unauthorized`), `unnamed`, and `step_up` on the one
 refusal the caller clears themselves
-([below](#some-gestures-ask-how-recently-you-proved-who-you-are)) — and `grants` are the capabilities any **one** of which would have
-admitted this caller for this object. An empty `grants` is an answer rather
-than an omission: no capability would, and what is missing is a relation the
-org chart does not hold. The [human write surface](#the-human-write-surface)
-answers its own refusals `403 forbidden` in its tools' wording instead.
+([below](#some-gestures-ask-how-recently-you-proved-who-you-are)) — and `grants`
+are the **least** that would have admitted this caller for this object: any
+**one** of them, added to what the caller holds, would. A tracker row names
+`["tracker"]`, a relation the caller does not hold names `["admin"]`, a lead
+missing the app names the app, and a question either app answers names both.
+An empty `grants` is an answer rather than an omission: no permission would —
+a seat-only verb, or a relation the org chart does not hold. The [human write
+surface](#the-human-write-surface) answers its own refusals `403 forbidden` in
+its tools' wording instead.
 
 A request the node **cannot decide** — it holds no company yet — is
 `503 unavailable` with a `Retry-After`, never a `403`: a lead
 told they lead nobody goes looking for an authority they already hold.
 
-| Grant | What it reaches |
+| Needs | What it reaches |
 |---|---|
-| `state:read` | The company's working state: `/agents`, `/agents/activity`, `/org`, `/tools`, `/schedules`, `/budgets`, `/sandbox-runs`, the reads under `/work/*` and `/pages/*`, `/containers`, `/feed`, `/viewer`, `/stream/snapshot`, `/tokens/*`, `/ws/stream` |
-| `audit:read` | The record of what happened: `/events*`, the socket's `event` push and the snapshot's `events` section, any seat's `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}` and `/agents/{id}/conversations`, every seat's memory totals (`memory_overview`), a running coding job's tail (`/sandbox-runs/{turn_id}/tail`), the turn, phase, trace and A2A-channel questions on the socket, `/iam/audit`, and — beside `people:manage` — the company's human seats and who holds each (`/iam/seats`). Separate from `state:read` because a prompt and a tool argument are the company's most sensitive read |
-| `config:read` | Every read under `/config*` — the org chart included, with its credentials masked, though one seat or unit is also its lead's to read ([A lead edits their own team](#a-lead-edits-their-own-team)) — `/integrations`, `/credential-pool`, `/mcp-servers`, a seat's resolved model chain and tool sources on `/org`, and the `/setup` and `/secrets` **listings**: they carry no values and still say which credentials a company holds, which it has not set, and when each last changed |
-| `secrets:read` | Revealing a credential's value: `GET /secrets/{name}?reveal=true`, which takes `config:read` as well — the value's grant on top of the row's |
-| `people:manage` | `/iam/*` — inviting or creating somebody onto a human seat, moving them to another, changing what they carry, suspending them, revoking their sessions, resetting a second factor, removing them — the company's human seats and what holds each (`/iam/seats`, `?unheld=true` for the vacancies), which is what an invitation is sent into and a person is created on, and this node's Tier A token labels (`/iam/node-tokens`, as `audit:read` may too). **The grant that can grant**, and it bounds itself: a caller may not confer a grant they do not hold |
-| `work:write` | Filing and moving work — the [write surface's](#the-human-write-surface) item routes and a project's files (`PUT /work/files/…`; removing one is the project lead's) — and `/operator/mcp`'s write half. Some of those verbs also ask a RELATION: re-routing, a project's policy and taking an item out of circulation are its project lead's |
-| `knowledge:write` | Writing the company's own pages. A rename, the trash and a restore are also the container's lead's; see [the write surface](#the-human-write-surface) |
-| `config:write` | **Host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `cli-agent` model, a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included — see [Identity and Access](../concepts/identity-and-access.md#grants-the-eleven-things-there-are-to-allow). Every write under `/config*` — the org chart included, whose leads may also write what is inside the units they lead ([A lead edits their own team](#a-lead-edits-their-own-team)) — and `/setup`'s writes — with `secrets:write` as well wherever the write seals a credential — and, on top of the page's own rule, the create, save, rename, trash, restore and purge of a page in the tool-skills container (a comment on one is not gated: a remark is not the skill). |
-| `secrets:write` | `PUT`/`DELETE /secrets/{name}` and `POST /secrets/rekey`, and on top of `config:write` a `/setup` write that seals a credential: a submission carrying one, a provisioning pass, a GitHub App |
-| `fleet:operate` | The deployment rather than the company: `/fleet`, the broker's membership and its two removals (`/fleet/broker*`), every `/work/retention*` route (the maintenance status and the reanchor value included), `/backup`, `/backups`, the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`) — which no seat may make whatever it holds. It is also the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be — on everybody's work, and not on what a seat is told to do |
-| `sandbox:run` | Starting a coding run |
+| **everybody** | The [overview](../concepts/identity-and-access.md#everybodys-overview), for every principal the guard resolved whose stage may act: `/agents`, `/agents/activity` and the `agent` and `live_call` questions — an agent's **status**, with its **body** to an administrator and to whoever leads the seat ([below](#a-status-reader-never-receives-a-transcript)) — `/org`, `/tools`, `/schedules` and their runs, `/budgets`, `/sandbox-runs` (status; the same body rule), `/tokens/*`, `/viewer`, `/stream/snapshot`, `/ws/stream`, `GET /iam/seats` (masked per reader), the `seat_activity` and `colleague` questions, and the cross-app answers filtered row by row — `/feed`, `decisions` and the `knowledge` question |
+| `tracker` | The reads under `/work/*`, the [write surface's](#the-human-write-surface) item routes, a project's files (`GET`/`PUT /work/files/…`; removing one is the project lead's), every `work_*` question, the socket's `inbox_changed` push, and `/operator/mcp`'s tracker half. Some verbs also ask a RELATION beside the app: re-routing, a project's policy and taking an item out of circulation are its project lead's, and a person's inbox, queue and person view are their own and their lead's |
+| `knowledge` | The reads under `/pages/*` and `/containers`, the page questions, and writing the company's own pages. A rename, the trash and a restore are also the container's lead's or the page's creator's; see [the write surface](#the-human-write-surface) |
+| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `cli-agent` model, a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included — see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead — [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/credential-pool`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/work/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, and the two purges (`/work/items/{key}/purge`, `/pages/{id}/purge`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
+| `audit.seat.read` | One seat's own trail — `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}`, `/agents/{id}/conversations`, `memory_overview` (filtered to the seats the caller may read), `turns?seat=` and `phases?seat=`, and a coding run's tail (`/sandbox-runs/{turn_id}/tail`) — decided per seat: **its lead**, or `admin` |
 
 A question asked on the socket is decided by the same declaration the REST
-route is — one registry, both transports — so there is no way round a grant by
-choosing a channel.
+route is — one registry, both transports — so there is no way round a
+permission by choosing a channel.
+
+### A status reader never receives a transcript
+
+Everybody sees what the agents are doing; only some read what they *said*. An
+agent's and a coding run's answers split into a **status** half and a **body**
+half — on the `agent` and `live_call` questions, the `agents`, `snapshot` and
+`sandboxes` pushes and their mirrors (`/agents`, `/stream/snapshot`), and
+`sandbox_runs` — and the body goes only to an administrator, to whoever leads
+that seat (`audit.seat.read`), and, for a coding run's parked question, to the
+person it is put to. The body is a call's `trigger`, `prompt`,
+`prompt_messages`, `response`, `tool_executions`, `round_narration`,
+`partial_round` and `running_call.arguments`, an `llm_history` entry's
+`payload`, and a coding run's `task_description`, `question`, `reply` and
+`bridge_calls`. A status reader receives the rest with **`body_withheld:
+true`** and the body's version counters at zero, so a client never marks the
+call stale and asks for a body it will not be sent. A work item a call or a
+turn names (`work_item`, an `llm_history` entry's `work_item` and `task_id`
+tags) is the tracker's, and is left out for a reader without `tracker`.
 
 ### Some gestures ask how recently you proved who you are
 
 A session lives for days, so the gestures that change what a company *is* ask
 for a proof of identity taken recently — the **step-up**. It is decided by the
-same authority table as the grant, on the same row, so a REST route and a
+same authority table as the permission, on the same row, so a REST route and a
 socket question about one verb cannot disagree, and it is asked only **after**
-the grant or relation admitted you: a caller who could never make the gesture
+the permission or relation admitted you: a caller who could never make the gesture
 is told what they lack, not sent to confirm who they are first.
 
 | Window | Setting (default) | What asks for it |
 |---|---|---|
-| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*`, `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`), the deployment's own controls — `POST /backup`, every `POST /work/retention*` and both `POST /fleet/broker/remove*` — and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
-| none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account — an administrator ending somebody else's asks `step_up`; changing your own password (`POST /auth/password`), whose current password — and code, from somebody who holds a second factor — is itself the proof; and every work and knowledge verb — the tools, `/operator/mcp`, `/operator/act` and the human write surface |
+| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*`, `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`), the deployment's own controls — `POST /backup`, every `POST /work/retention*` and both `POST /fleet/broker/remove*` — the two purges (`POST /work/items/{key}/purge`, `POST /pages/{id}/purge`), and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
+| none | | Every read, the two deployment reads (`GET /work/retention/maintenance`, `GET /work/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account — an administrator ending somebody else's asks `step_up`; changing your own password (`POST /auth/password`), whose current password — and code, from somebody who holds a second factor — is itself the proof; and every work and knowledge verb but the two purges — the tools, `/operator/mcp`, `/operator/act` and the rest of the human write surface |
 
 A proof that is too old is **`403 step_up_required`**, the code the sign-in
 surface answers for the same fact, carrying the window it needs so a client can
@@ -602,7 +621,7 @@ ask the person to confirm who they are and send the same request again —
   "message": "…",
   "reason": "step_up",
   "window": "step_up",
-  "grants": ["secrets:read"]
+  "grants": ["admin"]
 }
 ```
 
@@ -620,22 +639,25 @@ token (and a session exchanged from one), the development principal, and a
 personal access or service token. There is nothing else any of them could
 present, and the break-glass credential has to reach a step-up gesture on the
 day nobody can sign in as a person. What keeps a machine token off the
-gestures that need a person present is therefore never the clock, and it is
-two locks, both in the authority table. Every row that needs a person says so,
-and a request that presented a machine token is refused there
-`403 token_refused` with `reason: token_refused` and no `grants`, since no
-capability would change it — a code of its own, whose `message` says a token
-cannot do this and its owner must, signed in, because `unauthorized`'s is
-about a missing grant: revealing a secret, every `/iam/*` write that
+gestures that need a person present is therefore never the clock, nor a
+permission it cannot carry — a token may be minted with `admin` — and it is two
+locks. Every row that needs a person says so, and a request that presented a
+machine token is refused there `403 token_refused` with `reason:
+token_refused` and no `grants`, since no permission would change it — a code
+of its own, whose `message` says a token cannot do this and its owner must,
+signed in, because `unauthorized`'s is about a missing permission: revealing a secret, every `/iam/*` write that
 changes who may do anything, ending every session in the company, changing how
 somebody proves who they are (`POST /auth/totp`, `POST /auth/totp/recovery`,
 and revoking a password, a second factor or the recovery codes through
 `DELETE /iam/credentials/{id}`) and — about anybody but the token's own owner
 — minting or revoking a token and ending sessions. A token may still revoke its
 owner's tokens, itself included, and end its owner's sessions, which ends it
-too: that is what somebody who finds one leaked reaches for. And
-`secrets:read` and `people:manage` — the grants behind every such gesture about
-somebody else — can never be minted onto one. `POST /auth/step-up` refuses a
+too: that is what somebody who finds one leaked reaches for. And the identity
+domain refuses every administrative record — an enrolment, an invitation, an
+edit of somebody's row, a suspension, a removal, ending everybody's sessions —
+written through a machine token, `403 token_refused`, whatever the token
+carries, at the record, so a CLI or a duty is held to it as a route is.
+`POST /auth/step-up` refuses a
 token itself: there is nobody to confirm. No tool asks for a proof: a seat has
 no keyboard, and `/operator/mcp` is not a step-up surface.
 
@@ -721,31 +743,31 @@ consumer.
 
 **Always guarded, reads included**, for the reason `/secrets` guards its
 listing: a map of who can reach a company and how is worth as much to an
-attacker as the grants themselves. Nothing under `/iam` is on the exemption
+attacker as the permissions themselves. Nothing under `/iam` is on the exemption
 list and nothing ever will be.
 
 | Route | Who |
 |---|---|
-| `GET /iam/people` | `people:manage` or `audit:read` |
-| `POST /iam/people` | `people:manage` |
-| `GET /iam/people/{id}` | the person themselves, `people:manage` or `audit:read` |
-| `PATCH /iam/people/{id}` | `people:manage` |
-| `DELETE /iam/people/{id}` | `people:manage` |
-| `POST /iam/invitations` | `people:manage` |
-| `GET /iam/invitations[?all=true]` | `people:manage` or `audit:read` |
-| `DELETE /iam/invitations/{id}` | `people:manage` |
-| `GET /iam/people/{id}/sessions` | the person themselves, `people:manage` or `audit:read` |
-| `DELETE /iam/people/{id}/sessions` | the person themselves or `people:manage` |
-| `POST /iam/people/{id}/mfa/reset` | `people:manage` |
-| `POST /iam/people/{id}/password-reset` | `people:manage`, for somebody holding no grant the caller does not |
-| `GET /iam/credentials[?person=]` | the person themselves, `people:manage` or `audit:read` |
-| `POST /iam/credentials[?person=]` | the person themselves, from their own session; `people:manage` for a **service account** only; never a request presenting a machine token |
-| `DELETE /iam/credentials/{id}[?person=]` | the person themselves or `people:manage`; revoking a password, a second factor or the recovery codes needs a person present, so a machine token revokes machine tokens only — `403 token_refused` with nothing written, on a node that had listed the credential before the write and on one that had not alike. Revoking a person's **last** authenticator app revokes their recovery codes with it, in the same record and each announced, because codes held alone are a second factor every sign-in would ask for with only those single-use answers |
-| `POST /iam/invalidate-all` | `fleet:operate` **and** `people:manage` — the deployment's grant and the directory's, both, as the record layer holds too. Ends every session **and every machine token** |
-| `GET /iam/seats[?unheld=true]` | `people:manage` or `audit:read` |
-| `GET /iam/check` | `people:manage` or `audit:read` |
-| `GET /iam/node-tokens` | `people:manage` or `audit:read` |
-| `GET /iam/audit` | `audit:read` |
+| `GET /iam/people` | `admin` |
+| `POST /iam/people` | `admin` |
+| `GET /iam/people/{id}` | the person themselves, or `admin` |
+| `PATCH /iam/people/{id}` | `admin` |
+| `DELETE /iam/people/{id}` | `admin` |
+| `POST /iam/invitations` | `admin` |
+| `GET /iam/invitations[?all=true]` | `admin` |
+| `DELETE /iam/invitations/{id}` | `admin` |
+| `GET /iam/people/{id}/sessions` | the person themselves, or `admin` |
+| `DELETE /iam/people/{id}/sessions` | the person themselves, or `admin` |
+| `POST /iam/people/{id}/mfa/reset` | `admin` |
+| `POST /iam/people/{id}/password-reset` | `admin`, for somebody holding no permission the caller does not |
+| `GET /iam/credentials[?person=]` | the person themselves, or `admin` |
+| `POST /iam/credentials[?person=]` | the person themselves, from their own session; `admin` for a **service account** only; never a request presenting a machine token |
+| `DELETE /iam/credentials/{id}[?person=]` | the person themselves, or `admin`; revoking a password, a second factor or the recovery codes needs a person present, so a machine token revokes machine tokens only — `403 token_refused` with nothing written, on a node that had listed the credential before the write and on one that had not alike. Revoking a person's **last** authenticator app revokes their recovery codes with it, in the same record and each announced, because codes held alone are a second factor every sign-in would ask for with only those single-use answers |
+| `POST /iam/invalidate-all` | `admin`, a person present and a recent proof — the record layer refuses it through a machine token too. Ends every session **and every machine token** |
+| `GET /iam/seats[?unheld=true]` | **everybody** — each holder's name and kind to every reader, their person id, login and stage to an administrator and to the holder themselves, and the open invitations and `?unheld=true` to an administrator alone (`403` naming `["admin"]` to anybody else) |
+| `GET /iam/check` | `admin` |
+| `GET /iam/node-tokens` | `admin` |
+| `GET /iam/audit` | `admin` |
 
 **Every write here asks for a recent proof**, inside `step_up` (an hour by
 default); see
@@ -760,19 +782,22 @@ estate keys on an id precisely because a person changes their login, so a self
 check against a mutable name would open somebody else's row the day they
 swapped.
 
-**Editing your own row is not a self gesture.** Changing your own grants is
-the escalation this estate exists to close, so `PATCH /iam/people/{id}` has no
-self path at all — unlike the credential mint and the session end beside it,
+**Editing your own row is not a self gesture.** Changing your own permissions
+is the escalation this estate exists to close, so `PATCH /iam/people/{id}` has
+no self path at all — unlike the credential mint and the session end beside it,
 which are the two gestures a person legitimately makes about themselves. The
-record layer refuses it a second time: a caller may not confer a grant they do
-not hold, on anybody, themselves included — on an edit, on a
+record layer refuses it a second time: a caller may not confer a permission
+they do not hold, on anybody, themselves included — on an edit, on a
 `POST /iam/people` enrolment and on a `POST /iam/invitations` alike, each
-answered `403` naming the grant.
+answered `403` naming the permission. Judged through `iam.Expand`, so an
+administrator may confer every app.
 
-**An auditor reads and never writes.** `audit:read` opens the directory
-because "who can reach this company, and how" is the audit question — and it
-opens nothing that changes it, because a grant that could end a session is a
-grant that can lock a company out of its own engine.
+**An administrative record is never written through a machine token.** An
+enrolment, an invitation, an edit of somebody's row, a suspension, a removal,
+a reset link and `POST /iam/invalidate-all` are refused `403 token_refused`
+when the request presented a `pat:` token, whatever the token carries — by the
+authority table's row and again by the identity record itself, so the CLI and
+every other path that publishes a record is held to it too.
 
 **A listing says what still works.** A session's `live` and a credential's
 `revoked` are the reading the request guard makes: a session or a machine token
@@ -889,10 +914,11 @@ the trail's detail and, for a suspension or ending somebody's sessions, what
 each session it ends is listed as ended by. A value outside a bound is `400`
 too: a `reason` longer than 256
 bytes (it is rendered into the authentication trail beside the op, so it
-names which cause fired rather than narrating), and a machine given
-`secrets:read` or `people:manage` — by a create, or by an edit that adds one —
-since a machine acts only through tokens and a token never carries either. An
-enrolment is one record, so a
+names which cause fired rather than narrating), and a permission this build
+does not know, **added** — by a create, an invitation, `add_grants` or a
+whole-set `grants` naming one the row does not already carry — which is
+refused naming the three; one already on the row is kept, and
+`remove_grants` may name it. An enrolment is one record, so a
 refused create leaves nothing behind and the corrected retry lands.
 
 #### `POST /iam/people` creates a person on their seat, or a service account
@@ -915,7 +941,14 @@ refused create leaves nothing behind and the corrected retry lands.
 
 The body is `{kind, email, seat, login, name, grants, reason}`, and `kind`
 defaults to `person`. `email`, `seat` and `login` are trimmed before anything
-judges them. The whole create is **one record** on the directory, which
+judges them. **`grants` is required**, for a person and a service account
+alike — any of `admin`, `tracker` and `knowledge`, and `[]` for the
+[overview](../concepts/identity-and-access.md#everybodys-overview) alone — and
+an omitted field is `400 invalid_body` naming `grants`, decided before any key
+is read or link minted: a person enrolled with every app and one enrolled with
+none are both legitimate, so a body that names neither is one whose author did
+not decide. A name this build does not know is the same `400`, naming the
+three. The whole create is **one record** on the directory, which
 decides the address, the login and the seat together against every row — so a
 create refused for any of them has created nobody and issued nothing.
 
@@ -943,8 +976,8 @@ factor there where `api.auth.totp` requires one. It is good for **a week** — a
 invitation's week, because it is the same person's position — and it is a
 `reset` credential like any other: listed among their credentials, replaced by
 a [password reset link](#post-iampeopleidpassword-reset-issues-a-one-time-link)
-issued later, and ended by whatever ends one (an edit that adds a grant to
-them, a suspension, their sessions ended, `POST /iam/invalidate-all`). Send it to them
+issued later, and ended by whatever ends one (an edit that adds a permission
+to them, a suspension, their sessions ended, `POST /iam/invalidate-all`). Send it to them
 yourself: this engine sends no mail. Its issue is one
 `iam_password_reset_issued` event with `first: true` — for whom, by whom,
 until when, never the link — published by the call whose record carried it and
@@ -972,9 +1005,10 @@ carries no `url` and a `detail` saying to issue a password reset link. An
 |---|---|
 | `201` | Created, a person and a service account alike: `{id, kind, login, seat?, credential?, url?, expires_at?, detail?}` beside the `outcome`, `op_id` and `position` every write carries — the link's three fields for a person only. `202` is the same answer for a record this node has not applied yet |
 | `400 seat_required` | A person's create that names no seat |
-| `400 invalid_body` | A seat the company this node runs does not hold, or holds as an agent's; a person with no address; a service account with no login; a login outside its kind's grammar, or none to propose from the address (`field: login`); a `kind` other than `person` or `machine`; a machine given `secrets:read` or `people:manage`; a name or a reason past its cap |
+| `400 invalid_body` | No `grants` field, or a name in it this build does not know (`field: grants`); a seat the company this node runs does not hold, or holds as an agent's; a person with no address; a service account with no login; a login outside its kind's grammar, or none to propose from the address (`field: login`); a `kind` other than `person` or `machine`; a name or a reason past its cap |
 | `400 op_id_invalid` | An `Idempotency-Key` that is not a uuid7 |
-| `403 unauthorized` | A grant the caller does not hold |
+| `403 unauthorized` | A permission the caller does not hold |
+| `403 token_refused` | The request presented a machine token: an enrolment is an administrative record, refused through a token whatever it carries |
 | `409 invalid` | An address, a login or a seat somebody holds (`held_by`), or an open invitation holds (`invitation`) |
 | `409 bad_params` | The key of an earlier create sent with a different body |
 | `409 no_active_revision` | A node that runs no company yet: it holds no human seat to create anybody on, and the `hint` says to import or create a company that declares one |
@@ -986,20 +1020,25 @@ carries no `url` and a `detail` saying to issue a password reset link. An
 The owner is the person the **route** names — `?person=`, or the caller — and
 never a body field, because that is the value the authority table decided on.
 **A person's token is minted by that person alone**: it acts as them and its
-value is shown to whoever minted it, so `people:manage` mints for service
+value is shown to whoever minted it, so `admin` mints for service
 accounts and never on a person's account. A person mints their own with no
 `?person=` from their own session — `crewlet iam token -login` makes exactly
 that request, signing in for it and signing out after.
 The body is `{"label", "expires_in_days", "grants"}`, every field optional:
-omitted, the token carries every grant its owner holds that a token may carry,
-for 90 days. The answer is `201` with
+`grants` omitted, the token carries every permission its owner holds, `admin`
+included; `[]` mints one that reads the overview alone; and the token lasts 90
+days. A token may carry `admin` — what keeps it off the gestures that need a
+person present is the authority table's presence rows and the identity
+record's own refusal of an administrative record written through a token, not
+a permission it cannot carry. The answer is `201` with
 `{"id", "person", "token", "grants", "expires_at", "position"}`.
 
 | Answer | When |
 |---|---|
 | `400 bad_params` | No owner: a Tier A token owns no machine tokens, so it names the service account with `?person=` |
 | `400 invalid_body` | An expiry in the past or more than 365 days away, a label past 128 bytes, an owner already holding 64 live credentials — a revoked or expired one gives up its place to the new token, the earliest to lapse first, so revoking a token nothing uses makes room at once |
-| `403` | The request presented a machine token (`token_refused`); a **person's** token asked for by anybody but that person; a service account's asked for without `people:manage`; a grant the owner does not hold, or `secrets:read` / `people:manage`; a grant the caller does not hold; an owner who may not act |
+| `400 invalid_body` (`field: grants`) | A permission this build does not know, named beside the three |
+| `403` | The request presented a machine token (`token_refused`); a **person's** token asked for by anybody but that person; a service account's asked for without `admin`; a permission the owner does not hold; a permission the caller does not hold; an owner who may not act |
 | `404` | Nobody by that id |
 
 **`Idempotency-Key` is ignored here, deliberately.** A retry that landed once
@@ -1039,19 +1078,26 @@ landed — and the way to free a person's seat is to move them to another or
 remove them. A **service account** is unbound with `seat: ""`.
 
 **Grants are the whole set or a change to it, never both.** `grants` replaces
-what the person holds — what `crewlet iam grant` sends, stating it outright.
+what the person holds — what `crewlet iam grant` sends, stating it outright —
+among `admin`, `tracker` and `knowledge`; `admin` includes every app, and the
+dashboard and the CLI store every app beside it, so taking admin away later
+leaves the apps.
 `add_grants` and `remove_grants` are applied to what they hold **when the
 record is decided**, which is what an editor working from an earlier read
 means: sent whole, the grants that editor never touched are the ones the read
 held, so a grant another administrator took away meanwhile would come back and
 one they gave would go — and nothing would refuse it, since only an addition
-needs the caller to hold the grant. The dashboard's edit sends the change.
+needs the caller to hold the permission. The dashboard's edit sends the
+change.
 
 **Everything the surface can judge alone is refused before the first record**:
 a `login` of `""` (a login is never cleared, only changed), a `stage` this
 build cannot name, a `reason` past 256 bytes, `grants` beside `add_grants` or
-`remove_grants`, a name in either that is no grant or that is in both (`400`),
-and grants the caller may not confer (`403`). What only a later record can decide — a grant the caller's own
+`remove_grants`, a name in both, a name this build does not know **added** —
+in `add_grants`, or in a whole `grants` naming one the row does not already
+carry (`400`, naming the three); `remove_grants` may name one, and one already
+on the row is kept and ignored — and permissions the caller may not confer
+(`403`). What only a later record can decide — a grant the caller's own
 row stopped letting them confer a moment ago — is refused by that record, and
 the steps before it have landed. So a refusal met after the first record
 carries `landed`, the fields whose change was made (`identity`, `stage`), and a
@@ -1093,7 +1139,11 @@ document with no form.
 
 `POST /iam/invitations` takes `{email, seat, grants, reason}` and answers
 `201` with `{id, url, expires_at, seat, detail}` beside the `outcome`, `op_id`
-and `position`. **`seat` is required**: every invitation names the human seat
+and `position`. **`grants` is required**, as on `POST /iam/people`: what the
+link confers — any of `admin`, `tracker` and `knowledge`, `[]` for the
+overview alone — and an omitted field or a name this build does not know is
+`400 invalid_body` naming `grants`, decided before any key is read or link
+minted. **`seat` is required**: every invitation names the human seat
 its invitee will hold, by its handle, and one left out is `400 seat_required`,
 answered before any key is read or anything minted. It must be a **human**
 seat that no person and no open invitation holds: a seat the running company
@@ -1123,7 +1173,7 @@ node's own configuration file can supply one.
 {
   "invitations": [
     {"id": "0192f00d-…", "email": "sam@example.com", "seat": "qa-lead",
-     "grants": ["state:read", "work:write"], "invited_by": "people-lead",
+     "grants": ["tracker", "knowledge"], "invited_by": "people-lead",
      "created_at": "2026-06-08T09:12:00Z", "expires_at": "2026-06-15T09:12:00Z",
      "state": "open"}
   ],
@@ -1197,11 +1247,12 @@ so a link needed beside any of those is issued after it, or it is `410
 reset_spent` by the time it is opened. A
 machine is `409` (it has no password; mint it a token), and so is a person
 `suspended` or `retired`, naming the `stage`, because a link would hand back an
-account somebody stopped: reactivate them first. A person holding a grant the
-caller does not is `403 unauthorized`, judged in the record's own snapshot:
-whoever issues the link is shown it and could spend it themselves, so a link is
-held to the rule an invitation and an edit are — nobody hands out a grant they
-do not hold.
+account somebody stopped: reactivate them first. A person holding a
+permission the caller does not is `403 unauthorized`, judged in the record's
+own snapshot: whoever issues the link is shown it and could spend it
+themselves, so a link is held to the rule an invitation and an edit are —
+nobody hands out what they do not hold. An administrator holds every app, so
+what reaches it today is a name this build does not know, kept on the row.
 
 **Shown once, and no key is read.** Like a token's mint, a replay of the issue
 could not hand back a secret its first attempt never showed, so the route
@@ -1237,8 +1288,8 @@ outage.
 {
   "seats": [
     {"handle": "founder", "name": "Founder",
-     "holder": {"person": "018f3a9c-…", "kind": "person", "login": "jane.doe",
-                "stage": "active"}},
+     "holder": {"person": "018f3a9c-…", "name": "Jane Doe", "kind": "person",
+                "login": "jane.doe", "stage": "active"}},
     {"handle": "qa-lead", "name": "QA Lead", "unit": "quality",
      "invitation": {"id": "0192f00d-…", "email": "sam@example.com",
                     "invited_by": "founder",
@@ -1249,26 +1300,35 @@ outage.
 ```
 
 Every human seat of the company this node runs, in the order the company
-declares them, with what holds each:
+declares them, with what holds each. **Everybody reads it** — it is the org
+chart's people, named, and the org chart is [everybody's
+overview](../concepts/identity-and-access.md#everybodys-overview) — and what
+each reader sees is masked per row. The example above is an administrator's.
 
 - **`holder`** is whoever the directory binds to the seat **at any stage
   short of removal** — a suspended or retired person still holds their seat —
-  with `kind` saying which remedy freeing it takes: a `person` is moved to
-  another human seat or removed, a `machine` (a service account, or a Tier A
-  token's `token:<id>` row) is unbound.
+  with `name`, their own name opened on this node's keyring (or `sealed: true`
+  where it does not open), and `kind` saying which remedy freeing it takes: a
+  `person` is moved to another human seat or removed, a `machine` (a service
+  account, or a Tier A token's `token:<id>` row) is unbound. `name` and `kind`
+  go to every reader; `person`, `login` and `stage` only to an administrator
+  and to the holder themselves.
 - **`invitation`** is the **open** invitation that names the seat — not
   redeemed, not past its expiry at this node's clock — which holds the seat
   until it is redeemed, cancelled or lapses: `id` (what
   `DELETE /iam/invitations/{id}` cancels), the address it was sent to, opened on
   this node's keyring or `sealed` where it cannot be, `invited_by` and
-  `expires_at`. **Never a link**, which was shown once by the issue.
+  `expires_at`. **Never a link**, which was shown once by the issue. **Only an
+  administrator** is sent it; to anybody else an invited seat lists as
+  vacant.
 - Neither, for a **vacant** seat — the one a person can be invited into or
   created on (`POST /iam/invitations`, `POST /iam/people`), which is what the
   seat's **Invite** and **Create person** in **Agents › Org chart** do.
 
 `?unheld=true` keeps only the vacant seats: one with a holder **or** an open
 invitation is left out, because each holds it against a create, an invitation
-and a move alike. Where two open invitations name one seat — a residue only a
+and a move alike. It is an administrator's helper, for the gestures that need
+one — anybody else is refused `403 unauthorized` naming `["admin"]`. Where two open invitations name one seat — a residue only a
 build before invitations held their seats, or a restore, leaves — the newest is
 listed; a holder and an invitation on one seat are both listed. An `unheld`
 that is not a boolean is `400 invalid_query`.
@@ -1291,7 +1351,7 @@ behind: it cannot say which of them holds the seat, and another node can.
      "detail": "seat \"platform-lead\" is not a seat of the company this node runs; move them to another human seat, or remove them — a person always holds a seat"}
   ],
   "position": "CREWLET_IAM_LOG@0:1840",
-  "people_with_people_manage": 2,
+  "people_with_admin": 2,
   "bindings_unchecked": 0
 }
 ```
@@ -1300,12 +1360,15 @@ behind: it cannot say which of them holds the seat, and another node can.
 so within a kind the directory's own order holds and two nodes over the same
 rows print the same report:
 
-1. `no_people_manage_holder` — nobody left who can administer the company
-   except through a Tier A token: no active person holding an **enrolled**
+1. `no_admin_holder` — nobody left who can administer the company except
+   through a Tier A token: no active **person** holding an **enrolled**
    credential (a password, a second factor, a token — a way in they have used)
-   carries `people:manage`. A first password link nobody has spent yet does not
-   count, because a company whose only administrator has not chosen a password
-   is one nobody can administer yet.
+   holds `admin`. A first password link nobody has spent yet does not count,
+   because a company whose only administrator has not chosen a password is one
+   nobody can administer yet — and neither does a service account holding
+   `admin`, because a machine token never writes an administrative identity
+   record, so a company whose only administrator is one can invite, grant and
+   revoke nobody. `people_with_admin` is that count.
 2. `person_without_credential` — somebody active with no live way in at all: a
    person whose first password link lapsed unspent or was revoked, or whose
    every credential has been; a service account holding no live token. A live
@@ -1314,8 +1377,9 @@ rows print the same report:
    never the cause.
 3. `binding_dangling` — somebody bound to a seat the company no longer holds as
    a human seat.
-4. `grant_clamped_by_ceiling` — a grant a row declares and this node's
-   `api.auth.max_grants` withholds.
+4. `admin_clamped_by_node` — a row holding `admin` on a node whose
+   `api.auth.admin` is `refuse`, which clamps it away here: that person keeps
+   every app on this node and administers nothing through it.
 
 Each finding's `detail` says what to do, and the table in
 [`crewlet iam check`](cli.md#crewlet-iam-check) says the same per kind.
@@ -1407,7 +1471,7 @@ since the removal erases what identified them and the trail keeps the id.
 
 ### `/config/*` — live config management (auth-gated)
 
-Every `/config/*` route takes a grant: `config:read` for the reads below and `config:write` for the writes, whatever the credential — a Tier A token, a session, or the development principal. A caller without it is refused `403 unauthorized` naming the grant (see [Which grant a route needs](#which-grant-a-route-needs)). The routes that can change the org chart — `PUT` and `PATCH /config`, a revert, and the seat and unit entity routes — also admit a unit's **lead** for what is inside the units they lead, read and judged change by change (see [A lead edits their own team](#a-lead-edits-their-own-team)). A write also asks for a proof of identity inside `step_up`, and a session whose proof is older is refused `403 step_up_required` (see [Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are)). See the [Configuration concept doc](../concepts/configuration.md#auth) for the full auth model.
+Every `/config/*` route takes `admin`, reads and writes alike, whatever the credential — a Tier A token, a session, or the development principal. A caller without it is refused `403 unauthorized` naming `admin` (see [Which permission a route needs](#which-permission-a-route-needs)). The routes that can change the org chart — `PUT` and `PATCH /config`, a revert, and the seat and unit entity routes — also admit a unit's **lead** for what is inside the units they lead, read and judged change by change (see [A lead edits their own team](#a-lead-edits-their-own-team)). A write also asks for a proof of identity inside `step_up`, and a session whose proof is older is refused `403 step_up_required` (see [Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are)). See the [Configuration concept doc](../concepts/configuration.md#auth) for the full auth model.
 
 **A managed document refuses every other writer.** When Tier A lists
 `api.auth.company_writers`, only those token ids may change the document:
@@ -1416,7 +1480,7 @@ of each answer any other credential `403 config_managed`, before anything is
 read or stored, and `/setup`'s connect, disconnect and GitHub App routes
 answer the same refusal before they touch the secret store or a vendor. Reads
 and `POST /config/reload` stay open to whoever the authority table admits:
-`config:read` for a read, `config:write` for a reload. The body names who
+`admin`, for a read and a reload alike. The body names who
 manages the document and what to do:
 
 ```json
@@ -1549,7 +1613,7 @@ may be a unit's lead who holds no grant over the directory:
     "qa-lead": {"invitation": "0192f00d-…",
                 "expires_at": "2026-06-15T09:12:00Z"}
   },
-  "hint": "move each person to another human seat (PATCH /iam/people/{person} with seat) or remove them, unbind a service account (PATCH /iam/people/{person} with no seat), cancel an open invitation (DELETE /iam/invitations/{id}) — whoever holds people:manage — then send the write again"
+  "hint": "move each person to another human seat (PATCH /iam/people/{person} with seat) or remove them, unbind a service account (PATCH /iam/people/{person} with no seat), cancel an open invitation (DELETE /iam/invitations/{id}) — an administrator — then send the write again"
 }
 ```
 
@@ -1557,8 +1621,8 @@ The holder's `kind` decides the remedy, which the `hint` spells out: a
 **person** holds a human seat for as long as they are here, so they are moved
 to another human seat or removed — never unbound; a **service account**
 (`kind: machine`) is unbound; an **invitation** is cancelled, or left to be
-redeemed or to lapse at its `expires_at`. Each is a gesture for whoever holds
-`people:manage`. Where a person and an invitation both claim one seat — a
+redeemed or to lapse at its `expires_at`. Each is a gesture for an
+administrator. Where a person and an invitation both claim one seat — a
 residue of a build before invitations held their seats — the person is named.
 The check is advisory: a bind or an invitation landing between it and the
 activation is not seen, and an offline `crewlet config import` asks nothing,
@@ -1571,7 +1635,7 @@ human seat away never asks.
 #### A lead edits their own team
 
 A person whose seat leads a unit may write the seats and units
-inside it — the unit and every unit beneath it — without `config:write`,
+inside it — the unit and every unit beneath it — without `admin`,
 through the routes that write the org chart: `PUT` and `PATCH /config`,
 `POST /config/revisions/{id}/revert`, and `PUT /config/roles/{handle}` and
 `PUT /config/units/{id}`. The route admits anybody bound to a seat before the
@@ -1589,7 +1653,7 @@ never a lead's. The rule, change by change, is in [Identity and
 Access](../concepts/identity-and-access.md#a-lead-edits-their-own-team).
 
 A write any part of which is not the caller's is refused whole —
-`403 unauthorized` naming `config:write`, the grant that would admit all of
+`403 unauthorized` naming `admin`, the permission that would admit all of
 it, and a `refused` list naming every part, so a client can show each beside
 what it is about. A [dry run](#dry-runs) answers the same before anything is
 stored.
@@ -1597,7 +1661,7 @@ stored.
 ```json
 {
   "error": "unauthorized", "message": "...",
-  "reason": "not_lead", "grants": ["config:write"],
+  "reason": "not_lead", "grants": ["admin"],
   "refused": [
     {"kind": "unit", "id": "platform", "op": "changed", "side": "after",
      "place": "platform", "why": "self", "reason": "not_lead"},
@@ -1612,11 +1676,11 @@ stored.
 
 | Field | What it says |
 |---|---|
-| `kind`, `id` | A `seat` by handle, a `unit` by key, a `setting` by its top-level key, or the `document` (no `id`) for a write that changes nothing — re-publishing the company unchanged re-activates it on every node, which is `POST /config/reload`'s and `config:write`'s; a [dry run](#dry-runs) of a seat or unit sent back unchanged is answered to its lead instead |
+| `kind`, `id` | A `seat` by handle, a `unit` by key, a `setting` by its top-level key, or the `document` (no `id`) for a write that changes nothing — re-publishing the company unchanged re-activates it on every node, which is `POST /config/reload`'s and `admin`'s; a [dry run](#dry-runs) of a seat or unit sent back unchanged is answered to its lead instead |
 | `op` | What the write does to the seat or unit: `added`, `removed`, `moved` or `changed` — its fields, or where it sits among its siblings, since order decides which of a seat's managers is its own |
 | `side` | `before` (the revision replaced) or `after` (the one proposed): which document the place was read in |
 | `place` | The key of the unit the change reaches; `""` is the company root, which is nobody's subtree |
-| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), `named` (another object's `lead:` or `manages:` entry that already states the id an added seat or unit takes, with the id in `value`), `duplicate` (two objects on one id, which only the company grant may write), `credential` (a credential field, compared whole so an `mcp_env` key with nothing under it counts, or a `${VAR}` in any other field, with the field's path in `value`), `key` (a `project`, `space`, `channel`, `email` or `contact` set, cleared or changed, with the field in `value`), or `unchanged` (the `document` itself) |
+| `why` | What reaches it: `place` (where the object sits), `self` (a unit's own fields), `lead` or `manages` (a new reference, with the name in `value`), `named` (another object's `lead:` or `manages:` entry that already states the id an added seat or unit takes, with the id in `value`), `duplicate` (two objects on one id, which only `admin` may write), `credential` (a credential field, compared whole so an `mcp_env` key with nothing under it counts, or a `${VAR}` in any other field, with the field's path in `value`), `key` (a `project`, `space`, `channel`, `email` or `contact` set, cleared or changed, with the field in `value`), or `unchanged` (the `document` itself) |
 | `reason` | The authority table's reason: `not_lead` for a place outside the caller's subtree, the company root included, or `no_grant` for a credential, a key, a setting or an unchanged document |
 
 A lead reads what they may write the same way: `GET /config/roles/{handle}`
@@ -1626,15 +1690,15 @@ read and the write of one seat or unit are decided where the id sits **before**
 it is looked up or the body is read — at the company root for an id the company
 does not have — so a seat in another team, a seat at the root and an id that
 does not exist are refused in the same bytes, whatever the body, and only
-`config:read` on a read and `config:write` on a write are told a seat or a unit
+`admin` is told a seat or a unit
 is missing. A refused write that reaches outside from inside the caller's
 subtree is more forthcoming by design: each refused part names the place it
 reaches, which is where something outside the caller's subtree sits — the unit
 a seat a `manages:` entry names sits in, or the root for a name nothing answers
 to. So the chart's shape — which seats exist and where they sit — is no secret
-from anybody bound to a seat, as it is none from `state:read`, which is served
-the org chart whole; a seat's or a unit's fields are, and only a read serves
-them. The whole document, its history and its references stay `config:read`'s,
+from anybody bound to a seat, as it is none from anybody signed in, who is
+served the org chart whole; a seat's or a unit's fields are, and only a read serves
+them. The whole document, its history and its references stay `admin`'s,
 so a lead edits through the entity routes.
 
 #### Dry runs
@@ -1753,7 +1817,7 @@ Four rules follow from that:
   the body. A decoder that ignored what it did not recognise would answer `201`
   and store the seat with its goal silently gone.
 - **A plain `PUT` never creates.** An id nothing carries is `404 no_such_entity`
-  (on `roles` and `units`, to the holder of `config:write` alone — anybody else
+  (on `roles` and `units`, to an administrator alone — anybody else
   is refused `403` as for a seat outside their team), not a new entity: naming
   one that is not there is far more often a typo than
   an intent to add one. The intent is SAID with `If-None-Match: *` — the
@@ -1786,24 +1850,23 @@ Four rules follow from that:
 
 ### `/secrets/*` — the company's credentials (auth-gated)
 
-Every `/secrets/*` and `/setup/*` route takes a grant, reads included: the
+Every `/secrets/*` and `/setup/*` route takes `admin`, reads included: the
 listing alone says which credentials a company holds and when each last
 changed. Every node serving the API serves them, because every node opens the fleet's
 [coordination store](../concepts/coordination.md) that holds the rows.
 
-| Route | Grant |
+| Route | Needs |
 |---|---|
-| `GET /secrets`, `GET /secrets/{name}` | `config:read` |
-| `GET /secrets/{name}?reveal=true` | `config:read` **and** `secrets:read`, and a proof of identity inside `step_up` — decided before the store is read, so a caller without the second is refused alike for a name that exists and one that does not |
-| `PUT /secrets/{name}`, `DELETE /secrets/{name}`, `POST /secrets/rekey` | `secrets:write`, and a proof inside `step_up` |
-| `GET /setup/integrations`, `GET /setup/integrations/{kind}`, the two `runs` reads | `config:read` |
-| `POST /setup/integrations/{kind}/inputs` | `config:write` — and `secrets:write` as well when the submission carries a credential, supplied or to be minted |
-| `DELETE /setup/integrations/{kind}`, `POST /setup/integrations/{kind}/check` | `config:write` |
-| `POST /setup/integrations/{kind}/provision`, `POST /setup/integrations/github/app` | `config:write` **and** `secrets:write`: a writing pass is handed a sink that mints and seals, and an app's private key is sealed on its way back |
+| `GET /secrets`, `GET /secrets/{name}` | `admin` |
+| `GET /secrets/{name}?reveal=true` | `admin`, a **person present** — a request that presented a machine token is refused `403 token_refused` — and a proof of identity inside `step_up`, decided before the store is read, so a caller refused is refused alike for a name that exists and one that does not |
+| `PUT /secrets/{name}`, `DELETE /secrets/{name}`, `POST /secrets/rekey` | `admin`, and a proof inside `step_up` |
+| `GET /setup/integrations`, `GET /setup/integrations/{kind}`, the two `runs` reads | `admin` |
+| `POST /setup/integrations/{kind}/inputs`, `DELETE /setup/integrations/{kind}`, `POST /setup/integrations/{kind}/check` | `admin` |
+| `POST /setup/integrations/{kind}/provision`, `POST /setup/integrations/github/app` | `admin`: a writing pass is handed a sink that mints and seals, and an app's private key is sealed on its way back |
 
-**Connecting is `config:write` and `secrets:write`.** `/setup` performs no
-write of its own — a credential goes through the store `/secrets` serves — so
-a caller who could not write a credential there cannot write one here either.
+**Connecting is `admin`'s and nothing more.** `/setup` performs no write of
+its own — a credential goes through the store `/secrets` serves — so connecting
+asks exactly what writing a credential there asks.
 Every `/setup` and `/secrets` write asks for a proof of identity inside
 `step_up` as well, and so does a reveal; the reads ask for none (see
 [Some gestures ask how recently you proved who you are](#some-gestures-ask-how-recently-you-proved-who-you-are)).
@@ -1888,7 +1951,7 @@ On a `409`, re-read `/config` and send the edit again.
 - `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key — asked last, once the write is admitted and its document checked, so a caller who may not make the change is answered the `403` first; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
 - `401 Unauthorized`: missing or invalid bearer token — `invalid_token`, in the same [refusal envelope](#every-refusal-is-one-envelope) every route answers with, written by the guard itself before any route runs
 - `403 Forbidden`: `unauthorized` when the credential holds neither the grant nor, on the org chart, the lead relation — with a `refused` list for [a lead's write](#a-lead-edits-their-own-team) — and `step_up_required` for a write whose proof of identity is older than `step_up`; and `config_managed` when `api.auth.company_writers` names the document's writers and this credential is not one of them — a person's session, a machine token and a lead's write among them — with `managed_by`, `detail` and `hint`, a write and its dry run alike, never a read or a reload, and asked before the body is read (see [Managed configuration](../concepts/configuration.md#managed-configuration))
-- `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity read or write naming an id the active revision does not carry (of a seat or a unit, told only to `config:read` on a read and `config:write` on a write, and anybody else is refused `403` as for one outside their team), or `no_route` for a path under `/config` this surface does not serve
+- `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity read or write naming an id the active revision does not carry (of a seat or a unit, told only to `admin`, and anybody else is refused `403` as for one outside their team), or `no_route` for a path under `/config` this surface does not serve
 - `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
 - `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, or `no_active_revision` when `If-Match` names a revision and none is active
@@ -2114,9 +2177,8 @@ across two requests.
 **Every route takes a grant, reads included**, on the same terms as `/config`
 and `/secrets`: this surface answers with the *names* of the credentials a
 company holds, which of them are unset, and the pages at each third-party app an
-administrator would visit. That is a map of what to attack. Reading takes
-`config:read`; connecting takes `config:write`, and `secrets:write` as well
-wherever a credential is sealed — see [the grant each route
+administrator would visit. That is a map of what to attack. Reading and
+connecting both take `admin` — see [what each route
 takes](#secrets--the-companys-credentials-auth-gated).
 
 **On a managed document** (Tier A `api.auth.company_writers`), a submission
@@ -2770,7 +2832,7 @@ opens — before a single turn has run:
 | Section | What it is |
 |---|---|
 | `agents` | The company's agent seats, each merged with its live overlay. Every seat in the company, not the ones this node runs, because the dashboard is a view of the company. Human seats are excluded — they have no turn, no phase and no spend; they appear in `org` with `"kind": "human"` |
-| `org` | The same projection [`GET /org`](#get-org) answers, built for the socket's audience: the charter, the company's resolved `timezone` and its `token_budget`, root-level `roles` and `units` nesting to any depth, with only the fields that projection declares for each — a seat's resolved `llm` chain and `tool_sources` only to an audience holding `config:read` |
+| `org` | The same projection [`GET /org`](#get-org) answers, built for the socket's audience: the charter, the company's resolved `timezone` and its `token_budget`, root-level `roles` and `units` nesting to any depth, with only the fields that projection declares for each — a seat's resolved `llm` chain and `tool_sources` only to an audience holding `admin` |
 | `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Empty on a node with no active revision, which has no catalogue yet |
 | `events`, `sandboxes`, `tokens`, `budget`, `health` | The live projection: what has happened |
 
@@ -2967,12 +3029,15 @@ Assembled entirely from the in-memory projection — no database
 round-trip on the hot path.  Used as a fallback when the browser cannot
 upgrade to a WebSocket (corporate proxies, etc.).
 
-**Each section is the caller's**, decided by the grant its push kind takes on
-the socket: the whole bundle needs `state:read` (`403 unauthorized` without
-it), and the `events` section is present only for a caller who also holds
-`audit:read` — absent rather than empty, because an empty feed reads as a
-company that has done nothing. `GET /agents`, `GET /org` and `GET /tools` are
-the same sections served alone, under the same `state:read`.
+**Each section is the caller's**, decided by what its push kind needs on the
+socket: the bundle is everybody's — every principal the guard resolved whose
+stage may act — and the `events` section is present only for an
+administrator, absent rather than empty, because an empty feed reads as a
+company that has done nothing. The `agents` and `sandboxes` sections carry
+each call's and run's **body** only where the caller may read it ([A status
+reader never receives a transcript](#a-status-reader-never-receives-a-transcript)).
+`GET /agents`, `GET /org` and `GET /tools` are the same sections served alone,
+shaped the same way.
 
 **Response**
 
@@ -3034,7 +3099,7 @@ revision had applied.)
 The envelope is **public** — `GET /health` is an unguarded probe and the push
 reaches an anonymous tab — which is why the fleet and the alarm table appear on
 it as counts (`nodes`, `alarms`) and never as their rows. Which node holds what
-is the `fleet:operate` [`fleet`](#get-fleet) answer, and what each alarm measured is
+is the `admin` [`fleet`](#get-fleet) answer, and what each alarm measured is
 `work_retention`'s.
 
 ```json
@@ -3707,17 +3772,23 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 > the same fall-through is what a kind this build's engine sends and its own
 > client forgot looks like, and the e2e replay fails on a non-zero count.
 
-**Who may open it, and what each reader receives.** The handshake needs
-`state:read` — a caller without it is answered `403 unauthorized` before the
-upgrade, naming the grant — and every push kind is received only by a socket
-whose caller holds the grant that kind's question takes: `event` needs
-`audit:read` (it is an `events` row, carrying every phase's prompt and
-response), and every other company kind `state:read`. The snapshot is built for
-the same audience. When the socket's credential is decided again and it
-resolves somebody else — another login, another seat or none, other grants —
-the socket closes `1013`, and the reconnect's handshake builds the snapshot for
-the new audience while the client asks who it is again; one that finds
-`state:read` gone closes the socket `4403` — see [Close codes](#close-codes).
+**Who may open it, and what each reader receives.** The handshake admits
+every principal the guard resolves whose stage may act — the overview is
+everybody's — and refuses one whose stage may not `403` before the upgrade.
+Every push kind is received only by a socket whose caller holds what that
+kind's question takes: `event` needs `admin` (it is an `events` row, carrying
+every phase's prompt and response), `inbox_changed` needs `tracker`, and every
+other company kind is everybody's. The `agents`, `seats` and `sandboxes`
+pushes carry a call's and a run's **body** only to a caller who may read that
+seat's — an administrator, or its lead — and to everybody else its status with
+`body_withheld: true` ([A status reader never receives a
+transcript](#a-status-reader-never-receives-a-transcript)). The snapshot is
+built for the same audience. When the socket's credential is decided again and
+it resolves somebody else — another login, another seat or none, other
+permissions — or a published company moves which seats' bodies the caller may
+read, the socket closes `1013`, and the reconnect's handshake builds the
+snapshot for the new audience while the client asks who it is again — see
+[Close codes](#close-codes).
 
 #### Pushes
 
@@ -3735,9 +3806,9 @@ Server → client kinds:
 | `org` / `tools` / `schedules` | On the same edge as `seats`: every published company. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The whole [health envelope](#the-health-envelope), exactly what `GET /health` answers. There is no query for it. |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered, or a `watch` that was not installed. | `{ id, what, error, reason?, grants?, retry_after?, refusal?, detail? }` where `error` is a code — and an `unauthorized` one adds `reason` and `grants`, exactly as the REST envelope does: the rule that decided, and the grants any one of which would have admitted the caller (an EMPTY list means no grant would, because what is missing is a relation such as leading that person). A **watch refusal** has no `id` and names `what: "watch"`: `unauthorized` when the caller may not watch that seat — with its `reason` and `grants` — `unavailable` when this node could not read the chart that decides it or the directory a login resolves through — carrying `retry_after` as a query's `unavailable` does, by the same rule and with the same `0` for a read no wait clears, but never the `refusal` or `detail` behind it, because what the directory says about a login names the seat it is bound to — and `not_found` when a login names no record, which only `fleet:operate` is ever told. For a query, the codes are: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *here* — a projection still catching up after a restart or a fresh join, a coordination store it could not reach, no copy of the estate to answer from (the tracker and the knowledge base are read through the [estate router](../concepts/scaling.md#how-a-request-reaches-the-estate), so a copy out of service or a data node restarting is a holder to ask again rather than a fault), or a refusal by its state log — so a client does not report a fault. A query's `unavailable` frame also carries `retry_after`, the whole seconds before asking this node again, and, where a state-log refusal is behind it, `refusal` (its code — `behind`, `log_full`, `deferred`, `broker_refused`, …) and `detail` (its own words, the remedy). **A `retry_after` of `0` is the answer, never an omission**: waiting will not change it — a log at its byte ceiling, a record this node cannot decode, a barrier its broker refused — so the client asks another node or waits for an operator rather than polling this one; see [Read consistency](../guides/consistency.md#the-fourteen-refusals). Its REST twin is `503` with the same `refusal` and `detail` in the body and `Retry-After` carrying the hint, absent where the hint is zero. **A work, page or search question on a node that has not been handed a company yet** is `unavailable` with `refusal: "no_active_revision"`, the tracker's and the knowledge base's own sentence as its `detail`, and `retry_after: 15` — the reconcile poll that brings the company — and its REST twin is `503 no_active_revision` with the same detail and `Retry-After: 15`, as every other surface over those two halves answers such a node. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`, and it carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. A frame has ONE `detail` key, `unavailable`'s words and `bad_params`'s sentence alike. Every other code's text stays in the node's log, since a failure's own text can carry a path. The dashboard asks again after exactly a frame's `retry_after` — and not at all after a `0` — and keeps no wait of its own, so this hint and the `Retry-After` on a REST refusal are the only retry clock it has. |
+| `error`    | Reply to a client `query` that could not be answered, or a `watch` that was not installed. | `{ id, what, error, reason?, grants?, retry_after?, refusal?, detail? }` where `error` is a code — and an `unauthorized` one adds `reason` and `grants`, exactly as the REST envelope does: the rule that decided, and the grants any one of which would have admitted the caller (an EMPTY list means no grant would, because what is missing is a relation such as leading that person). A **watch refusal** has no `id` and names `what: "watch"`: `unauthorized` when the caller may not watch that seat — with its `reason` and `grants` — `unavailable` when this node could not read the chart that decides it or the directory a login resolves through — carrying `retry_after` as a query's `unavailable` does, by the same rule and with the same `0` for a read no wait clears, but never the `refusal` or `detail` behind it, because what the directory says about a login names the seat it is bound to — and `not_found` when a login names no record, which only `admin` is ever told. For a query, the codes are: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *here* — a projection still catching up after a restart or a fresh join, a coordination store it could not reach, no copy of the estate to answer from (the tracker and the knowledge base are read through the [estate router](../concepts/scaling.md#how-a-request-reaches-the-estate), so a copy out of service or a data node restarting is a holder to ask again rather than a fault), or a refusal by its state log — so a client does not report a fault. A query's `unavailable` frame also carries `retry_after`, the whole seconds before asking this node again, and, where a state-log refusal is behind it, `refusal` (its code — `behind`, `log_full`, `deferred`, `broker_refused`, …) and `detail` (its own words, the remedy). **A `retry_after` of `0` is the answer, never an omission**: waiting will not change it — a log at its byte ceiling, a record this node cannot decode, a barrier its broker refused — so the client asks another node or waits for an operator rather than polling this one; see [Read consistency](../guides/consistency.md#the-fourteen-refusals). Its REST twin is `503` with the same `refusal` and `detail` in the body and `Retry-After` carrying the hint, absent where the hint is zero. **A work, page or search question on a node that has not been handed a company yet** is `unavailable` with `refusal: "no_active_revision"`, the tracker's and the knowledge base's own sentence as its `detail`, and `retry_after: 15` — the reconcile poll that brings the company — and its REST twin is `503 no_active_revision` with the same detail and `Retry-After: 15`, as every other surface over those two halves answers such a node. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`, and it carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. A frame has ONE `detail` key, `unavailable`'s words and `bad_params`'s sentence alike. Every other code's text stays in the node's log, since a failure's own text can carry a path. The dashboard asks again after exactly a frame's `retry_after` — and not at all after a `0` — and keeps no wait of its own, so this hint and the `Retry-After` on a REST refusal are the only retry clock it has. |
 | `pong`     | Reply to a client `ping`. | `null` |
-| `inbox_changed` | A committed tracker batch wrote the watched seat one or more notices. Every node serving the API holds the estate — `ingress` requires `data` — and applies every tracker record, so each node pushes to its OWN sockets from its own applier after the batch commits. While a node's own copy is out of service it stays in rotation and pushes a sound data node's movements instead, relayed over the broker, and withholds its own applier's; every switch of source sends each watched seat one frame with `unread_delta: 0` and an empty `subject` and `reason`, because what moved during the switch is not replayed — read the inbox again, as on any frame. One frame per seat per batch. | `{ handle, unread_delta, subject, reason }`, and the frame itself carries `seat`. **Identifiers and a count, never content**: `subject` is the id of the object the newest of those notices was written on — the task for a task commit, and the PERSON for a `prioritised` notice, whose task `work_inbox` names as `task` — and `reason` the reason it was routed under, and what the notices say is read through `work_inbox`, the question that decides who may read them. `unread_delta` is a **hint** — the notices the batch wrote, which a redelivery the engine has already collapsed may count twice — so a client re-asks rather than adding it to a badge. **Routed by seat**: it reaches only the clients whose `watch` for that seat was allowed, never every tab. It needs `state:read`, the grant `work_inbox` takes. |
+| `inbox_changed` | A committed tracker batch wrote the watched seat one or more notices. Every node serving the API holds the estate — `ingress` requires `data` — and applies every tracker record, so each node pushes to its OWN sockets from its own applier after the batch commits. While a node's own copy is out of service it stays in rotation and pushes a sound data node's movements instead, relayed over the broker, and withholds its own applier's; every switch of source sends each watched seat one frame with `unread_delta: 0` and an empty `subject` and `reason`, because what moved during the switch is not replayed — read the inbox again, as on any frame. One frame per seat per batch. | `{ handle, unread_delta, subject, reason }`, and the frame itself carries `seat`. **Identifiers and a count, never content**: `subject` is the id of the object the newest of those notices was written on — the task for a task commit, and the PERSON for a `prioritised` notice, whose task `work_inbox` names as `task` — and `reason` the reason it was routed under, and what the notices say is read through `work_inbox`, the question that decides who may read them. `unread_delta` is a **hint** — the notices the batch wrote, which a redelivery the engine has already collapsed may count twice — so a client re-asks rather than adding it to a badge. **Routed by seat**: it reaches only the clients whose `watch` for that seat was allowed, never every tab. It needs `tracker`, the permission `work_inbox` takes. |
 
 #### Client frames
 
@@ -3746,8 +3817,8 @@ Client → server kinds:
 | `kind` | Purpose |
 |--------|---------|
 | `ping` | Keepalive; server replies with `pong`. |
-| `watch` | Become a recipient for one seat's seat-routed frames: `{ kind: "watch", seat }`. An empty `seat` clears it (always allowed), and one socket watches one seat at a time — a tab is looking at one screen, so a second watch replaces the first. **`seat` names a record the way `work_inbox`'s `handle` does**: a seat's handle, either of your own names, or somebody's **login**, which is resolved to the record their notices are kept under — the seat the identity directory binds them to — and the watch is installed there, because that is the name every `inbox_changed` frame for them is pushed to; see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for), whose rules it follows to the letter, the directory asked only once the watch is decided as far as it can be without it. A login that names nobody answers `not_found` to `fleet:operate` and is refused like any other seat to everybody else. **It is decided like `work_inbox` about the same seat**, because it buys that seat's `inbox_changed` frames: the seat's own holder, whoever leads it through the chart, or the admin grant. Three answers, and none closes the socket. **Allowed** installs the watch. **Refused** installs nothing, drops any watch the socket held, and replies `error` with `unauthorized`. It is not a `4403` close, because a client reads that as "this browser may not have the live channel at all" when all that was refused is one seat's frames. **Undecidable** (this node could not read the chart, or the directory a login resolves through) installs nothing either and replies `unavailable`, with the `retry_after` that says when asking again can change the answer — `0` where no wait will. Installing would hand the seat's frames to somebody this node could not show was allowed them. Refusing would tell a lead they lead nobody because the node is behind. **Every time the socket's credential is decided again by an identity record that names it, and on every published company, which is when a lead can move, so is the current watch**: a refusal withdraws it and says so, and an undecidable answer keeps it, since nothing has been learned against a decision this node already made. A watch with nobody resolved behind it closes the socket with **4401**. |
-| `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params }` — `id` is any client-chosen value echoed back on the reply. **There is no per-frame credential**: every question is asked as the principal the handshake resolved (and each decision of the credential since), and decided by the grant it is registered under. Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows — at most **four** at a time per **socket**, which is a tab's share of the node's reader pool: the pool's floor is sized as two full dashboards at four each, and a fifth query waits on its own socket rather than in the pool the engine's own reads share. |
+| `watch` | Become a recipient for one seat's seat-routed frames: `{ kind: "watch", seat }`. An empty `seat` clears it (always allowed), and one socket watches one seat at a time — a tab is looking at one screen, so a second watch replaces the first. **`seat` names a record the way `work_inbox`'s `handle` does**: a seat's handle, either of your own names, or somebody's **login**, which is resolved to the record their notices are kept under — the seat the identity directory binds them to — and the watch is installed there, because that is the name every `inbox_changed` frame for them is pushed to; see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for), whose rules it follows to the letter, the directory asked only once the watch is decided as far as it can be without it. A login that names nobody answers `not_found` to `admin` and is refused like any other seat to everybody else. **It is decided like `work_inbox` about the same seat**, because it buys that seat's `inbox_changed` frames: the seat's own holder, whoever leads it through the chart, or `admin` — and `tracker` either way. Three answers, and none closes the socket. **Allowed** installs the watch. **Refused** installs nothing, drops any watch the socket held, and replies `error` with `unauthorized`. It is not a `4403` close, because a client reads that as "this browser may not have the live channel at all" when all that was refused is one seat's frames. **Undecidable** (this node could not read the chart, or the directory a login resolves through) installs nothing either and replies `unavailable`, with the `retry_after` that says when asking again can change the answer — `0` where no wait will. Installing would hand the seat's frames to somebody this node could not show was allowed them. Refusing would tell a lead they lead nobody because the node is behind. **Every time the socket's credential is decided again by an identity record that names it, and on every published company, which is when a lead can move, so is the current watch**: a refusal withdraws it and says so, and an undecidable answer keeps it, since nothing has been learned against a decision this node already made. A watch with nobody resolved behind it closes the socket with **4401**. |
+| `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params }` — `id` is any client-chosen value echoed back on the reply. **There is no per-frame credential**: every question is asked as the principal the handshake resolved (and each decision of the credential since), and decided by what it is registered under — the overview's questions for everybody, an app's for that app, admin's for admin, and a seat's trail by `audit.seat.read`. Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows — at most **four** at a time per **socket**, which is a tab's share of the node's reader pool: the pool's floor is sized as two full dashboards at four each, and a fifth query waits on its own socket rather than in the pool the engine's own reads share. |
 
 #### Queries
 
@@ -3758,10 +3829,10 @@ REST route calls, so the two surfaces cannot diverge:
 |--------|----------|--------------|
 | `agent` | `{id}` | `GET /agents/{id}` — config + live state + `llm_history` |
 | `live_call` | `{agent_id}` | `GET /query/live_call?agent_id=…`. `{agent_id, handle, live_call, live_call_seq}`: the seat's call in flight with every field and its `versions`, or `live_call: null` while it has none (a seat the projection has never seen included, at `live_call_seq` 0), and the seat's `live_call_seq` beside it either way, which the tab orders the answer by against the pushes that may overtake it. Asked and answered by the seat's AGENT ID, the key every overlay is merged by, and never by its name, which two seats may share; `handle` is a label. From the projection alone, so it costs what a push does — the REPAIR a tab makes when an `agents` push names a version of a heavy field newer than the copy it holds: the push that carried the field was dropped (see [What the projection carries, and what the wire sends](#what-the-projection-carries-and-what-the-wire-sends)) |
-| `agent_memory` | `{id, limit}` | `GET /agents/{id}/memory`. A seat's trail, so it takes `audit:read` whoever's seat it is. ANSWERED BY THE NODE HOLDING THE SEAT, which it names (`held_by`, or `none` with an empty answer for a seat no node holds; `unavailable` while the holder is silent or still taking the seat) — every node keeps a copy of a seat's memory and only the holder keeps it current. Four collections, each a page (`limit`, at most 50) with its counted total beside it: the diary (`diary_total`), the episodes (`episodes_total`), the synthesized skills (`skills_total`) and the COUNTERPARTY PROFILES (`counterparties_total`) — what this seat has learned about the colleagues it works with, both instants carried because `last_updated_at` moves on every interaction and `last_corroborated_at` only when the traits changed. `traits` is a bag whose keys the model invents, never a fixed schema. Plus `latest_reflection` (the newest live diary entry, whatever the page) and `onboarded_at`. An episode's `ask` and `plan_summary` are their OPENINGS, at most 600 bytes each — the figure a seat is shown of a past turn's words before they are condensed (`learning.EpisodeAccountBytes`) — with each whole text's size in `ask_bytes` and `plan_summary_bytes`. The diary is keyed on the derived agent id and the other three on the seat's handle; both are resolved from the one identifier a caller has, the handle. See [the route](#get-agentsidmemory) |
-| `agent_episode` | `{id, episode}` | `GET /agents/{id}/memory/episodes/{episode}`. A seat's trail, so it takes `audit:read` whoever's seat it is, as `agent_memory` does. ONE EPISODE WHOLE — what the turn was asked and what it did, complete — answered by the seat's holder as `agent_memory` is (`held_by`); `episode: null` for one the seat no longer holds. See [the route](#get-agentsidmemoryepisodesepisode) |
-| `memory_overview` | `{}` | **Takes `audit:read`**, as `agent_memory` does. EVERY AGENT SEAT'S memory totals — `diary_total`, `episodes_total`, `skills_total`, `last_reflection_at` and the `latest_reflection` itself — each counted by the node holding the seat, gathered in ONE scatter rather than a read per seat, with `held_by` per row (`none` for a seat no node holds, nothing counted), an `unavailable` reason on a row whose holder did not answer, and the fleet `coverage`. Every agent in the chart, handle order, no cap. See [the section](#memory_overview) |
-| `conversations` | `{handle, conversation, limit}` | `GET /agents/{id}/conversations`. The seat's own thread ledger — the engine's only account of what a seat said on a surface it does not own, and what stops it replying twice in one thread. TWO SHAPES IN ONE ANSWER, because a screen asks two questions with one navigation: `conversations` is every thread this seat holds entries in, and naming one in `conversation` adds that thread's turns as `entries`. Each turn's `reply` and `unsent` carry the same artifact and WHICH ONE HOLDS IT is the whole record of whether anybody received it — a turn can end with real work done and no way to say so. The ledger is keyed on the seat's handle. An absent `handle` is the caller's own SEAT — a seat's trail is the seat's, so a caller bound to none names one — and a named one is a seat's TRAIL rather than a person's queue, so it takes `audit:read` whoever's seat it is. The listing is a page (default 50, at most 200) with `conversations_total` beside it, ANSWERED BY THE SEAT'S HOLDER, as `agent_memory` is and for its reason: the ledger travels with a seat's memory and only the holder's copy is current (`held_by`) — see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for) |
+| `agent_memory` | `{id, limit}` | `GET /agents/{id}/memory`. A seat's trail, so it takes `audit.seat.read` — the seat's lead, or `admin`. ANSWERED BY THE NODE HOLDING THE SEAT, which it names (`held_by`, or `none` with an empty answer for a seat no node holds; `unavailable` while the holder is silent or still taking the seat) — every node keeps a copy of a seat's memory and only the holder keeps it current. Four collections, each a page (`limit`, at most 50) with its counted total beside it: the diary (`diary_total`), the episodes (`episodes_total`), the synthesized skills (`skills_total`) and the COUNTERPARTY PROFILES (`counterparties_total`) — what this seat has learned about the colleagues it works with, both instants carried because `last_updated_at` moves on every interaction and `last_corroborated_at` only when the traits changed. `traits` is a bag whose keys the model invents, never a fixed schema. Plus `latest_reflection` (the newest live diary entry, whatever the page) and `onboarded_at`. An episode's `ask` and `plan_summary` are their OPENINGS, at most 600 bytes each — the figure a seat is shown of a past turn's words before they are condensed (`learning.EpisodeAccountBytes`) — with each whole text's size in `ask_bytes` and `plan_summary_bytes`. The diary is keyed on the derived agent id and the other three on the seat's handle; both are resolved from the one identifier a caller has, the handle. See [the route](#get-agentsidmemory) |
+| `agent_episode` | `{id, episode}` | `GET /agents/{id}/memory/episodes/{episode}`. A seat's trail, so it takes `audit.seat.read`, as `agent_memory` does. ONE EPISODE WHOLE — what the turn was asked and what it did, complete — answered by the seat's holder as `agent_memory` is (`held_by`); `episode: null` for one the seat no longer holds. See [the route](#get-agentsidmemoryepisodesepisode) |
+| `memory_overview` | `{}` | **Decided per seat by `audit.seat.read`**, as `agent_memory` is, and answered for exactly the seats the caller may read — every one for `admin`, a lead's own agents for a lead, none for anybody else; a seat this node cannot decide makes the whole answer `unavailable` rather than a shorter list. Each seat's memory totals — `diary_total`, `episodes_total`, `skills_total`, `last_reflection_at` and the `latest_reflection` itself — each counted by the node holding the seat, gathered in ONE scatter rather than a read per seat, with `held_by` per row (`none` for a seat no node holds, nothing counted), an `unavailable` reason on a row whose holder did not answer, and the fleet `coverage`. The seats the caller may read, handle order, no cap. See [the section](#memory_overview) |
+| `conversations` | `{handle, conversation, limit}` | `GET /agents/{id}/conversations`. The seat's own thread ledger — the engine's only account of what a seat said on a surface it does not own, and what stops it replying twice in one thread. TWO SHAPES IN ONE ANSWER, because a screen asks two questions with one navigation: `conversations` is every thread this seat holds entries in, and naming one in `conversation` adds that thread's turns as `entries`. Each turn's `reply` and `unsent` carry the same artifact and WHICH ONE HOLDS IT is the whole record of whether anybody received it — a turn can end with real work done and no way to say so. The ledger is keyed on the seat's handle. An absent `handle` is the caller's own SEAT — a seat's trail is the seat's, so a caller bound to none names one — and a named one is a seat's TRAIL rather than a person's queue, so it takes `audit.seat.read` — the seat's lead, or `admin`. The listing is a page (default 50, at most 200) with `conversations_total` beside it, ANSWERED BY THE SEAT'S HOLDER, as `agent_memory` is and for its reason: the ledger travels with a seat's memory and only the holder's copy is current (`held_by`) — see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for) |
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload |
 | `events` | `{limit, type, source, category, trace_id, channel_id, seat, actor, agent, turn_id, work_key, work_item, suspended, failed, feed_only, since, until, before_id, before_time}` | `GET /events`. `feed_only=true` selects the rows the activity feed carries — every stored type but the ones it keeps out (`auxiliary_spend`), a trace's `agent` siblings included — and is what every read merged with the live feed asks; `true`, `false` or absent, any other word a **400**. `failed` is THREE-VALUED the same way — `true`, `false` or absent, any other word a **400** — and selects by the rule every row's own `failed` is stamped by: a stored `failed` tag, or a type that is itself a failure (`llm_unavailable`, `budget_exhausted`, `turn.guard_breach`, `sandbox_run_failed`). It is the event log's "Failures only", applied by the engine so the axis and every page are one set. `suspended` is THREE-VALUED — `true`, `false` or absent for every row, any other word a **400** — and selects by whether a completion record PARKED its turn on a detached coding run: a turn that parks and resumes writes two `agent_turn_completed` records, the first marked `suspended`, so `type=agent_turn_completed&suspended=false` is the turns that ENDED, one record each, and is what a turns axis counts over. `trace_id` selects one trace as a FILTER — paged, windowed and combinable with every other filter, where [`GET /events/trace/{trace_id}`](#routes) is the whole trace oldest first. `channel_id` selects one agent-to-agent conversation's events, by the channel id every A2A event carries (an index seek, migration `0034`). `seat` is a seat's **handle** and selects the events that seat published, resolved on the server to the id every node derives for it — so a seat since removed from the chart still names its history, and a role name, which a rename changes, is never the key; anything that is not a handle, or a person's seat's handle, is a **400** — an empty page would read as a seat that never did anything — and before a company configuration is applied it is **503** `unavailable`, since the id is derived from the company's name. `agent` is the broader question — the **related** filter: every event involving one agent seat, named by any handle it answers to and matched on its agent id, plus every event sharing a trace with one (see [Paging the event history](#paging-the-event-history)). `turn_id` selects ONE RUN of a turn; `work_key` selects every run of one unit of work — the attempts at a trigger that was redelivered; `work_item` selects every event on one work item — each turn's start, its phases and completions, a coding run it launched — named by the item's identity across trackers, `<backend>:<id>` (`native:<task id>`, `jira:<issue id>`), never by its key, which a move rewrites. A value that is not that shape (a key such as `ENG-4`, or either half missing) is a **400** rather than an empty page, because an empty answer reads as "nothing happened on this item". The filter reads the `work_item` COLUMN (migration `0033`), filled from the same payload field as the row's `work_item` tag. Every row answers with its own `work_key` read off the `work_key` COLUMN (migration `0029`) rather than out of its `tags` — the column is what the `work_key` filter reads, so a row and the filter that matched it never disagree about its unit of work |
 | `event_series` | `{bucket, since, until, type, source, category, trace_id, channel_id, seat, actor, agent, turn_id, work_key, work_item, suspended, failed, feed_only}` | `GET /events/series`. Every bar carries `failed` beside `count` — how many of its rows reported a failure — and the answer a `failed` total beside `total` (see [the event log's time axis](#the-event-logs-time-axis)). THE SAME ROWS WITH A TIME AXIS, which a page of rows has no dimension for: a burst at four in the morning and a steady trickle across a week are the same hundred rows in the same column. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back — the same split `tokens` and `token_series` carry. Both halves compile their filters through ONE predicate in the store, so a bar can never claim rows the listing beside it would not show |
@@ -3774,16 +3845,16 @@ REST route calls, so the two surfaces cannot diverge:
 | `seat_activity` | `{seat?, days?, previous?}` | `GET /agents/activity`. Every seat's TURNS over the `days` (1 to 90, default 7) company days ending today, summed across every node from the replicated usage domain — so the answer is the same on whichever node is asked and still counts a node that has left. `{since, until, days, previous_since?, previous_until?, seats, quantile_resolution}`; each seat is `{handle, role, agent_id, in_chart, turns, failed, reviewed, first_pass, first_pass_pct?, sent_back, p50_ms?, p90_ms?, tokens, per_day, last_turn_at?, previous?}`. `first_pass_pct` is `first_pass` over REVIEWED turns (0–100) and is ABSENT when none was reviewed — a 0% for a seat nobody reviewed would be a verdict nobody gave. `sent_back` counts reviews that sent work back. `p50_ms` and `p90_ms` are read from the merged turn-duration histogram and are within `quantile_resolution` (0.06) of the true value; absent when no turn ended. `per_day` is every day of the window, oldest first, a quiet day included as zeros. `previous` (with `previous=true`) is the seat's `{turns, failed, reviewed, first_pass, sent_back, tokens, per_day}` over the same number of days before, `per_day` being every one of those days, oldest first — so a profile draws the fortnight its week-on-week figure is made over from this one answer. Every AGENT seat of the current chart has a row, a quiet one with zeros ("took no turns" is a measurement); a seat that has left the chart appears with `in_chart: false` while its days are in the window; a human seat has none. `seat=` narrows to one handle, and a handle with no rows answers one row of zeros rather than none; a human seat's handle is refused (`bad_params`, naming the person), because the engine runs no turns for a person and a zero row would say one took none. Ordered by handle |
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `scope_id` is the scope's IDENTITY (a seat's agent id, a unit's key), which is what a `schedules` row carries and what the ledger keys on — hand back what that row gave you rather than the handle beside it. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
-| `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `fleet:operate`**. See [below](#the-brokers-membership) |
-| `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Takes `config:read`**. See [below](#get-credential-pool) |
-| `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Takes `fleet:operate`**. See [below](#get-backups) |
-| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › Tools & MCP screen's Servers section. **Takes `config:read`**. See [below](#get-mcp-servers) |
-| `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `fleet:operate`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
+| `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
+| `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Takes `admin`**. See [below](#get-credential-pool) |
+| `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
+| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › Tools & MCP screen's Servers section. **Takes `admin`**. See [below](#get-mcp-servers) |
+| `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by |
-| `sandbox_tail` | `{turn_id, launch_id, epoch?, after?, digest?}` | `GET /sandbox-runs/{turn_id}/tail?launch_id=…[&epoch=…&after=…&digest=…]`. What ONE running coding job has said so far, read from its box by the node that owns the run (see [Watching a run live](../concepts/code-sandbox.md#watching-a-run-live)). Both ids are required (`bad_params` otherwise): a turn can launch more than one job, and the launch id is the one `sandbox_run_started` and the run's phase record carry. Answers `{outcome, turn_id, launch_id, node?, status?, output?}`: `outcome` is `tail` with `output`; `launching` for a job whose box is still being made (not stopped — ask again); `not_running` with the record's `status` (`awaiting_clarification`, `resumed`, `reseed`, `replaced` for a job a later launch replaced, or absent where no record is left); `owner_silent` naming the owning `node` that did not answer inside the 2 s fleet read budget — a draining owner, or one whose heartbeat lapsed, included (no `node` for a run nobody holds right now); or `box_paused` for a running record whose box is paused where its backend cannot read it without waking it (a peek never wakes a box). The asker says what it holds — `epoch`, `after` (the byte offset it holds through: a whole number of zero or more, `bad_params` otherwise — a fraction is refused rather than rounded) and `digest`, all three absent for one holding nothing yet — and `output` is `{text, source: transcript\|stderr\|none, cut, as_of, finished, epoch, start, end, digest, reset, front, held}`, redacted — `epoch`, `start`, `end` and `digest` on every answer, `0` included (a run that has settled nothing yet is answered at `end: 0` and followed from `start: 0`): `text` is what follows `after` (`start` = `after`), or on `reset: true` the last 256 KiB in whole lines, which replaces what the asker held (`start` says where it begins; `cut` that earlier output exists). Send `end` and `digest` back as the next `after` and `digest`. `front` says the owner's reading began after the job's own start; `held` counts bytes written but not shown until their redaction is settled. A record that could not be read, or a box the owner could not read, is an error carrying the reason. There is no event and no row: the dashboard asks it every 3 s for each running job it is showing — an open span on a turn's timeline, a parked turn's coding-run card, and the run's own page — and nothing outside the dashboard asks |
+| `sandbox_tail` | `{turn_id, launch_id, epoch?, after?, digest?}` | `GET /sandbox-runs/{turn_id}/tail?launch_id=…[&epoch=…&after=…&digest=…]`. What ONE running coding job has said so far, read from its box by the node that owns the run (see [Watching a run live](../concepts/code-sandbox.md#watching-a-run-live)). Both ids are required (`bad_params` otherwise): a turn can launch more than one job, and the launch id is the one `sandbox_run_started` and the run's phase record carry. Answers `{outcome, turn_id, launch_id, node?, status?, output?}`: `outcome` is `tail` with `output`; `launching` for a job whose box is still being made (not stopped — ask again); `not_running` with the record's `status` (`awaiting_clarification`, `resumed`, `reseed`, `replaced` for a job a later launch replaced, or absent where no record is left); `owner_silent` naming the owning `node` that did not answer inside the 2 s fleet read budget — a draining owner, or one whose heartbeat lapsed, included (no `node` for a run nobody holds right now); or `box_paused` for a running record whose box is paused where its backend cannot read it without waking it (a peek never wakes a box). The asker says what it holds — `epoch`, `after` (the byte offset it holds through: a whole number of zero or more, `bad_params` otherwise — a fraction is refused rather than rounded) and `digest`, all three absent for one holding nothing yet — and `output` is `{text, source: transcript\|stderr\|none, cut, as_of, finished, epoch, start, end, digest, reset, front, held}`, redacted — `epoch`, `start`, `end` and `digest` on every answer, `0` included (a run that has settled nothing yet is answered at `end: 0` and followed from `start: 0`): `text` is what follows `after` (`start` = `after`), or on `reset: true` the last 256 KiB in whole lines, which replaces what the asker held (`start` says where it begins; `cut` that earlier output exists). Send `end` and `digest` back as the next `after` and `digest`. `front` says the owner's reading began after the job's own start; `held` counts bytes written but not shown until their redaction is settled. What a coding agent prints is its seat's trail, so the tail is read by an admin and by the lead of the seat the run's record names (`audit.seat.read`) and refused to anybody else naming `admin` — and a caller who leads nobody is refused before the record is read, so a record that could not be read, or a box the owner could not read, is an error carrying the reason only to somebody it could have admitted. There is no event and no row: the dashboard asks it every 3 s for each running job it is showing — an open span on a turn's timeline, a parked turn's coding-run card, and the run's own page — and nothing outside the dashboard asks |
 | `budgets` | `{}` | `GET /budgets` |
 | `a2a_channels` | `{}` | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
-| `knowledge` | `{q, mode?}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all four of no company, no backend, a backend wired with no org-wide read scope, and a node whose index is still `building`. `reason` (`no_company` / `no_backend` / `no_scope` / `building`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. A search that RAN and fell short says so in its outcome rather than its `note` (which is empty whenever `available` is true): `served_mode` empty with `coverage.complete` false is a backend that did not answer, and a partial `coverage` is part of the corpus unsearched. An EMPTY `q` is the seam's PROBE: nothing runs and nothing is read, no hits are returned, but `modes` and — for the `mode` asked — the `degraded` its CONFIGURATION decides are answered, so a screen offers the modes honestly before anybody types (the dashboard asks the probe for `semantic`, the mode whose reason names what is missing). A transient reason (`embedding_failed`) is a property of a search and is never predicted. `mode` is `hybrid` (the default), `keyword` or `semantic` — the screen's label for the last is "Meaning", and any other value is refused rather than run as the default. A `q` past 400 bytes (trimmed) is refused `bad_params`, naming its size and the limit, rather than cut — the bound every search surface shares ([Search](../guides/search.md#three-modes-and-what-an-answer-says-it-served)). Every answer carries what the search actually did: `mode` (resolved), `served_mode` (the ranking the hits came from; `""` when nothing ran), `modes` (what this backend can serve as asked — `[keyword]` with no embeddings provider and on Confluence), `degraded` (`no_embeddings` / `embedding_failed` / `semantic_partial` / `unsupported`, empty when it served what was asked) and `coverage{nodes:[{id,answered,error}], complete, buckets_missing}` — the fleet the scan was divided across, which is how a partial answer is told from a short corpus. A hybrid search with nothing to rank by meaning serves its keyword half; a semantic one serves nothing and says why. See [Search](../guides/search.md#three-modes-and-what-an-answer-says-it-served) |
+| `knowledge` | `{q, mode?}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. Everybody may ask it, and what it searches is the caller's apps': it searches pages only for a caller holding `knowledge`, so a caller holding `tracker` alone is answered with no hits, `available: false` and `reason: no_access` — and the searcher is never asked — while a caller holding neither app is refused `unauthorized` naming both. `available: false` covers all five of no access, no company, no backend, a backend wired with no org-wide read scope, and a node whose index is still `building`. `reason` (`no_access` / `no_company` / `no_backend` / `no_scope` / `building`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. A search that RAN and fell short says so in its outcome rather than its `note` (which is empty whenever `available` is true): `served_mode` empty with `coverage.complete` false is a backend that did not answer, and a partial `coverage` is part of the corpus unsearched. An EMPTY `q` is the seam's PROBE: nothing runs and nothing is read, no hits are returned, but `modes` and — for the `mode` asked — the `degraded` its CONFIGURATION decides are answered, so a screen offers the modes honestly before anybody types (the dashboard asks the probe for `semantic`, the mode whose reason names what is missing). A transient reason (`embedding_failed`) is a property of a search and is never predicted. `mode` is `hybrid` (the default), `keyword` or `semantic` — the screen's label for the last is "Meaning", and any other value is refused rather than run as the default. A `q` past 400 bytes (trimmed) is refused `bad_params`, naming its size and the limit, rather than cut — the bound every search surface shares ([Search](../guides/search.md#three-modes-and-what-an-answer-says-it-served)). Every answer carries what the search actually did: `mode` (resolved), `served_mode` (the ranking the hits came from; `""` when nothing ran), `modes` (what this backend can serve as asked — `[keyword]` with no embeddings provider and on Confluence), `degraded` (`no_embeddings` / `embedding_failed` / `semantic_partial` / `unsupported`, empty when it served what was asked) and `coverage{nodes:[{id,answered,error}], complete, buckets_missing}` — the fleet the scan was divided across, which is how a partial answer is told from a short corpus. A hybrid search with nothing to rank by meaning serves its keyword half; a semantic one serves nothing and says why. See [Search](../guides/search.md#three-modes-and-what-an-answer-says-it-served) |
 | `colleague` | `{q}` | A NAME TO A SEAT, through the same four tiers an agent's `lookup_colleague` and `a2a_ask` resolve through (`internal/agent/colleague`): exact handle, chat id and role name, then case and separators folded, then part of a name, then a close spelling — each tier answering only when every tier above it found nothing, so a name that is exactly somebody's handle is never diluted by near misses. Answers `{match, candidates[{handle, why}]}`: `match` is the one seat the text names when EXACTLY ONE does and `null` otherwise — including when several do, which is a list for a person to choose from and never a pick — and `candidates` is every seat it could name, best tier first (the match included; empty when nothing matched, which reads differently from ambiguity). `why` is the tier in a person's words ("handle matches exactly", "part of the name matches"). The chat-id tier needs a credential: a seat's contact identities are operator-gated configuration, so an anonymous caller resolves over handles and names alone. `q` is at most 200 bytes — a name, not the sentence around it. The command palette's assign and ask pickers read it. Registered whenever a company is active |
 | `integrations` | `{}` | `GET /integrations` |
 | `work_items` | `{container, status, status_group, assignee, reporter, watcher, collaborator, tag, type, priority, parent, root, q, key, references, linked_page, removed, blocked, blocking, has_dependencies, has_open_asks, flag, asked_of, asked_by, subtasks, show_closed, closed_since, f.<slug>, view, preset, group_by, group_by2, group, subgroup, group_limit, totals, sort, fields, around, cursor, limit, …}` | `GET /work`. `container` is the scope — `workspace`, or `project:ENG` (a bare `ENG` works too, and the key is upper-cased because the column is); any other `<kind>:` — `unit:eng`, `person:ana` — is REFUSED, because a task lives in the workspace or a project and a team's or a person's work is `unit=` or `assignee=` (read as a project key, `unit:eng` answered an empty board) — and an ABSENT container is neither: the engine refuses to default it, because an omitted key would otherwise be the most expensive query in the system. Every list key is comma-separated, because a socket frame's JSON object cannot carry a repeated key and a filter only one transport can express is exactly the divergence this channel exists to prevent; `status` also takes `!` negation. There is no `open` flag — open and closed are STATUS GROUPS (`not_started`, `active`, `done`, `closed`), which is the level every rule in the tracker is written at. `f.<slug>=<value>` filters on a custom field — resolved against the company's catalogue by slug, id or label, and compared on the column its DECLARED TYPE says, so `f.effort=gt:9` is a numeric comparison and not a lexical one; the seventeen operators are `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `contains`, `startswith`, `in`, `range`, `any`, `all`, `not_any`, `not_all`, `me`, `null` and `not_null` — and which of them a field admits is a property of its TYPE, so `eq` on a `labels` field is REFUSED naming `any`, `all`, `not_any` and `not_all` rather than compiling to a clause that matches nothing and reads as "no task has this label". `null` and `not_null` are on every type, because "is this set" is a question about the ROW. A bare value is the type's NATURAL comparison — `any` on a set, because naming a value is not claiming the set IS it, and `eq` everywhere else. A set operator takes a comma-separated list (`any:api,ui`, at most 16) and `range` takes both ends (`range:3..8`), because a range with one end is `gte` or `lte`. A value whose text begins `<scheme>://` is a VALUE rather than an operator call, so a `url` field can be filtered by what it holds — anything else before a colon is carried through as an operator, so a typo is refused naming the set rather than silently answered. `f.<slug>=me` is resolved to the reader by the SURFACE before the query is parsed, which is what makes one saved view mean whoever opens it. A ref nothing resolves is REFUSED naming it. `unit=` and `routing_unit=` name a team by its key or by its NAME where exactly one unit carries it, in any case, and each resolves through the chart and matches the work filed under the team's key or its name, whichever the reference was spelled as. A team the chart does not have matches nothing rather than refusing, because a task's filed unit is a record of what was true and may name a team since dissolved. `q=` is a FIND rather than a search — a substring of a key (from the front) or a title (anywhere), which is what finds the item somebody half remembers; there is no `mode`, because this grammar has no ranker and ranked search over what the work says is `work_search`'s. A `q` longer than the longest title (256 bytes) is refused naming the bound, because it can match nothing and an empty board reads as "there is no such item". `key=ENG-1,ENG-7` narrows to keys a caller already holds — upper-cased, like `container=` and `references=`, because a key is what somebody pasted and the column it is compared against is minted upper-case — and `removed=true` is the TRASH — the only way to list what a removal hid, which is what a restore is a gesture about. `references=ENG-12` lists the tasks whose DESCRIPTION mentions that key (a task's former key resolves like its current one; a comment's mentions are not references), and `linked_page=<page id>` the tasks that name that knowledge-base page through `linked_pages`. A parameter this grammar does not read is REFUSED naming it, never ignored: a filter nobody parsed is a board showing more than the person asked for, silently. An unknown status or group is refused naming the closed set rather than matching nothing. A custom field VALUE is checked against its own declaration at the write and refused naming the rule — never rounded or coerced to fit; see the coercion table in [the work tracker guide](../guides/work-tracker.md). `flag=` is the ATTENTION queue and its values OR: `cycle`, `too_deep`, `inconsistent_project` and `key_collision` are facts about a task's own row, and `one_sided` and `one_sided_final` are about a DEPENDENCY of it — an authored `waiting_on` whose blocker does not list it, and one whose mirror was refused permanently (the blocker is gone, was removed, or is full). The first is what the `tracker` duty repairs 30 seconds on; the second is what a person resolves. `asked_of=` is whose answer an open ask is waiting on and `asked_by=` whose question it is — the work a person is WAITING on — each a record owner's name: a person's seat, and the login of a credential bound to none, which is the name every ask they put is authored under whichever surface they put it from. `inconsistent_project` marks a subtask filed in another project from its root, which the writer refuses and the applier flags rather than stall on if a record carries it anyway. `key_collision` marks a task holding a key another task claimed first — which is what a key counter restored beside newer work mints — and the key goes on opening the claimant on every node, so the flagged task is reached by its id; purging the claimant hands the key to the remaining holder with the lowest id. Every row this API lists an item in SAYS SO, because a row is what a link, a peek or a composed call is built from and one carrying the key alone opens the claimant: a row here and a `work_my_work` row carry `key_collision`, as do a `work_search` hit, a `work_item` answer (beside `blocked`) and each of its `links`; a `work_activity` record and a `work_inbox` notice carry `subject_key_collision` beside `subject_key` (a notice's id to open by is its `task`, since a `prioritised` notice's subject is a person); a `work_my_work` checklist item carries `task_key_collision` beside `task_key`. The rule a reader applies is one sentence — open a row by its key unless the flag is set, and then by its id — and an ask's `answer_with` already follows it. A notice's flag is asked of the key the notice STORED rather than read off the task, because a duplicate moved since answers to a new key while the one its notice carries still opens the claimant. They OR because an attention queue asks "is anything wrong with this", and a conjunction over six flags answers nothing on every company. `totals=<column>:<op>` adds aggregates over the WHOLE matched set rather than the page — a number that changed as somebody scrolled would be the one thing a header must not do. The seven ops are `sum`, `avg`, `min`, `max`, `count`, `median` and `p90`. `median` and `p90` are ORDER STATISTICS by nearest rank — the value at position ⌈p·n⌉ of the set's values in ascending order — so each answers a value some task actually holds: the median of four values is the second, never an average of two. The columns are the summable ones (`points`, `estimate_min`, the `spend_*` family — `spend_workers` and `spend_sent_back` included — `reassignments`, `reopens`, `depth`), the date columns for the four order statistics `min`/`max`/`median`/`p90` only (a sum of dates is a number of microseconds nobody meant), `tasks:count`, and `f.<slug>` for a declared number or date field. A total with nothing to add up is ABSENT rather than zero: "nothing is estimated" and "everything is estimated at nothing" are different facts. `subtasks=` is how a tree is filtered: `collapsed` (the default) and `expanded` filter ROOT tasks and let their subtrees ride along unfiltered — so a todo root brings its done subtask — while `separate` filters every task on its own. The first two answer the same SET and differ only in how a caller renders it. Asking for a subtree with `parent=` or `root=` turns the mode off, because those are questions *about* subtasks and filtering their roots would answer the parent's siblings. `any=[{…},{…}]` is one level of disjunction, ANDed with the top-level keys: a branch is a PREDICATE, so it may not carry the keys that decide the answer's own shape (`removed`, `archived`, `show_closed`, `closed_since`, `subtasks`, `fields`, `around`) or how fresh it must be (`read_level`, `max_lag_seconds`, `max_lag_seq`, `min_position`) — those are the same decision at every branch or they are incoherent, and a branch that carried one would narrow what was asked for at the top level rather than widening it. An empty branch is refused, because it matches every task and makes the others decoration. `view=<id>` and `preset=<name>` are loaded FIRST and every explicit key overrides them — a saved view is a set of defaults rather than a lock, so somebody who opens a board and picks another assignee gets the view with that one key changed. A view beats a preset (somebody saved it) and what was typed beats both. The five presets are `my_queue`, `priorities`, `triage`, `blocked` and `overdue`. `my_queue` is *what can I pick up*: a DISJUNCTION of the work the viewer holds and the work in their OWN project nobody holds, open and unblocked, most important first — both arms matter, because written as "assigned to me" alone a seat with an empty queue reads the company as having nothing for it while its project's unclaimed backlog sits there, and the second arm is scoped to their project because unscoped it offers every unassigned task in the company — so a viewer with no project of their own, a seat whose unit files none or a caller the directory binds to no seat, has no second arm and picks up what they hold. `priorities` is the viewer's own ordered list, open tasks only, IN THE ORDER somebody arranged it — that order is the answer, so nothing sorts over it, and a finished task drops out of the answer without the list being rewritten. `triage` is the unassigned open work, which with one fixed status set is the honest definition of "needs somebody to decide". `my_queue` and `priorities` are the CALLER's own — there is no parameter naming whose, because a question about somebody's queue asked on their behalf is the owner-or-lead rule's, not a filter's — read under their [own record](#whose-record-a-personal-question-answers-for), which for a caller bound to no seat is their login; a caller the engine can name nothing for is refused both, because a list with nobody's name on it is everybody's. A `view=` nothing resolves is REFUSED, never answered as the whole board. `group_by=` turns the answer into a BOARD: `groups` replaces `rows` — returning both would be the same rows twice — and each column carries its own `count` over the whole set beside a bounded slice of its rows (`group_limit`, default 20, max 100). The axes are `status`, `status_group`, `assignee`, `priority`, `type`, `tag`, `project`, `unit`, `routing_unit`, `parent`, `due:day`, `due:week`, `start:week`, `due:bucket` and `f.<slug>` for a custom field; anything else is REFUSED naming the key rather than answered ungrouped. `unit` and `routing_unit` group on the TEAM rather than on the stored string, for the reason `unit=` matches both the team's key and its name: grouping on the column drew a team whose rows hold both as two columns — both headed with its name — with its counts split between them. The expression folds every spelling onto the unit's key, and `group=` is folded the same way, so `group=eng` and `group=Engineering` load the one column. A stored unit the chart no longer has keeps its own column under the literal its rows hold, since folding it into anything would invent a home for work whose team is gone. A grouped answer mints no cursor, because across a set of columns there is no single order to be after; `group=<value>` is how a board loads one column further, and it narrows the WHOLE query, so the hint and the totals describe that column too. `group_by2=` adds swimlanes inside each column and `subgroup=` names one — a swimlane board is bounded by its CELLS rather than by either axis alone, because the work it costs is the PRODUCT of the two, so asking for lanes lowers the column cap and `subgroups_dropped` says how many lanes a column has beyond it. A `group_by=` over the WHOLE COMPANY is refused when the query's own narrowed predicate still matches more than 20 000 tasks: a board is drawn by sorting every one of them, and the refusal names the ceiling and what narrows it. It is a bounded COUNT rather than a check for the presence of a filter key, deliberately — `status_group=not_started,active` is a filter and narrows nothing, so a gate spelled "needs a narrowing filter" is one a caller clears in a single attempt without making the query any cheaper. Scoping to one project with `container=project:<key>` lifts it, because there the input is an index range whose width is one project's own size. An absent value is its own labelled column — "nobody is assigned" is a question a board answers rather than a row it hides — and `group=` with no value is how that column is loaded one further, because a key named and left empty asks for the rows with no value where an absent key asks for all of them. `group_by=due:bucket` is the one axis that is not a stored value: it is WHEN the work is due, read against the query's own day — `overdue` (still open and past it), `earlier` (finished, and past it — work delivered late is not overdue and calling it so would be a false claim, so it is its own band and is empty unless `show_closed` brings finished work into the answer), `today`, `this_week` (through the end of the current Monday-anchored week, which is the week `due=range:sow..eow` means), `later`, and the empty key for a task with no due date. Its six headings read Overdue, Earlier, Today, This week, Later and No due date. The day it cuts on is the COMPANY's midnight in the company's own zone — the same instant the row's `overdue` flag is derived from and the same one every `due=` filter compiles against — so the bands, the flag and the filters cannot disagree about a task. A band cut in the reader's own browser could and did: for anybody whose local day differs from the company's, a task landed under Earlier on a row the same answer flagged as due today and not overdue. A CLOSED axis — `status`, `status_group`, `priority` and the `due:bucket` bands — carries every column the query itself admits, the empty ones at `count: 0` with `rows: []`, in the declared order: a board is the shape of the process rather than of this week's rows, so an open-work board draws To do, In progress and In review whether or not anything is in them — and never Done, which the query excluded, because "nothing is done" said about a set that was never asked is a claim rather than an absence. The admission is the predicate's own (`status`, `status!`, `status_group`, `show_closed`, the overdue alias, `due=` for the bands, and `group=` down to one column — where a key NAMED AND LEFT EMPTY admits the undated band on `due:bucket` and nothing at all on the three whose values are never empty). An OPEN axis — assignee, tag, type, a field — carries only the values present, since every seat as an empty column is a roster rather than a board, and the second axis is never filled. `group_by=tag` is the one axis where a task is on several columns at once; the answer sets `groups_overlap` so a reader knows the counts do not sum to `total_hint`, and `groups_dropped` says how many columns did not fit. `sort=` takes `rank`, `updated`, `due`, `start`, `priority`, `created`, `title`, `estimate`, `points`, `spend_tokens`, `reopens`, `status_entered` and `removed`, each reversible with a leading `-` — `spend_tokens` is the column's own name, as a total's is, since `spend` on a row is an object of five. The numeric filters `estimate=`, `points=` and `spend_tokens=` take `lt:`, `lte:`, `gt:`, `gte:`, `range:a..b`, `null` or `not_null`. `closed_since=<date token>` is the open work PLUS what finished (done or cancelled) at or after that date, resolved on the COMPANY's clock through the same calendar as `due=` — `closed_since=sow` begins at the company's Monday midnight, so a Done lane on it is this week's work and empties itself when the week ends; it is the Board's Recent scope, and naming it beside `show_closed` is refused because both say which finished work is in the answer. `fields=tags,dependents_count,open_asks,spend` puts a board card's facts on each row, and only when asked: `tags` (sorted, `[]` when none), `dependents_count` (live tasks waiting on it through the authored `waiting_on` edges `blocking=` reads), `open_asks` (unanswered questions, by the same test `has_open_asks=` makes) and `spend: {tokens, turns, workers, sent_back, reopens}` — each present, `0` included, when asked, and absent otherwise, because the same row is what a seat reads through `list_work_items`, which never asks for them even through a saved view that does; an unknown name is refused. `around=<task>` (a key, a former key or an id) adds `around: {position, prev, next, total_hint, total_capped?}` — where that task sits in this answer's DRAWING order over the whole answer rather than the page: a flat answer's own sort, or a board read column by column (and lane by lane within a column) in the answer's column order with each column's rows in the row order, so the card after the last one in a column is the first in the next. `prev`/`next` are keys, null at the ends; on a label board the order counts cards and a task is placed at its first column; `position` is null past the 10 000 a count stops at. A task the answer does not hold answers `around: null` — never a refusal — and a saved view cannot carry `around`. A `priorities=` answer is paged in the list's own order: the whole list (at most 32) is read each page and its cursor **An absent value sorts LAST in both directions**: "soonest first" and "latest first" are both questions about values, and a task with no due date is the answer to neither — so `sort=due` puts the undated at the end rather than ahead of the one due tomorrow, and a cursor resumes in the same place the order put it. `sort=f.<slug>` orders by a custom field, LEFT-joined so a task that set no value still appears — a sort that also filtered would be two things the caller asked for once, and such a task sorts last by the same rule. The answer carries `total_hint` (capped — an exact total over an unbounded set turns a poll into a scan), `next_cursor`, `totals`, `groups`, and an echo of the `view`/`preset` it was expanded from — these answers travel detached from their requests, so a board restored from a URL can still say which saved view it is showing — plus the coverage half below |
@@ -3795,15 +3866,15 @@ REST route calls, so the two surfaces cannot diverge:
 | `work_flow` | `{bucket, points, project, read_level, …}` | `GET /work/flow`. The company's work as a SERIES: `points` windows (1–90, default 14) of a `bucket` (`day`, the default, or `week`) on the company's clock, oldest first, the last the window now falls in. Each point is `{window, start, end, not_started, active, done, closed, completed}` — the census at the window's END (at now for the current one) and how many changes in it took a task from not delivered to delivered (a cancellation is not one; done → closed is not a second). Replayed BACKWARD from today's census over `tracker_history` (status, create, remove, restore, purge and project moves, through the partial index replicated migration 0029 adds), so the cost is the window's changes, not the company's history. `now` is `{not_started, active, blocked, overdue}` — `overdue` cut on the company's midnight — and `blocked_history` is always `false`: nothing records when a task became blocked, so no blocked series is drawn from a guess. `project=` narrows to one project, following a task to where it was at each instant |
 | `work_item_turns` | `{id, cursor?, limit?, read_level, …}` | `GET /work/turns`. One page of the agent TURNS charged to an item, newest first: `{item, key, turns, next_cursor?}` plus the coverage half. Each turn is `{turn_id, ordinal, seat, trigger?, segments, tokens, cache_read, rounds, wall_ms, workers?, sent_back?, outcome, phases, failed_in?, summary?, review?, tools?, at}` — a turn's SEGMENTS folded into one (a turn that parked on a coding run is charged once per segment): tokens, rounds and wall time summed, `phases` in the order each first ran, and `outcome`, `summary` (what it did, in the agent's words) and `review` (what the newest review that sent the work back asked for) off its newest segment; `tools` is each tool its executor called with its `calls`. `failed_in` names the phase that failed when `outcome` is `failed` because one did — `phases` lists every phase that ran, the failed one included — and is absent for a failure outside every phase and on a turn that did not fail. `ordinal` is "Turn n" — the position of the turn's counted segment among every counted segment on the item, so the newest turn's `ordinal` is the item's `spend.turns`; a turn with no counted segment on this item (more of a turn charged to another) has `0`. `at` is when the newest segment landed. Read from the tracker's own turn rows — the account `spend` sums — so it answers on any node and outlives the thirty days a node keeps its event history, where `turns?work_item=` reads the event history. `next_cursor` is the position of the oldest turn's first segment; the next page is the turns whose first segment is below it, so a turn that gains a segment while you page never moves between pages. `limit` defaults to 20 and is held to 50; a cursor this endpoint did not hand out is `bad_params` |
 | `work_comments` | `{item, cursor?, limit?, read_level, …}` | `GET /work/comments`. One page of an item's THREAD, newest page first and each page in the order it was written: `{item, key, title, comments, next_cursor?, key_collision?}` plus the coverage half. `next_cursor` reads the page before and is absent when this page reaches the first comment; it continues from `work_item`'s own `comments_cursor` exactly, since both are the same read. `limit` defaults to the detail's 20 and is held to 50. Each comment's `author` is who wrote it — a person as their seat, beside `author_kind` — so a pane draws a name with no second lookup. `key_collision` says the item's key opens another task, as on `work_item`. Its own question beside `work_item` because nothing followed that cursor, so every comment older than the twentieth was unreachable, and because a pane that draws a conversation wants the thread without the history, links and fields a detail assembles |
-| `decisions` | `{handle?, read_level, …}` | `GET /work/decisions`. What waits on ONE PERSON's decision: the open asks put to them — to their own record, a person's seat — and the coding runs parked on a question put to them (`awaiting_clarification` or `reseed`), newest first, at most 50. `{handle, items: [{kind: "ask"\|"run", at, ask?, run?}], total, capped, oldest_at?}` — `total` counts every one, not the page; `capped` says the ask count stopped at the engine's ceiling, so `total` is a floor; `oldest_at` is when the longest-waiting began. An ask is `work_my_work`'s `asked_of_me` row and a run is `sandbox_runs`' row. The same scope rule as `work_my_work`: absent is the caller's own record, and a named one is resolved first — a login to the record its holder's work is kept under — and then takes whoever leads them, or `fleet:operate` |
+| `decisions` | `{handle?, read_level, …}` | `GET /work/decisions`. What waits on ONE PERSON's decision: the open asks put to them — to their own record, a person's seat — and the coding runs parked on a question put to them (`awaiting_clarification` or `reseed`), newest first, at most 50. `{handle, items: [{kind: "ask"\|"run", at, ask?, run?}], total, capped, oldest_at?}` — `total` counts every one, not the page; `capped` says the ask count stopped at the engine's ceiling, so `total` is a floor; `oldest_at` is when the longest-waiting began. An ask is `work_my_work`'s `asked_of_me` row and a run is `sandbox_runs`' row. The same scope rule as `work_my_work`: absent is the caller's own record, and a named one is resolved first — a login to the record its holder's work is kept under — and then takes whoever leads them, or `admin` — your own asks need no app at all, so a person without `tracker` still sees what they were asked |
 | `company_feed` | `{kinds, actor, limit, cursor, read_level, …}` | `GET /feed`. What the company DID, newest first: `completed`, `created` and `handoff` from the tracker, `page` (created or saved) from the knowledge base, and `schedule` fires from the usage domain — `kinds` a comma list, empty for every kind this node keeps; asking for one it keeps no source for is `bad_params`. `limit` is 1–50 (default 20). `{rows: [{kind, at, work?, page?, schedule?}], next_cursor?, complete, read_level}`. A tracker row carries its task's key and title, and — by kind — the task's running `spend` (`{tokens, turns}`, tokens only) and `first_pass` (no reviewer sent it back), the create's `origin` (`{surface, conversation}`: the chat surface the filing turn was woken on), or the hand-off's `from`, `to`, `reassignments` and `reassignment_budget`. A `schedule` row is a RUN — a fire the scheduler dispatched, never a tick it skipped (those stay in `schedule_runs`) — and consecutive runs of one schedule for one runner that no other row falls between are ONE row: `schedule.runs` counts them (at least 1) and `schedule.since` is the oldest one's instant (set when `runs` is above 1). A page that folds many runs reads its source again from where it stopped, at most four reads per source; past that the page is answered short, never out of order. MERGED BY INSTANT, CURSORED PER SOURCE: `next_cursor` resumes each source exactly where this page stopped consuming it, so a scroll never repeats or skips a row however the three interleave, and is absent once every source is read to its end. A `read_level=session` floor names the TRACKER's log (this is a tracker session question); the pages half is read at the dashboard's own level |
 | `work_activity` | `{task, container, kinds, actor, actor_kinds, assignee, q, notified, since, from, to, limit, cursor}` | `GET /work/activity`. Every commit writes a history row, so this is an account of what HAPPENED rather than of what was announced — `notified` is how a reader tells the two apart, and `kinds` is what the change WAS whether or not anybody heard about it. The two used to be one: a record's kind was read off its notification, so the same change filed under one word with an audience and another without, and a quiet removal reached the feed as `tombstone` while the filter spells it `removed`. `kinds` accepts the twenty-seven change kinds and nothing else — one this build does not have is refused `bad_params` naming the set, by this route and by a seat's `task_activity` alike, because a filter matching nothing answers an empty feed that reads exactly like a quiet company. Each record carries BOTH instants: `at` is the authored one a card renders, and `effective_at` is the fleet-agreed one every duration is measured on. `actor` is who made the change; `assignee` is whose work it is, and the two are routinely different people. `actor_kinds` is a CSV of `agent`, `human`, `operator` and `system` and narrows to WHO WAS WRITING rather than to which handle — which is not the same question and cannot be asked as a set of handles, since an `operator` commit carries a token's own label where an `agent` one carries a seat handle, and the set of people is the roster, which changes. It is REFUSED when it names a kind this build does not have, as `kinds` is: a filter silently ignored answers a wider question than the caller asked, and on an audit feed that reads as a company where everybody is an operator. The `q` gate is on what the query would SCAN, never on which keys were named — `container=workspace&q=` and a five-year `since` both name a key and narrow nothing. `fields` is what MOVED, in the same `{from, to}` shape for every kind, the full list of names a task's own row draws on is there too, and `keys` names the tasks those deltas point at — `ask` is the question a commit asked or answered, in `work_inbox`'s shape and read the same way; see [`GET /work/activity`](#routes). `subject_key_collision` says the record's `subject_key` opens ANOTHER task — one that claimed the key first — so a link to the subject goes by `subject_id`. A `cursor` or a position `since` must be on the tracker's own log, and one from another domain's log — or a `cursor` that is not a position — is refused `bad_params` rather than picking a page by a number from elsewhere |
-| `work_my_work` | `{handle}` | `GET /work/my-work`. Seven lists, each bounded at 20 so no block crowds out another — the whole answer is read as one page. `priorities` is NOT re-sorted: the order is what somebody decided. A finished or removed task is filtered out of it rather than rewritten out, because a read must not write to somebody's own object. `totals` counts each list IN FULL — `{priorities, assigned, asked_of_me, checklist_items, collaborating, watching_recent, unblocked_recent}`, each `{total, capped}` — by the predicate that drew its page and in the same read, so a count is drawn from there and never from a list's length; `capped` means the count stopped at 10,000. Every row's `overdue` mark is cut on the company's own midnight — the [`timezone`](../getting-started/configuration.md#the-companys-clock) a board's due bands are cut on — so a task due today is not overdue here while a board says today. `handle` DEFAULTS to the caller's own record, and naming anybody else's takes the owner-or-lead rule — whoever leads them, or `fleet:operate` — see below. Every task row carries `key_collision` and every checklist item `task_key_collision`, and an ask's `answer_with` names the task by its key or, where that key opens another task, by its id |
+| `work_my_work` | `{handle}` | `GET /work/my-work`. Seven lists, each bounded at 20 so no block crowds out another — the whole answer is read as one page. `priorities` is NOT re-sorted: the order is what somebody decided. A finished or removed task is filtered out of it rather than rewritten out, because a read must not write to somebody's own object. `totals` counts each list IN FULL — `{priorities, assigned, asked_of_me, checklist_items, collaborating, watching_recent, unblocked_recent}`, each `{total, capped}` — by the predicate that drew its page and in the same read, so a count is drawn from there and never from a list's length; `capped` means the count stopped at 10,000. Every row's `overdue` mark is cut on the company's own midnight — the [`timezone`](../getting-started/configuration.md#the-companys-clock) a board's due bands are cut on — so a task due today is not overdue here while a board says today. `handle` DEFAULTS to the caller's own record, and naming anybody else's takes the owner-or-lead rule — whoever leads them, or `admin`, with `tracker` — see below. Every task row carries `key_collision` and every checklist item `task_key_collision`, and an ask's `answer_with` names the task by its key or, where that key opens another task, by its id |
 | `work_inbox` | `{handle, unread, primary_only, snoozed, reasons, limit, cursor, since}` | `GET /work/inbox`. One person's notices, newest first, 50 to a page. Each names the ONE reason of eighteen it reached them under, `addressed` (it asks something of them rather than informing them), `fallback` (nobody better was found), and their own read and snooze marks. `actor` is who made the change and `actor_kind` its kind — a person as their seat, a credential nobody is bound through under its login. `comment_id` and `turn_id` are the comment the change wrote and the turn that made it; `ask` is the question the notice is about — the ask itself for `asked`, the ask it answered for `answered` — as `{comment, asked_of, open, answered_by, answered_at, resolved, choice, decision}`, read NOW, so an ask somebody has since answered reads `open: false`. `snoozed` is `exclude` (the default), `include` (snoozed notices kept and marked) or `only` (just what was put off); a snooze whose time has come is back under every scope and is not `only`. `snoozed`, `unread`, `primary_only` and `reasons` all narrow the SCAN rather than the page, by the same rules the marks are computed with, so a page holds `limit` notices whenever the scope does — they used to be applied to the page after it was read while the cursor was taken before, so a person with their newest fifty notices snoozed or read opened an empty page with a cursor behind it. `subject_key` is the key the notice's task held when it was written, and `task` is that task's id — the subject for a task commit, and the task a lead put first for a `prioritised` notice, whose `subject_id` is the PERSON whose list it is; a notice naming no task carries none. `subject_key_collision` says the stored key now opens a task OTHER than `task` — asked of the stored key itself, so a notice about a duplicate moved since is still flagged — and the notice is then reached by `task`; it is never set on a notice that names no task, whose key is the only address it has. `primary_reasons` is the split that was APPLIED, defaulted, so a caller renders *you are seeing these because* without repeating the rule; `unread` and `primary` are counts over the PAGE and say so, because a total over the table is a second scan of rows this answer did not return. `reasons` FILTERS rather than classifies — the primary split classifies the same rows — and an unknown one is refused naming the eighteen. `since` is a log POSITION (`<stream>@<generation>:<sequence>`, what `seen_through` renders), never a bare sequence — and a position on THIS log: a `since` or a `cursor` from another domain's log, or a `cursor` that is not a position, is `bad_params`, because both are compared against the tracker's own sequence numbers and one from another log would pick a page by a number that means nothing here. Same scope rule as `work_my_work` |
 | `work_search` | `{q, limit, mode?}` | `GET /work/search`. The company's work RANKED against a phrase — `hybrid` by default (BM25 over the engine's own inverted list fused with the semantic scan over the replicated vectors), or `keyword` / `semantic` alone, which is the same fan-out a seat's `search_work_items` runs. Not a filter: `work_activity`'s `q` is an escaped LIKE over an excerpt, gated to a span of days, and answers a different question. Answered only where the company keeps its tracker in the engine — a company whose tracker is a vendor's, or none, gets `unknown_query`, as it does for every other work question, and a node with no company yet `unavailable` with `refusal: "no_active_revision"` — and holding the board is not holding an index: a node that joined recently has every row and no index, and answers `available: false` with `reason: "building"` rather than an error or an empty result — nothing is wrong, and a reader told *nothing matched* files the duplicate. A hit carries `rank`, its 1-based PLACE in the answer, and never a score: the fan-out finishes the ordering on the nodes that scanned each slice of the corpus and hands the coordinator ids best first, so a score on the wire could only ever read zero. It carries the item's `id`, `key`, `title`, `project`, `type`, `status`, `assignee` and `priority`, the index's own `snippet`, and `key_collision` exactly as a board row does. The answer carries the same outcome fields as `knowledge` — `mode`, `served_mode`, `modes`, `degraded` and `coverage{nodes, complete, buckets_missing}` — and a mode it does not know is refused, as a `q` past 400 bytes is — `bad_params` naming its size and the limit, asked before the mode, rather than cutting it |
 | `work_routing` | `{record_id}` | `GET /work/routing/{record_id}`. Who ONE change woke, and under which reason — the fact no other tracker records. `tracker_notifications` has always been readable by RECIPIENT (`work_inbox`); this is the same rows by RECORD, which is a primary-key prefix scan and needs no index of its own. Each recipient names the ONE reason of eighteen that found them, `addressed` (it asks something of them), and `fallback`/`fallback_rank` (nobody better was found). `notified` is the history row's own flag and means the commit CARRIED a notification — never that somebody was woken, since the applier deliberately does not hold the roster that would need. So an empty recipient list is THREE facts and `delivery` tells them apart: `nobody` (announced, inside the retention window, and every candidate was the actor or has left), `swept` (older than `tracker.native.inbox_retention_days`, so their absence is not evidence), `unknown` (no horizon stated) and `quiet` (the commit announced nothing, which is most of them). `retained_from` is the instant that decision was made against |
 | `viewer` | `{}` | `GET /viewer`. `{login, grants, handle, name, kind, owner, acts, project, config_writer, config_managed_by}`; `acts` is what [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller — the catalogue's writes the authority table can admit them to before any object is named — and `project` is where their `create_work_item` lands when it names none: the engine's own default for their seat (the seat's project, else its unit's, else the nearest ancestor's), so a screen offering "Create task" says where rather than working out a second answer; `""` when there is none, and a create must name one. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. A bound caller — every person, and a token bound to a seat — carries a `handle`; an unbound one — a Tier A token or a service account bound to none — carries a login and no seat, which is an ordinary state rather than a refusal (a person is never unbound: every person holds a seat). `owner` is the name the caller's OWN record is kept under — the seat when bound, the login when not — and it is what a screen asks the personal questions by, never `handle`. `config_writer` is whether the caller's credential may change the company document — false for an anonymous caller and for every credential a managed document's `api.auth.company_writers` does not list — and `config_managed_by` is that list, `[]` when the document is not managed and for an anonymous caller, so a screen draws every editing control disabled with who manages it rather than offering a save the engine refuses |
-| `work_person` | `{handle}` | `GET /work/people/{handle}`. Scoped like `work_my_work`: absent is the caller's own record, and somebody else's takes their lead or `fleet:operate`. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person — the name their writes are recorded under, a person's seat — which is how a lead's authority is made visible beside the `prioritised` wake the write sends them — a wake that names the task now at the top of the list, because a notification here is task-shaped and "your list changed" names nothing to act on. `max_snooze_ahead` is how far ahead a snooze may be set, in SECONDS — the engine's bound, so a screen offers only the presets `mark_inbox` will accept |
+| `work_person` | `{handle}` | `GET /work/people/{handle}`. Scoped like `work_my_work`: absent is the caller's own record, and somebody else's takes their lead or `admin`, with `tracker` either way. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person — the name their writes are recorded under, a person's seat — which is how a lead's authority is made visible beside the `prioritised` wake the write sends them — a wake that names the task now at the top of the list, because a notification here is task-shaped and "your list changed" names nothing to act on. `max_snooze_ahead` is how far ahead a snooze may be set, in SECONDS — the engine's bound, so a screen offers only the presets `mark_inbox` will accept |
 | `work_views` | `{container, counts}` | `GET /work/views`. `container` is the strip's own — `workspace`, `project:ENG`, `unit:engineering`, `person:ana` — and it is REQUIRED, because a strip belongs to exactly one. Whose personal views appear and whose pins come first is the CALLER's, never a parameter — their [own record](#whose-record-a-personal-question-answers-for), which is the login of a Tier A token or service account bound to no seat; a caller the engine can name nothing for gets the shared strip — no pins and no personal views but the shared ones. Every row carries `builtin`, which is what tells the six nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names — this channel's, not the `list_work_items` TOOL's, which renames four of them for a model — so a caller either hands them straight back or, simpler, passes the view's `id` as `view=` and lets the engine expand it. `counts=true` adds `count` to every row PINNED for the caller — the `total_hint` `work_items{view, container}` answers for it, run as the caller on the company's clock, with `count_capped` when it stopped at 10,000 — or `count_refused` naming why a view that no longer compiles could not be counted. At most 32 counts, in the strip's one read; only a record has pins, so it is refused `bad_params` to a credential that names no record of its own |
 | `work_saved_views` | `{counts}` | `GET /work/views/saved`. Every SAVED view — never a builtin — that the caller can see across every container: the shared ones, and the caller's own personal ones, pinned-for-them first and then by container (the workspace, projects, units, people) and the strip's own rank. Each row is `work_views`' row shape, so `container` says where it lives and `params` is its saved query. A sibling of `work_views` rather than a `container=` it takes, because a strip is ONE container's tabs and this is one PERSON's views — the inventory of what somebody saved and the pins a sidebar draws — which the workspace strip could not answer: a view saved on a project board appeared in neither. Whose is the caller's [own record](#whose-record-a-personal-question-answers-for), never a parameter, and `counts=true` takes the same rule as `work_views`: every pinned row's `count` is its view run IN ITS OWN CONTAINER, which is what opening it runs |
 | `work_files` | `{project, folder, removed, limit, after}` | `GET /work/files`. Answers `{project, files, next}` plus the coverage half. Each file carries its `path`, `content_type`, `size`, `hash` (the SHA-256 of its whole content), `version`, who created and last wrote it and when, and — only with `removed` — who removed it and when. `next` is absent on the last page. The listing is rows only: the bytes are read through the byte route, never through the socket |
@@ -3813,10 +3884,10 @@ REST route calls, so the two surfaces cannot diverge:
 | `containers` | `{}` | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
 | `page_activity` | `{page, container, kinds, actor_kinds, since, cursor, limit}` | What happened to a page, or to everything in a container — the wiki's own change log, mirroring `work_activity`. `kinds` is a CSV of the ten change kinds and `actor_kinds` of the three author kinds (`agent`, `human`, `operator`), the latter refused when it names one this build does not have — `work_activity`'s note says why. `since` bounds the window and `cursor` pages it: the same unit, two parameters, because the cursor moves with every page and the bound does not. The answer carries `log_seq` and `applied_through` as a tracker answer does — this node's checkpoint on the pages log and the prefix of it whose records it applied, read in the transaction that read the changes — so a node holding a record it cannot decode says it is behind |
 | `page_revision` | `{page, version}` | One revision's own body, message and author. Revision N is the body AT version N — including the newest — so a reader comparing two versions asks for both rather than for one and the head |
-| `config` | `{}` | `GET /config` *(needs `config:read`)* |
-| `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(needs `config:read`)* |
-| `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(needs `config:read`)* |
-| `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of Settings › Configuration, whose write half is `PUT /config/{kind}/{id}` *(needs `config:read`)* |
+| `config` | `{}` | `GET /config` *(needs `admin`)* |
+| `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(needs `admin`)* |
+| `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(needs `admin`)* |
+| `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of Settings › Configuration, whose write half is `PUT /config/{kind}/{id}` *(needs `admin`)* |
 
 **Every tracker answer carries how far this node had got, and both halves
 matter.** `read_level` is the level the read was ACTUALLY served at, never the
@@ -3907,14 +3978,14 @@ one of them takes a `handle`, and the rule for whose is the same, in one place:
    says, because no credential can act as it. So a mistyped `token:opps`
    names no record rather than a queue kept for a credential that does not
    exist. **The directory is asked only after the question has decided what
-   it can without it**: `fleet:operate` is admitted whatever the login turns
+   it can without it**: `admin` is admitted whatever the login turns
    out to be, and a caller who leads somebody may be, so for those two the
    login is looked up and the question decided again on the record it names;
    everybody else — somebody who leads nobody — is refused exactly as they
    would be on a seat they do not lead, before anything is looked up, so the
    refusal never says whether the login exists or whose seat it holds. A
    login nobody holds, or one whose holder is bound to a seat the chart no
-   longer has, then names no record (`404`) for `fleet:operate` and is
+   longer has, then names no record (`404`) for `admin` and is
    refused as below for a lead, who leads nobody by that name. A node that
    cannot read the directory answers `503` — to those two only, and without
    the directory's own words, which name the seat a login is bound to.
@@ -3922,19 +3993,18 @@ one of them takes a `handle`, and the rule for whose is the same, in one place:
    it resolved to, each question asking its own verb. The first three are
    somebody's QUEUE, and take the owner-or-lead rule: whoever leads that
    person — so a lead may name their report by seat or by login — or a caller
-   holding `fleet:operate`. A node that cannot read the chart to tell answers
-   `503`, never a refusal — a lead told they lead nobody goes looking for an
-   authority they already hold. `conversations` is a seat's TRAIL — what it
-   said on a surface the engine does not own — and takes `audit:read`, the
-   grant `/events` and `/agents/{id}/memory` already take for every seat at
-   once; a lead does not read it by leading, and `fleet:operate` does not
-   open it either.
+   holding `admin`, each with `tracker`. A node that cannot read the chart to
+   tell answers `503`, never a refusal — a lead told they lead nobody goes
+   looking for an authority they already hold. `conversations` is a seat's
+   TRAIL — what it said on a surface the engine does not own — and takes
+   `audit.seat.read`, the rule `/agents/{id}/memory` takes: the seat's lead, or
+   `admin`, with no app.
 
 A refusal on authority is `403 unauthorized` naming the rule that decided in
-`reason` and, in `grants`, the capabilities any one of which would have
-admitted the caller — `fleet:operate` for a colleague's queue, `audit:read`
-for a seat's threads. An empty `grants` means no capability would: the answer
-is a relation the chart does not hold.
+`reason` and, in `grants`, the permissions any one of which would have
+admitted the caller — `admin` for a colleague's queue or a seat's threads,
+`tracker` for a lead who does not use it. An empty `grants` means no
+permission would.
 
 **A caller's own record is kept under ONE name**, and it is the name every
 write they make is [attributed to](#who-a-write-is-attributed-to): the seat's
@@ -4075,7 +4145,7 @@ Each answer does one thing:
 | Answer | Code | What a client does |
 |---|---|---|
 | The session ended, expired or was revoked; the token is no longer accepted | `4401` | Re-dial with the credential the browser holds now; if the handshake answers `401`, sign in. |
-| The person resolves but their seat is gone from the chart, or they no longer hold `state:read` | `4403` | Stop reconnecting and show why: the credential is fine, what it may do is not. |
+| The person resolves but their seat is gone from the chart | `4403` | Stop reconnecting and show why: the credential is fine, what it may do is not. |
 | This node will not vouch for the credential now: it could not read what decides it, an identity move named nobody, or the seat answers to another handle | `1013` | The standard's *try again later*: reconnect on a backoff. The handshake decides — and answers `503 identity_unavailable` with a `Retry-After` for as long as the node cannot say, before any snapshot is built. |
 | Resolved as somebody else: renamed, bound to another seat or to none, given or refused a grant | `1013` | Reconnect, and ask who you are again (`viewer`): the handshake builds the snapshot for the new grants, and a screen that named the old login or seat — "your day" on a seat no longer yours — is redrawn as the new one. |
 | Resolved as the same login, seat and grants | *(no close)* | Nothing — and later questions are asked as the principal just resolved. |
@@ -4182,8 +4252,8 @@ a change has to keep — is documented in
 
 ### `GET /org`
 
-The company's charter and its organization tree, as a reader with no grant beyond state:read may see
-it. The same object is the `org` section of the [handshake
+The company's charter and its organization tree, as a reader holding no
+permission at all may see it. The same object is the `org` section of the [handshake
 snapshot](#what-the-handshake-snapshot-carries) and the body of every `org`
 push, so all three surfaces carry exactly one shape.
 
@@ -4322,8 +4392,8 @@ meters count against.
 **A seat's `avatar`, `llm` and `tool_sources` are RESOLVED**, for the reason
 `derived` is: the rule is one a client would get wrong. All three are absent on
 a human seat, which is drawn as the person it is and runs neither. `avatar` is
-published at `state:read`, as `timezone` and `token_budget` are; `llm` and
-`tool_sources` are published **only to a reader holding `config:read`**: they
+published to everybody, as `timezone` and `token_budget` are; `llm` and
+`tool_sources` are published **only to a reader holding `admin`**: they
 are computed from the seat's configuration, which no other reader is shown, so
 a label derived from it follows the same rule.
 
@@ -4361,15 +4431,15 @@ effect is the resolved `llm` above); a unit's `mcp_env`, `integrations` and
 `schedules`; and every company block outside the charter and its budget
 (providers, MCP servers, integrations, knowledge, the tracker, notification and
 learning settings, worker templates). Those are read through the
-`config:read`-gated `config` query or
+`admin`-gated `config` query or
 [`GET /config`](#config--live-config-management-auth-gated), which masks
 credentials. Schedules also have a read surface of their own, under the same
 posture as `/org`, and the tree does not repeat them:
 [`GET /schedules`](#routes) answers every configured schedule with its task
 and next run.
 
-**Why an explicit shape.** `/org` is readable by every caller holding
-`state:read`, which is nearly everybody signed in. Serialising the config's own
+**Why an explicit shape.** `/org` is readable by every caller — it is the
+overview everybody signed in sees. Serialising the config's own
 seat and unit types would make every field added to a seat public the day it
 landed, whatever it held. The shape is declared field by field in
 `internal/api` instead, and a test fails when the config gains a company, seat
@@ -4594,7 +4664,7 @@ outcome is a delivery the broker never confirmed; answering again is
 harmless, because whichever copy arrives second finds that question no longer
 waiting.
 
-**Who may answer**: whoever asked for the run — the seat its requester holds — or whoever leads the run's seat, or `fleet:operate`. Everybody else is refused `forbidden`, as the authority table refuses a lead's verb, because everybody signed in holds a credential and an answer steers somebody else's work.
+**Who may answer**: whoever asked for the run — the seat its requester holds — or whoever leads the run's seat, or `admin`. Everybody else is refused `forbidden`, as the authority table refuses a lead's verb, because everybody signed in holds a credential and an answer steers somebody else's work.
 
 It refuses `not_running` for a run that is not waiting for an answer, or has no
 record at all (a run that ended has none). It is
@@ -4615,7 +4685,7 @@ pause, and what waited is delivered first. See
 | `pause_seat` | `handle` — the agent seat; `reason` — one line, at most 500 characters, optional; `stop_running` — also end the turn the seat is on at its next round. A stopped turn is not run again. |
 | `resume_seat` | `handle` |
 
-**Who may**: the seat's holder, whoever leads it, or `fleet:operate` — never every reader, since everybody signed in holds a credential.
+**Who may**: the seat's holder, whoever leads it, or `admin` — never every reader, since everybody signed in holds a credential.
 
 Both answer `{"handle", "outcome", "paused", "changed", …}` — a pause adds
 `paused_by`, `paused_by_kind`, `operator_id`, `paused_at`, `reason` and `stop_running`:
@@ -4655,7 +4725,7 @@ naming the phase and round that read it, or `expired` if the turn ended or
 parked first. `note_id` is the request's own id, so a retry of one request is
 one note however often it is sent.
 
-**Who may**: the turn's seat's holder, whoever leads that seat, or `fleet:operate`. The seat is the one thing this node cannot know — the turn runs wherever its seat is held — so `fleet:operate` is admitted at once and a caller who leads nobody is refused at once, and anybody else is decided after a PROBE asks the fleet whose turn it is, without offering the note. A probe nobody answers inside two seconds is `unavailable`: nothing was offered, so there is nothing to be uncertain about.
+**Who may**: the turn's seat's holder, whoever leads that seat, or `admin`. The seat is the one thing this node cannot know — the turn runs wherever its seat is held — so `admin` is admitted at once and a caller who leads nobody is refused at once, and anybody else is decided after a PROBE asks the fleet whose turn it is, without offering the note. A probe nobody answers inside two seconds is `unavailable`: nothing was offered, so there is nothing to be uncertain about.
 
 `unknown` means no node answered the OFFER inside two seconds. A reply lost on its way
 back is indistinguishable from none, so the note may have been taken; sending it
@@ -4717,7 +4787,10 @@ for a page on an external wiki), a work item by its key. `tokens` is what
 **this call** spent, and nothing converts it to money. A question nothing
 matches is answered in one sentence with no sources, no model and no tokens.
 
-**Only a caller who holds a seat may ask.** It takes `state:read`, and it runs on
+**Only a caller who holds a seat may ask.** It takes either app — it searches
+the pages only for a `knowledge` holder and the board only for a `tracker`
+holder, and keeps the two answers apart in its cache, so an answer one reader
+was given is never served to a reader holding the other — and it runs on
 the auxiliary model of the seat the identity directory binds the caller to —
 every person's, and a token's bound to one — so a principal no seat binds, a
 pipeline's token or a service account bound to none, is refused
@@ -4804,9 +4877,9 @@ handles badly: the parent chain, a title that already exists (`save_page` with
 the version it read), and a file that turns out to be a tool skill rather than
 prose. The [reserved containers](../concepts/knowledge-system.md#who-may-write-where)
 are refused to a seat and not to it: a person publishing the onboarding tree
-and the tool skills is what they are for. A tool skill takes `config:write` on
-top of `knowledge:write`, though — it is injected into every seat's turn, so
-writing one is a configuration change — and a token without it is refused
+and the tool skills is what they are for. A tool skill takes `admin` rather
+than `knowledge`, though — it is injected into every seat's turn, so writing
+one is a configuration change — and a token without it is refused
 `pages.skill.write`.
 
 ### Who a write is attributed to
@@ -4875,8 +4948,9 @@ no server-to-client stream (`GET` and `DELETE` answer `405` with
 carrying it presented, on that request. Two things follow, and both are the
 point:
 
-- **A grant withdrawn is withdrawn from the next call.** Lowering
-  `api.auth.max_grants`, editing a person's grants, revoking their session or
+- **A permission withdrawn is withdrawn from the next call.** Restarting a
+  node with `api.auth.admin: refuse`, editing a person's permissions, revoking
+  their session or
   removing a token takes effect on the assistant's very next call, however
   long it has been connected.
 - **A session id is not a credential.** Nothing another client echoes can make
@@ -4925,7 +4999,7 @@ The dashboard's request carries its session cookie; a script sets
 
 **Every principal the guard resolved may call it**
 ([ADR-0024](../../adr/0024-the-dashboard-acts-as-the-principal-its-session-resolves-to.md)),
-and every tool is decided by the [authority table](#which-grant-a-route-needs)
+and every tool is decided by the [authority table](#which-permission-a-route-needs)
 exactly as on every other surface — a person signed in writes as the seat
 they hold, and a credential nobody is bound through — a Tier A token or a
 service account bound to no seat — writes under its own login. Nobody is
@@ -5105,7 +5179,7 @@ API, and the same request is served from then on with no restart.
 
 ### The routes, and the authority each takes
 
-The authority is the [authority table's](#which-grant-a-route-needs), decided
+The authority is the [authority table's](#which-permission-a-route-needs), decided
 ONCE. Where the object is in the path — a project — the route decides the verb
 itself. Where it needs a stored row — which project an item is filed under,
 which space a page is in, who wrote a comment, whose record a person's name is
@@ -5116,37 +5190,37 @@ route.
 
 | Method | Path | Does | Decided by |
 |---|---|---|---|
-| `POST` | `/work/items` | `create_work_item` | `work:write` |
-| `PATCH` | `/work/items/{key}` | `update_work_item`. `If-Match` is its `if_match` | `work:write`; re-routing asks the project's lead |
-| `POST` | `/work/items/{key}/comments` | `comment_on_work_item` | `work:write` |
-| `PATCH` | `/work/items/{key}/comments/{cid}` | Rewrite a remark: `{"body": …}` | its **author** — the table admits `fleet:operate` too, and the tracker then refuses anybody but the author, because a remark somebody else can rewrite is one attributed to a person who did not make it |
-| `POST` | `/work/items/{key}/rank` | `place_work_item` — a board drag: `{"after": ref}` or `{"before": ref}` (one neighbour, never both) and the `status` lane it was dropped into. `If-Match` is its required `if_match`, and a move of an item somebody changed since is `409 stale_version` | `work:write`, and **never a seat** |
-| `POST` | `/work/items/{key}/depend` | `update_work_item`'s `waiting_on`, `blocking` and `dependency_note`, and nothing else | `work:write` |
-| `POST` | `/work/items/{key}/relate` | `update_work_item`'s `linked` and `linked_pages`, and nothing else | `work:write` |
-| `DELETE` | `/work/items/{key}` | `remove_work_item` (`{"subtree": true}` takes its children) | the lead of the item's **own** project, or `fleet:operate` |
+| `POST` | `/work/items` | `create_work_item` | `tracker` |
+| `PATCH` | `/work/items/{key}` | `update_work_item`. `If-Match` is its `if_match` | `tracker`; re-routing asks the project's lead |
+| `POST` | `/work/items/{key}/comments` | `comment_on_work_item` | the route admits everybody (`work.thread`) and the tool decides once the item is read: `tracker`, or — for **the answer to an open ask that names the caller**, and nothing else — the person asked, with no app ([You may answer what you were asked](../concepts/identity-and-access.md#what-each-app-opens)) |
+| `PATCH` | `/work/items/{key}/comments/{cid}` | Rewrite a remark: `{"body": …}` | its **author**, with `tracker` — the table admits `admin` too, and the tracker then refuses anybody but the author, because a remark somebody else can rewrite is one attributed to a person who did not make it |
+| `POST` | `/work/items/{key}/rank` | `place_work_item` — a board drag: `{"after": ref}` or `{"before": ref}` (one neighbour, never both) and the `status` lane it was dropped into. `If-Match` is its required `if_match`, and a move of an item somebody changed since is `409 stale_version` | `tracker`, and **never a seat** |
+| `POST` | `/work/items/{key}/depend` | `update_work_item`'s `waiting_on`, `blocking` and `dependency_note`, and nothing else | `tracker` |
+| `POST` | `/work/items/{key}/relate` | `update_work_item`'s `linked` and `linked_pages`, and nothing else | `tracker` |
+| `DELETE` | `/work/items/{key}` | `remove_work_item` (`{"subtree": true}` takes its children) | the item's **reporter**, the lead of the item's **own** project, or `admin`, with `tracker`; `subtree` is the lead's or `admin`'s alone |
 | `POST` | `/work/items/{key}/restore` | `restore_work_item` | the same |
-| `POST` | `/work/items/{key}/move` | `move_work_item`: `{"project": "OPS"}` moves the item and everything under it. A move whose walk stopped after the item itself moved answers `200` with the item's receipt, `subtree_followed` of `subtree_total`, and a `move_stopped` instruction — the **same** `Idempotency-Key` finishes it (the answer's `op_id`, sent back as that header, which is the key even when the request sent none), and a new one is refused as somebody else's move | the lead of the item's **own** project, or `fleet:operate` |
-| `POST` | `/work/items/{key}/purge` | Destroy it and every row it produced — see [below](#a-purge) | `fleet:operate`, and **never a seat** |
-| `PUT` | `/work/projects/{key}` | `write_project`'s policy: `fields`, `default_assignee`, `archived` | the project's lead or `fleet:operate`; archiving never a seat |
-| `POST` | `/work/projects/{key}/tags` | `write_project`'s `tags_add`, `tags_rename`, `tags_archive` | declaring: `work:write`; renaming and archiving: the project's lead |
-| `POST` | `/work/views` | `save_work_view` | `{"personal": true}` makes it the CALLER's own view — its owner is always the caller's [own record](#whose-record-a-personal-question-answers-for), and there is no naming somebody else's; a shared one is its container's lead's — and a save naming a stored view's `id` also needs that authority over the view it replaces. Only a shared view can be `default` |
-| `PUT` | `/work/catalogue` | `write_work_catalogue` | `config:write` |
-| `PUT` | `/work/people/{handle}/inbox` | `mark_inbox` — see [below](#somebody-elses-inbox) | the person, or `fleet:operate` |
-| `PUT` | `/work/people/{handle}/pins` | `set_pins` | the person, or `fleet:operate` |
-| `PUT` | `/work/people/{handle}/priorities` | `set_priorities` (`{"items": [...]}`) | the person, whoever leads them, or `fleet:operate`; never a seat reordering a colleague |
-| `POST` | `/pages` | `write_page` | `knowledge:write` |
-| `PUT` | `/pages/{id}` | `save_page`. `If-Match` is its required `base_version` | `knowledge:write`; a `title` in the body is a rename, and asks what a rename asks |
-| `POST` | `/pages/{id}/rename` | Move the page to a new title — its address: `{"title": …, "quiet": false}` | the lead of the page's container, or `fleet:operate` |
-| `POST` | `/pages/{id}/comments` | `comment_on_page` | `knowledge:write` |
-| `PATCH` | `/pages/{id}/comments/{cid}` | Rewrite a remark: `{"body": …}` | its **author** — for the work comment's reason |
-| `DELETE` | `/pages/{id}/comments/{cid}` | Take a remark down | its author, or `fleet:operate` as a moderator |
-| `DELETE` | `/pages/{id}` | Put the page in the trash | the lead of the page's container, or `fleet:operate` |
+| `POST` | `/work/items/{key}/move` | `move_work_item`: `{"project": "OPS"}` moves the item and everything under it. A move whose walk stopped after the item itself moved answers `200` with the item's receipt, `subtree_followed` of `subtree_total`, and a `move_stopped` instruction — the **same** `Idempotency-Key` finishes it (the answer's `op_id`, sent back as that header, which is the key even when the request sent none), and a new one is refused as somebody else's move | the lead of the item's **own** project, or `admin`, with `tracker` |
+| `POST` | `/work/items/{key}/purge` | Destroy it and every row it produced — see [below](#a-purge) | `admin`, a recent proof (`step_up`), and **never a seat** |
+| `PUT` | `/work/projects/{key}` | `write_project`'s policy: `fields`, `default_assignee`, `archived` | the project's lead or `admin`, with `tracker`; archiving never a seat |
+| `POST` | `/work/projects/{key}/tags` | `write_project`'s `tags_add`, `tags_rename`, `tags_archive` | declaring: `tracker`; renaming and archiving: the project's lead, with `tracker` |
+| `POST` | `/work/views` | `save_work_view` | `{"personal": true}` makes it the CALLER's own view — its owner is always the caller's [own record](#whose-record-a-personal-question-answers-for), and there is no naming somebody else's; a shared one is its container's lead's — and a save naming a stored view's `id` also needs that authority over the view it replaces. With `tracker`. Only a shared view can be `default` |
+| `PUT` | `/work/catalogue` | `write_work_catalogue` | `admin` |
+| `PUT` | `/work/people/{handle}/inbox` | `mark_inbox` — see [below](#somebody-elses-inbox) | the person, or `admin`, with `tracker` |
+| `PUT` | `/work/people/{handle}/pins` | `set_pins` | the person, or `admin`, with `tracker` |
+| `PUT` | `/work/people/{handle}/priorities` | `set_priorities` (`{"items": [...]}`) | the person, whoever leads them, or `admin`, with `tracker`; never a seat reordering a colleague |
+| `POST` | `/pages` | `write_page` | `knowledge` — and only in a space the company declares ([Who may write where](../concepts/knowledge-system.md#who-may-write-where)) |
+| `PUT` | `/pages/{id}` | `save_page`. `If-Match` is its required `base_version` | `knowledge`; a `title` in the body is a rename, and asks what a rename asks |
+| `POST` | `/pages/{id}/rename` | Move the page to a new title — its address: `{"title": …, "quiet": false}` | the page's **creator**, the lead of the page's container, or `admin`, with `knowledge` |
+| `POST` | `/pages/{id}/comments` | `comment_on_page` | `knowledge` |
+| `PATCH` | `/pages/{id}/comments/{cid}` | Rewrite a remark: `{"body": …}` | its **author**, with `knowledge` — for the work comment's reason |
+| `DELETE` | `/pages/{id}/comments/{cid}` | Take a remark down | its author, or `admin` as a moderator, with `knowledge` |
+| `DELETE` | `/pages/{id}` | Put the page in the trash | the page's **creator**, the lead of the page's container, or `admin`, with `knowledge` |
 | `POST` | `/pages/{id}/restore` | Take it back | the same |
-| `POST` | `/pages/{id}/purge` | Destroy it: `?confirm=` repeats its **title**, `?reason=` is required | `fleet:operate`, and **never a seat** |
+| `POST` | `/pages/{id}/purge` | Destroy it: `?confirm=` repeats its **title**, `?reason=` is required | `admin`, a recent proof (`step_up`), and **never a seat** |
 
 **A page in the tool-skills container asks one question more.** Creating,
 saving, renaming, trashing, restoring or purging one is decided as
-`pages.skill.write` on top of the rule in the table — **`config:write`**, and
+`pages.skill.write` on top of the rule in the table — **`admin`**, and
 never a seat — because a tool skill is injected into every seat's turn and
 writing one rewrites the prompt the company runs under. A remark on one is an
 ordinary comment. See [who may write where](../concepts/knowledge-system.md#who-may-write-where).
@@ -5266,8 +5340,8 @@ the identity directory's to resolve, exactly as above, and is **never** a seat
 ("Jane Doe"); only a name that is neither — a handle, a role, a display name,
 an address — is resolved against the chart. The lead relation is then asked
 about the seat it all resolved to, so a lead may name their report either way.
-A name nothing answers to is refused, and the refusal lists the seats only to a
-caller who may read the roster (`state:read`).
+A name nothing answers to is refused, and the refusal lists the seats — the
+roster is everybody's overview.
 
 ## The native tracker and knowledge base
 
@@ -5407,8 +5481,8 @@ written. Unlike a work item, a file has no per-field merge — two people editin
 one spreadsheet would lose one of them.
 
 **A write is decided and attributed like every other write on this surface.**
-Reading a file or the listing takes `state:read`; uploading takes `work:write`;
-removing one is its project's lead's, or `fleet:operate`'s — taking a file out
+Reading a file or the listing and uploading one take `tracker`; removing one is
+its project's lead's, or `admin`'s, with `tracker` — taking a file out
 of a project is the project's, as taking a work item out is. The write is
 recorded under whoever the request resolved to — a person as their seat, a
 credential nobody is bound through under its own login — with the credential it
@@ -5465,7 +5539,7 @@ runs the object store. A company on Jira has no project files to serve.
 
 ### `GET /work/retention` — what the log is holding
 
-**Takes `fleet:operate`, reads included**, on the same rule `/config` and `/secrets`
+**Takes `admin`, reads included**, on the same rule `/config` and `/secrets`
 follow: the answer names every node in the fleet, its position, its disk and
 its snapshot repository, which is a map of which machine to take out to lose
 the company's history, and it takes its own grant on top of authentication.
@@ -5625,9 +5699,9 @@ See [Retention](../guides/retention.md#the-one-number-to-watch).
 ### The three retention gestures that write
 
 All three are **POSTs**, and all three — like every other `/work/retention*`
-route — take `fleet:operate`: moving the floor the trim deletes against,
+route — take `admin`: moving the floor the trim deletes against,
 stopping a machine writing and letting it write again are the deployment's own
-controls, and a caller without the grant is refused `403` naming it.
+controls, and a caller without it is refused `403` naming it.
 
 | Route | What it does |
 |---|---|
@@ -5793,7 +5867,7 @@ A log's Tier A ceiling is only the value its stream is created with, and these
 routes are the window in which a running log's ceiling changes. The
 [procedure is documented once](../guides/retention.md#changing-a-logs-ceiling);
 what follows is the wire surface. Every route here, the status read included,
-takes `fleet:operate`.
+takes `admin`.
 
 | Route | What it does |
 |---|---|
@@ -5854,8 +5928,8 @@ the seat**. Also served as the `agent_memory` query, which takes `{id, limit}`.
 `{id}` is the seat's **handle** — the canonical identifier everywhere in
 the system — or a person's **login**, which names the seat the identity directory binds them
 to and is never read as a handle. It is a seat's TRAIL, so it takes
-`audit:read` whoever's seat it is, and an absent name is the caller's own
-seat. The halves are keyed differently in the store — the diary and the
+`audit.seat.read` — the seat's lead, or `admin` — and an absent name is the
+caller's own seat. The halves are keyed differently in the store — the diary and the
 onboarding marker by the derived agent id, the episodes, skills and
 counterparty profiles by the handle — and the answer resolves both itself
 rather than making a caller know which.
@@ -5944,8 +6018,8 @@ its size is its length. The whole row is
 One episode **whole**: the same row as the listing's, with `ask` and
 `plan_summary` complete. Also served as the `agent_episode` query, which takes
 `{id, episode}`. Answered by the node holding the seat under exactly the rules
-of `GET /agents/{id}/memory` above, and naming it — its grant included: a
-seat's trail takes `audit:read`, whoever's seat it is.
+of `GET /agents/{id}/memory` above, and naming it — its rule included: a
+seat's trail takes `audit.seat.read`, the seat's lead or `admin`.
 
 ```json
 {
@@ -6047,7 +6121,7 @@ shared knowledge backend, reachable by all members via query-time search.
 Backs **Settings › Models & keys**: every model the company configures, in
 config order (the order a seat that names no model falls back through), the
 keys each rotates through and which of them is benched. **It takes
-`config:read`, reads included** — which variable holds each model's key and
+`admin`, reads included** — which variable holds each model's key and
 when each is refused is a map of which credential to take.
 
 **Names, never values.** A key is `ref`, the variable a whole `${VAR}` names
@@ -6107,7 +6181,7 @@ To change a model's keys, `PUT /config/llm-providers/{id}` — see
 
 Backs the **Servers** section of **Settings › Tools & MCP**: every MCP server,
 what the configuration declares for it and what each live node did with it.
-**It takes `config:read`**, as `GET /config` does — it names the nodes, the
+**It takes `admin`**, as `GET /config` does — it names the nodes, the
 launch commands and the first line of each failure, which is what the
 configuration it reports on carries.
 
@@ -6170,7 +6244,7 @@ presence carries each node's `node.roles` and `node.labels`, seat and
 worker leases name their holder, and the per-node config epoch comes from
 the control plane's apply status.
 
-**It needs a credential carrying `fleet:operate`, reads included** — a
+**It needs a credential carrying `admin`, reads included** — a
 signed-in session or a bearer — like every other answer the dashboard's
 Settings › Nodes screen draws. What it describes is the DEPLOYMENT
 rather than the company's work — the node ids, which node holds which
@@ -6396,7 +6470,7 @@ rejoins. The whole gesture is bounded by one wait — the carrying member's own
 commit budget and one round trip; a member that does not answer within it ends
 the gesture as `outcome_unknown` rather than another member proposing it again.
 `crewlet fleet broker remove` is a client of both routes. **Both take
-`fleet:operate`** and a [recent proof](#some-gestures-ask-how-recently-you-proved-who-you-are),
+`admin`** and a [recent proof](#some-gestures-ask-how-recently-you-proved-who-you-are),
 as every other control of the deployment does, and both are refused during a
 [drain](#during-a-drain). Every refusal carries `detail` and
 `hint`:
@@ -6656,9 +6730,9 @@ client that gives up leaves an unfinished directory rather than a false one.
 
 Four refusals, each pointing somewhere different:
 
-- **401 without a credential, and 403 without `fleet:operate`.** This writes
+- **401 without a credential, and 403 without `admin`.** This writes
   every credential the company holds to a path the caller chooses, so it is
-  the deployment's own control and no narrower grant reaches it.
+  the deployment's own control and nothing narrower reaches it.
 - **400 for a destination this node cannot use** — relative, already occupied,
   one this host cannot create, read or make private (a path through a regular
   file, a parent that does not exist or is not writable, a read-only mount), or
@@ -6706,7 +6780,7 @@ is **Settings › Backups & retention › Take a backup**.
 ### `GET /backups`
 
 Backs **Settings › Backups & retention**: what the fleet has backed up. **It
-takes `fleet:operate`** — every row names a directory on a named host that
+takes `admin`** — every row names a directory on a named host that
 holds the company's sealed credentials.
 
 Two records, because they answer two questions:

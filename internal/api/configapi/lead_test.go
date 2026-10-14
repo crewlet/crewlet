@@ -146,8 +146,8 @@ func refusedParts(t *testing.T, res *httptest.ResponseRecorder) []string {
 		t.Fatalf("refused as %v, want unauthorized: %v", body["error"], body)
 	}
 	if grants, _ := body[authz.DetailGrants].([]any); !slices.Equal(grants,
-		[]any{string(iam.GrantConfigWrite)}) {
-		t.Errorf("grants = %v, want the company's grant that would admit all of it",
+		[]any{string(iam.GrantAdmin)}) {
+		t.Errorf("grants = %v, want admin, which would admit all of it",
 			body[authz.DetailGrants])
 	}
 	list, _ := body["refused"].([]any)
@@ -563,14 +563,14 @@ func TestALeadsSettingChangeIsRefusedNamingTheKey(t *testing.T) {
 	}
 }
 
-// A WRITE THAT CHANGES NOTHING IS THE COMPANY GRANT'S.
+// A WRITE THAT CHANGES NOTHING IS ADMIN'S.
 //
 // Storing the document unchanged makes a new revision and re-activates it on
-// every node — `POST /config/reload`'s gesture — so a caller without
-// `config:write` is refused it however it arrives: a patch of a key that is
-// already unset, by a person who leads nothing, and an entity sent back as it
-// was read, by a lead. The revision does not move. The control is the company's
-// grant, whose same patch lands.
+// every node — `POST /config/reload`'s gesture — so a caller without admin is
+// refused it however it arrives: a patch of a key that is already unset, by a
+// person who leads nothing, and an entity sent back as it was read, by a lead.
+// The revision does not move. The control is an admin, whose same patch
+// lands.
 //
 // Mutation: admit a diff with no part refused, as before, and both writes
 // land as new revisions.
@@ -596,11 +596,11 @@ func TestAWriteThatChangesNothingIsTheCompanyGrants(t *testing.T) {
 		t.Errorf("a refused no-op moved the active revision to %s", after)
 	}
 	admin := iam.Principal{ID: uuid.New(), Login: "ops.admin", Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantConfigWrite},
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin},
 		ReauthAt: time.Now().Add(time.Hour)}
 	if res := doAs(t, s, admin, http.MethodPatch, "/config", `{"vision": null}`,
 		headers); res.Code != http.StatusCreated {
-		t.Errorf("config:write re-publishing the document = %d: %s", res.Code, res.Body.String())
+		t.Errorf("an admin re-publishing the document = %d: %s", res.Code, res.Body.String())
 	}
 }
 
@@ -684,21 +684,21 @@ func TestALeadsReorderIsCheckedAndSavedAlike(t *testing.T) {
 	}
 }
 
-// THE COMPANY'S GRANT IS THE ADMIN PATH: whoever holds config:write changes
-// anything, a root seat and a setting included, leading nothing at all.
+// ADMIN IS THE ADMIN PATH: an admin changes anything, a root seat and a
+// setting included, leading nothing at all.
 func TestConfigWriteIsTheAdminPath(t *testing.T) {
 	t.Parallel()
 	s := leadSurface(t)
 	admin := iam.Principal{ID: uuid.New(), Login: "ops.admin", Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantConfigWrite},
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin},
 		ReauthAt: time.Now().Add(time.Hour)}
 	if res := putEntityAs(t, s, admin, configapi.EntityRoles, "ceo",
 		func(e map[string]any) { e["goal"] = "grow" }, ""); res.Code != http.StatusCreated {
-		t.Errorf("config:write editing a root seat = %d: %s", res.Code, res.Body.String())
+		t.Errorf("an admin editing a root seat = %d: %s", res.Code, res.Body.String())
 	}
 	if res := doAs(t, s, admin, http.MethodPatch, "/config", `{"mission": "grow"}`,
 		map[string]string{"X-Summary": "mission"}); res.Code != http.StatusCreated {
-		t.Errorf("config:write editing a setting = %d: %s", res.Code, res.Body.String())
+		t.Errorf("an admin editing a setting = %d: %s", res.Code, res.Body.String())
 	}
 }
 
@@ -740,7 +740,7 @@ func TestTheRouteRefusesSomebodyWhoCouldLeadNothing(t *testing.T) {
 //
 // One seat or one unit of their subtree, masked as every read of the document
 // is — and not a seat or a unit outside it, nor the whole document, which is
-// `config:read`'s.
+// admin's.
 func TestALeadReadsOnlyTheirSubtree(t *testing.T) {
 	t.Parallel()
 	s := leadSurface(t)
@@ -769,8 +769,8 @@ func TestALeadReadsOnlyTheirSubtree(t *testing.T) {
 // A person bound to a seat who leads nothing is refused a seat in another
 // team, a seat at the root, a unit, and an id the company does not have, in
 // the same bytes: an id the revision does not hold is decided at the root, and
-// the root is refused as another team's unit is. The control is the company's
-// read grant, which is told the id is not there.
+// the root is refused as another team's unit is. The control is an admin, who
+// is told the id is not there.
 //
 // Mutation: look the id up before deciding, or give the root a refusal reason
 // of its own, and the missing id answers differently from the seat in Design.
@@ -794,10 +794,10 @@ func TestAReadIsDecidedBeforeItsIDIsLookedUp(t *testing.T) {
 		}
 	}
 	admin := iam.Principal{ID: uuid.New(), Login: "ops.admin", Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantConfigRead},
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin},
 		ReauthAt: time.Now().Add(time.Hour)}
 	if res := doAs(t, s, admin, http.MethodGet, "/config/roles/nosuch", "", nil); res.Code != http.StatusNotFound {
-		t.Errorf("config:read reading a missing seat = %d, want 404: %s",
+		t.Errorf("an admin reading a missing seat = %d, want 404: %s",
 			res.Code, res.Body.String())
 	}
 }
@@ -811,7 +811,7 @@ func TestAReadIsDecidedBeforeItsIDIsLookedUp(t *testing.T) {
 // first, a body this kind cannot read answered 400 naming where the seat sits
 // in the document, a body naming another handle 400 naming both, a well-formed
 // edit admission's 403 naming the seat's unit, and a missing id 404. The
-// controls are the company's grant, which is told the id is not there, and an
+// controls are an admin, who is told the id is not there, and an
 // address inside their subtree, whose body is read and refused as unreadable.
 //
 // Mutation: decide the address after the draft is built, and every body to an
@@ -856,11 +856,11 @@ func TestAWriteIsDecidedBeforeItsIDIsLookedUp(t *testing.T) {
 			"want the body read and refused: %s", res.Code, res.Body.String())
 	}
 	admin := iam.Principal{ID: uuid.New(), Login: "ops.admin", Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantConfigWrite},
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin},
 		ReauthAt: time.Now().Add(time.Hour)}
 	if res := doAs(t, s, admin, http.MethodPut, "/config/roles/nosuch",
 		`{"name": "Nosuch", "llm": "zulu"}`, headers); res.Code != http.StatusNotFound {
-		t.Errorf("config:write writing a missing seat = %d, want 404: %s",
+		t.Errorf("an admin writing a missing seat = %d, want 404: %s",
 			res.Code, res.Body.String())
 	}
 }

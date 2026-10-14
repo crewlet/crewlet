@@ -70,7 +70,7 @@ import { peekable } from "./frame/peeks.tsx";
 import { StateBar, degradationOf } from "./frame/StateBar.tsx";
 import { useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
 import { ViewerProvider, useHeldGrants, useViewer } from "~/lib/viewer.ts";
-import { NO_ACCESS, SessionReading, useFrameSession } from "~/lib/frameSession.ts";
+import { SessionReading, useFrameSession } from "~/lib/frameSession.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
@@ -349,12 +349,12 @@ export function FrameReadings({ children }: { children: ReactNode }) {
  * that needs nobody. A sign-in does not dial either: it lands here, and the
  * frame dials for the session it reads.
  *
- * AND ONLY FOR A SESSION THE ENGINE SERVES THE LIVE VIEW TO. The frame asks
- * `GET /auth/session` first (`lib/frameSession.ts`): a `401` is nobody, which
- * `rest.ts` turns into the sign-in the app follows, and nothing is dialled; a
- * session without `state:read` is no access yet, and nothing is dialled until
- * an answer holds it; any other failure says nothing about a session, and the
- * dial's own handshake decides.
+ * AND ONLY FOR SOMEBODY. The frame asks `GET /auth/session` first
+ * (`lib/frameSession.ts`): a `401` is nobody, which `rest.ts` turns into the
+ * sign-in the app follows, and nothing is dialled; any session is dialled,
+ * whatever access it holds, because the socket serves everybody the overview
+ * and decides each push by the reader's access; any other failure says
+ * nothing about a session, and the dial's own handshake decides.
  */
 export function Shell({ children }: { children: ReactNode }) {
   return (
@@ -381,38 +381,26 @@ function Frame({ children }: { children: ReactNode }) {
   const session = useFrameSession();
   // WHAT THE READER HOLDS — the frame's one reading (`useHeldGrants`), which
   // Settings' column locks its sections by, as the sidebar locks its rows.
-  // Read off the viewer alone, the column drew a session without
-  // `state:read`, whose viewer never answers, no lock at all.
+  // Read off the viewer alone, the column drew no lock at all until the
+  // socket answered.
   const held = useHeldGrants();
 
-  // DIAL FOR A SESSION THAT MAY READ THE COMPANY — see [Shell] — when it is
-  // first read, and again when a later answer holds the grant an earlier one
-  // lacked. A read that failed on anything but a `401` says nothing about the
-  // session, and the handshake decides.
-  const serves = session.answer !== null && !session.noAccess;
+  // DIAL FOR SOMEBODY — see [Shell] — when the session is first read. A read
+  // that failed on anything but a `401` says nothing about the session, and
+  // the handshake decides.
+  const serves = session.answer !== null;
   const undecided =
     session.answer === null && session.error !== null && session.error.status !== 401;
   useEffect(() => {
     if (serves || undecided) socket.start();
   }, [serves, undecided, socket]);
-  // A SESSION WITH NO ACCESS IS A BROWSER THE ENGINE REFUSES, whether or not a
-  // dial found out: recorded where a refused handshake records one, so every
-  // surface reading the connection — the write gate, the palette — says the
-  // one thing rather than "offline" about a socket nobody dialled. The dial a
-  // later grant makes lifts it (`LiveSocket.start`).
-  useEffect(() => {
-    if (session.noAccess) store.setAccessRefused(NO_ACCESS);
-  }, [session.noAccess, store]);
-  // A REFUSAL THE SOCKET MET IS ASKED ABOUT AGAIN: `state:read` withdrawn under
-  // an open socket closes it, and the session read before it still holds the
-  // grant — so the panel said "you hold state:read" beside the engine's "the
-  // live socket needs state:read", and nothing would ever notice the grant
-  // coming back. NEVER THE FRAME'S OWN [NO_ACCESS]: that is recorded FROM the
-  // read this would repeat, so every no-access landing read the session twice
-  // in a row — and a third time after a socket refusal it answered.
+  // A REFUSAL THE SOCKET MET IS ASKED ABOUT AGAIN: a seat taken out of the
+  // chart closes an open socket, and the session read before it still names
+  // the seat — so the panel would say who the reader is from a reading the
+  // refusal has just made stale.
   const { reload: readSessionAgain } = session;
   useEffect(() => {
-    if (accessRefused !== null && accessRefused !== NO_ACCESS) void readSessionAgain();
+    if (accessRefused !== null) void readSessionAgain();
   }, [accessRefused, readSessionAgain]);
   // A ZONE OR A DATE FORMAT CHANGED IN THE PREFERENCES REPAINTS EVERY
   // TIMESTAMP. The formatters read the preference when they are called, so
@@ -452,12 +440,14 @@ function Frame({ children }: { children: ReactNode }) {
   // navigated away, and the sidebar's badge (`lib/useInboxCounts.ts`) is what
   // has to stay current. UNDER `owner` — the seat when bound, the login when
   // not — because that is the record the engine pushes about. The socket
-  // re-sends it on every reconnect.
+  // re-sends it on every reconnect. ONLY WITH TRACKER: `inbox_changed` is the
+  // tracker's push, and a watch from anybody else is a refusal on every
+  // reconnect.
   useEffect(() => {
-    if (viewer.owner === "") return;
+    if (viewer.owner === "" || !viewer.tracker) return;
     socket.watch(viewer.owner);
     return () => socket.watch("");
-  }, [socket, viewer.owner]);
+  }, [socket, viewer.owner, viewer.tracker]);
 
   // THE FRAME'S KEYS, by row — `keymap.ts` says which key each one is.
   const [legendOpen, setLegendOpen] = useState(false);
@@ -539,7 +529,6 @@ function Frame({ children }: { children: ReactNode }) {
   const degraded = degradationOf({
     authRejected,
     accessRefused,
-    noAccess: session.noAccess,
     connected,
     configured: engine?.configured,
     onSignIn: goSignIn,

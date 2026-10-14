@@ -39,14 +39,25 @@
  * A human seat is held by whoever the identity directory binds to it, and the
  * company document cannot say who that is. So a person's page states it from
  * `GET /iam/seats` through the one [SeatHolding] the peek and the chart's card
- * menu share: the holder's login and stage; or the open invitation that holds
- * it, with its cancellation; or "Nobody holds this seat", with Invite and
- * Create — the two ways a person comes to exist, since every person holds a
- * human seat. The read takes `people:manage` or `audit:read`, so it is asked
- * only of a reader holding one, and the gestures are drawn only for
- * `people:manage`; a reader holding neither sees the page as it was. A read
- * that failed is said rather than drawn as nothing, because the gestures live
- * here and a page without them would say nothing about why.
+ * menu share: the holder's name (and, to an admin and the holder, their login
+ * and stage); or the open invitation that holds it, with its cancellation (an
+ * admin's to see); or "Nobody holds this seat", with Invite and Create — the
+ * two ways a person comes to exist, since every person holds a human seat.
+ * Every signed-in reader is answered the listing, masked for them, and the
+ * gestures are drawn only for an admin. A read that failed is said rather
+ * than drawn as nothing, because the gestures live here and a page without
+ * them would say nothing about why.
+ *
+ * # Status for everybody, the rest by access
+ *
+ * The page is the OVERVIEW's: anybody signed in reads a seat's state, its
+ * figures and its schedules. What it is working on is the tracker's, so the
+ * open work — the strip's count, the Overview's card, the Work tab — is asked
+ * only of a reader holding Tracker. What it SAID — the Turns and Memory tabs,
+ * a call's prompt and answer — is its trail, which the engine answers to an
+ * admin and to whoever leads the seat (`seat/profile.ts`' `mayReadTrail`);
+ * every other reader finds those tabs drawn and locked, saying what would
+ * open them, and nothing is asked.
  *
  * # Tabs are sections
  *
@@ -56,7 +67,7 @@
  */
 
 import { useId, useMemo, useState } from "react";
-import { Button, ButtonLink, Callout, EmptyState, Menu, Tag, tabId } from "@crewlethq/ui";
+import { Button, ButtonLink, Callout, EmptyState, Menu, Skeleton, Tag, tabId } from "@crewlethq/ui";
 import {
   ActivityGlyph,
   ChartNoAxesGanttGlyph,
@@ -107,12 +118,9 @@ import {
 } from "~/lib/seats.ts";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import {
-  canManagePeople,
-  canReadDirectory,
-  SeatHolding,
-  useHumanSeats,
-} from "~/components/people.tsx";
+import { ADMIN, TRACKER } from "~/lib/access.ts";
+import { canManagePeople, SeatHolding, useHumanSeats } from "~/components/people.tsx";
+import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { turnIdOf, watchHref, watchLink } from "~/lib/turns.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { menuHold, useMessageSeatAccess, useWriteAccess } from "~/lib/useWriteAccess.ts";
@@ -125,8 +133,10 @@ import {
   AGENT_TABS,
   HUMAN_TABS,
   TAB_LABELS,
+  TRAIL_WORDS,
   findSeat,
   liveRow,
+  mayReadTrail,
   pillWord,
   seatRun,
   sentence,
@@ -142,6 +152,7 @@ const WORK_PAGE = 50;
 
 export function SeatScreen({ handle }: { handle: string }) {
   const nav = useNavigator();
+  const viewer = useViewer();
   const org = useOrg();
   const agents = useAgents();
   const now = useNow();
@@ -186,8 +197,12 @@ export function SeatScreen({ handle }: { handle: string }) {
       sort: "-priority,updated",
       limit: WORK_PAGE,
     },
-    { enabled: !!seat?.handle, pollMs: 30_000 },
+    // THE TRACKER'S QUESTION, asked only of a reader holding it.
+    { enabled: !!seat?.handle && viewer.tracker, pollMs: 30_000 },
   );
+  // WHAT THE SEAT SAID is its lead's and an admin's to read — see the file's
+  // doc.
+  const trail = !!seat && mayReadTrail(viewer, index, seat.handle);
   // THE GUARDED HALF, read once for every tab that draws it.
   const setup = useSeatSetup(seat?.handle ?? "");
   const chrome: RowChrome = useMemo(() => seatResolvers(index), [index]);
@@ -414,11 +429,49 @@ export function SeatScreen({ handle }: { handle: string }) {
               now={now}
             />
           )}
-          {tab === "work" && (
-            <Work seat={seat} index={index} work={work} chrome={chrome} now={now} />
-          )}
-          {tab === "turns" && !human && <Turns seat={seat} agent={agent} now={now} />}
-          {tab === "memory" && !human && <Memory seat={seat} now={now} />}
+          {tab === "work" &&
+            (viewer.loading ? (
+              <AccessPending />
+            ) : viewer.tracker ? (
+              <Work seat={seat} index={index} work={work} chrome={chrome} now={now} />
+            ) : (
+              <GrantRequired
+                size="compact"
+                what="This seat's work"
+                grants={[TRACKER]}
+                reader={viewer.login}
+              />
+            ))}
+          {tab === "turns" &&
+            !human &&
+            (viewer.loading ? (
+              <AccessPending />
+            ) : trail ? (
+              <Turns seat={seat} agent={agent} now={now} />
+            ) : (
+              <GrantRequired
+                size="compact"
+                what="This seat's turns"
+                grants={[ADMIN]}
+                reader={viewer.login}
+                also={TRAIL_WORDS}
+              />
+            ))}
+          {tab === "memory" &&
+            !human &&
+            (viewer.loading ? (
+              <AccessPending />
+            ) : trail ? (
+              <Memory seat={seat} now={now} />
+            ) : (
+              <GrantRequired
+                size="compact"
+                what="This seat's memory"
+                grants={[ADMIN]}
+                reader={viewer.login}
+                also={TRAIL_WORDS}
+              />
+            ))}
           {tab === "schedules" && !human && <Schedules seat={seat} now={now} />}
           {tab === "settings" && <Settings seat={seat} agent={agent} setup={setup} />}
         </div>
@@ -474,12 +527,13 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
 }
 
 /**
- * What holds this human seat, for a reader the directory answers — see the
- * file's doc. Nothing at all for anybody else, and nothing asked.
+ * What holds this human seat, for every signed-in reader — see the file's
+ * doc. Nothing at all, and nothing asked, before somebody has said who this
+ * is.
  */
 function Holder({ seat }: { seat: { handle: string; name: string } }) {
   const viewer = useViewer();
-  const reads = !viewer.asking && canReadDirectory(viewer.grants);
+  const reads = !viewer.asking && !viewer.anonymous;
   const seats = useHumanSeats(reads);
   if (!reads) return null;
   return (
@@ -567,4 +621,13 @@ function Notices({
       )}
     </div>
   );
+}
+
+/**
+ * A tab whose access is not decided yet — the viewer has not answered — waits
+ * for it, rather than drawing a lock on a guess (a refusal nobody made, naming
+ * nobody as the reader) or a tab whose reads were never sent.
+ */
+function AccessPending() {
+  return <Skeleton variant="text" rows={4} label="Checking your access" />;
 }

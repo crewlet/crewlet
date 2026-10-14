@@ -2,6 +2,7 @@ package turnctx
 
 import (
 	"context"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
@@ -16,35 +17,6 @@ import (
 // and a gate answers 503 to. An agent that could not read its own board is
 // not a degraded company, it is a stopped one.
 
-// SeatGrants are the capabilities an agent seat carries.
-//
-// FOUR, and the set is the whole of what a seat's tools ask for:
-//
-//   - `state:read` opens the ordinary reads — the board, the pages, the
-//     roster, the catalogue. A seat that could not read them could not do
-//     anything at all, which is why this is not configurable per seat: a
-//     company that wanted a seat to see nothing would not give it a seat.
-//   - `work:write` and `knowledge:write` are the two colleague writes,
-//     separate for the reason internal/iam states: a company routinely wants
-//     an automation that files bugs and may not edit the handbook, and a seat
-//     inherits both because its ROLE is what bounds it — a seat with no
-//     knowledge tools registered cannot write a page whatever it carries.
-//   - `sandbox:run` is the detached coding run. Carried rather than
-//     conditional, because whether a seat CAN run one is whether a sandbox is
-//     wired into its deps, and a grant that had to agree with that wiring
-//     would be a second answer to one question.
-//
-// WHAT IS DELIBERATELY ABSENT is every operator capability: a seat holds no
-// `config:write`, no `secrets:*`, no `fleet:operate`, no `people:manage` and
-// no `audit:read`. An agent that could rewrite the company it runs inside, or
-// read every prompt every other agent was given, is the blast radius this
-// vocabulary exists to bound — and the one grant a company might reasonably
-// want to give a seat is precisely the one it must not be able to take.
-var SeatGrants = []iam.Grant{
-	iam.GrantStateRead, iam.GrantWorkWrite, iam.GrantKnowledgeWrite,
-	iam.GrantSandboxRun,
-}
-
 // Principal is who a turn acts as.
 //
 // THE SEAT'S HANDLE IS THE IDENTITY, and the kind is [iam.KindSeat] — which
@@ -54,6 +26,25 @@ var SeatGrants = []iam.Grant{
 // every class: a tool surface built outside a turn legitimately has no seat,
 // and admitting it would make "no acting seat" the most powerful caller in
 // the engine.
+//
+// # A seat holds every app and never admin
+//
+// EVERY APP, and not a per-seat choice, because what bounds a seat is its
+// ROLE: a seat with no knowledge tools registered cannot write a page
+// whatever it holds, so a permission that had to agree with the registry
+// would be a second answer to one question. A company that wanted a seat to
+// see nothing would not give it a seat.
+//
+// NEVER ADMIN. An agent that could rewrite the company it runs inside, read
+// its credentials or every prompt every other agent was given, is the blast
+// radius the vocabulary exists to bound — and the one permission a company
+// might reasonably want to give a seat is precisely the one it must not be
+// able to take. The two verbs only a seat makes — asking a colleague and a
+// detached coding run — are the table's `seatOnly` rows rather than a
+// permission a seat carries, so nothing beside the apps is needed here.
+//
+// A CLONE, so a decision that appends to the principal's grants can never
+// reach the list of apps every other turn reads.
 func Principal(t *Turn) iam.Principal {
 	seat, err := t.RequireSeat()
 	if err != nil {
@@ -63,7 +54,7 @@ func Principal(t *Turn) iam.Principal {
 		Kind:     iam.KindSeat,
 		Seat:     seat.Handle(),
 		Stage:    iam.StageActive,
-		Grants:   SeatGrants,
+		Grants:   slices.Clone(iam.Apps),
 		Position: unitOf(t, seat),
 	}
 }

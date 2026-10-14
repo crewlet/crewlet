@@ -107,7 +107,7 @@ func TestASaveCannotTakeOverAViewItMayNotWrite(t *testing.T) {
 			for key, value := range c.args {
 				args[key] = value
 			}
-			got, err := tool.Call(personHolding(iam.GrantStateRead, iam.GrantWorkWrite), args)
+			got, err := tool.Call(personHolding(iam.GrantTracker), args)
 			if err != nil {
 				t.Fatalf("save_work_view: %v", err)
 			}

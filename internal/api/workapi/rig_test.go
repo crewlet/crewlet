@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -66,15 +67,21 @@ func person(seat string, grants ...iam.Grant) iam.Principal {
 		Grants: grants}
 }
 
-// colleague is a person holding the ordinary grants and no deployment grant:
-// the caller a case about AUTHORITY acts as, because the admin grant is
-// checked before every relation and would admit anything.
+// colleague is a person holding every app and not admin: the caller a case
+// about AUTHORITY acts as, because admin is checked before every relation and
+// would admit anything.
 func colleague(seat string) iam.Principal {
-	return person(seat, iam.GrantStateRead, iam.GrantWorkWrite, iam.GrantKnowledgeWrite)
+	return person(seat, iam.Apps...)
 }
 
-// admin holds every grant.
-func admin(seat string) iam.Principal { return person(seat, iam.AllGrants...) }
+// admin holds admin — and so every app — and proved who they are a moment
+// ago, so a verb asking for a recent sign-in (a purge) is decided on the
+// permission rather than refused for the proof's age.
+func admin(seat string) iam.Principal {
+	p := person(seat, iam.GrantAdmin)
+	p.ReauthAt = time.Now().Add(time.Hour)
+	return p
+}
 
 // ---- the tracker ------------------------------------------------------- //
 
@@ -86,6 +93,10 @@ type reader struct {
 	mu    sync.Mutex
 	tasks map[string]tracker.TaskDetail
 	err   error
+
+	// asks are the open asks on each task, by the seat each one names — what
+	// a thread read authored by that seat infers, as the tracker's own does.
+	asks map[string]map[string]string
 }
 
 func newReader() *reader {
@@ -127,6 +138,26 @@ func (r *reader) Task(_ context.Context, ref string, want tracker.DetailWants,
 		}
 	}
 	return d, nil
+}
+
+// Thread infers the one open ask a comment's author was asked, as the
+// tracker's reader does, and refuses an `answers` naming somebody else's.
+func (r *reader) Thread(_ context.Context, q tracker.ThreadQuery,
+	_ statelog.Freshness) (tracker.ResolvedThread, error) {
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	open := r.asks[q.Task]
+	out := tracker.ResolvedThread{ThreadParties: tracker.ThreadParties{Asked: q.Ask},
+		Answers: q.Answers}
+	if out.Answers == "" && q.Author != "" {
+		out.Answers = open[q.Author]
+	}
+	if out.Answers != "" && open[q.Author] != out.Answers {
+		return tracker.ResolvedThread{}, fmt.Errorf("%w: %s asked somebody else",
+			tracker.ErrForbidden, out.Answers)
+	}
+	return out, nil
 }
 
 // addComment files a remark on a task, for the edit cases.
@@ -220,7 +251,7 @@ func (b *bound) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
 	return b.w.answer(opID)
 }
 
-func (b *bound) RestoreTask(_ context.Context, opID, _, _ string,
+func (b *bound) RestoreTask(_ context.Context, opID, _, _ string, _ bool,
 	_ *tracker.Notify) (tracker.WriteResult, error) {
 
 	b.w.mu.Lock()

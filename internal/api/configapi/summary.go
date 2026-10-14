@@ -179,9 +179,9 @@ func takeSummary(w http.ResponseWriter, r *http.Request, body []byte) (summary s
 // ASKED LAST, once the write has been admitted and its document checked, and
 // never as the body is read: a caller who may not make the change is told so,
 // rather than first asked to describe it. Asked first, a credential with no
-// grant to write the configuration was answered `400 summary_required`, and
-// met the `403` that was the real answer only once it had written a sentence
-// for a change it could never make.
+// permission to write the configuration was answered `400 summary_required`,
+// and met the `403` that was the real answer only once it had written a
+// sentence for a change it could never make.
 func requireSummary(w http.ResponseWriter, summary, hint string) bool {
 	if summary != "" {
 		return true

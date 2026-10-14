@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -55,14 +57,87 @@ func TestASandboxTailNeedsTheTurnAndTheJob(t *testing.T) {
 	}
 }
 
-// WHAT A CODING AGENT PRINTS IS ITS TRANSCRIPT, so the tail is read on the
-// audit grant the trace beside it is read on — the board's reader sees that a
-// run is running and not what it says.
-func TestASandboxTailIsReadOnTheAuditGrant(t *testing.T) {
+// WHAT A CODING AGENT PRINTS IS ITS TRANSCRIPT, so the tail is read by
+// whoever reads the run's SEAT's trail — an admin, or the seat's lead — and
+// nobody else: everybody sees that a run is running, and only they see what
+// it says (ADR-0033).
+//
+// The seat is the one the run's record names, read before the tail is asked
+// for; a run no record names any more is `not_running`, answered without
+// asking the tail reader, whose own later read of the record could find one
+// this decision never saw; and a record that cannot be read is unavailable to
+// a lead, never a refusal. A caller who leads nobody — a person with no
+// reports, an unbound token — is refused BEFORE the record is read, so a run
+// store that cannot answer never tells them to come back to a refusal.
+//
+// Mutation: drop [queries.Sources.mayTail]'s seat decision and the stranger
+// is shown the run's output; decide on the caller instead of the run's seat
+// and the lead is refused; drop the decision taken before the record is read
+// and the callers who lead nobody are answered unavailable.
+func TestASandboxTailIsReadByItsSeatsTrail(t *testing.T) {
 	t.Parallel()
-	r := queries.NewRegistry()
-	queries.Register(r, queries.Sources{SandboxTail: &recordingTails{}})
-	needsExactly(t, r, "sandbox_tail", iam.GrantAuditRead)
+	run := sandbox.PendingRun{TurnID: "t1", LaunchID: "l1", AgentHandle: "swe",
+		Status: sandbox.StatusRunning}
+	params := map[string]any{"turn_id": "t1", "launch_id": "l1"}
+	running := sandbox.TailAnswer{Outcome: sandbox.TailRunning, TurnID: "t1", LaunchID: "l1"}
+	for _, c := range []struct {
+		name    string
+		caller  context.Context
+		runs    queries.PendingRuns
+		chart   authz.Chart
+		asked   bool
+		outcome sandbox.TailOutcome
+		refused bool
+		err     error
+	}{
+		{"an admin, with no run record to read", everyGrant(t), nil, flatChart{},
+			true, sandbox.TailRunning, false, nil},
+		{"the seat's lead, holding no permission", asSeat(t, "ana"), fixedRuns{run},
+			leadsChart{lead: "ana", report: "swe"}, true, sandbox.TailRunning, false, nil},
+		{"a caller holding every app and leading nobody", asSeat(t, "ana", iam.Apps...),
+			fixedRuns{run}, flatChart{}, false, "", true, nil},
+		{"a lead, on a node with no run record to read", asSeat(t, "ana"), nil,
+			leadsChart{lead: "ana", report: "swe"}, false, "", true, nil},
+		{"a lead, on a run no record names", asSeat(t, "ana"), fixedRuns{},
+			leadsChart{lead: "ana", report: "swe"}, false, sandbox.TailNotRunning, false, nil},
+		{"a lead, on a record that cannot be read", asSeat(t, "ana"),
+			unreachableRuns{}, leadsChart{lead: "ana", report: "swe"}, false, "", false,
+			queries.ErrUnavailable},
+		{"somebody leading nobody, on a record that cannot be read", asSeat(t, "ana"),
+			unreachableRuns{}, flatChart{}, false, "", true, nil},
+		{"an unbound token, on a record that cannot be read",
+			asGrants(t, "ci", iam.Apps...), unreachableRuns{},
+			leadsChart{lead: "ana", report: "swe"}, false, "", true, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			tails := &recordingTails{answer: running}
+			r := queries.NewRegistry()
+			queries.Register(r, queries.Sources{SandboxTail: tails, Sandbox: c.runs,
+				Chart: c.chart})
+			got, err := r.Answer(c.caller, "sandbox_tail", params)
+			switch {
+			case c.err != nil:
+				if !errors.Is(err, c.err) {
+					t.Fatalf("answered %v, want %v", err, c.err)
+				}
+			case c.refused:
+				var refusal *queries.Refusal
+				if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants,
+					[]iam.Grant{iam.GrantAdmin}) {
+					t.Fatalf("answered %v, want a refusal naming [admin]", err)
+				}
+			default:
+				answer, ok := got.(sandbox.TailAnswer)
+				if err != nil || !ok || answer.Outcome != c.outcome {
+					t.Fatalf("answered %#v, %v; want outcome %s", got, err, c.outcome)
+				}
+			}
+			if asked := len(tails.asked) > 0; asked != c.asked {
+				t.Errorf("the tail reader was asked: %v, want %v", asked, c.asked)
+			}
+		})
+	}
 }
 
 // EVERY REQUEST IS A CURSOR: what the asker holds, read off `epoch`, `after`

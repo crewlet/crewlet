@@ -219,7 +219,7 @@ describe("what a lead's draft refuses", () => {
       refused({ type: "updateCompany", set: [{ path: ["name"], value: "Acme Two" }] }),
     ).toEqual([
       "scope",
-      "The company's charter and settings are not part of Engineering: changing them takes the config:write grant.",
+      "The company's charter and settings are not part of Engineering: changing them takes Admin access.",
     ]);
     expect(
       refused({
@@ -230,15 +230,15 @@ describe("what a lead's draft refuses", () => {
       }),
     ).toEqual([
       "scope",
-      "Only Engineering and what is inside it can be changed here: the company's top level takes the config:write grant.",
+      "Only Engineering and what is inside it can be changed here: the company's top level takes Admin access.",
     ]);
     expect(refused({ type: "remove", target: top })).toEqual([
       "scope",
-      "Where Engineering sits decides who leads it, so moving or deleting it takes the config:write grant.",
+      "Where Engineering sits decides who leads it, so moving or deleting it takes Admin access.",
     ]);
     expect(refused({ type: "setLead", target: top, lead: "qa" })).toEqual([
       "scope",
-      "Engineering's own lead decides who may change it, so changing it takes the config:write grant.",
+      "Engineering's own lead decides who may change it, so changing it takes Admin access.",
     ]);
   });
 
@@ -247,7 +247,7 @@ describe("what a lead's draft refuses", () => {
   // field an addition carries.
   test("a key another system finds a seat or unit by, on any node", () => {
     const KEY =
-      "Another system finds a seat or unit by this, so setting or changing it takes the config:write grant.";
+      "Another system finds a seat or unit by this, so setting or changing it takes Admin access.";
     const withKeys = builderReducer(INITIAL_BUILDER, {
       type: "load",
       mode: "edit",

@@ -25,9 +25,9 @@ bucket crewlet_token_windows  streams/KV_crewlet_token_windows.snapshot  512 B  
 …
 ```
 
-**It needs `fleet:operate`.** The command authenticates with
+**It needs `admin`.** The command authenticates with
 `CREWLET_API_TOKEN` like every command that talks to a running node, and
-`POST /backup` refuses a credential without that grant with `403` naming it —
+`POST /backup` refuses a credential without it with `403` naming it —
 copying the node's whole durable state, every credential and every seat's
 memory included, to a directory the caller names operates the deployment
 rather than reading the company.
@@ -562,11 +562,12 @@ estate and are untouched, which is what you run this command — and re-mint the
 pipelines' tokens — with.
 
 Run it **after** the fleet is up and **before** anybody is told the restore is
-finished. It takes `fleet:operate` **and** `people:manage` — the grant whoever
-ran the restore holds, and the directory's, because it ends every person's
-authority at once — and a proof of identity inside `step_up`, which a Tier A
-token holding both grants (as the break-glass one does) satisfies by
-construction. A machine token never can: it never carries `people:manage`.
+finished. It takes `admin`, a person present and a proof of identity inside
+`step_up` — it ends every person's authority at once — which a Tier A token
+holding `admin` (as the break-glass one does) satisfies by construction, since
+it is its own credential rather than a machine token and is fresh by
+construction. A machine token never can, whatever it carries: the authority
+table refuses it on this row, and the identity domain refuses the record.
 
 **Before you run it, put back what took access away.** The generation ends
 *bearers* — cookies, sessions, machine tokens — and nothing else. Every other
@@ -592,9 +593,9 @@ carries, so everybody signing in again once lets them straight back:
   to — can redeem it and be enrolled with what it carries, on the seat it
   names. While it is open it holds that seat again too: nobody else can be
   invited onto it or created on it until it is cancelled once more.
-- **A grant taken away since is held again** — never above
-  `api.auth.max_grants`, which is Tier A and not in the artefact, but up to
-  it — and so is a **seat**: a person moved to another seat since is back on
+- **A permission taken away since is held again** — `admin` counting only on a
+  node whose `api.auth.admin` serves it, which is Tier A and not in the
+  artefact — and so is a **seat**: a person moved to another seat since is back on
   the one they held, and a service account unbound since is bound again.
 
 The restored estate cannot list any of these: its own trail

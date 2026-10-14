@@ -126,10 +126,12 @@ person's decisions about the company rather than its work, and are served only
 there too: `pause_seat` and `resume_seat`, and `steer_turn` (a note to a
 running turn, decided once a probe of the fleet names the turn's seat — a
 probe nobody answers is `unavailable`), each for the seat's holder, its lead
-or a `fleet:operate` holder; `answer_run`, for the person who asked the parked
+or an administrator; `answer_run`, for the person who asked the parked
 coding run its question or a lead of its seat; and `answer_knowledge`, which
 asks the company's knowledge a question on the auxiliary model of the asker's
-seat, so it needs `state:read` **and** a credential bound to a seat. That set
+seat, so it needs either app — it searches the pages only for a `knowledge`
+holder and the board only for a `tracker` holder — **and** a credential bound
+to a seat. That set
 is ONE operator catalogue, built for every call from what the node runs now,
 and every operator transport serves it — MCP at `/operator/mcp` and the
 dashboard's [`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)
@@ -191,7 +193,7 @@ re-publishes what its MCP starts concluded on its presence heartbeat (per
 server, its instances counted), so **MCP servers** shows each server as
 *Running*, *Partly failing*, *Failing*, *Not started* or *Not reported* with one
 cell per live node and the first failure's reason and seat (`GET /mcp-servers`,
-which takes `config:read` because it shows each server's configured launch,
+which takes `admin` because it shows each server's configured launch,
 as `/config` does; the heartbeat carries each reason bounded, and the whole
 text is the node's `mcp_server_failed` log line). Clicking a server opens its own page:
 its state, reach and launch, every node's reason as the node reported it rather
@@ -200,7 +202,7 @@ which, for a server that never started, says it registered none and why.
 
 ### Adding a server from the dashboard
 
-**Add an MCP server** on Settings › Tools & MCP (`config:write`) writes
+**Add an MCP server** on Settings › Tools & MCP (`admin`) writes
 the same `mcp_servers` entry you would write in YAML: a name, a command and its
 arguments (stdio) or an address (http), `shared` or one per seat, and the
 environment or headers — values as `${NAME}` pointers into the secret store,
@@ -605,7 +607,7 @@ mcp_servers:
 
 A server that worked by reading an undeclared variable out of the engine's environment fails to authenticate or to install until that line is added, and its own last words on stderr — surfaced as `server_stderr_tail` — usually name the variable.
 
-**This is not isolation, and it does not claim to be.** The server runs as the engine's user, so it can read whatever that user can: the Tier A file and the engine's own `/proc/<pid>/environ` among it. What the explicit environment removes is the engine *handing* its secrets to code that never asked for them. Keeping a server you do not trust away from them takes a different user or a container around the server itself — and, since declaring a stdio server is running its `command` on every engine host that runs seats, `config:write` is a grant to give as you would give shell on those hosts (see [Grants](../concepts/identity-and-access.md#grants-the-eleven-things-there-are-to-allow)).
+**This is not isolation, and it does not claim to be.** The server runs as the engine's user, so it can read whatever that user can: the Tier A file and the engine's own `/proc/<pid>/environ` among it. What the explicit environment removes is the engine *handing* its secrets to code that never asked for them. Keeping a server you do not trust away from them takes a different user or a container around the server itself — and, since declaring a stdio server is running its `command` on every engine host that runs seats, `admin` is a permission to give as you would give shell on those hosts (see [What admin runs](../concepts/identity-and-access.md#what-admin-runs)).
 
 ### Tool annotation overrides
 

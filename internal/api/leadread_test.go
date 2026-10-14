@@ -21,35 +21,53 @@ import (
 // chart the decision asks.
 //
 // The personal questions — somebody's inbox, their day, their person record —
-// are the caller's own, their lead's, or the admin grant's. Every rule piece of
-// that was tested where it lives; what went untested was the WIRING, and the
-// wiring was missing: `crewlet run` built the query surface with no chart at
-// all, so every lead's read of a report's record was UNKNOWN on every node for
-// the life of the process, answered 503 and retried for ever. Composed through
-// api.App, the way a caller reaches it, a chart that answers is a 200 and a
-// surface holding none is the 503 — and the second row is what `api.New` now
-// refuses to be built as.
+// are the caller's own, their lead's, or admin's, and every one of them is the
+// tracker's, so a lead holding no tracker reads none of them however the chart
+// answers. Every rule piece of that was tested where it lives; what went
+// untested was the WIRING, and the wiring was missing: `crewlet run` built the
+// query surface with no chart at all, so every lead's read of a report's
+// record was UNKNOWN on every node for the life of the process, answered 503
+// and retried for ever. Composed through api.App, the way a caller reaches it,
+// a chart that answers is a 200 and a surface holding none is the 503 — and
+// the second row is what `api.New` now refuses to be built as.
 func TestALeadReadsAReportsInboxThroughTheApp(t *testing.T) {
 	t.Parallel()
-	const token = "a-lead-holding-state-read-and-nothing-else"
+	const (
+		token     = "a-lead-holding-the-tracker-and-nothing-else"
+		noTracker = "a-lead-holding-the-knowledge-base-and-nothing-else"
+	)
 	b := config.DefaultBootstrap()
-	// STATE READ ALONE, so the lead relation is the only way in: a token
-	// carrying fleet:operate would be admitted by the admin path before
-	// the chart was asked, and the row would assert nothing about it.
-	authorize(&b, config.APIToken{ID: "lead", Token: token,
-		Grants: []iam.Grant{iam.GrantStateRead}})
-	// The lead's token is bound to seat ana, the way `crewlet iam bind`
-	// binds it — the fakes are the inbox test's.
-	seats := map[string]string{iam.TokenLogin("lead"): "ana"}
+	// THE TRACKER ALONE, so the lead relation is the only way in: a token
+	// carrying admin would be admitted by the admin path before the chart
+	// was asked, and the row would assert nothing about it. The second
+	// lead holds the knowledge base instead, so the relation is all they
+	// have and the tracker is what they lack.
+	authorize(&b,
+		config.APIToken{ID: "lead", Token: token,
+			Grants: []iam.Grant{iam.GrantTracker}},
+		config.APIToken{ID: "lead-without-tracker", Token: noTracker,
+			Grants: []iam.Grant{iam.GrantKnowledge}})
+	// Both leads' tokens are bound to seat ana, the way `crewlet iam bind`
+	// binds them — the fakes are the inbox test's.
+	seats := map[string]string{
+		iam.TokenLogin("lead"):                 "ana",
+		iam.TokenLogin("lead-without-tracker"): "ana",
+	}
 	bound := auth.SeatBindings{Directory: inboxBindings(seats), Chart: inboxChart(seats)}
 	for _, c := range []struct {
 		name  string
+		token string
 		chart authz.Chart
 		want  int
 	}{
-		{"a chart that answers", leadOf{lead: "ana", report: "bo"}, http.StatusOK},
-		{"a chart that answers no", leadOf{lead: "ana", report: "cy"}, http.StatusForbidden},
-		{"a surface holding no chart", authz.NoChart{}, http.StatusServiceUnavailable},
+		{"a chart that answers", token, leadOf{lead: "ana", report: "bo"}, http.StatusOK},
+		{"a chart that answers no", token, leadOf{lead: "ana", report: "cy"}, http.StatusForbidden},
+		{"a surface holding no chart", token, authz.NoChart{}, http.StatusServiceUnavailable},
+		// THE QUEUE IS THE TRACKER'S: the chart says ana leads bo, and a
+		// lead holding no tracker still reads none of bo's queue — the
+		// question takes the app, and so does the relation arm behind it.
+		{"a lead holding no tracker", noTracker, leadOf{lead: "ana", report: "bo"},
+			http.StatusForbidden},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -60,7 +78,7 @@ func TestALeadReadsAReportsInboxThroughTheApp(t *testing.T) {
 			})
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/work/inbox?handle=bo", nil)
-			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Authorization", "Bearer "+c.token)
 			a.ServeHTTP(rec, req)
 			if rec.Code != c.want {
 				t.Errorf("GET /work/inbox?handle=bo as bo's lead = %d, want %d\n%s",
@@ -85,10 +103,10 @@ func TestALeadReadsAReportsInboxThroughTheApp(t *testing.T) {
 // not say what would change the answer. A refused WATCH says it too.
 func TestARefusedPersonalQuestionNamesItsReasonAndItsGrants(t *testing.T) {
 	t.Parallel()
-	const token = "a-colleague-holding-state-read-and-nothing-else"
+	const token = "a-colleague-holding-the-tracker-and-nothing-else"
 	b := config.DefaultBootstrap()
 	authorize(&b, config.APIToken{ID: "colleague", Token: token,
-		Grants: []iam.Grant{iam.GrantStateRead}})
+		Grants: []iam.Grant{iam.GrantTracker}})
 	a := newApp(t, api.Options{
 		Bootstrap: &b,
 		SeatBindings: auth.SeatBindings{
@@ -103,12 +121,12 @@ func TestARefusedPersonalQuestionNamesItsReasonAndItsGrants(t *testing.T) {
 		reason string
 		grants []any
 	}{
-		// Somebody else's queue: no relation, and the admin grant would
-		// have admitted it.
+		// Somebody else's queue: no relation, and admin would have
+		// admitted it.
 		{"/work/inbox?handle=bo", string(authz.ReasonNotSelf),
-			[]any{string(iam.GrantFleetOperate)}},
-		// A question whose own grant the caller does not carry.
-		{"/events", string(authz.ReasonNoGrant), []any{string(iam.GrantAuditRead)}},
+			[]any{string(iam.GrantAdmin)}},
+		// A question whose own permission the caller does not carry.
+		{"/events", string(authz.ReasonNoGrant), []any{string(iam.GrantAdmin)}},
 	} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, c.path, nil)
@@ -146,13 +164,13 @@ func TestARefusedPersonalQuestionNamesItsReasonAndItsGrants(t *testing.T) {
 	}{
 		{map[string]any{"kind": "query", "id": 1, "what": "work_inbox",
 			"params": map[string]any{"handle": "bo"}},
-			string(authz.ReasonNotSelf), []any{string(iam.GrantFleetOperate)}},
+			string(authz.ReasonNotSelf), []any{string(iam.GrantAdmin)}},
 		{map[string]any{"kind": "query", "id": 2, "what": "events"},
-			string(authz.ReasonNoGrant), []any{string(iam.GrantAuditRead)}},
+			string(authz.ReasonNoGrant), []any{string(iam.GrantAdmin)}},
 		// A WATCH of somebody else's inbox is decided by the same rule
 		// and refused with the same two facts.
 		{map[string]any{"kind": "watch", "seat": "bo"},
-			string(authz.ReasonNotSelf), []any{string(iam.GrantFleetOperate)}},
+			string(authz.ReasonNotSelf), []any{string(iam.GrantAdmin)}},
 	} {
 		sock.send(t, c.frame)
 		body := nextError(t, sock)

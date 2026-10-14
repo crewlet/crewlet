@@ -76,7 +76,7 @@ func TestAViewStripIsTheCallersOwn(t *testing.T) {
 			t.Parallel()
 			caller := c.caller
 			caller.ID, caller.Stage = uuid.New(), iam.StageActive
-			caller.Grants = []iam.Grant{iam.GrantStateRead}
+			caller.Grants = []iam.Grant{iam.GrantTracker}
 			trk := newFakeTracker()
 			var listed bool
 			for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
@@ -162,7 +162,7 @@ func TestAPersonalVerbIsDecidedOnTheRecordItWrites(t *testing.T) {
 			t.Parallel()
 			caller := c.caller
 			caller.ID, caller.Stage = uuid.New(), iam.StageActive
-			caller.Grants = []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite}
+			caller.Grants = []iam.Grant{iam.GrantTracker}
 			ctx := iam.WithPrincipal(context.Background(), caller)
 
 			var mu sync.Mutex

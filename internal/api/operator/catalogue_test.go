@@ -47,8 +47,7 @@ func TestEveryTransportServesTheSameCatalogue(t *testing.T) {
 		},
 		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}},
 	})})
-	ops := machine("token:ops-bot", iam.GrantStateRead, iam.GrantWorkWrite,
-		iam.GrantKnowledgeWrite)
+	ops := machine("token:ops-bot", iam.Apps...)
 	sess := dialOperator(t, s, ops)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -126,7 +125,7 @@ func TestARetriedPageCommentCarriesItsOperation(t *testing.T) {
 		Pages: builtin.PageDeps{Reader: kb, Writer: kb},
 	})})
 	ctx := iam.WithPrincipal(t.Context(),
-		person("jane.founder", "jane-founder", iam.GrantKnowledgeWrite))
+		person("jane.founder", "jane-founder", iam.GrantKnowledge))
 	args := map[string]any{"page": "Runbook", "body": "the step is wrong"}
 	key := statelog.NewOpID(time.Now(), "")
 	comment := func(key string) {
@@ -166,7 +165,7 @@ func TestARetriedPageCommentCarriesItsOperation(t *testing.T) {
 // after a ledger loss decides a second time.
 func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 	t.Parallel()
-	ctx := iam.WithPrincipal(t.Context(), machine("token:founder", iam.GrantWorkWrite))
+	ctx := iam.WithPrincipal(t.Context(), machine("token:founder", iam.GrantTracker))
 	key := statelog.NewOpID(time.Now().Add(-time.Hour), "")
 	named, err := operator.WorkActor(operator.WithKey(ctx, key), nil)
 	if err != nil {

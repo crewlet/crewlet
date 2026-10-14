@@ -95,20 +95,17 @@ api:
                     #   this on loopback; leave the line out anywhere else.
                     #   Nobody holds a password yet: the token below invites
                     #   the first person onto their seat (step 4).
-    max_grants:     # THE CEILING on what this deployment will ever let a
-                    #   directory record confer. Required once a port is set.
-      [state:read, audit:read, config:read, secrets:read, work:write,
-       knowledge:write, config:write, secrets:write, fleet:operate,
-       people:manage, sandbox:run]
+    admin: serve    # whether THIS node grants admin to those who hold it:
+                    #   `serve`, or `refuse` to clamp admin away here and keep
+                    #   every app. Required once a port is set.
     tokens:         # at least one is REQUIRED once a port is set: every route
                     #   needs a credential, and this is also what puts the
                     #   first person on their seat on a fresh deployment.
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26 characters at minimum
-        grants:     # what this credential may do — required and non-empty.
-          [state:read, audit:read, config:read, secrets:read, work:write,
-           knowledge:write, config:write, secrets:write, fleet:operate,
-           people:manage, sandbox:run]
+        grants: [admin]   # what this credential may do — required and
+                          #   non-empty: admin, tracker, knowledge. Admin
+                          #   runs the company and includes every app.
 
 secrets:                  # REQUIRED. Every record on every state log — the
                           #   tracker's, the knowledge base's — is signed
@@ -453,9 +450,10 @@ from the keyboard, and on the seat's page). Press **Invite** — the dialog is
 for that seat and offers no other — and fill in
 
 - **your email address** — what the invitation is held against;
-- **the grants** — tick all eleven for yourself (the founder token holds them
-  all, and nobody can confer a grant they do not hold). Keep `people:manage`,
-  or nobody after you can be invited or created except with the token again.
+- **your access** — tick **Admin**, which ticks and locks both apps (Tracker
+  and Knowledge) beside it. The founder token holds `admin`, and nobody can
+  confer a permission they do not hold. Keep Admin, or nobody after you can be
+  invited or created except with the token again.
 
 The link it shows is the credential and is shown **once** — copy it now. The
 engine sends no mail; for anybody else you invite, getting it to them is
@@ -501,9 +499,11 @@ and then carries on. The founder token stays: it is what a pipeline uses, and
 the way back in when nobody who can sign in is available — a machine
 credential, not how people should be signing in. Everybody after you arrives
 the same way, on a seat of their own: add a human seat for them (**Agents ›
-Edit org › Add human seat**), and once it is saved whoever holds
-`people:manage` invites them onto it, or creates them on it, from its card in
-the org chart.
+Edit org › Add human seat**), and once it is saved an administrator invites
+them onto it, or creates them on it, from its card in the org chart — with
+both apps ticked by default and Admin not. A person handed no permission at all
+still sees the company's overview: the org chart, what the agents are doing,
+spend and schedules — just not its tracker or its knowledge base.
 
 **From a shell instead**, `crewlet iam invite` issues the same invitation
 through the running node, authenticating with `CREWLET_API_TOKEN` like every
@@ -513,9 +513,12 @@ every invitation names the seat its redemption binds — and `crewlet iam seats
 
 ```bash
 export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
-crewlet iam invite you@example.com -seat founder \
-  -grants state:read,audit:read,config:read,secrets:read,work:write,knowledge:write,config:write,secrets:write,fleet:operate,people:manage,sandbox:run
+crewlet iam invite you@example.com -seat founder -grants admin
 ```
+
+`-grants admin` stores `admin` and both apps beside it; `-grants` takes
+`admin`, `tracker`, `knowledge` or `none`, and left out on an invitation it
+sends every app and not admin.
 
 ```
 invitation 0192f4c8-…
@@ -626,7 +629,7 @@ the identity directory, and yours is you. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
 Once you sign in as a person, give the assistant **your own** token rather than
-the deployment's. It acts as you — your seat, your grants, its writes carrying
+the deployment's. It acts as you — your seat, your permissions, its writes carrying
 your seat's handle with author kind `human` — and every write it
 makes also records `pat:<its id>`, so what the assistant did stays tellable
 from what you did. Nobody else can mint it, an administrator included; you mint
@@ -684,10 +687,10 @@ form that starts the company from a template, has the engine check it, and
 creates it with `PUT /config`. Keep its **Add a seat for yourself** ticked:
 that seat is the one you then invite yourself onto, from the org chart, as
 step 4 describes. The builder reads and writes the company
-document, so it needs a session whose grants reach it: the one you signed in
-with using `$CREWLET_API_TOKEN_FOUNDER` carries the `state:read`,
-`config:read` and `config:write` it uses, and a person you invite needs them
-among their grants. The dashboard adds no model provider — Settings › Models &
+document, so it needs a session holding `admin`: the one you signed in with
+using `$CREWLET_API_TOKEN_FOUNDER` carries it, and a person you invite needs
+it ticked to build the company — or to lead a unit, whose own team they may
+edit without it. The dashboard adds no model provider — Settings › Models &
 keys edits one the configuration already declares — so one step stays outside
 it. Until it is done the company runs and no agent seat takes a turn; whatever
 is sent to a seat waits on its inbox. Add `providers.llm` afterwards with a

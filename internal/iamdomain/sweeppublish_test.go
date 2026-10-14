@@ -183,24 +183,22 @@ func TestABucketIsSweptOnlyOnceItIsASlackPastItsHorizon(t *testing.T) {
 	}
 }
 
-// THE SWEEP TAKES THE DEPLOYMENT'S GRANT, and administering people is not it.
+// THE SWEEP IS ADMIN'S, and using the company's apps is not it.
 //
 // What a sweep decides is how long the authentication trail is kept, which is
-// Tier A's `api.audit` — a fact about the deployment. A party holding only
-// people:manage is refused before anything is read; the control is the node's
-// own grant, which is what the duty publishes with.
-func TestTheSweepTakesTheDeploymentsGrant(t *testing.T) {
+// Tier A's `api.audit` — a fact about the deployment. A party using every app
+// is refused before anything is read; the control is the node's own
+// permission, which is what the duty publishes with.
+func TestTheSweepIsAdmins(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	// NARROWED to people:manage alone: the rig's own party holds every
-	// grant, so the gate is exercised by saying which one is missing.
-	administrator := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
-		[]iam.Grant{iam.GrantPeopleManage}))
-	_, err := administrator.Sweep(t.Context(), defaultHorizons)
+	// NARROWED to the apps: the rig's own party holds every permission,
+	// so the gate is exercised by saying which one is missing.
+	user := rig.writer.As(principalNamed("ana.user", iam.KindPerson, iam.Apps))
+	_, err := user.Sweep(t.Context(), defaultHorizons)
 	if !errors.Is(err, iamdomain.ErrRefused) {
-		t.Fatalf("a party holding only %s swept the trail (err %v) — whoever "+
-			"administers people would decide how long their own changes are "+
-			"kept", iam.GrantPeopleManage, err)
+		t.Fatalf("a party using every app swept the trail (err %v) — the "+
+			"deployment decides how long its own trail is kept", err)
 	}
 	if _, err := rig.sweeper(time.Now()).Sweep(t.Context(), defaultHorizons); err != nil {
 		t.Fatalf("the deployment's own writer was refused: %v", err)
@@ -229,7 +227,7 @@ func TestAZeroHorizonIsRefused(t *testing.T) {
 
 // sweeper is this rig's writer acting as the node, with its clock at `now`.
 func (r *writeRig) sweeper(now time.Time) *iamdomain.Writer {
-	w := r.writer.As(principalNamed("node-a", iam.KindMachine, []iam.Grant{iam.GrantFleetOperate}))
+	w := r.writer.As(principalNamed("node-a", iam.KindMachine, []iam.Grant{iam.GrantAdmin}))
 	w.Now = func() time.Time { return now }
 	return w
 }

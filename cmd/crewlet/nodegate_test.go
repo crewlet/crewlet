@@ -57,7 +57,7 @@ func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 	// wiring that put one where the other goes is caught.
 	by := iam.Principal{ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
 		Stage: iam.StageActive, Via: "pat:0192f00d-0000-7000-8000-00000000000a",
-		Grants: []iam.Grant{iam.GrantFleetOperate}}
+		Grants: []iam.Grant{iam.GrantAdmin}}
 	res, err := gate.Evict(t.Context(), engine.GateRequest{
 		Node: "node-9", OpID: statelog.NewOpID(time.Now(), "evict-node-9"), By: by,
 	})

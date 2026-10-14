@@ -72,52 +72,42 @@ func TestASelfArmsOwnWindowIsARealOneOnARowThatHasOne(t *testing.T) {
 	}
 }
 
-// ENDING EVERY SESSION IN THE COMPANY TAKES BOTH HATS.
+// ENDING EVERY SESSION IN THE COMPANY IS ADMIN'S, AND ASKS A RECENT PROOF.
 //
-// The deployment's grant runs a restore and the directory's decides who may
-// act; this gesture is both at once — it ends every person's authority and
-// every machine token in one record — so it asks for both, and
-// internal/iamdomain's record holds the same rule. A refusal names what the
-// caller LACKS, which is the only thing that would change the answer: an SRE
-// holding the deployment's grant is told the directory's is missing. And it
-// asks the step-up window of a caller holding both.
-//
-// Mutation: admit on the deployment's grant alone and the SRE is let through;
-// name both grants on every refusal and the SRE is told to ask for one they
-// hold.
-func TestEndingEverySessionInTheCompanyTakesBothHats(t *testing.T) {
+// It ends every person's authority and every machine token in one record, so
+// it is admin's alone — every app together does not reach it, and a refusal
+// names admin and nothing else — and it asks the step-up window of an
+// administrator whose proof is old. Mutation: admit on any app and the
+// colleague holding both is let through; drop the window and the stale
+// administrator is.
+func TestEndingEverySessionInTheCompanyIsAdmins(t *testing.T) {
 	t.Parallel()
 	decide := func(p iam.Principal) authz.Decision {
 		return authz.Decide(t.Context(), p, authz.ActionSessionInvalidate,
 			authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, decidedAt)
 	}
 	for _, c := range []struct {
-		name    string
-		holds   []iam.Grant
-		missing []iam.Grant
+		name  string
+		holds []iam.Grant
 	}{
-		{"the deployment's grant alone", []iam.Grant{iam.GrantFleetOperate},
-			[]iam.Grant{iam.GrantPeopleManage}},
-		{"the directory's grant alone", []iam.Grant{iam.GrantPeopleManage},
-			[]iam.Grant{iam.GrantFleetOperate}},
-		{"neither", nil, []iam.Grant{iam.GrantFleetOperate, iam.GrantPeopleManage}},
+		{"every app", iam.Apps},
+		{"nothing", nil},
 	} {
 		d := decide(person("sam.sre", c.holds...))
 		if d.Allowed || d.Reason != authz.ReasonNoGrant ||
-			!slices.Equal(d.Grants, c.missing) {
-			t.Errorf("%s decided %+v, want refused naming exactly %v", c.name,
-				d, c.missing)
+			!slices.Equal(d.Grants, []iam.Grant{iam.GrantAdmin}) {
+			t.Errorf("%s decided %+v, want refused naming exactly [admin]", c.name, d)
 		}
 	}
-	both := person("ana.admin", iam.GrantFleetOperate, iam.GrantPeopleManage)
-	if d := decide(both); !d.Allowed || d.Reason != authz.ReasonGrant {
-		t.Errorf("both grants decided %+v, want admitted on the grant", d)
+	admin := person("ana.admin", iam.GrantAdmin)
+	if d := decide(admin); !d.Allowed || d.Reason != authz.ReasonGrant {
+		t.Errorf("admin decided %+v, want admitted on the permission", d)
 	}
-	both.ReauthAt = decidedAt.Add(-2 * time.Hour).Add(time.Hour)
-	if d := decide(both); d.Allowed || d.Reason != authz.ReasonStepUp ||
+	admin.ReauthAt = decidedAt.Add(-2 * time.Hour).Add(time.Hour)
+	if d := decide(admin); d.Allowed || d.Reason != authz.ReasonStepUp ||
 		d.Recency != iam.RecencyStepUp {
-		t.Errorf("both grants on a proof two hours old decided %+v, want a "+
-			"step-up naming %s", d, iam.RecencyStepUp)
+		t.Errorf("admin on a proof two hours old decided %+v, want a step-up "+
+			"naming %s", d, iam.RecencyStepUp)
 	}
 }
 
@@ -145,7 +135,7 @@ func TestEndingSomebodyElsesSessionsAsksForTheAdministratorsProof(t *testing.T) 
 		return authz.Object{Kind: authz.KindPerson, Owner: p.ID.String()}
 	}
 
-	admin := stale(person("ana.admin", iam.GrantPeopleManage), 2*time.Hour)
+	admin := stale(person("ana.admin", iam.GrantAdmin), 2*time.Hour)
 	d := authz.Decide(t.Context(), admin, authz.ActionSessionEnd, about(colleague),
 		authz.NoChart{}, decidedAt)
 	if d.Allowed || d.Reason != authz.ReasonStepUp || d.Recency != iam.RecencyStepUp {
@@ -153,12 +143,12 @@ func TestEndingSomebodyElsesSessionsAsksForTheAdministratorsProof(t *testing.T) 
 			"colleague's sessions decided %+v, want a step-up refusal naming %s",
 			d, iam.RecencyStepUp)
 	}
-	fresh := stale(person("ana.admin", iam.GrantPeopleManage), time.Minute)
+	fresh := stale(person("ana.admin", iam.GrantAdmin), time.Minute)
 	if d := authz.Decide(t.Context(), fresh, authz.ActionSessionEnd,
 		about(colleague), authz.NoChart{}, decidedAt); !d.Allowed ||
 		d.Reason != authz.ReasonGrant {
 		t.Errorf("the same administrator a minute after proving decided %+v, "+
-			"want admitted on the grant", d)
+			"want admitted on the permission", d)
 	}
 	weekOld := stale(colleague, 7*24*time.Hour)
 	if d := authz.Decide(t.Context(), weekOld, authz.ActionSessionEnd,
@@ -188,67 +178,75 @@ func TestNoToolAsksForAProof(t *testing.T) {
 	}
 }
 
-// EVERY OPERATOR WRITE ASKS FOR A PROOF, or says here why not.
+// EVERY ADMIN ROW ASKS FOR A PROOF, or says here why not.
 //
-// Held by the GRANT rather than by a second list of verbs: a row gated on a
-// capability that changes the deployment or the company's people asks for a
-// step-up unless it is one of the named exceptions below, each with its
-// reason. A new row on one of those grants therefore either asks for a proof or
-// arrives in this diff with a sentence defending why it does not.
-func TestEveryOperatorWriteAsksForAProofOrSaysWhyNot(t *testing.T) {
+// Held by the CLASS rather than by a second list of verbs: a row that only an
+// administrator may take changes the company, the deployment or its people,
+// so it asks for a step-up unless it is one of the named exceptions below,
+// each with its reason. A new admin row therefore either asks for a proof or
+// arrives in this diff with a sentence defending why it does not. The PURGES
+// are deliberately not excused: nothing undoes one.
+func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 	t.Parallel()
-	writes := map[iam.Grant]bool{
-		iam.GrantConfigWrite: true, iam.GrantSecretWrite: true,
-		iam.GrantSecretRead: true, iam.GrantPeopleManage: true,
-		iam.GrantFleetOperate: true,
-	}
 	unproved := map[authz.Action]string{
+		authz.ActionConfigRead: "a read of the company document changes nothing",
+		authz.ActionSecretList: "a listing of credential names changes nothing, " +
+			"and hands over no value",
+		authz.ActionSetupRead: "a read of what the integrations need changes " +
+			"nothing",
 		authz.ActionFleetRead: "a read of the deployment's own controls " +
 			"changes nothing",
+		authz.ActionAuditRead: "a read of the trail changes nothing",
 		authz.ActionCatalogueWrite: "a tool, asked through the operator MCP " +
 			"and a seat's registry, neither of which is a step-up surface",
 		authz.ActionSkillPageWrite: "asked from inside the page tools, on the " +
-			"work and knowledge surfaces the design leaves out of step-up",
-		authz.ActionWorkPurge: "the work surface, which the design leaves " +
-			"out of step-up — the admin grant and a person are its bar",
-		authz.ActionPagePurge: "the knowledge surface, for the purge above's " +
-			"reason",
+			"knowledge surface the design leaves out of step-up",
 	}
+	walked := 0
 	for _, a := range authz.Actions() {
 		class, _ := authz.ClassOf(a)
-		grant, _ := authz.GrantOf(a)
 		recency, _ := authz.RecencyOf(a)
-		if class != authz.ClassOperator || !writes[grant] {
+		if class != authz.ClassAdmin {
 			continue
 		}
+		walked++
 		why, excused := unproved[a]
 		switch {
 		case recency.Demands() && excused:
 			t.Errorf("%s asks for a %s proof and is also excused (%q) — drop "+
 				"the excuse", a, recency, why)
 		case !recency.Demands() && !excused:
-			t.Errorf("%s is gated on %s and asks for no proof, with nothing "+
-				"here saying why", a, grant)
+			t.Errorf("%s is admin's and asks for no proof, with nothing here "+
+				"saying why", a)
 		}
 	}
+	if walked == 0 {
+		t.Fatal("no row is admin's, so this walk certifies nothing")
+	}
 	for a := range unproved {
-		if _, ok := authz.RecencyOf(a); !ok {
-			t.Errorf("%s is excused and the table has no row for it", a)
+		if class, ok := authz.ClassOf(a); !ok || class != authz.ClassAdmin {
+			t.Errorf("%s is excused and is not an admin row", a)
 		}
 	}
 }
 
 // A STALE PROOF IS REFUSED EXACTLY WHERE THE ROW ASKS FOR ONE.
 //
-// One principal holding every grant, at four ages of proof, against every
-// verb: nothing it is refused may be a grant or a relation, so every refusal
+// One principal holding every permission, at four ages of proof, against
+// every verb — a seat for the seat-only ones and a person for the rest —
+// nothing it is refused may be a permission or a relation, so every refusal
 // here is the recency and nothing else. Inside the hour nothing is refused,
 // which is the control for the two ages that refuse every step-up row.
 func TestAStaleProofIsRefusedExactlyWhereTheRowAsksForOne(t *testing.T) {
 	t.Parallel()
-	holding := func(age time.Duration) iam.Principal {
+	// A SEAT-ONLY ROW IS DECIDED AS A SEAT, every other as a person: each
+	// is refused to the other kind before any proof is asked.
+	holding := func(age time.Duration, kind iam.Kind) iam.Principal {
 		p := iam.Principal{ID: uuid.New(), Login: "jane.doe",
-			Kind: iam.KindPerson, Stage: iam.StageActive, Grants: iam.AllGrants}
+			Kind: kind, Stage: iam.StageActive, Grants: iam.AllGrants}
+		if kind == iam.KindSeat {
+			p.Login, p.Seat = "sre", "sre"
+		}
 		if age < 0 {
 			return p // nothing ever proved
 		}
@@ -266,8 +264,11 @@ func TestAStaleProofIsRefusedExactlyWhereTheRowAsksForOne(t *testing.T) {
 			map[iam.Recency]bool{iam.RecencyStepUp: true}},
 		{"never proved", -1, map[iam.Recency]bool{iam.RecencyStepUp: true}},
 	} {
-		p := holding(c.age)
 		for _, a := range authz.Actions() {
+			p := holding(c.age, iam.KindPerson)
+			if seatOnly, _ := authz.SeatOnlyOf(a); seatOnly {
+				p = holding(c.age, iam.KindSeat)
+			}
 			recency, _ := authz.RecencyOf(a)
 			object := everythingAbout(p)
 			d := authz.Decide(t.Context(), p, a, object, nimbus(), decidedAt)
@@ -283,7 +284,7 @@ func TestAStaleProofIsRefusedExactlyWhereTheRowAsksForOne(t *testing.T) {
 			}
 			if !d.Allowed {
 				t.Errorf("%s: %s (asks %s) was refused (%s) — a principal "+
-					"holding every grant was stopped by something other "+
+					"holding every permission was stopped by something other "+
 					"than a proof it holds", c.name, a, recency, d.Reason)
 			}
 			if d.Recency != "" {
@@ -296,9 +297,8 @@ func TestAStaleProofIsRefusedExactlyWhereTheRowAsksForOne(t *testing.T) {
 
 // everythingAbout is an object every relation rule admits the principal on —
 // its own record under its login (the self class compares nothing else and
-// takes no admin grant), a comment it wrote, a container the admin grant
-// covers — so the only refusal left for a principal holding every grant is
-// how recently it proved who it is.
+// takes no admin path), a comment it wrote, a container admin covers — so the only refusal left for a principal holding every permission
+// is how recently it proved who it is.
 func everythingAbout(p iam.Principal) authz.Object {
 	return authz.Object{Kind: authz.KindPerson, ID: p.Login, Owner: p.Login,
 		Author: p.Login, Container: "PLATFORM", ContainerKind: authz.KindProject}
@@ -307,17 +307,17 @@ func everythingAbout(p iam.Principal) authz.Object {
 // THE PROOF IS ASKED AFTER THE RULE ADMITS.
 //
 // A principal who could never take the verb is told what it lacks. Asked
-// first, the proof would send them through a step-up only to be refused by a
-// grant the step-up was never going to give them.
+// first, the proof would send them through a step-up only to be refused for a
+// permission the step-up was never going to give them.
 func TestAPrincipalTheRuleRefusesIsNotSentToStepUp(t *testing.T) {
 	t.Parallel()
 	stale := iam.Principal{ID: uuid.New(), Login: "jane.doe",
 		Kind: iam.KindPerson, Stage: iam.StageActive,
-		Grants: []iam.Grant{iam.GrantStateRead}}
+		Grants: []iam.Grant{iam.GrantTracker}}
 	d := authz.Decide(t.Context(), stale, authz.ActionSecretReveal,
 		authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, decidedAt)
 	if d.Allowed || d.Reason != authz.ReasonNoGrant || d.Recency != "" {
-		t.Errorf("a stale caller without the grant decided %+v, want no_grant "+
+		t.Errorf("a stale caller without admin decided %+v, want no_grant "+
 			"and no window", d)
 	}
 	// And the UNKNOWN arm is still unknown: a chart that cannot answer is
@@ -340,7 +340,7 @@ func TestAPrincipalTheRuleRefusesIsNotSentToStepUp(t *testing.T) {
 // surface refuses.
 func TestAStepUpRefusalIsItsOwnCodeAndNamesTheWindow(t *testing.T) {
 	t.Parallel()
-	stale := person("jane.doe", iam.GrantSecretRead, iam.GrantConfigRead)
+	stale := person("jane.doe", iam.GrantAdmin)
 	stale.ReauthAt = decidedAt.Add(-time.Second)
 	guard := authz.ContextGuard(authz.NoChart{})
 	check := func(t *testing.T, rec *httptest.ResponseRecorder) {

@@ -21,8 +21,8 @@ func TestTheZeroValueOfEveryNamedTypeIsInvalid(t *testing.T) {
 		known func() bool // Valid() on a value this build declares
 	}{
 		{"Kind", func() bool { return Kind("").Valid() }, func() bool { return KindSeat.Valid() }},
-		{"Grant", func() bool { return Grant("").Valid() }, func() bool { return GrantConfigWrite.Valid() }},
-		{"Access", func() bool { return Access("").Valid() }, func() bool { return AccessWrite.Valid() }},
+		{"Grant", func() bool { return Grant("").Valid() }, func() bool { return GrantAdmin.Valid() }},
+		{"AdminPosture", func() bool { return AdminPosture("").Valid() }, func() bool { return AdminRefuse.Valid() }},
 		{"Stage", func() bool { return Stage("").Valid() }, func() bool { return StageActive.Valid() }},
 		{"ActorKind", func() bool { return ActorKind("").Valid() }, func() bool { return ActorOperator.Valid() }},
 		{"Resolution", func() bool { return Resolution("").Valid() }, func() bool { return Unknown.Valid() }},
@@ -46,25 +46,26 @@ func TestTheZeroValueOfEveryNamedTypeIsInvalid(t *testing.T) {
 	if !StageActive.MayAct() {
 		t.Error("StageActive may NOT act, so the check above proves nothing")
 	}
-	if got := Grant("").Access(); got != "" {
-		t.Errorf("the zero Grant classifies as %q, want the invalid zero Access", got)
+	if Grant("").IsApp() || (Principal{Grants: []Grant{""}}).Can("") {
+		t.Error("the zero Grant reads as an app or is carried as a permission")
 	}
 }
 
 // TestEveryDeclaredSetIsTheSizeItClaims pins the counts the package doc and
 // the constants' own comments state, so a member added or removed without a
-// reader is caught rather than quietly changing what "the ten" means.
+// reader is caught rather than quietly changing what "the three" means.
 func TestEveryDeclaredSetIsTheSizeItClaims(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		got  int
 		want int
 	}{
-		{"AllGrants", len(AllGrants), 11},
+		{"AllGrants", len(AllGrants), 3},
+		{"Apps", len(Apps), 2},
+		{"AdminPostures", len(AdminPostures), 2},
 		{"Kinds", len(Kinds), 4},
 		{"ActorKinds", len(ActorKinds), 4},
 		{"Stages", len(Stages), 5},
-		{"Accesses", len(Accesses), 2},
 		{"Resolutions", len(Resolutions), 3},
 	} {
 		if tc.got != tc.want {

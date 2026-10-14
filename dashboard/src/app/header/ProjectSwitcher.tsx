@@ -69,6 +69,7 @@ import {
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRecents, type Recent } from "~/lib/recents.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { useConfigWriteAccess, type ConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { unfinished } from "~/lib/work.ts";
 import { rankProjects } from "~/lib/projectRank.ts";
@@ -373,10 +374,12 @@ export function ProjectSwitcherProvider({ children }: { children: ReactNode }) {
   const nav = useNavigator();
   const recents = useRecents();
   const newProjectAccess = useConfigWriteAccess();
-  // A BROWSER THE ENGINE SERVES NO COMPANY ASKS IT NOTHING (no access yet, or
-  // refused), as the palette does not: the listing would wait on a socket
-  // nobody dials and draw a panel that never loads.
-  const served = useConnection().accessRefused === null;
+  // A BROWSER THE ENGINE REFUSED ASKS IT NOTHING, as the palette does not:
+  // the listing would wait on a socket nobody dials and draw a panel that
+  // never loads. NOR DOES A READER WITHOUT TRACKER, whose every project the
+  // engine would refuse — the palette offers them no switch to open.
+  const tracker = useViewer().tracker;
+  const served = useConnection().accessRefused === null && tracker;
   const at = useMemo(() => scopeAt(route.path, route.query), [route.path, route.query]);
 
   const [state, setState] = useState({ open: false, centred: false });

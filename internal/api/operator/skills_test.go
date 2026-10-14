@@ -79,21 +79,20 @@ func (k *skillPages) EditComment(_ context.Context, _ pages.Actor, id, cid, _ st
 	return pages.Comment{ID: cid}, written, err
 }
 
-// A TOOL SKILL IS CONFIGURATION, AND THE OPERATOR'S ASSISTANT NEEDS THE GRANT.
+// A TOOL SKILL IS CONFIGURATION, AND THE OPERATOR'S ASSISTANT NEEDS ADMIN.
 //
 // internal/pages refuses an AGENT every write into the skills container and
 // exempts every person, because whether a person may is a capability and the
 // store holds no grants. So over this surface — whose every caller is a person
-// or a credential — a token holding only knowledge:write rewrote the
-// instructions injected into every seat's turn. A skill page takes config:write
-// on top of the colleague write, and an ordinary container is untouched.
-func TestAToolSkillWriteOverTheOperatorSurfaceNeedsConfigWrite(t *testing.T) {
+// or a credential — a token holding only the knowledge base rewrote the
+// instructions injected into every seat's turn. A skill page takes admin, and
+// an ordinary container is the knowledge base's as ever.
+func TestAToolSkillWriteOverTheOperatorSurfaceNeedsAdmin(t *testing.T) {
 	t.Parallel()
 	kb := &skillPages{}
 	dir := &directory{people: map[string]iam.Principal{
-		"writer": machine("token:writer", iam.GrantStateRead, iam.GrantKnowledgeWrite),
-		"admin": machine("token:admin", iam.GrantStateRead, iam.GrantKnowledgeWrite,
-			iam.GrantConfigWrite),
+		"writer": machine("token:writer", iam.GrantKnowledge),
+		"admin":  machine("token:admin", iam.GrantAdmin),
 	}}
 	s := newSurface(t, operator.Options{
 		Halves: fixed(operator.Halves{Pages: builtin.PageDeps{
@@ -134,7 +133,7 @@ func TestAToolSkillWriteOverTheOperatorSurfaceNeedsConfigWrite(t *testing.T) {
 	} {
 		refused, out := call("writer", args.tool, args.args)
 		if !refused {
-			t.Errorf("%s: knowledge:write alone wrote into the skills container: %s",
+			t.Errorf("%s: the knowledge base alone wrote into the skills container: %s",
 				name, out)
 		}
 		if !strings.Contains(out, string(authz.ActionSkillPageWrite)) {
@@ -146,17 +145,17 @@ func TestAToolSkillWriteOverTheOperatorSurfaceNeedsConfigWrite(t *testing.T) {
 	}
 
 	if refused, out := call("admin", builtin.WritePageTool, create); refused {
-		t.Errorf("config:write could not publish a tool skill: %s", out)
+		t.Errorf("admin could not publish a tool skill: %s", out)
 	}
 	if refused, out := call("admin", builtin.SavePageTool, save); refused {
-		t.Errorf("config:write could not change a tool skill: %s", out)
+		t.Errorf("admin could not change a tool skill: %s", out)
 	}
 
-	// AN ORDINARY CONTAINER IS THE COLLEAGUE WRITE IT ALWAYS WAS, or the
-	// rule would be a ban on writing pages without config:write.
+	// AN ORDINARY CONTAINER IS THE KNOWLEDGE BASE'S AS EVER, or the rule
+	// would be a ban on writing pages without admin.
 	if refused, out := call("writer", builtin.WritePageTool,
 		map[string]any{"container": "ENG", "title": "Runbook", "body": "x"}); refused {
-		t.Errorf("knowledge:write could not write an ordinary page: %s", out)
+		t.Errorf("the knowledge base could not write an ordinary page: %s", out)
 	}
 	if got, want := kb.writes(), []string{
 		"create TS/Deploys", "save p-skill", "create ENG/Runbook",

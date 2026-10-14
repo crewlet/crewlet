@@ -53,11 +53,20 @@ func (s *Service) workRoutes(mount mounter) {
 
 	route("POST /work/items", task(authz.ActionWorkCreate), (*served).postItem)
 	route("PATCH /work/items/{key}", task(authz.ActionWorkUpdate), (*served).patchItem)
-	route("POST /work/items/{key}/comments", task(authz.ActionWorkComment),
+	// WHO MAY POST TO A THREAD IS A ROW: a tracker holder may say anything
+	// there, and somebody an OPEN ASK on the item names may post the answer
+	// to it and nothing else (internal/authz's asked arm) — and which ask
+	// is open, and whom it names, is only known once the item is read. So
+	// the route admits everybody (`work.thread`) and the tool decides,
+	// exactly as it decides the same call made through the act route or an
+	// assistant. Decided here as `comment_on_work_item` on the bare kind, a
+	// person asked a question without the tracker could never answer it.
+	route("POST /work/items/{key}/comments", task(authz.ActionWorkThread),
 		(*served).postItemComment)
-	// WHO WROTE THE REMARK IS A ROW, so the route admits the colleague
-	// write that commenting is and the handler decides the edit once it
-	// has read the author.
+	// WHO WROTE THE REMARK IS A ROW, so the route admits whoever may comment
+	// with the tracker and the handler decides the edit once it has read
+	// the author. An answer is never edited by somebody without it: the
+	// asked arm covers answering an open ask, not rewriting what was said.
 	route("PATCH /work/items/{key}/comments/{cid}", task(authz.ActionWorkComment),
 		(*served).patchItemComment)
 	// A PLACE ON A BOARD IS `place_work_item`, decided on the task's kind
@@ -68,9 +77,11 @@ func (s *Service) workRoutes(mount mounter) {
 	// doors onto the same verb.
 	route("POST /work/items/{key}/depend", task(authz.ActionWorkUpdate), (*served).postDepend)
 	route("POST /work/items/{key}/relate", task(authz.ActionWorkUpdate), (*served).postRelate)
-	// THE TRASH IS THE ITEM'S PROJECT'S LEAD'S, and which project that is
-	// comes out of the row: the route admits a reader of the board and the
-	// tool decides the verb once it has read it.
+	// THE TRASH IS THE ITEM'S PROJECT LEAD'S OR ITS REPORTER'S, and both the
+	// project and the reporter come out of the row: the route admits a
+	// tracker holder — nobody is ASKED to remove an item, so the asked arm
+	// admits nobody here — and the tool decides the verb once it has read
+	// the item. Every arm of that verb needs the tracker too.
 	route("DELETE /work/items/{key}", task(authz.ActionWorkRead), (*served).deleteItem)
 	route("POST /work/items/{key}/restore", task(authz.ActionWorkRead), (*served).postRestore)
 	// A MOVE IS THE LEAD'S OF THE PROJECT THE ITEM IS IN, which is the row's
@@ -78,8 +89,9 @@ func (s *Service) workRoutes(mount mounter) {
 	// is the retry of one that landed, which the tool answers from the
 	// move's own ledger rather than asking anybody's authority again.
 	route("POST /work/items/{key}/move", task(authz.ActionWorkRead), (*served).postMove)
-	// THE PURGE NEEDS NO ROW TO DECIDE: it is the fleet's grant and never
-	// an agent's, whatever the item is.
+	// THE PURGE NEEDS NO ROW TO DECIDE: it is admin's, after a recent
+	// sign-in, and never an agent's, whatever the item is — an author tidies
+	// their own item into the trash and back, never out of the estate.
 	route("POST /work/items/{key}/purge", authz.Policy{Action: authz.ActionWorkPurge},
 		(*served).postPurge)
 	route("PUT /work/projects/{key}", project(authz.ActionProjectWrite), (*served).putProject)
@@ -235,7 +247,7 @@ func (s *served) putPriorities(w http.ResponseWriter, r *http.Request) {
 // parsing and the same writer through [builtin.MarkInboxFor] and
 // [builtin.SetPinsFor], which resolve the path's name to the record it
 // addresses and decide the verb on THAT — the caller's own by either of their
-// names, somebody else's for the owner or the admin grant — and the tracker's
+// names, somebody else's for the owner or an admin — and the tracker's
 // own rule sits on top: a SEAT never writes a colleague's record. The tools
 // are not widened: no seat, and no assistant, gains a way to name another
 // person's record.
@@ -300,8 +312,8 @@ func (s *served) postRank(w http.ResponseWriter, r *http.Request) {
 // patchItemComment rewrites one remark on a work item, AS ITS AUTHOR.
 //
 // DECIDED TWICE, AND THE TWO ARE DIFFERENT QUESTIONS: the table answers "may
-// you act on this remark" ([authz.ClassAuthored] — its author, or the
-// deployment grant), and the tracker's writer answers "may you rewrite it" —
+// you act on this remark" ([authz.ClassAuthored] — its author, or an
+// admin), and the tracker's writer answers "may you rewrite it" —
 // only its author, because a remark somebody else can rewrite is one
 // attributed to a person who did not make it. An administrator is admitted by
 // the first and refused by the second, which is internal/pages' own rule for

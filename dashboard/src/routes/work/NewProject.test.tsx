@@ -114,10 +114,10 @@ describe("the dialog", () => {
     location.hash = "#/";
   });
 
-  /** The reader: an administrator holding `config:write`, unless a case says otherwise. */
+  /** The reader: an administrator holding Admin, unless a case says otherwise. */
   const ADMIN = {
     login: "ada.admin",
-    grants: ["config:read", "config:write"],
+    grants: ["admin"],
     handle: "pm",
     owner: "pm",
     name: "Ada",
@@ -175,10 +175,10 @@ describe("the dialog", () => {
   });
 
   // A PROJECT KEY IS THE COMPANY GRANT'S: a lead's write that sets one is
-  // refused, so a reader without `config:write` (a lead on their own team
+  // refused, so a reader without Admin (a lead on their own team
   // included) is told the gate's sentence, and nothing is read or offered.
-  test("a reader without config:write is held with the gate's sentence, and the document is not read", async () => {
-    const asked = mount([], { ...ADMIN, login: "lee.lead", grants: ["config:read"] });
+  test("a reader without Admin is held with the gate's sentence, and the document is not read", async () => {
+    const asked = mount([], { ...ADMIN, login: "lee.lead", grants: ["tracker"] });
     const dialog = await screen.findByRole("dialog", { name: "New project" });
     await waitFor(() => expect(dialog.textContent).toContain(CONFIG_WRITE_REASONS.no_grant));
     expect(screen.queryByRole("textbox", { name: "Project key" })).toBeNull();

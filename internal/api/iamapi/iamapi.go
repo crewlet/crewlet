@@ -8,11 +8,11 @@
 // internal/api/auth's exemption list is the whole of what is unguarded, and
 // nothing under /iam is on it.
 //
-// # Three parties ask, and they are not the same party
+// # Two parties ask, and they are not the same party
 //
-// The person a row is ABOUT, whoever manages people, and whoever audits.
-// internal/authz holds that as two classes rather than a condition here, so a
-// REST route and a socket frame cannot answer it differently — and the object
+// The person a row is ABOUT, and an admin. internal/authz holds that as one
+// class rather than a condition here (`directory`), so a REST route and a
+// socket frame cannot answer it differently — and the object
 // a route names is a person ID, never a login, because a login is a value
 // somebody changes and a self check against a mutable name opens the wrong
 // row the day they swap.
@@ -215,11 +215,13 @@ type Options struct {
 	// would answer an empty list that reads as a company with no seats.
 	Seats Seats
 
-	// Ceiling is this node's own `api.auth.max_grants`, which the report
-	// compares a person's declared grants against. Empty means this node
-	// grants nothing, which is a real posture rather than "no ceiling" —
-	// config refuses an absent one on a node that serves.
-	Ceiling []iam.Grant
+	// Admin is this node's own `api.auth.admin`, which the report reads to
+	// say whose admin this node clamps away: a row holding admin on a node
+	// that refuses it declares a permission this node does not honour.
+	// The zero is a node whose posture nobody set, which config refuses on
+	// a node that serves, and which the report reads as clamping nothing
+	// rather than guessing.
+	Admin iam.AdminPosture
 
 	// TokenIDs is THIS NODE's Tier A token labels — never their values —
 	// which `GET /iam/node-tokens` joins to the directory rows holding
@@ -254,7 +256,7 @@ type Service struct {
 	external  string
 	bindings  Bindings
 	seats     Seats
-	ceiling   []iam.Grant
+	admin     iam.AdminPosture
 	tokens    func() []string
 	writers   []string
 	audit     Audit
@@ -294,7 +296,7 @@ func New(opts Options) (*Service, error) {
 		directory: opts.Directory, authority: opts.Authority,
 		opener:   opts.Opener,
 		external: opts.ExternalBase, bindings: opts.Bindings, seats: opts.Seats,
-		ceiling: slices.Clone(opts.Ceiling), tokens: opts.TokenIDs,
+		admin: opts.Admin, tokens: opts.TokenIDs,
 		writers: sortedWriters(opts.CompanyWriters),
 		audit:   opts.Audit,
 		now:     opts.Now,

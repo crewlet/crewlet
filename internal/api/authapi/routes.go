@@ -111,17 +111,17 @@ const tokenLifetime = time.Hour
 // Nothing about the token is enrolled and nothing is copied into the session:
 // its subject is the token's LOGIN (`token:<id>`), and the guard answers that
 // subject from the entry this node holds for it NOW — the same composition the
-// bearer gets, so the grants are the entry's cut to this node's ceiling on
-// each request, a token the identity directory binds to a seat acts as that
-// seat, and removing the entry from the configuration ends the session on the
-// next request. It answers to the entry's ID and not its VALUE: a new value put
-// under the same id leaves the sessions the old one opened working until their
-// hour ends, so an operator answering a leak who must cut them off at once
-// rotates by giving the token a new id. It used to be minted for the token's
-// derived principal id,
-// which no directory row holds: once the start record applied every request
-// answered 401 and cleared the cookie, and before that it served a grantless
-// nobody — and a bound token was refused the exchange outright.
+// bearer gets, so the grants are the entry's as this node's admin posture
+// (`api.auth.admin`) lets it carry them on each request, a token the identity
+// directory binds to a seat acts as that seat, and removing the entry from the
+// configuration ends the session on the next request. It answers to the
+// entry's ID and not its VALUE: a new value put under the same id leaves the
+// sessions the old one opened working until their hour ends, so an operator
+// answering a leak who must cut them off at once rotates by giving the token a
+// new id. It used to be minted for the token's derived principal id, which no
+// directory row holds: once the start record applied every request answered
+// 401 and cleared the cookie, and before that it served a grantless nobody —
+// and a bound token was refused the exchange outright.
 //
 // IT IS STEPPED UP BY CONSTRUCTION, as the bearer is: presenting the token was
 // the proof, and there is nothing else a config-file credential could present.

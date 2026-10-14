@@ -27,6 +27,7 @@ import { Button, type ButtonProps } from "@crewlethq/ui";
 import type { ActionTool } from "~/protocol/act.ts";
 import type { Act } from "~/lib/useAct.ts";
 import { marked } from "~/ui/Problems.tsx";
+import { needsWords } from "~/lib/access.ts";
 
 export interface WriteButtonProps<T extends ActionTool> extends Omit<
   ButtonProps,
@@ -115,10 +116,11 @@ export function WriteButton<T extends ActionTool>({
  * is the one mark a tool's sentence carries for a value — so it is drawn as
  * one, in the refusal's own ink, rather than as punctuation around a word.
  *
- * A REFUSAL ON AUTHORITY SAYS WHAT WOULD CHANGE IT: the grants the deciding
- * rule would have admitted this person on, from the answer itself and never
- * written here — a grant named in this file is a second statement of the
- * rule, and the one that goes stale the day the rule's grant moves.
+ * A REFUSAL ON AUTHORITY SAYS WHAT WOULD CHANGE IT: the access the deciding
+ * rule would have admitted this person on ("needs Tracker access"), from the
+ * answer itself and never written here — a permission named in this file is
+ * a second statement of the rule, and the one that goes stale the day the
+ * rule moves.
  */
 export function RefusalNote<T extends ActionTool>({ write }: { write: Act<T> }) {
   const { refusal, busy } = write;
@@ -128,16 +130,7 @@ export function RefusalNote<T extends ActionTool>({ write }: { write: Act<T> }) 
       <span>{marked(refusal.sentence, "inherit")}</span>
       {refusal.hint && <span className="t-caption">{refusal.hint}</span>}
       {refusal.grants.length > 0 && (
-        <span className="t-caption">
-          Needs{" "}
-          {refusal.grants.map((grant, i) => (
-            <span key={grant}>
-              {i > 0 ? " or " : ""}
-              <code className="inline">{grant}</code>
-            </span>
-          ))}
-          : sign in as somebody who holds it.
-        </span>
+        <span className="t-caption">{needsWords("This", refusal.grants)}</span>
       )}
       {refusal.retryable && (
         <Button size="small" variant="ghost" loading={busy} onClick={() => void write.retry()}>

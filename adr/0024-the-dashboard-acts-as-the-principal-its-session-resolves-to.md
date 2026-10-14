@@ -64,7 +64,7 @@ the request resolved to, because that principal is exactly who pressed it.
 The second is to admit only a credential bound to a seat, and refuse the rest.
 That is a second authority rule standing beside the table, deciding from a
 fact the table does not ask: a Tier A token the table admits on
-`fleet:operate`, or an administrator signed in through it to repair a locked
+`admin`, or an administrator signed in through it to repair a locked
 directory, would be shown a dashboard whose every control is refused, while
 the same credential's assistant does the same thing over `/operator/mcp`. A
 refusal keyed on a binding is also a refusal keyed on whatever holds the

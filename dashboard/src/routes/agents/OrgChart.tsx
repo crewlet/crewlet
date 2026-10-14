@@ -39,12 +39,13 @@
  *
  * A human seat is held by whoever the identity directory binds to it, which
  * the company document cannot say — and every person comes from one, since a
- * person holds exactly one human seat for as long as they exist. So for a
- * reader the directory answers (`people:manage` or `audit:read`; nobody else
- * is asked), a person's card says what holds it instead of when they are
- * around: "Held by jane.doe", "Invited · sam@example.com", or "Vacant" — in
- * the card's NEUTRAL ink, because who holds a seat is not something the seat
- * is doing. A reader holding `people:manage` gets the card's menu besides
+ * person holds exactly one human seat for as long as they exist. So for every
+ * signed-in reader — who holds each seat is part of the overview, and the
+ * engine masks the listing per reader — a person's card says what holds it
+ * instead of when they are around: "Held by Jane Doe", "Invited ·
+ * sam@example.com" (an admin's to see), or "Vacant" — in the card's NEUTRAL
+ * ink, because who holds a seat is not something the seat is doing. An admin
+ * gets the card's menu besides
  * ([SeatCardActions]): Invite and Create on a vacant seat, Cancel invitation
  * on an invited one — through the tree's own pattern, a pointer strip beside
  * the card and the same items under the ContextMenu key, because a tree's
@@ -53,8 +54,8 @@
  *
  * A DIRECTORY READ THAT FAILED IS SAID, above the canvas or the outline
  * ([DirectoryUnanswered]): drawn as nothing, an administrator saw a chart
- * whose human cards read "Human · availability" and carried no menu — the
- * chart a reader holding neither grant sees — with no word why.
+ * whose human cards read "Human · availability" and carried no menu, with no
+ * word why.
  *
  * # On a phone it is rows
  *
@@ -108,7 +109,6 @@ import { useViewer } from "~/lib/viewer.ts";
 import { QueryState } from "~/components/common.tsx";
 import {
   canManagePeople,
-  canReadDirectory,
   holdingLine,
   SEAT_GESTURE_WORDS,
   SeatGestureDialog,
@@ -202,8 +202,14 @@ export function OrgChart() {
 
   // THE KEY ON A UNIT'S NODE is the project its work is filed under, which
   // only the tracker knows. A company on another tracker answers nothing and
-  // a unit's node carries its type alone.
-  const projects = useQuery("work_projects", { limit: PROJECT_PAGE }, { pollMs: 120_000 });
+  // a unit's node carries its type alone — as it does for a reader without
+  // Tracker, who is not asked a question the engine would refuse them.
+  const viewer = useViewer();
+  const projects = useQuery(
+    "work_projects",
+    { limit: PROJECT_PAGE },
+    { pollMs: 120_000, enabled: viewer.tracker },
+  );
   const projectRows = projects.error ? undefined : projects.data?.projects;
   const keysOf = useMemo(() => projectsByUnit(projectRows ?? []), [projectRows]);
   const company = org?.name ?? "";
@@ -215,12 +221,11 @@ export function OrgChart() {
   // which two seats may share.
   const byHandle = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
 
-  // WHAT HOLDS EACH HUMAN SEAT, for a reader the directory answers — see the
-  // file's doc — by the seat's handle. Asked once the viewer has said who
-  // this is, so nobody is asked a question they would be refused.
-  const viewer = useViewer();
+  // WHAT HOLDS EACH HUMAN SEAT, for every signed-in reader — see the file's
+  // doc — by the seat's handle. Asked once the viewer has said who this is,
+  // so nobody is asked a question they would be refused.
   const manages = canManagePeople(viewer.grants);
-  const directory = useHumanSeats(!viewer.asking && canReadDirectory(viewer.grants));
+  const directory = useHumanSeats(!viewer.asking && !viewer.anonymous);
   const holdings = useMemo(
     () => new Map((directory.data ?? []).map((row) => [row.handle, row])),
     [directory.data],
@@ -454,7 +459,7 @@ export function OrgChart() {
           }}
           onNodeKey={onNodeKey}
           onNodeKeyDown={onNodeKeyDown}
-          // A HUMAN SEAT'S MENU, for `people:manage` alone ([SeatCardActions]):
+          // A HUMAN SEAT'S MENU, for an admin alone ([SeatCardActions]):
           // the ContextMenu key opens it on the node only where there is one.
           hasNodeMenu={(id) => gesturesOf(chart.seats.get(id)).length > 0}
           // THE SWITCH UNDER THE ZOOM BAR, in the chart's own corner, where
@@ -478,7 +483,7 @@ export function OrgChart() {
 
 /**
  * The identity directory did not answer a reader it would have: so who holds
- * each human seat is not drawn, and — for `people:manage` — no vacant seat
+ * each human seat is not drawn, and — for an admin — no vacant seat
  * offers Invite or Create, until it does. The refusal beneath says why, in
  * the words every screen uses for it.
  *
@@ -522,7 +527,7 @@ function gestureLabel(gesture: SeatGesture, name: string): string {
 }
 
 /**
- * What a reader holding `people:manage` may do about a human seat, on its card.
+ * What an admin may do about a human seat, on its card.
  *
  * THE TREE'S OWN PATTERN, as the builder's node actions are drawn: a tree's
  * items hold nothing focusable, so the buttons a pointer uses sit in the

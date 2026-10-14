@@ -35,8 +35,9 @@ var (
 	ErrUnknown = errors.New("queries: unknown query")
 
 	// ErrUnauthorized is a question asked by somebody this node KNOWS,
-	// who does not carry the grant it declares — or, for a question naming
-	// somebody's record, whose relation to that record does not reach it.
+	// who does not carry the permission it declares, or whose stage may
+	// not act — or, for a question naming somebody's record, whose
+	// relation to that record does not reach it.
 	// Every such refusal is a [*Refusal], which carries the rule's reason
 	// and the grants that would have admitted the caller; this sentinel is
 	// what a transport branches on.
@@ -48,7 +49,7 @@ var (
 	// DISTINCT FROM [ErrUnauthorized], because the two ask a client for
 	// opposite things — "present a credential" and "the one you presented
 	// does not carry this" — and a narrow reader meets the second the
-	// moment they open a screen outside their grants, which is the
+	// moment they open a screen outside their access, which is the
 	// ordinary case rather than the exceptional one. Folded together, the
 	// surface tells that reader to go and get a new credential.
 	//
@@ -128,9 +129,8 @@ func refuseAs(class error, format string, args ...any) error {
 // A TYPE RATHER THAN A WRAPPED SENTENCE, because a surface renders what it
 // carries: the rule's own reason and the grants that would have admitted the
 // caller, as values a client branches on. A sentence written beside the rule
-// — "needs the lead relation or fleet:operate" — is a second statement of the
-// rule, and it is the copy that goes stale the day the rule's admin grant
-// moves.
+// — "needs the lead relation or admin" — is a second statement of the rule,
+// and it is the copy that goes stale the day the rule's admin path moves.
 type Refusal struct {
 	// What is what was refused: the question, or — where the question was
 	// admitted and the record it named was not — the verb asked of that
@@ -138,13 +138,14 @@ type Refusal struct {
 	What string
 
 	// Reason is the rule that decided, in the authority table's own words:
-	// [authz.ReasonNoGrant] for a question's declared grant, and whatever
-	// [authz.Decide] concluded for a record a personal question named.
+	// [authz.ReasonNoGrant] for a question's declared permission,
+	// [authz.ReasonStage] for a caller whose stage may not act, and
+	// whatever [authz.Decide] concluded for a record a question named.
 	Reason authz.Reason
 
-	// Grants are the capabilities any one of which would have admitted the
-	// caller — [authz.Decision.Grants], or the one grant a question is
-	// registered as needing. Empty where no capability would.
+	// Grants are the permissions any one of which would have admitted the
+	// caller — [authz.Decision.Grants], or the one permission a question is
+	// registered as requiring. Empty where no permission would.
 	Grants []iam.Grant
 }
 
@@ -347,21 +348,123 @@ type Answer func(ctx context.Context, p Params) (any, error)
 type entry struct {
 	answer Answer
 
-	// needs is the grant a caller must carry to ask it.
+	// posture is who may ask it.
 	//
-	// A GRANT RATHER THAN A BOOL, which is what makes a narrow reader
+	// A POSTURE RATHER THAN A BOOL, which is what makes a narrow reader
 	// possible at all. It was `operator bool` — is there a credential,
 	// yes or no — and under that a token that could read the board could
 	// also read the company document and every ${VAR} reference in it by
-	// name. A deliberately public read surface is now a credential
-	// holding `state:read` and nothing else, and this is the field that
-	// makes that mean something.
+	// name.
 	//
 	// THE ZERO IS REFUSED AT REGISTRATION, not at the first request: an
-	// unstated grant would make a question this build ships ungated,
+	// unstated posture would make a question this build ships ungated,
 	// looking exactly like one somebody decided to leave open.
-	needs iam.Grant
+	posture Posture
 }
+
+// postureKind is which of the three answers a [Posture] gives.
+type postureKind uint8
+
+const (
+	// postureUnset is the zero, which no question may be registered with.
+	postureUnset postureKind = iota
+	postureEverybody
+	postureRequires
+	postureDecidedBy
+)
+
+// Posture is who may ask a question, declared where it is registered.
+//
+// THREE ANSWERS, and each is a different statement about what the question
+// discloses (ADR-0033):
+//
+//   - [Everybody]: the overview — the org chart, the agents' status, spend,
+//     schedules, the tools — which every principal the guard resolves and
+//     whose stage may act reads, a service account and a token included. A
+//     question that discloses a row of an app beside rows of none (the
+//     company feed, a page's links back to the work) is Everybody and drops
+//     the rows its caller may not see, through [authz.Shows].
+//   - [Requires]: admin, or one app. A question that answers nothing BUT one
+//     app's rows — the board, the pages — or nothing but the company's own
+//     machinery — the document, the audit trail, the deployment.
+//   - [DecidedBy]: any resolved principal may ASK, and the answer decides per
+//     record through the authority table's verb — a seat's trail
+//     (`audit.seat.read`, its lead or admin), a work item somebody may have
+//     been asked a question on (`get_work_item`). Stated here so the gate
+//     that walks the registry can tell a question that decides inside its
+//     answer from one that forgot to decide at all.
+//
+// THE ZERO IS INVALID and [Registry.Register] panics on it: a question with no
+// posture answers to any credential at all, and looks exactly like one
+// somebody decided to leave open.
+type Posture struct {
+	kind  postureKind
+	grant iam.Grant
+	verb  authz.Action
+}
+
+// Everybody is the overview's posture: any resolved principal whose stage may
+// act.
+func Everybody() Posture { return Posture{kind: postureEverybody} }
+
+// Requires is the posture of a question only admin or one app opens. g must
+// be [iam.GrantAdmin] or one of [iam.Apps]; anything else is refused at
+// registration.
+func Requires(g iam.Grant) Posture { return Posture{kind: postureRequires, grant: g} }
+
+// DecidedBy is the posture of a question whose ANSWER decides, per record,
+// through the authority table's verb a. Any resolved principal whose stage may
+// act may ask; what they are shown is that verb's decision. a must be a verb
+// the table has a row for.
+func DecidedBy(a authz.Action) Posture { return Posture{kind: postureDecidedBy, verb: a} }
+
+// Valid reports whether p is a posture a question may be registered with.
+func (p Posture) Valid() bool {
+	switch p.kind {
+	case postureEverybody:
+		return p.grant == "" && p.verb == ""
+	case postureRequires:
+		return p.verb == "" && (p.grant == iam.GrantAdmin || p.grant.IsApp())
+	case postureDecidedBy:
+		_, known := authz.ClassOf(p.verb)
+		return p.grant == "" && known
+	}
+	return false
+}
+
+// String names the posture as a person reads it: "everybody", the permission
+// a [Requires] posture asks for, or "decided_by:<verb>".
+func (p Posture) String() string {
+	switch p.kind {
+	case postureEverybody:
+		return "everybody"
+	case postureRequires:
+		return string(p.grant)
+	case postureDecidedBy:
+		return "decided_by:" + string(p.verb)
+	}
+	return "unset"
+}
+
+// Grant is the permission a [Requires] posture asks for, or "" for any other.
+func (p Posture) Grant() iam.Grant {
+	if p.kind != postureRequires {
+		return ""
+	}
+	return p.grant
+}
+
+// Verb is the authority table's verb a [DecidedBy] posture's answer decides
+// through, or "" for any other.
+func (p Posture) Verb() authz.Action {
+	if p.kind != postureDecidedBy {
+		return ""
+	}
+	return p.verb
+}
+
+// IsEverybody reports whether p is [Everybody].
+func (p Posture) IsEverybody() bool { return p.kind == postureEverybody }
 
 // Registry is the set of questions this process can answer.
 type Registry struct {
@@ -372,9 +475,9 @@ type Registry struct {
 // NewRegistry builds an empty registry.
 func NewRegistry() *Registry { return &Registry{entries: map[string]entry{}} }
 
-// Register adds a question and DECLARES the grant it needs.
+// Register adds a question and DECLARES who may ask it.
 //
-// # Why the grant is at the registration
+// # Why the posture is at the registration
 //
 // It is the only place that knows. A question's authority is a property of
 // what it discloses — `config` serves the whole company document, `events`
@@ -382,18 +485,20 @@ func NewRegistry() *Registry { return &Registry{entries: map[string]entry{}} }
 // visible from the name, the route or the caller. Stated anywhere else it
 // would be a second list somebody has to keep in step with this one.
 //
-// A ZERO OR UNKNOWN GRANT PANICS, at wiring time, on every build. A question
-// registered without one would answer to any credential at all, which is the
-// exact shape of an ungated surface that looks deliberate — and the panic is
-// at start-up rather than at the first request because a company finding out
-// on the first request has already served it.
+// A ZERO OR INVALID POSTURE PANICS, at wiring time, on every build — a
+// [Requires] of anything but admin or an app, and a [DecidedBy] of a verb the
+// authority table has no row for, included. A question registered without
+// one would answer to any credential at all, which is the exact shape of an
+// ungated surface that looks deliberate — and the panic is at start-up rather
+// than at the first request because a company finding out on the first
+// request has already served it.
 //
 // Registering a name twice panics too, rather than silently taking one of
 // them: two answers to one question is exactly the divergence this package
 // exists to prevent, and a wiring mistake that resolved to whichever ran last
 // would be invisible.
-func (r *Registry) Register(name string, needs iam.Grant, answer Answer) {
-	r.register(name, entry{answer: answer, needs: needs})
+func (r *Registry) Register(name string, posture Posture, answer Answer) {
+	r.register(name, entry{answer: answer, posture: posture})
 }
 
 func (r *Registry) register(name string, e entry) {
@@ -403,11 +508,13 @@ func (r *Registry) register(name string, e entry) {
 	if e.answer == nil {
 		panic(fmt.Sprintf("queries: %q registered with no answer", name))
 	}
-	if !e.needs.Valid() {
-		panic(fmt.Sprintf("queries: %q registered needing grant %q, which is "+
-			"not one this build knows — a question with no grant answers to "+
-			"any credential at all, and looks exactly like one somebody "+
-			"decided to leave open", name, e.needs))
+	if !e.posture.Valid() {
+		panic(fmt.Sprintf("queries: %q registered with the posture %s, which "+
+			"is not one a question may declare — Everybody, Requires(admin or "+
+			"one of %v), or DecidedBy(a verb internal/authz has a row for). A "+
+			"question with no posture answers to any credential at all, and "+
+			"looks exactly like one somebody decided to leave open",
+			name, e.posture.debug(), iam.Apps))
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -415,6 +522,12 @@ func (r *Registry) register(name string, e entry) {
 		panic(fmt.Sprintf("queries: %q registered twice", name))
 	}
 	r.entries[name] = e
+}
+
+// debug spells out every field of p, for the registration panic — where the
+// posture is invalid and [Posture.String] would hide what is wrong with it.
+func (p Posture) debug() string {
+	return fmt.Sprintf("{kind %d, grant %q, verb %q}", p.kind, p.grant, p.verb)
 }
 
 // Names lists the registered questions, sorted.
@@ -465,16 +578,25 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params) (any, 
 	// everybody holding a perfectly good credential that theirs is no
 	// good — which is how a company gets taught to reset working passwords
 	// while the identity estate is down.
+	//
+	// A STAGE THAT MAY NOT ACT IS REFUSED HERE, whatever the posture, which
+	// is the authority table's own first check: an [Everybody] question
+	// decides nothing else, so without it a suspended person's live
+	// session would go on reading the overview that every other gesture of
+	// theirs is refused.
 	switch principal, resolution := iam.From(ctx); {
 	case resolution == iam.Unknown:
 		return nil, unresolved(ctx, what)
 	case resolution == iam.Anonymous:
 		// NOBODY IS ASKING, which is a different refusal from a
-		// principal who lacks the grant — see [ErrUnauthenticated].
-		return nil, fmt.Errorf("%w: %q needs %s", ErrUnauthenticated, what, e.needs)
-	case !principal.Can(e.needs):
+		// principal who lacks the permission — see [ErrUnauthenticated].
+		return nil, fmt.Errorf("%w: %q is asked as %s", ErrUnauthenticated,
+			what, e.posture)
+	case !principal.Stage.MayAct():
+		return nil, &Refusal{What: what, Reason: authz.ReasonStage}
+	case e.posture.kind == postureRequires && !principal.Can(e.posture.grant):
 		return nil, &Refusal{What: what, Reason: authz.ReasonNoGrant,
-			Grants: []iam.Grant{e.needs}}
+			Grants: []iam.Grant{e.posture.grant}}
 	}
 	data, err := e.answer(ctx, p)
 	return data, classifyFailure(err)
@@ -604,22 +726,21 @@ func unavailableHere(err error) bool {
 	return ok
 }
 
-// Needs reports the grant a question is registered as needing.
+// PostureOf reports who a question is registered as being asked by.
 //
 // THE REGISTRY'S DECLARED POSTURE, readable without running the answer —
 // which is what a gate asserting the posture needs and the only caller there
 // is. Nothing enforces with it: [Registry.AnswerWith] makes the decision for
 // both transports, and each maps the refusal its own way (the socket to
-// `unauthorized`, a REST route to a 401 carrying the same code). It said it
-// was "for a REST route that has to make the same decision before it calls the
-// answer"; no route does, and a second enforcement point is exactly what
-// AnswerWith's own comment says must not exist.
+// `unauthorized`, a REST route to a 403 carrying the same code); a second
+// enforcement point is exactly what AnswerWith's own comment says must not
+// exist.
 //
-// An unregistered name answers the zero grant, which is invalid — so a caller
-// asserting about one is told it is not a question rather than being handed a
-// plausible-looking answer about nothing.
-func (r *Registry) Needs(what string) iam.Grant {
+// An unregistered name answers the zero posture, which is invalid — so a
+// caller asserting about one is told it is not a question rather than being
+// handed a plausible-looking answer about nothing.
+func (r *Registry) PostureOf(what string) Posture {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.entries[what].needs
+	return r.entries[what].posture
 }

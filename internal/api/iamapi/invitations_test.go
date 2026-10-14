@@ -47,7 +47,7 @@ func TestTheInvitationListingIsOpenUnlessAllIsAsked(t *testing.T) {
 	verifier := iamdomain.InvitationVerifier("the-link-secret")
 	r.directory.invitations = []iamdomain.InvitationRow{
 		{ID: "inv-open", Sealed: "sealed", Seat: "founder",
-			Grants: []iam.Grant{iam.GrantStateRead}, InvitedBy: "alice.admin",
+			Grants: []iam.Grant{iam.GrantTracker}, InvitedBy: "alice.admin",
 			ExpiresAt: at.Add(time.Hour), Verifier: verifier},
 		{ID: "inv-foreign", Sealed: "foreign", Seat: "sre",
 			ExpiresAt: at.Add(time.Hour)},
@@ -105,11 +105,15 @@ func TestTheInvitationListingIsOpenUnlessAllIsAsked(t *testing.T) {
 // INVITATIONS ARE READ LIKE THE DIRECTORY AND WITHDRAWN LIKE ANY DIRECTORY
 // WRITE.
 //
-// An auditor reads them — who could reach this company is the audit question —
-// and may not cancel one; somebody holding neither grant reads nothing. The
-// CONTROL is the administrator, admitted to both. Mutation: mount the listing
-// on the write verb and the auditor is refused; mount the cancel on the read
-// verb and the auditor cancels.
+// Both are admin's (ADR-0033): who could reach this company, and the address
+// each open link was sent to, is no app's and nobody's overview — so somebody
+// holding every app reads nothing and cancels nothing. The CONTROL is the
+// administrator, admitted to both. Each row asks its OWN verb, which is what
+// the case holds: the cancel is the directory's write, and so asks a recent
+// proof where the read asks none — an administrator whose proof is a day old
+// reads the listing and is refused the cancel. Mutation: mount the cancel on
+// the read verb and the stale administrator cancels; mount the listing on the
+// write verb and they cannot read it.
 func TestInvitationsAreReadLikeTheDirectoryAndWithdrawnLikeAWrite(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -118,9 +122,10 @@ func TestInvitationsAreReadLikeTheDirectoryAndWithdrawnLikeAWrite(t *testing.T) 
 		read, cancel int
 	}{
 		{"an administrator (the control)", administrator(), http.StatusOK, http.StatusOK},
-		{"an auditor", auditor(), http.StatusOK, http.StatusForbidden},
-		{"somebody holding neither grant", ordinary(), http.StatusForbidden,
-			http.StatusForbidden},
+		{"an administrator whose proof is a day old", staleAdministrator(),
+			http.StatusOK, http.StatusForbidden},
+		{"somebody holding every app and not admin", ordinary(),
+			http.StatusForbidden, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

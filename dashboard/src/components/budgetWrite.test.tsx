@@ -57,17 +57,7 @@ const BUDGETS: BudgetsAnswer = {
 /** An administrator, who holds every grant. */
 const ADMIN = {
   login: "U0",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane",
@@ -141,7 +131,7 @@ test("it raises the seat's own ceiling when the seat's window is the one refusin
 // seat's ceiling is no credential, and the engine admits a lead's write of a
 // seat inside the units they lead.
 test("a lead raises a seat they lead, and is told the company's ceiling is not theirs", async () => {
-  const pm = { ...ADMIN, login: "pm.person", grants: ["state:read"], handle: "pm", owner: "pm" };
+  const pm = { ...ADMIN, login: "pm.person", grants: [], handle: "pm", owner: "pm" };
   mount(day(), true, pm);
   await settle();
   const seat = screen.getByRole("button", { name: "Raise budget" });
@@ -151,7 +141,7 @@ test("a lead raises a seat they lead, and is told the company's ceiling is not t
   mount(undefined, true, pm);
   await settle();
   expect(screen.getByRole("button", { name: "Raise budget" }).getAttribute("title")).toBe(
-    "You lead Management and Developer Relations, and this is outside them: changing it takes the config:write grant.",
+    "You lead Management and Developer Relations, and this is outside them: changing it takes Admin access.",
   );
 });
 
@@ -164,7 +154,7 @@ test("a lead raises a seat they lead, and is told the company's ceiling is not t
 // offered.
 test("on a managed document a raise is held for everybody but its writers", async () => {
   const managed = { config_writer: false, config_managed_by: ["gitops"] };
-  const pm = { ...ADMIN, login: "pm.person", grants: ["state:read"], handle: "pm", owner: "pm" };
+  const pm = { ...ADMIN, login: "pm.person", grants: [], handle: "pm", owner: "pm" };
   for (const viewer of [
     { ...ADMIN, ...managed },
     { ...pm, ...managed },
@@ -183,7 +173,7 @@ test("on a managed document a raise is held for everybody but its writers", asyn
 // carries — here a seat with no contact, which no ceiling caused — is the
 // baseline's too, and the raise saves without asking the lead to confirm it.
 test("a lead's raise saves without confirming a warning the company already had", async () => {
-  const pm = { ...ADMIN, login: "pm.person", grants: ["state:read"], handle: "pm", owner: "pm" };
+  const pm = { ...ADMIN, login: "pm.person", grants: [], handle: "pm", owner: "pm" };
   const seat = { name: "DevRel", handle: "devrel", token_budget: { day: 100 } };
   const unreachable = {
     kind: "advisory",

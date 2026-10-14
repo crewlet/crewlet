@@ -177,12 +177,16 @@ export function classifyCheck(
     };
   }
   // A PART REFUSED IS A PROBLEM WITH A LEAD'S DRAFT, NEVER THE COMPANY'S.
-  // Whoever drafts the whole company holds config:write, whose writes are
-  // never refused part by part, or leads no unit (`Builder`'s scope) and is
-  // refused every write whole: the engine's route admits anybody bound to a
-  // seat until it has read what a write changes, so it still names each part,
-  // starting with an unchanged draft's `document`. That is a grant the reader
-  // lacks, which pauses editing, and not a problem with each edit.
+  // Whoever drafts the whole company holds Admin as the node answering
+  // `viewer` serves it — a reader holding no Admin and leading no unit is
+  // refused the company's read before any check is sent. An admin's write is
+  // never refused part by part where admin is served; it is where a check
+  // lands on a node whose `api.auth.admin` is `refuse`, which a fleet
+  // mid-rollout legally holds beside one serving it: that node's route admits
+  // anybody bound to a seat until it has read what a write changes, so it
+  // names each part, starting with an unchanged draft's `document`. That is a
+  // grant the reader lacks there, which pauses editing, and not a problem with
+  // each edit. A declined step-up is a 403 of this arm too, and keeps its code.
   //
   // EVERY REFUSAL IS READ THE WAY EVERY OTHER /config WRITER READS IT
   // (`protocol/configAnswer.ts`). A check has no stored revision to settle,

@@ -28,8 +28,8 @@ import (
 // seat table every other credential goes through ([session.ResolveSeat]). This
 // file reads the bearer, asks both, and composes the principal — as the owner,
 // carrying the grants the token was minted with that the owner STILL holds,
-// cut to this node's ceiling on this request, and reaching no further than
-// either of them.
+// under this node's admin posture on this request, and reaching no further
+// than either of them.
 //
 // # A node that cannot tell says so
 //
@@ -174,9 +174,9 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 	}
 	p := iam.Principal{
 		ID: id, Login: owner.Login, Kind: owner.Kind, Stage: owner.Stage,
-		// THE MINT'S GRANTS THE OWNER STILL HOLDS, cut to this node's
-		// ceiling on this request.
-		Grants: intersect(row.EffectiveGrants(), g.ceiling),
+		// THE MINT'S GRANTS THE OWNER STILL HOLDS, under this node's
+		// admin posture on this request.
+		Grants: g.admin.Effective(row.EffectiveGrants()),
 		// AND THROUGH WHAT. The token acts as its owner, so without this
 		// every write it made was recorded exactly as the owner's own —
 		// and a token minted on somebody's account could file, edit and
@@ -188,14 +188,17 @@ func (g *Guard) token(r *http.Request, presented credential.Token) (*http.Reques
 	// there is nothing else it could present.
 	//
 	// WHAT KEEPS IT OFF THE GESTURES THAT NEED A PERSON PRESENT is not a
-	// proof's age. Every such verb's row in internal/authz says so, and the
-	// table refuses the credential this principal names below ([iam.Principal.Via],
-	// read through [iam.Principal.MachineToken]) — which is what closes the
-	// ones a verb admits the owner to as THEMSELVES on no grant at all,
-	// changing how they prove who they are. And the two grants those ask
-	// of anybody else's record — `secrets:read` and `people:manage` — are
-	// never minted onto a token (internal/iamdomain) and never carried by
-	// one (internal/iam/credential).
+	// proof's age, and not a permission it cannot carry: admin may be
+	// minted onto a token, and a token minted with it acts with admin on a
+	// serving node. Every gesture that needs a person present says so on
+	// its row in internal/authz, and the table refuses the credential this
+	// principal names below ([iam.Principal.Via], read through
+	// [iam.Principal.MachineToken]) — which also closes the ones a verb
+	// admits the owner to as THEMSELVES on no permission at all, changing
+	// how they prove who they are. And internal/iamdomain refuses every
+	// administrative identity record — an enrolment, a grant, a removal, an
+	// invalidation — whose operator is a machine token, whatever the route
+	// in front of it decided, so a leaked token never rewrites who may act.
 	g.proof.stamp(&p, now)
 	if owner.Seat == "" {
 		return r.WithContext(iam.WithPrincipal(ctx, p)), nil

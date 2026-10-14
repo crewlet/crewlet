@@ -66,7 +66,8 @@ type Store struct {
 	db store.ReplicatedReader
 
 	// reserved names the containers a SEAT may not write to, or not add a
-	// page to. See [Options.Reserved].
+	// page to, and every container a page may be created in at all. See
+	// [Options.Reserved].
 	reserved func() Reserved
 
 	now      func() time.Time
@@ -87,8 +88,14 @@ type Options struct {
 	Now func() time.Time
 
 	// Reserved names the containers this company holds back from an
-	// AGENT's writes — see [Reserved] for the two and what each refuses.
-	// A refused write answers [ErrReserved].
+	// AGENT's writes — see [Reserved] for the two and what each refuses;
+	// a refused write answers [ErrReserved] — and the spaces it DECLARES,
+	// outside which nobody creates a page ([Reserved.Declared]).
+	//
+	// NIL DECLARES NOTHING, so a store built without it creates no page:
+	// the declared spaces are the one rule here that binds a person as well
+	// as an agent, and a seam whose absence meant "anywhere" would be the
+	// way a surface wired later created pages in containers nobody named.
 	//
 	// # Why it is here and not at a tool
 	//
@@ -139,6 +146,30 @@ type Reserved struct {
 	// and routed like any other, so a seat keeping one current, renaming
 	// it or remarking on it is ordinary upkeep and is not refused.
 	Root string
+
+	// Declared is every container key the company DECLARES — each unit's
+	// and each seat's `space:`, `knowledge.root_space` and
+	// `knowledge.skills_container` — and a page is CREATED only in one of
+	// them, by anybody: [ErrInvalid] naming the key and how a space is
+	// declared otherwise.
+	//
+	// # Why a create, and why a person too
+	//
+	// A container is a space the org chart names — who leads it, who is
+	// woken by what happens in it, which team's knowledge it is — and a
+	// page filed under a key nothing declares belongs to nobody: no lead
+	// tidies it, no routing reaches it, and a typo of a real key splits a
+	// team's knowledge in two with nothing to say so. That is a fact about
+	// the KEY rather than about who typed it, which is why this, unlike the
+	// two above, refuses a person exactly as it refuses an agent — the same
+	// rule a task's create holds an undeclared project to. Only a create
+	// asks: a save cannot move a page across containers and a rename keeps
+	// its container, so every other write is already inside a space that
+	// was declared when the page was made.
+	//
+	// THE MEANINGFUL ZERO: nil and empty both declare nothing, and every
+	// create is refused.
+	Declared []string
 }
 
 // NewStore builds the knowledge base over its own log.
@@ -651,6 +682,40 @@ func (s *Store) refuseReserved(actor Actor, container string, creating bool) err
 			"can be edited and commented on as usual", ErrReserved, key)
 	}
 	return nil
+}
+
+// refuseUndeclared refuses a page created in a container this company does
+// not declare — see [Reserved.Declared].
+//
+// NEITHER OF [Store.refuseReserved]'s EARLY RETURNS: a store with no reserved
+// seam declares nothing, and a person is held to the declared spaces exactly
+// as an agent is.
+func (s *Store) refuseUndeclared(container string) error {
+	var held Reserved
+	if s.reserved != nil {
+		held = s.reserved()
+	}
+	key := ContainerKey(container)
+	declared := make([]string, 0, len(held.Declared))
+	for _, raw := range held.Declared {
+		space := ContainerKey(raw)
+		if space == key {
+			return nil
+		}
+		if space != "" && !slices.Contains(declared, space) {
+			declared = append(declared, space)
+		}
+	}
+	slices.Sort(declared)
+	where := "this company declares none yet"
+	if len(declared) > 0 {
+		where = "write in one of: " + strings.Join(declared, ", ")
+	}
+	return invalid("container", "%s is not a space this company declares — a "+
+		"page lives in a declared space: a unit's or a seat's `space:`, "+
+		"`knowledge.root_space`, or the tool-skills container "+
+		"(`knowledge.skills_container`). Declare it in the company document, "+
+		"or %s", key, where)
 }
 
 // IsHuman reports an actor a notification treats as a person.

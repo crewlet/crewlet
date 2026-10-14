@@ -78,10 +78,10 @@ func newAuditTrail(t *testing.T) *trail {
 func tierA(t *testing.T, tr *trail) *auth.Guard {
 	t.Helper()
 	b := config.DefaultBootstrap()
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	b.API.Auth.Tokens = []config.APIToken{{
 		ID: "break-glass", Token: "the-break-glass-token-value",
-		Grants: []iam.Grant{iam.GrantStateRead},
+		Grants: []iam.Grant{iam.GrantTracker},
 	}}
 	return auth.New(&b).WithAudit(tr)
 }
@@ -431,7 +431,7 @@ func (s *signedIn) withAudit(tr *trail) *auth.Guard {
 	s.t.Helper()
 	b := config.DefaultBootstrap()
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ci", Token: "a-tier-a-token"}}
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	b.API.ExternalURL = "http://127.0.0.1:8000"
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: s.signer, Directory: s.dir, Applier: s.dir, Chart: s.chart,

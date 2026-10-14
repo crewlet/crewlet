@@ -3,9 +3,10 @@
 Every row this engine keeps — a work item's comment, a page revision, an audit
 event — records **who did it**. Every route, query and tool it serves decides
 **whether you may**. This page is the vocabulary both of those use: what a
-*principal* is, which *grants* exist and what each one opens, and — the part
-that matters when something goes wrong — the difference between the engine
-knowing you are nobody and the engine not being able to tell.
+*principal* is, which *permissions* exist — `admin`, and one per app — what
+each one opens and what everybody sees without one, and — the part that
+matters when something goes wrong — the difference between the engine knowing
+you are nobody and the engine not being able to tell.
 
 > The vocabulary lives in `internal/iam`. It is a deliberately small package:
 > it names things and classifies them, and it reads nothing, writes nothing
@@ -55,8 +56,9 @@ binding has two ends](#the-binding-has-two-ends-and-only-one-of-them-arbitrates)
 A person signed in with a session acts as the seat their row holds. A **Tier A
 token** acts under the login `token:<id>`, and it acts as a seat the same way:
 when the directory holds a row under that login bound to a human seat, which
-`crewlet iam create -kind machine -login token:<id> -seat <handle>` enrols and
-binds in one record. A service account is bound the same way, at its create or
+`crewlet iam create -kind machine -login token:<id> -seat <handle> -grants
+none` enrols and binds in one record — the row carries no permission of its
+own, since the token's are its Tier A entry's. A service account is bound the same way, at its create or
 later with `crewlet iam bind`.
 
 **A token or a service account bound to no seat acts as the credential**, under
@@ -142,162 +144,283 @@ taken.
 
 ---
 
-## Grants: the eleven things there are to allow
+## Access: admin and one permission per app
 
-A grant is one capability. There are eleven, each covering a surface the engine
-actually serves, and each is either a **read** or a **write**. The class is
-declared rather than derived from the HTTP method, and it is what lets a
-narrow service account be cut down to reading: the public read posture
-`allow_anonymous_read` used to open is now a credential holding read grants and
-nothing else.
+What a principal may do comes from two things: the **permissions** it carries,
+and its **relations** in the org chart — the seat it holds, the team it leads,
+the work it wrote. There are three permissions, because there are three things
+a company actually decides about somebody who joins it: whether they **run**
+it, and which of its two apps they **use**.
 
-**`api.auth.max_grants` bounds all eleven.** A person's grants live in the
-replicated store, written by whoever holds `people:manage`; the ceiling is the
-operator's statement, in the tier that holds the keyring, of what that
-directory may ever confer. It is required once the API is served.
+| Permission | On the dashboard | What it is |
+|---|---|---|
+| `admin` | **Admin** | Runs the company and the engine — its configuration, its credentials, its people, its deployment and its company-wide trail. **It includes every app**, and it is host access ([below](#what-admin-runs)) |
+| `tracker` | **Tracker** | Uses the native [work tracker](../guides/work-tracker.md): reads it and writes it |
+| `knowledge` | **Knowledge** | Uses the native [knowledge base](knowledge-system.md): reads it and writes it |
 
-It is intersected at **decision time, per node, per request**, and nothing is
-written when it changes. That is what makes lowering it immediate — no config
-apply, no migration, no restart of the fleet — and it is also what makes a
-fleet whose nodes disagree a *legal* state rather than a broken one: a rolling
-restart **is** that state, for as long as it runs.
+They are stored in the `grants` field of a person's row, an invitation, a
+machine token and a Tier A token entry — the field keeps its name, and the
+dashboard calls the concept **Access**. `tracker` and `knowledge` are the
+**apps**, and `iam.Apps` is the one place an app is declared: an agent seat's
+own set, the dashboard's picker and the authority table's checks all read it,
+so a third app is a new member there and a new set of rows, and the build fails
+until both are in place.
 
-Legal and invisible is the problem. Without a signal, a person's authority
-depends on which node a load balancer sent them to, and the symptom is an
-operator who can revoke a credential on one request and cannot on the next,
-with nothing anywhere saying why. So each node publishes a **digest of its own
-resolved ceiling** on its presence lease, and `GET /query/fleet` renders it as
-`grant_ceiling` per node — two different values on that view is the
-disagreement being said out loud. It is a hash rather than the list because
-every node reads every other node's lease on every heartbeat, and eleven strings
-per node is a payload that grows with the fleet to answer one question. It is
-derived from the **sorted, deduplicated** set, so a fleet whose config is
-assembled by a template does not report a disagreement it does not have, and it
-is **absent** rather than empty on a node that binds no API — a worker has no
-opinion, and a blank must not read as a ceiling of nothing.
+**Admin includes every app.** One function, `iam.Expand`, reads a set as it is
+compared — its own members, plus every app when it holds `admin` — and every
+comparison of permissions goes through it: what a principal can do, a node's
+admin posture, what a machine token carries against its owner, what a writer
+may confer, an invitation's bound and a Tier A token's check. So an
+administrator is never told they lack an app. Ticking **Admin** in the
+dashboard's picker, or `-grants admin` on the command line, also stores every
+app this build knows, so taking admin away later leaves the person their apps.
 
-### Reads
+**Everything else is everybody's.** Somebody holding no permission at all still
+sees [the overview](#everybodys-overview) and manages their own account; what
+a permission adds is an app to use or a company to run. What a **lead** may do
+in their own team, an **author** to their own work and a **person** to their
+own record are relations the [authority
+table](#the-authority-table-one-function-decides) asks the chart about — and
+on an app's verb, *beside* the app. That is
+[ADR-0033](../../adr/0033-access-is-admin-and-one-permission-per-app.md).
 
-| Grant | What it opens |
+It replaced eleven grants — a read and a write for each surface, plus a
+deployment operator, a manager of people and a sandbox run — that nobody
+inviting a teammate could tell apart, and that left somebody handed none of
+the right ones on a "no access yet" panel with no step they could take,
+because reading the company was itself a grant.
+
+**`api.auth.admin` says whether this node serves admin.** A person's
+permissions live in the replicated store, written by an administrator; Tier A,
+the tier that holds the keyring, states per node whether admin counts here at
+all:
+
+| `api.auth.admin` | What a principal composed on this node carries |
 |---|---|
-| `state:read` | What the company is doing: the board, the pages, the roster, the org chart, the fleet, budgets, schedules — the ordinary dashboard read |
-| `audit:read` | The *record* of what happened: `/events`, any seat's `/agents/{id}/memory` and `/agents/{id}/conversations`, and the turn frames on `/ws/stream` carry full prompts, tool arguments, diary entries and what a seat said on a chat surface, and `/iam/audit` carries the identity estate's own trail beside them. So — beside `people:manage` — is the list of the company's human seats and who holds each (`/iam/seats`). A seat's trail is the audit read whoever's seat it is — not its lead's by leading it, and not `fleet:operate`'s |
-| `config:read` | The company document — the org chart, every integration, and the *names* of every credential the company holds or has not set yet |
-| `secrets:read` | Revealing a stored credential's value (the one `/secrets` route that returns one, which needs an explicit `?reveal=true`, takes `config:read` beside this grant, and logs the access) |
+| `serve` | What its row holds, with every app an admin holds |
+| `refuse` | The same, **minus `admin`** — and every app kept, because the apps are expanded before admin is clamped away. A node published to the people who use the company, where nobody should be able to run it however their row reads |
 
-`state:read` and `audit:read` are separate on purpose: showing somebody the
-board and showing them every prompt an agent was ever given are not one
-decision.
+It is required once the node serves the API — a zero is refused at
+`api.auth.admin`, naming both values — and a posture the request path somehow
+reached without (a wiring mistake) confers nothing at all rather than guessing.
+It is applied at **decision time, per node, per request**, and nothing is
+written when it changes: a restart with `refuse` takes admin off that node on
+its next request, with no apply and no migration. A fleet whose nodes disagree
+is therefore a *legal* state — a rolling restart **is** that state for as long
+as it runs — and an invisible one would be a problem: an administrator who can
+revoke a credential on one request and cannot on the next, with nothing saying
+why. So each node publishes its posture on its presence lease, and `GET
+/query/fleet` shows it as `admin` per node — two different values there is the
+disagreement said out loud. It is **absent** on a node that binds no API: a
+worker has no posture, and a blank must not read as one.
 
-`audit:read` is **one** grant over both trails rather than a transcript read
-and an audit read, because they have one audience and one question — what did
-this company do, and who asked it to. An agent's turn names the principal that
-woke it and a sign-in names the session every later turn carried, so a reader
-holding one and refused the other could establish neither half.
+### Everybody's overview
 
-`config:read` also covers the `/setup` and `/secrets` *listings*. They carry no
-values, but the list of which credentials a company has **not** configured is a
-map of what to attack, which is why those surfaces are guarded even for reads.
+Every principal the request guard resolves and whose
+[stage](#stages-whether-a-principal-may-act-at-all) may act — a person, a
+service account, a machine token, a Tier A token — reads the company's
+**overview**, with no permission at all:
 
-### Writes
+- **the org chart**, with each human seat's holder shown by name and seat —
+  their login only to an administrator and to the person themselves
+  (`GET /iam/seats`);
+- **the agents' status** — who is working, on which phase, for how long and at
+  what spend — and each seat's page, its status side;
+- **coding runs' status**;
+- **spend**, the token rollups and series, and **budgets**;
+- **schedules** and their runs, the **tools** list and the node's **health**;
+- who to ask: `lookup_colleague` and the person-facing colleague question —
+  the latter masking a seat's external contact ids for anybody but an
+  administrator;
+- `viewer` — who they are, what they carry, which actions are theirs — and
+  the live socket, which admits every resolved principal.
 
-| Grant | What it opens |
+**The overview carries status, never transcripts.** An agent's and a coding
+run's surfaces split into a **status** half and a **body** half, declared once
+per surface and held by a walk that fails the build on a field nobody
+classified. The body is what a turn *said*: its prompts and prompt messages,
+its responses, its tool calls and their arguments, its round narration, its
+`llm_history` payloads, the text that triggered a live call, and a coding run's
+task, question, reply and bridged calls. It goes to **an administrator**, to
+**whoever leads that seat** — `audit.seat.read`, the same rule that decides
+who reads a seat's diary — and, for a coding run's question, to **the person
+it is put to**. Everybody else receives the status alone, with
+`body_withheld: true` and the body's version counters at zero, so a screen
+says "not shown to you" and never asks again for what it will not be sent.
+
+**Their own account** is everybody's too: their own row, their own
+credentials, their own sessions — the self arms of the directory, which no
+permission is needed to take ([Your own account](#your-own-account-is-account)).
+
+**An answer that crosses apps is filtered row by row**, through one helper
+(`authz.Shows`) that asks which app a row belongs to: a work row needs
+`tracker`, a page row `knowledge`, and anything else nothing. So the Home
+feed carries only the rows its reader may see — an explicit `kinds=` entry
+they may not see is dropped rather than refused, since a refusal would confirm
+what exists; the decisions list carries a work item's ask only to a tracker
+holder or to the person it names; Spend's task tiles and an agent's current
+task need `tracker`; a page's `linked_from` tasks need `tracker`; and a
+question answered from the company's knowledge searches the pages only for a
+`knowledge` holder and the board only for a `tracker` holder.
+
+### What each app opens
+
+| App | What it opens |
 |---|---|
-| `work:write` | Filing and moving work: create, update, comment, merge, and the project facets a writer may declare |
-| `knowledge:write` | Authoring the company's own pages: write, save, comment — except in the tool-skills container, which takes `config:write` as well |
-| `config:write` | Changing the company — `PATCH /config` and the epoch activation that rebuilds every seat's tools, providers and MCP children; the org chart included, all of it — a unit's lead may change what sits inside it without this grant ([A lead edits their own team](#a-lead-edits-their-own-team)); the tracker's workspace catalogue (`write_work_catalogue`), which is configuration rather than any project's; and a page in the tool-skills container (`pages.skill.write`), which is injected into every seat's turn. **It is host access** — see below |
-| `secrets:write` | Sealing, rotating, deleting and re-keying the fleet's credentials |
-| `fleet:operate` | The deployment's own controls: `POST /backup`, the retention floor, the capacity window, the maintenance gestures, evict and readmit, and the two purges — a work item's and a page's — which no seat may make whatever it holds. With `people:manage` beside it, `POST /iam/invalidate-all` |
-| `people:manage` | Authority over **person rows**: inviting somebody or creating them on a seat, changing what they carry, moving them to another seat, suspending them, revoking their sessions, resetting a second factor, removing them — and, with `fleet:operate` beside it, ending every session in the company. It also lists the company's human seats and what holds each — a person, a service account or an open invitation (`GET /iam/seats`, `?unheld=true` for the vacancies), which is what an invitation and a create name |
-| `sandbox:run` | Starting a detached coding run, and holding the per-run credential its MCP bridge mints |
+| `tracker` | Every tracker read and write — the board, a project, its files, its views and reading the workspace catalogue (writing it is admin's); filing, updating, commenting, merging and placing work — and every `work_*` question. A person's own **Inbox**, **My work** and person view, and the same for a report as their lead (or anybody, as an administrator). The `inbox_changed` push |
+| `knowledge` | Reading, listing and searching the company's pages (`get_page`, `list_pages`, `search_knowledge`, and the `pages`, `page`, `containers`, `page_activity`, `page_revision` and `page_reads` questions); writing, saving and commenting on them (`write_page`, `save_page`, `comment_on_page`) |
 
-**`config:write` is host access: running code on every engine host**, and
-that is what it confers rather than a side effect of it. It is one grant by
-decision, and the configuration it writes runs code — a stdio `mcp_servers`
-entry is a `command` the engine starts as its own user on every node that runs
-seats; a seat's per-phase model keys (`llm_*`) name a `cli-agent` provider, a
-binary the engine runs, and a `sandbox` cell of `run_in: self` does its code
-work inside it; a `run_in: direct` sandbox cell runs a coding agent, and every
-setup step, as that user; a seat's `mcp_env` decides which credentials its
-children are handed; and a seat's worker grants decide which of its tools a
-worker holds. So a holder can run anything on every engine host
-and read whatever the engine's user can: the Tier A file, the keyring every
-session cookie is signed under, and every credential the store holds — and
-every other grant is transitively theirs. A separate "runtime" grant would be
-this one's whole reach under a second name, and a ceiling that withheld it
-would withhold every settings edit with it. Hand it out as you would a shell on
-those hosts. A machine token may carry it — `iamdomain` mints it onto one
-deliberately, because applying a configuration from a deploy job is what a
-token is for — so minting a token with it is handing that job host access.
-Every write that can start a process — the company document, connecting an
-integration — asks for a
-[recent step-up](#some-gestures-ask-how-recently-you-proved-who-you-are), which
-is what keeps a stolen week-old cookie from reaching it, and every child the
-engine starts is handed
-an [allowlisted environment](../guides/tools-and-mcp.md#what-a-stdio-servers-environment-is)
+**A relation asks the app beside it.** Leading a project, being the owner of an
+inbox, having written a comment, owning a saved view: each is a relation, and
+on an app's verb it admits only a caller who also uses the app. A project lead
+who does not use the tracker does not set its policy there, and a comment's
+author who no longer uses the knowledge base does not edit it there. A
+refusal names exactly what would change the answer — `[tracker]` to a lead
+missing the app, `[admin]` to somebody missing the relation.
+
+Three narrow rules sit beside the apps, each the owner's own decision:
+
+- **You may answer what you were asked, without Tracker.** When a colleague
+  puts a structured ask on a work item to you, you may read that item and post
+  your answer to it — the comment or choice that answers that ask — whether or
+  not you hold `tracker`. It is a self arm on the read and on the answer, and
+  nothing wider: the tool reads the item, finds the open ask that names you
+  (`tracker.AskedOn`), and admits only the answer, which the tracker's writer
+  checks again is yours; a plain comment, a new ask and a decision are still
+  the tracker's. A missing item and one you were not asked on are one
+  refusal, so the arm says nothing about which items exist, and once you have
+  answered the item is the tracker's again. The dashboard opens a work item's
+  own page (`#/work/{KEY}-{n}`) to somebody it was put to for exactly this.
+- **Authors tidy their own work.** Whoever created a page may rename, trash
+  and restore it, and whoever reported a work item may remove and restore it —
+  beside the container's lead and an administrator, and with the app. An
+  author tidies only their own item: removing or restoring the items beneath
+  it stays the project lead's or an administrator's, and a **purge**, which
+  nothing undoes, stays an administrator's, asks for a [recent
+  proof](#some-gestures-ask-how-recently-you-proved-who-you-are) and is never
+  an agent's.
+- **A page lives in a declared space.** Creating a page under a container key
+  the company does not declare is refused, naming the key and how a space is
+  declared — a unit's or a seat's `space:`, `knowledge.root_space`, or the
+  tool-skills container — for a person and an agent alike, exactly as filing a
+  task in a project the company does not declare is. See [Who may write
+  where](knowledge-system.md#who-may-write-where).
+
+### What admin runs
+
+`admin` covers every gesture that changes what the company *is* or reads what
+everybody did:
+
+- **the company document** — reading and writing `/config`, the org chart
+  beyond a lead's own subtree, integrations and their setup, models, MCP
+  servers, settings and budgets, and the project and space keys a unit or seat
+  declares, which are keyed fields of it;
+- **the workspace catalogue** — task types and custom fields — and the
+  **tool-skill pages**, which are injected into every seat's turn;
+- **the credential store** — listing, writing and revealing a secret;
+- **people** — reading anybody else's directory row, every directory write
+  (inviting, creating, changing what somebody carries, moving, suspending,
+  removing, resetting a second factor or a password), and ending every
+  session in the company;
+- **the deployment** — backups, retention, the fleet's controls and the
+  broker's membership;
+- **the company-wide trail** — every event, turn and phase, every
+  agent-to-agent channel, the `event` push and `/iam/audit`;
+- **the purges**, and the **admin path** of every relation rule: an
+  administrator reaches a departed person's inbox, any project's policy and
+  anybody's saved view.
+
+**A lead reads their own agents' trail.** One seat's diary, episodes, threads,
+memory overview, turns, phases and live bodies are its **lead's** to read as
+well as an administrator's — a lead steers, pauses and answers for their
+agents, and could do none of it well without reading what those agents did.
+It is `audit.seat.read`, decided per seat, and it is limited to questions
+about **one seat** (a seat page's own turns and phases, its memory, a coding
+run that seat launched). The company-wide trail stays admin's.
+
+**Admin is host access: running code on every engine host**, and that is what
+it confers rather than a side effect of it. It is one permission by decision,
+and the configuration it writes runs code — a stdio `mcp_servers` entry is a
+`command` the engine starts as its own user on every node that runs seats; a
+seat's per-phase model keys (`llm_*`) name a `cli-agent` provider, a binary the
+engine runs, and a `sandbox` cell of `run_in: self` does its code work inside
+it; a `run_in: direct` sandbox cell runs a coding agent, and every setup step,
+as that user; a seat's `mcp_env` decides which credentials its children are
+handed; and a seat's worker grants decide which of its tools a worker holds.
+So a holder can run anything on every engine host and read whatever the
+engine's user can: the Tier A file, the keyring every session cookie is signed
+under, and every credential the store holds. A separate "runtime" permission
+would be this one's whole reach under a second name. Hand it out as you would a
+shell on those hosts. A machine token may carry it — applying a configuration
+from a deploy job is what a token is for — so minting a token with it is
+handing that job host access; what keeps such a token off the gestures that
+need a person present is [two locks](#some-gestures-ask-how-recently-you-proved-who-you-are),
+not a permission it cannot carry. Every write that can start a process — the
+company document, connecting an integration — asks for a [recent
+step-up](#some-gestures-ask-how-recently-you-proved-who-you-are), which is what
+keeps a stolen week-old cookie from reaching it, and every child the engine
+starts is handed an [allowlisted
+environment](../guides/tools-and-mcp.md#what-a-stdio-servers-environment-is)
 rather than the engine's own — which stops the engine *handing* its secrets to
-a tool server, and does nothing about a holder of this grant, who chose that
-server. `people:manage` being its own grant keeps directory changes a
-reviewable gesture of their own; it is **not** a bound on a `config:write`
-holder, who can reach the store the directory lives in anyway.
+a tool server, and does nothing about an administrator, who chose that server.
 
-**A lead reaches part of it without the grant.** The org chart is written by
-its leads as well ([A lead edits their own
-team](#a-lead-edits-their-own-team)), and a lead may change every field of a
-seat in their team but a credential — its model chain and its sandbox among
-them. What they choose from is what the settings declare, which stay
-`config:write`'s: if the company offers a `cli-agent` provider or a sandbox cell
-that runs on the engine host, a lead can give one to their own seats, and
-through them run code there. Declare those only where every lead may use them.
+**A lead reaches part of it without admin.** The org chart is written by its
+leads as well ([A lead edits their own team](#a-lead-edits-their-own-team)),
+and a lead may change every field of a seat in their team but a credential and
+a keyed field — its model chain and its sandbox among them. What they choose
+from is what the settings declare, which stay admin's: if the company offers a
+`cli-agent` provider or a sandbox cell that runs on the engine host, a lead can
+give one to their own seats, and through them run code there. Declare those
+only where every lead may use them.
 
-**Connecting an integration has no grant of its own.** `/setup` performs no
-write of its own — a credential goes through the store `/secrets` serves, and
-the `${VAR}` pointer through the merge and compare-and-set `/config` performs —
-so connecting a vendor is exactly `config:write` plus `secrets:write`. A third
-grant beside them would be a second answer to one question.
+**Connecting an integration is admin's and nothing more.** `/setup` performs
+no write of its own — a credential goes through the store `/secrets` serves,
+and the `${VAR}` pointer through the merge and compare-and-set `/config`
+performs — so connecting a vendor is the same permission as both.
 
-Three splits are worth knowing because they follow a real deployment shape:
+### Agents hold every app, and never admin
 
-- `secrets:read` is separate from `secrets:write` so an automation that
-  reseals keys on a schedule can hold the write and never the read.
-- `sandbox:run` is separate from `work:write` because a coding run puts
-  generated code on a machine and hands it a seat's whole tool surface, which
-  is a different risk from filing a ticket.
-- `people:manage` is separate from `config:write` although both are
-  administrative. Changing the company document rebuilds every seat's tools
-  and providers; changing a person's row decides who may do that tomorrow. An
-  automation that applies a configuration must not be able to enrol itself a
-  colleague, and the person who onboards a team has no business editing
-  `mcp_servers`.
+An agent seat acting in its own turn holds exactly the apps — `iam.Apps`,
+derived, so a seat can never hold `admin` — and its **role** decides which
+tools it is offered. Two verbs belong to agents alone, marked **seat-only** on
+their rows: `a2a_ask`, which spends a colleague seat's turn, and
+`run_sandbox`, which hands a box the seat's whole tool surface. No person and
+no token takes either, whatever they hold, because a person has no turn for a
+colleague's answer to land in and no executor for a run to resume; which seats
+may is the role registry's decision, which already says which seat runs which
+tool. Seat-only is the mirror of the **human-only** mark, and both are checked
+before anything else on the row ([The fifteen rules](#the-fifteen-rules)).
 
-**`people:manage` bounds itself.** A caller may not confer a grant they do not
-hold — on anybody, themselves included — so holding it does not reach past
-whatever else the holder carries. That rule lives at the **record** rather
-than at the route, because a record can be published by a CLI, a duty and a
-migration, none of which passes through one. Taking a grant *away* is always
-allowed: nobody escalates by narrowing, and an administrator who cannot hold
-`secrets:read` must still be able to withdraw it from a leaver.
+### Nobody confers what they do not hold
 
-It holds on every record that hands a grant out: an edit of somebody's row,
-**an enrolment** — which is a grant change from nothing to what it carries —
-and **an invitation**, whose grants are decided once, by whoever issues it.
-One enrolment is not the writer's to authorise, because the node's own writer
-performs it and holds only `fleet:operate` and `people:manage`; it names the
-authority it rests on instead, and the record checks it in the same snapshot
-the grants land from:
+A caller may not confer a permission they do not hold — on anybody, themselves
+included — judged through `iam.Expand`, so an administrator may confer every
+app. That rule lives at the **record** rather than at the route, because a
+record can be published by a CLI, a duty and a migration, none of which passes
+through one. Taking a permission *away* is always allowed: nobody escalates by
+narrowing.
+
+It holds on every record that hands a permission out: an edit of somebody's
+row, **an enrolment** — which is a change from nothing to what it carries —
+and **an invitation**, whose permissions are decided once, by whoever issues
+it. Both an administrator's create and an invitation must **state** what they
+confer: `grants` is required on `POST /iam/people` and `POST
+/iam/invitations`, an omitted field is `400` naming it, and `[]` is a value —
+the overview alone. One enrolment is not the writer's to authorise, because
+the node's own writer performs it; it names the authority it rests on instead,
+and the record checks it in the same snapshot the permissions land from:
 
 | Enrolment | Its authority | What the record refuses |
 |---|---|---|
-| Created by an administrator (`POST /iam/people`) | The administrator's own grants | Any grant they do not hold, before anything is published; and for a person, no seat, or a seat that is not a vacant human seat |
-| Redeeming an invitation — the company's first person's included | The invitation, as its issuer wrote it, and the secret its link carries | A secret that is not the link's, a grant the invitation did not carry, an address it was not issued to, a seat other than the one it binds — or that one, once it is removed, an agent's or held by somebody else — an invitation that names no seat, and a link already spent or aged out |
+| Created by an administrator (`POST /iam/people`) | The administrator's own permissions | Any permission they do not hold, before anything is published; and for a person, no seat, or a seat that is not a vacant human seat |
+| Redeeming an invitation — the company's first person's included | The invitation, as its issuer wrote it, and the secret its link carries | A secret that is not the link's, a permission the invitation did not carry, an address it was not issued to, a seat other than the one it binds — or that one, once it is removed, an agent's or held by somebody else — an invitation that names no seat, and a link already spent or aged out |
 
 An enrolment is **one record** on the directory — the person, their address,
 their login, the seat (always, for a person; when it binds one, for a service
 account) and, for a redemption, the spent link or, for a person's create, their
 first password link — and the authority in that table is checked in that
-record's own snapshot,
-against every row: so a refusal leaves nothing behind, and a half-finished
-enrolment is not a state the estate can be in.
+record's own snapshot, against every row: so a refusal leaves nothing behind,
+and a half-finished enrolment is not a state the estate can be in.
 
 **An administrator's create is derived, and never rewrites somebody who
 exists.** Its person comes from the operation's key — the one an `unknown`
@@ -310,36 +433,47 @@ what keeps a link single-use is the link, which the record that creates the
 person spends, and a second redemption is refused in its own snapshot as a link
 already used.
 
+**An administrative record is never written through a machine token.** Every
+enrolment, invitation, edit of somebody's row, suspension, removal and
+company-wide invalidation is refused at the record if the request came
+through a `pat:` credential, whatever that token carries — `403
+token_refused` — because a token is what an attacker holding a pipeline's
+environment already has, and deciding who may do anything needs a person at a
+keyboard. It sits beside the authority table's own [presence
+rows](#some-gestures-ask-how-recently-you-proved-who-you-are), at the record,
+so a CLI, a duty or a test is held to it exactly as a route is.
+
 Whether **anybody exists yet** is one predicate — a person or a machine that is
 enrolled and not removed; a suspended person is somebody — and it is asked in
 two places, both about the first person: `GET
 /health`'s `identity`, and the line a node logs at boot while the answer is no.
 
-**`POST /iam/invalidate-all` takes both `fleet:operate` and `people:manage`.**
-It is the restore runbook's last step, run by whoever runs the deployment, and
-it ends every person's authority at once — every session and every machine
-token — which is the directory's to decide. The route used to admit on
-`fleet:operate` alone while the record it writes refused anybody without
-`people:manage`, so an operator the route let through was refused one step
-later; now the route, the record and this page say the same thing. The Tier A
-token the runbook runs it with holds both, and a machine token can never hold
-`people:manage`, so no pipeline's credential signs the company out.
+**`POST /iam/invalidate-all` is admin's, a person's, and a recent proof's.** It
+is the restore runbook's last step, and it ends every person's authority at
+once — every session and every machine token — and cannot be taken back. A
+Tier A token holds `admin`, is its own credential rather than a machine token
+and is fresh by construction, so the runbook's CLI step still runs on the day
+nobody can sign in; a machine token is refused it twice, by the row and by the
+record.
 
-### A grant this build has never heard of
+### A permission this build has never heard of
 
-During a rolling upgrade a newer node writes capability strings an older one
-cannot read. The older node **ignores that one string and keeps the rest** — it
-cannot open a door it has never heard of, and it does not need to in order to
-open the doors it has. It does not refuse the principal, because refusing would
-log everybody out for the length of the deploy. If you see a node logging
-ignored capabilities for longer than a deploy takes, that is a node nobody
-finished upgrading.
+During a rolling upgrade a newer node may write a permission an older one
+cannot read, and a row written before a vocabulary change may still carry a
+name this build no longer knows. Such a name is **kept and ignored**: it stays
+in the row, it opens nothing, and the person keeps every permission this build
+does know — refusing the principal would log everybody out for the length of a
+deploy. A writer may **remove** an unknown name from a row and never **add**
+one; a whole-set edit that restates one the row already carries adds nothing
+and is allowed. Tier A is stricter, because a file an operator wrote is a typo
+rather than an upgrade: an unknown name in an `api.auth.tokens` entry is
+refused, naming the three.
 
 ---
 
 ## Stages: whether a principal may act at all
 
-Before any grant is consulted, a principal has to be *enrolled*.
+Before any permission is consulted, a principal has to be *enrolled*.
 
 | Stage | May act | Means |
 |---|---|---|
@@ -391,7 +525,7 @@ withdrawn](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-configur
 for the routing rule for every stage, removal included.
 
 **The stage sticks through every edit.** It has one writer — the status
-record — and a later rename, grant change or credential change forms its
+record — and a later rename, permission change or credential change forms its
 document from the stage the row holds, so no edit made while somebody is
 suspended can quietly reinstate them.
 
@@ -412,7 +546,7 @@ This is the distinction to remember when a request is refused.
 ```mermaid
 flowchart LR
     REQ["a request arrives"] --> R{"can the engine<br/>say who this is?"}
-    R -->|"yes"| RES["<b>resolved</b><br/>a principal, with grants"]
+    R -->|"yes"| RES["<b>resolved</b><br/>a principal, with its permissions"]
     R -->|"no, definitively:<br/>nothing was presented"| ANON["<b>anonymous</b><br/>a fact about the request"]
     R -->|"could not tell:<br/>the store was unreachable,<br/>nothing resolved it"| UNK["<b>unknown</b><br/>not an answer at all"]
     ANON --> A2["refused as<br/><i>you presented nothing</i>,<br/>except on the handful of<br/>exempt routes"]
@@ -445,11 +579,12 @@ anonymous: the absence of an answer is not evidence of absence.
 A fresh deployment's identity estate is **empty**, and the one credential it
 has is a **Tier A token** — `api.auth.tokens`, which configuration requires on
 every node that serves the API for exactly this reason. A Tier A token is an
-operator, and it carries the `grants` its own `api.auth.tokens` entry declares,
-cut on every request to the node's `max_grants` ceiling — never the whole
-ceiling by default (see [Tier A](../getting-started/configuration.md#tier-a)).
-So the first person arrives **like everybody after them**: onto a human seat,
-invited or created by whoever holds a token declaring `people:manage`.
+operator, and it carries the `grants` its own `api.auth.tokens` entry declares
+— the founder's is `grants: [admin]` — read through the node's
+[admin posture](#access-admin-and-one-permission-per-app) on every request
+(see [Tier A](../getting-started/configuration.md#tier-a)). So the first person
+arrives **like everybody after them**: onto a human seat, invited or created by
+whoever holds a token declaring `admin`, on a node that serves it.
 
 **The seat comes first.** A person holds a human seat from the moment they
 exist, so the company has to declare yours before you can be put on it: a
@@ -468,12 +603,14 @@ token form while `/health` says nobody has joined), open **Agents › Org
 chart**, and open your seat — it is drawn **Vacant**, and its card's menu, its
 peek and its page each offer the same two gestures:
 
-- **Invite** — your address and the grants. The link is shown once; you open
+- **Invite** — your address and your access: tick **Admin**, which ticks and
+  locks every app beside it. The link is shown once; you open
   it, choose a login (one is proposed from the address) and a password, and
   redeem it exactly as [the next section](#a-person-arrives-on-their-seat-invited-or-created)
   describes, which signs you in.
-- **Create person** — your address, optionally your name and login, and the
-  grants. You are created active on the seat at once, and handed a **first
+- **Create person** — your address, optionally your name and login, and your
+  access — tick **Admin** here too. You are created active on the seat at
+  once, and handed a **first
   password link**, shown once, that sets your password and signs nobody in:
   you sign in afterwards with the login or the address.
 
@@ -484,25 +621,27 @@ Or from a shell:
 ```sh
 export CREWLET_API_TOKEN=...   # the value of one of api.auth.tokens
 crewlet iam seats -unheld      # the human seats nobody holds
-crewlet iam invite founder@example.com -seat founder \
-  -grants state:read,audit:read,config:read,secrets:read,work:write,knowledge:write,config:write,secrets:write,fleet:operate,people:manage,sandbox:run
+crewlet iam invite founder@example.com -seat founder -grants admin
 ```
 
-— or `crewlet iam create -email founder@example.com -seat founder -grants …`,
+— `-grants admin` stores `admin` and every app beside it — or `crewlet iam
+create -email founder@example.com -seat founder -grants admin`,
 which prints the first password link instead. Nothing about the first person
 is special:
 
 - **An invitation or a create confers only what its writer holds**, and a Tier
-  A token holds its own declared `grants` within the ceiling — so the token
-  that puts the first person on their seat must itself list `people:manage`
-  and every grant the first person is to receive (the quickstart's token lists
-  all eleven), and the operator decides which of those to give. A grant the
-  token does not hold is refused `403`, naming the grants that would have
-  admitted it; add it to the token's entry and restart, as [Tier
+  A token holds its own declared `grants`, read through the node's admin
+  posture — so the token that puts the first person on their seat must itself
+  list `admin` (the quickstart's founder token is `grants: [admin]`), on a node
+  whose `api.auth.admin` is `serve`. A permission the token does not hold is
+  refused `403`, naming the permission that would have admitted it; add it to
+  the token's entry and restart, as [Tier
   A](../getting-started/configuration.md#tier-a) states. Give the first person
-  `people:manage`, or nobody after them can be invited or created except
-  through the token again; `crewlet iam check` names a company in that state
-  as `no_people_manage_holder`.
+  `admin`, or nobody after them can be invited or created except through the
+  token again; `crewlet iam check` names a company in that state as
+  `no_admin_holder` — counting only an **active person** who holds `admin`,
+  never a service account, because no machine token may write an
+  administrative identity record.
 - **The node says the company is waiting for it.** `GET /health` answers
   `identity: unclaimed` while no person is enrolled (`ready` once one is — a
   person created directly counts the moment the create lands, before their
@@ -518,7 +657,7 @@ is special:
   none and points at `crewlet iam seats -unheld`. Neither ever moves
   `status`.
 - **After that, the token is the way back in, not the way people arrive.** Once
-  somebody holds `people:manage`, people are invited and created by them; the
+  somebody holds `admin`, people are invited and created by them; the
   token stays the break-glass credential for the day nobody who can do that is
   reachable.
 
@@ -554,9 +693,13 @@ afterwards moved, never cleared.
 | From a shell | `crewlet iam invite EMAIL -seat SEAT` | `crewlet iam create -email EMAIL -seat SEAT` |
 | Over HTTP | `POST /iam/invitations` | `POST /iam/people` |
 
-Both are directory writes, so both take `people:manage` and a [recent
+Both are directory writes, so both take `admin` and a [recent
 proof](#some-gestures-ask-how-recently-you-proved-who-you-are) from a person
-present, and both confer only what their writer holds. Both name a **human**
+present, and both confer only what their writer holds. Both **state** what
+they confer — `grants` is required, `[]` meaning the overview alone, and the
+dashboard's dialogs and the CLI each state a default out loud before they send
+([Nobody confers what they do not hold](#nobody-confers-what-they-do-not-hold)).
+Both name a **human**
 seat of the company the node runs: a handle the company does not hold, or an
 agent's seat, is `400`; a seat somebody holds is `409` naming them; a seat an
 open invitation holds is `409` naming the invitation, with `DELETE
@@ -565,9 +708,11 @@ yet answers `409 no_active_revision`. Leaving the seat out is `400
 seat_required`, refused before anything is minted.
 
 **On the dashboard both live on the seat.** In **Agents › Org chart**, a human
-seat's card says what holds it — **Held by** a login, **Invited ·** an
-address, or **Vacant** — to anybody who holds `people:manage` or `audit:read`.
-For `people:manage` the card's menu offers **Invite to this seat…** and
+seat's card says who holds it, by name, to everybody — the org chart is
+[everybody's overview](#everybodys-overview) — or that it is **Vacant**; an
+administrator also sees the holder's login and an open invitation (**Invited
+·** an address), which `GET /iam/seats` sends nobody else. For an
+administrator the card's menu offers **Invite to this seat…** and
 **Create a person on this seat…** on a vacant seat and **Cancel invitation**
 on an invited one, and the seat's peek and its page offer the same as
 **Invite**, **Create person** and **Cancel invitation**. A seat a service
@@ -594,7 +739,7 @@ seat.
 What redeeming confers is decided **once, by whoever issued it**, rather than
 again by whoever happens to process the redemption. A redemption is therefore
 not a way to ask for more than was offered: issuing one is held to the issuer's
-own grants, and the redemption names the invitation as its authority, so the
+own permissions, and the redemption names the invitation as its authority, so the
 record refuses anything the invitation does not cover — and a link that was
 spent or aged out between opening the form and posting it answers
 `410 invite_spent`, the same as one that was already spent.
@@ -662,8 +807,8 @@ looking for who used it.
 **The link is shown once and nothing can read it back.** What the estate holds
 is the invitation's id and the SHA-256 of the secret its link carries — the
 record that issued it carries the same hash and never the secret, and the
-redemption's own record checks the secret against it again where the grants
-land. An invitation an administrator lost is re-issued with one more call
+redemption's own record checks the secret against it again where the
+permissions land. An invitation an administrator lost is re-issued with one more call
 rather than recovered; the one answer that carries a link again is a **retry of
 the issue itself** under the same key, because the id is derived from the key
 and the secret from the id, both under the company's own key. And the address it
@@ -693,12 +838,12 @@ same person's position.
 redeemed and that are still good — `?all=true` (`-all`) adds the redeemed and
 the expired, each with its `state` — and every row says for whom (the address,
 opened on the listing node's own keyring), which seat it holds, what it
-confers, who issued it and until when. It is read like the directory, by
-whoever holds `people:manage` or `audit:read`, and no row carries the link,
+confers, who issued it and until when. It is read like the directory, by an
+administrator, and no row carries the link,
 its secret or what the estate keeps of it: the link is shown once, and an
 inviter who lost it cancels and issues another. `DELETE /iam/invitations/{id}`
 (`crewlet iam cancel-invite`) withdraws one nobody has redeemed, and takes
-`people:manage` like every directory write. It is one directory record, and
+`admin` like every directory write. It is one directory record, and
 its apply deletes the invitation's row, so the link answers exactly as one
 nobody issued, and the address and the seat it held are free at once — for a
 new invitation, or a person created or moved onto the seat. A
@@ -738,8 +883,8 @@ Until it is spent nobody can sign in as them.
   **Password link**, and printed once by the CLI — and the engine never sends
   it. So a create needs `api.external_url`, and a node with none refuses a
   person's create naming the setting. Whoever is shown it could spend it
-  themselves, which is why a create, like an invitation, confers only grants
-  its writer holds.
+  themselves, which is why a create, like an invitation, confers only
+  permissions its writer holds.
 - **Its retry hands back the same link.** The person is derived from the
   create's operation key and the link from the person, under the company's
   own key, so the retry an unknown answer asks for — the same request under the
@@ -750,8 +895,8 @@ Until it is spent nobody can sign in as them.
 - **It is good for one week**, an invitation's horizon, because it is the same
   person's position: somebody who does not work here yet, sent a link before
   their first day.
-- **It ends as every reset link ends**: an edit that gives the person a grant
-  revokes it, and suspending them, signing them out everywhere, resetting
+- **It ends as every reset link ends**: an edit that gives the person a
+  permission revokes it, and suspending them, signing them out everywhere, resetting
   their second factor and `crewlet iam invalidate-all` end it. One that lapses
   or is ended unspent leaves an active person with no way in, which `crewlet
   iam check` reports as `person_without_credential`; the remedy is a password
@@ -847,8 +992,8 @@ row holding its login (none, or a row with its stage and the seat it binds the
 token to, if any). It reports what the row holds and passes no verdict on it:
 whether that seat is still the company's is `GET /iam/check`'s finding about
 the same row, whose login is `token:<id>`. It is decided like
-every other directory listing, on `people:manage` or `audit:read`, and it is
-what Settings › People & access reads.
+every other directory listing, on `admin`, and it is what Settings › People &
+access reads.
 
 ## Sessions go stale, and an unset deadline is stale
 
@@ -1009,7 +1154,7 @@ where the person holds a second factor, and the new one typed twice.
 Somebody who cannot sign in at all has no current password to present, so an
 administrator issues them a **reset link**: `POST
 /iam/people/{id}/password-reset`, or `crewlet iam reset-password` with their id
-or login, on `people:manage` and a recent proof, as resetting a second factor
+or login, on `admin` and a recent proof, as resetting a second factor
 is. The link reads
 
 ```text
@@ -1026,16 +1171,20 @@ SHA-256 of the secret, listed among their credentials and revoked like any of
 them — and issuing another revokes the one before, so a person holds at most
 one. A machine has no password and is refused, and so is somebody suspended or
 retired, because a link would hand back an account somebody stopped. And it is
-issued **only for somebody whose every grant the administrator holds** — `403`
+issued **only for somebody whose every permission the issuer holds** — `403`
 otherwise, judged in the record's own snapshot: whoever issues the link is shown
-it and could spend it themselves, so a link for somebody holding `secrets:read`
-or `config:write` would let a `people:manage` holder without either act with
-it. It is the rule an invitation and an edit are held to — nobody hands out
-what they do not hold — and the reason a machine token is minted only for a
-service account. Because it is judged when the link is issued, **an edit that
-gives the person a grant revokes their outstanding link** in the same record:
-that grant was never judged against whoever holds the link, so they ask for
-another, judged against the new set. Taking a grant away revokes nothing. What
+it and could spend it themselves, so administering people must never be a way
+to act with a permission one does not have. It is the rule an invitation and an
+edit are held to — nobody hands out what they do not hold — and the reason a
+machine token is minted only for a service account. An administrator holds
+every app, so what reaches that `403` today is a permission this build does
+not know, kept on the person's row and never one an issuer here can be shown
+to hold. Because it is judged when the link is issued, **an edit that gives the
+person a permission revokes their outstanding link** in the same record: that
+permission was never judged against whoever holds the link, so they ask for
+another, judged against the new set — and storing `[admin]` as `[admin,
+tracker, knowledge]` adds nothing, since the comparison expands both sides.
+Taking a permission away revokes nothing. What
 the issue does not follow is the *issuer*: an administrator demoted after
 issuing a link still holds one that opens, as an invitation they issued still
 confers what it carries — so whoever demotes them revokes it with `DELETE
@@ -1389,19 +1538,19 @@ tokens and a person's session: a bearer minted *for somebody in the
 directory* — a person's own token for the assistant they work through, or the
 token a **service account** (a directory row of kind `machine`, with a coloned
 login such as `ci:release`) presents from a pipeline. A service account has
-no password and no session, so it acts only through its tokens — and since a
-token never carries `secrets:read` or `people:manage`, a machine row is refused
-either: an enrolment or an edit that would give one to a machine is `400`. It
-is what `crewlet iam token` prints, and it is a `CREWLET_API_TOKEN` like any
+no password and no session, so it acts only through its tokens. It holds
+whichever permissions an administrator states for it — the apps, `admin`, or
+neither — with no default, since nobody is behind it to have meant one. It is
+what `crewlet iam token` prints, and it is a `CREWLET_API_TOKEN` like any
 other:
 
 ```bash
 # Your own, for the assistant you work through: signs in as you for the one
 # request (the password is read without echo), mints, and signs out.
-crewlet iam token -login jane.doe -label "my assistant" -grants state:read,work:write
+crewlet iam token -login jane.doe -label "my assistant" -grants tracker
 
-# A service account's, minted by whoever holds people:manage.
-crewlet iam token -person <service account id> -label "release pipeline" -grants state:read,work:write -days 30
+# A service account's, minted by an administrator.
+crewlet iam token -person <service account id> -label "release pipeline" -grants tracker -days 30
 
 export CREWLET_API_TOKEN=cwl_pat_…
 ```
@@ -1409,16 +1558,17 @@ export CREWLET_API_TOKEN=cwl_pat_…
 **A person's token is theirs alone to mint.** Whoever mints a token is shown
 its value, and the token acts as its owner — so one minted on somebody else's
 account is a credential that acts as them, held by somebody who is not them.
-`people:manage` therefore mints for **service accounts** and for nobody else;
+`admin` therefore mints for **service accounts** and for nobody else;
 a person mints their own from their own session, which is `POST
 /iam/credentials` with no `?person=` — the dashboard's Account page
 (`#/account`, **Personal access tokens › New token**) makes that request from
-the signed-in session — with **no grant ticked** to start, so a token carries
-what its holder chose rather than everything they hold (minted with none, it
-only keeps its owner's own record — marks their inbox read, pins views and
-orders their priorities — and reads nothing, that record included, since
-reading takes `state:read`; the dialog says so), and with a lifetime
-past the 365-day ceiling refused before it is sent — and `crewlet iam token
+the signed-in session — with **nothing ticked** to start, each of their own
+permissions theirs to tick, so a token carries what its holder chose rather
+than everything they hold (a person who pressed Mint without reading once held
+a bearer secret carrying everything they could do; minted with none, it reads
+the overview and manages nothing, and the dialog says so), and with
+a lifetime past the 365-day ceiling refused before it is sent — and `crewlet
+iam token
 -login` is that request too,
 signing in for it exactly as the dashboard does —
 the password from the terminal without echo or the first line piped in, a
@@ -1481,21 +1631,34 @@ reserved for exactly this: no service account may enrol under a login that
 starts `pat:`, so the name always means a machine token. See [who a write is
 attributed to](../reference/api-endpoints.md#who-a-write-is-attributed-to).
 
-**It carries what it was minted with that its owner still holds.** The grants
-are named at the mint (`-grants`); left out, the token carries every grant its
-owner holds that a token may carry. On every request the minted set is cut to
-the owner's **current** grants and to this node's ceiling — so demoting a
-person demotes every token they made, and nothing ever widens one.
+**It carries what it was minted with that its owner still holds.** The
+permissions are named at the mint (`-grants`); left out, the token carries
+every permission its owner holds, `admin` included. On every request the
+minted set is cut to the owner's **current** permissions — both sides
+expanded, so a token minted `[admin]` for an owner who has since lost admin
+keeps the apps they still hold — and to this node's [admin
+posture](#access-admin-and-one-permission-per-app); so demoting a person
+demotes every token they made, and nothing ever widens one.
+
+**A token may carry `admin`**, because a deploy job applying a configuration is
+what a token is for. What keeps it off the gestures that need a person present
+is not a permission it cannot carry but two locks: the authority table refuses
+a request that presented a token on every [person-present
+row](#some-gestures-ask-how-recently-you-proved-who-you-are) — revealing a
+secret, every directory write, ending everybody's sessions, changing how
+somebody proves who they are — and the identity domain refuses an
+[administrative record](#nobody-confers-what-they-do-not-hold) written through
+one, whatever it carries.
 
 **What a mint refuses:**
 
 | Refused | Why |
 |---|---|
-| `secrets:read` and `people:manage`, whatever the owner holds | Revealing a credential and deciding who may do anything are gestures that need a person present, and a token is what an attacker holding a pipeline's environment already has |
-| A grant the owner does not hold | A token narrows its owner and never widens them |
-| A grant the **minting party** does not hold | Whoever mints a token sees its value once, so minting one for somebody else is holding their grants oneself — the same rule as an enrolment |
+| A permission the owner does not hold | A token narrows its owner and never widens them |
+| A permission the **minting party** does not hold | Whoever mints a token sees its value once, so minting one for somebody else is holding their permissions oneself — the same rule as an enrolment |
+| A permission this build does not know | Refused naming the set, `400`: a mint adds every name it lists, and nobody adds a name nobody knows |
 | A **person's** token minted by anybody but that person — an administrator included | It acts as them, and its value is shown to whoever minted it |
-| A **service account's** token minted without `people:manage` | It has no login page, so nobody can mint for it as itself; minting for it is managing people |
+| A **service account's** token minted without `admin` | It has no login page, so nobody can mint for it as itself; minting for it is managing people |
 | An owner who is not active, and the machine row that binds a Tier A token (`token:<id>`) | That row is the deployment's credential's place in the directory, not an account |
 | No expiry, one already past, or one more than a year away | Ninety days by default and 365 at most: "forever" is deliberately unexpressible |
 | A request that presented a machine token | A token minted from a token is one whoever holds a pipeline's environment can renew for ever, a year at a time, with nobody present |
@@ -1622,7 +1785,7 @@ to know it:
 Nothing in it is secret and nothing in it grants anything alone: a bearer in a
 proxy log discloses a lineage, a person id, two deadlines and whether the
 session may only enrol a second factor, and is worthless without the mac. It deliberately carries nothing *about* the person — no login,
-no address, no grants — because a cookie is the value most likely to end up
+no address, no permissions — because a cookie is the value most likely to end up
 somewhere nobody meant it to.
 
 **There is no validation cache**, and that is not an omission — there is
@@ -1684,11 +1847,11 @@ asking about the caller and nobody else:
 
 | Section | What it does, and what it ends |
 |---|---|
-| **Profile** | Their login, name, address, seat and grants, read-only — an administrator changes them |
+| **Profile** | Their login, name, address and seat, and **Your access** — Admin, the apps, or the overview only — read-only: an administrator changes them |
 | **Two-step verification** | First under Security, because it is what a person comes to check: sets up or replaces the authenticator app, and issues new [recovery codes](#a-code-is-spent-when-it-is-used) — only beside an app |
 | **Change password…** | A dialog: [the current password, a code where a second factor is held, and the new one](#changing-your-own-password-ends-everything-else), typed twice. Ends every other session and every personal token; this browser stays signed in |
 | **Where you are signed in** | Their live sessions, this browser marked (`GET /auth/session`'s `lineage`); any other signed out by name with `POST /auth/logout/{lineage}`, or all of them — and every personal token — with **Sign out everywhere**, which asks first |
-| **Personal access tokens** | [Their machine tokens](#machine-tokens-a-persons-own-and-a-service-accounts): minted with no `?person=`, the value shown once, and revoked |
+| **Personal access tokens** | [Their machine tokens](#machine-tokens-a-persons-own-and-a-service-accounts): minted with no `?person=`, starting with nothing ticked and offering their own permissions, the value shown once, and revoked |
 
 A session exchanged from a Tier A token is no person's, so its Account page
 names the token and offers none of this.
@@ -1697,19 +1860,33 @@ names the token and offers none of this.
 
 A person is invited or created **on their seat**: a vacant human seat's card in
 **Agents › Org chart**, its peek and its page offer **Invite** and **Create
-person** to whoever holds `people:manage`, and an invited seat offers **Cancel
+person** to an administrator, and an invited seat offers **Cancel
 invitation** — see [A person arrives on their
 seat](#a-person-arrives-on-their-seat-invited-or-created). Everything else the
 directory does happens on its own screen, **Settings › People & access**,
-through the same `/iam` routes `crewlet iam` calls; it sends you to the org
-chart to invite or create somebody, and a reader holding `audit:read` alone
-sees it read-only. What each gesture ends is the route's:
+through the same `/iam` routes `crewlet iam` calls, and it is an
+administrator's; it sends you to the org chart to invite or create somebody.
+Its list's **Access** column reads each row's permissions in words — "Admin",
+"Tracker · Knowledge", "Overview only".
+
+**The access picker** is the same in every dialog that sets permissions.
+**Admin** is one switch: ticking it ticks every app and locks them, marked
+"Included with Admin", and it stores every app beside `admin`, so unticking
+Admin later leaves the apps ticked. **Invite** and **Create person** open with
+every app ticked and Admin not; a **new service account** opens with nothing
+ticked; and **Mint token** for a service account opens with the account's own
+permissions that the minter holds too — the account exists to act with them —
+while a person's own **New token** opens with nothing ticked. A note under
+the picker says what an unticked app costs: with **Tracker** unticked a person
+receives no work from their agents, who send work through the tracker, and with
+nothing ticked they have the overview only. What each gesture ends is the
+route's:
 
 | Gesture | What it does, and what it ends |
 |---|---|
 | **Invitations** · **Cancel** | Lists what nobody has redeemed (and, asked, what expired or was redeemed); cancelling one ends its link at once and frees the address and the seat |
-| **New service account** · **Mint token** | A machine with a coloned login and grants — never `secrets:read` or `people:manage`, which no token carries and so no machine is given — on a human seat nobody holds if it is to act as one, or none; then a [token](#machine-tokens-a-persons-own-and-a-service-accounts) out of its grants, shown once |
-| **Edit login, seat and grants** | One edit carrying only what changed. A person's seat is chosen among the vacant human seats and their own, with no "No seat" — it is moved, never cleared; a service account's may be none. Lowering grants reaches every token the person minted, which carries only what its owner still holds |
+| **New service account** · **Mint token** | A machine with a coloned login and the permissions ticked for it — nothing by default, `admin` among what it may hold — on a human seat nobody holds if it is to act as one, or none; then a [token](#machine-tokens-a-persons-own-and-a-service-accounts) out of its permissions, shown once |
+| **Edit login, seat and access** | One edit carrying only what changed. A person's seat is chosen among the vacant human seats and their own, with no "No seat" — it is moved, never cleared; a service account's may be none. Lowering what somebody holds reaches every token they minted, which carries only what its owner still holds. Taking Admin from yourself, suspending yourself or removing yourself while you are the only active person holding it says so first: afterwards nobody but the deployment's own token (`api.auth.tokens`) could administer people |
 | **Suspend** · **Reactivate** | A suspended person may not act, every session, token and password reset link they hold ends, and their seat — which they keep — is withheld from contact routing; reactivating restores the routing and lets them sign in again, and brings back none of what the suspension ended |
 | **Issue password reset link** | A [one-time link](#a-forgotten-password-is-a-one-time-link-from-an-administrator), shown once, good for a day, listed among their credentials. Spending it ends every session and token they hold. Every gesture that ends their sessions ends it too, so it is issued after them |
 | **Reset second factor** | Clears their authenticator and recovery codes and ends every session, token and password reset link they hold; where `api.auth.totp` is `required` they enrol again at their next sign-in, and where it is `optional` they sign in on their password alone until they set one up |
@@ -1864,8 +2041,9 @@ browser can use break-glass without holding the token's value — which matters
 on the one day it exists for, when nobody can sign in as a person. The session
 is the token and nothing else: it names the token's login (`token:<id>`) rather
 than a person, and every request re-composes it from the entry this node holds
-*now*, through the same function the bearer goes through — the entry's grants
-cut to the ceiling, the seat the directory binds the token to, and stepped up
+*now*, through the same function the bearer goes through — the entry's
+permissions read through the node's admin posture, the seat the directory binds
+the token to, and stepped up
 by construction. Its lifetime is one hour. Removing or renaming the entry ends
 it on the next request (and clears the cookie) wherever the node stands on the
 log, because a configuration entry is never late; `POST /auth/logout` from it
@@ -1878,18 +2056,18 @@ with everybody else's.
 **It answers to the token's id, not its value.** Putting a new value under the
 same id leaves the sessions the old value opened working until their hour
 ends — re-composed from the entry on every request, so they carry whatever the
-entry now grants. **To cut a leaked value's sessions off at once, rotate by
+entry now carries. **To cut a leaked value's sessions off at once, rotate by
 giving the token a new id** (`id: ops` becomes `id: ops-2`, with the new
 value): the old id is then an entry no node holds, which ends every session
 exchanged from it on its next request, everywhere. Remember that the id is
 also the token's login, `token:<id>`, so a directory row binding the old login
 to a seat has to be moved to the new one.
 
-**The ceiling applies to a person too.** `api.auth.max_grants` is intersected
-into every principal at the moment the request is resolved, so a node whose
-ceiling was lowered enforces it on its next request rather than on a row
-somebody has to rewrite. A mixed fleet mid-rollout is a legal state, which is
-why each node publishes a hash of its own ceiling.
+**The admin posture applies to a person too.** `api.auth.admin` is applied
+to every principal at the moment the request is resolved, so a node restarted
+with `refuse` clamps admin away on its next request rather than on a row
+somebody has to rewrite — and keeps every app. A mixed fleet mid-rollout is a
+legal state, which is why each node publishes its own posture.
 
 **A seat refusal does not reach `/auth/*`.** The `403` naming the seat is
 written for every guarded route *except* that surface, because nothing under
@@ -1926,13 +2104,14 @@ bool whose safe value was its zero, so `false` did not survive an export round
 trip and a deployment that had closed it re-opened itself the first time its
 config went through `PUT /config`.
 
-A deliberately public read surface is now an `api.auth.tokens` entry holding
-read grants and nothing else — listable, revocable without a restart, and
-present in the audit log.
+A credential for a script that only reads what the company is doing is a
+service account holding no permission at all — its tokens read the
+[overview](#everybodys-overview) and nothing else — listable, revocable without
+a restart, and present in the audit log.
 
 There is deliberately no list of *especially* guarded routes to go with this
 one. Guarded is what a route **is**; each surface states its own authority
-where it is enforced, as a grant on the route and an
+where it is enforced, as a verb on the route and an
 [authority rule](#the-authority-table-one-function-decides) deciding whether
 this caller may do that.
 
@@ -2011,7 +2190,7 @@ cross-origin claim can be believed.
 
 ## The authority table: one function decides
 
-A grant says what a principal *carries*. It does not say whether they may do a
+A permission says what a principal *carries*. It does not say whether they may do a
 particular thing to a particular object — because most of the interesting
 answers are about a **relation**: your own inbox, the project you lead, the
 comment you wrote. One function takes that decision, over one table, and every
@@ -2031,30 +2210,32 @@ showed up as a support question:
   revision therefore told every lead in the company
   that they lead nothing — while reporting itself healthy.
 
-And none of those lookups consulted a grant, so the deployment's own
+And none of those lookups consulted a permission, so the deployment's own
 administrator was refused by a tool where every HTTP route let them through.
 The tracker still takes an authority value on the writes that need one, but it
 states what the table **decided** — never the inputs a caller resolved — and
 keeps only the half a chart cannot know: which facet of a write each answer
 unlocks.
 
-### The thirteen rules
+### The fifteen rules
 
 | Rule | Covers | Decided by |
 |---|---|---|
-| **Read** | The board, pages, the org chart, the roster, the fleet, spend; and a person's question answered from the company's knowledge (`answer_knowledge`), which a principal no seat binds — a token or a service account bound to none — is refused, because it runs on the bound seat's model | `state:read` |
-| **Self** | The caller's own diary, episodes, skills and onboarding marker | The caller, and **nobody else** — not even the admin grant |
-| **Colleague write** | Filing, commenting, updating, merging; declaring a project's tags; authoring a page; asking a colleague | `work:write` for work, `knowledge:write` for pages |
-| **Own record** | Marking an inbox, pinned views | The owner, or `fleet:operate` |
-| **Own or lead** | Priorities, a person's day, reading their queue; whether a seat works — pausing it, resuming it, a note to the turn it is running (`pause_seat`, `resume_seat`, `steer_turn`) — and answering the question a coding run parked on (`answer_run`) | The owner, whoever leads them, or `fleet:operate` — and READING a person's day or queue (`work_inbox`, `my_work`, `get_person`) takes `state:read` beside that, the owner's own included, because it lists the company's tasks: one row with two grants, as ending every session in the company is, so `GET /work/inbox` and the operator surface's `work_inbox` give one answer. For a seat's controls the owner is the person bound to the seat; for a run's question it is the run's **requester** — the person whose message woke the turn that launched it — and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
-| **Saved view** | Saving a view | A **personal** view (one naming an owner): its owner, or `fleet:operate`. A **shared** one: its container's lead — a project's, a unit's, or the person whose page it sits on and whoever leads them — or `fleet:operate`, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
-| **Container** | A project's policy — its fields, default assignee, tag renames and archives, archiving the project — re-routing a task to another team, and a page container's own settings | The project's lead or, for pages, the lead of the unit whose `space:` the container is; or `fleet:operate` |
-| **Subtree** | The org chart — its seats and units — read and written through `/config` (`config.org.read`, `config.org.write`) | `config:read` to read and `config:write` to write anything in it, or a person who **leads** the part concerned: a unit is in their subtree when they lead it or a unit above it, and a seat when its unit is. A write by a lead is judged change by change on **both sides** of it — see [A lead edits their own team](#a-lead-edits-their-own-team). The company root is nobody's subtree, and no agent takes either verb |
-| **Destructive** | Removing and restoring a task; trashing and restoring a page | The **container's** lead, or `fleet:operate` |
-| **Authored** | Editing and removing a page comment | Whoever wrote it, or `fleet:operate` |
-| **Operator** | Configuration, secrets, integrations, the node itself, the tracker's workspace catalogue, and writing a page in the tool-skills container | The grant the verb names — `config:write` for a tool skill, which is injected into every seat's turn and so rewrites the prompt the company runs under; ending every session in the company names two (`fleet:operate` and `people:manage`) |
-| **Directory read** | Who can reach the company: the directory, one person's row, their credentials and sessions, and the answering node's Tier A token labels joined to the rows holding their logins (`GET /iam/node-tokens`) | The person the row is about, `people:manage`, or `audit:read` |
-| **Directory self** | Minting and revoking a credential, ending sessions | The person themselves, or `people:manage` |
+| **Everybody** | The overview's reads that a tool or a route asks about — who to ask (`lookup_colleague`), who holds each human seat (`GET /iam/seats`) — and the route to a work item's thread (`work.thread`), which admits the request and leaves the decision to `comment_on_work_item` once the item is read | Any principal whose stage may act |
+| **App** | Every tracker and page read and write: the board, a project, its files, its views and reading its catalogue (writing it is Admin's); filing, updating, merging and placing work, and a project's tags; reading, listing, searching, writing, saving and commenting on pages | The row's app — `tracker` or `knowledge` — which an administrator holds through `Expand` |
+| **Any app** | A person's question answered from what the company has written down (`answer_knowledge`), which a principal no seat binds — a token or a service account bound to none — is refused, because it runs on the bound seat's model | Either app; the answer searches the pages only for a `knowledge` holder and the board only for a `tracker` holder |
+| **App or asked** | Reading one work item, and commenting on it (`get_work_item`, `comment_on_work_item`) | `tracker`, or the person an open ask on the item names — and on the comment only their answer to it ([You may answer what you were asked](#what-each-app-opens)) |
+| **Self** | The caller's own diary, episodes, skills and onboarding marker | The caller, and **nobody else** — not even admin |
+| **Own record** | Marking an inbox, pinned views | The owner, or admin — with `tracker` |
+| **Own or lead** | Priorities, a person's day and queue (`set_priorities`, `my_work`, `work_inbox`, `get_person`); whether a seat works — pausing it, resuming it, a note to the turn it is running (`pause_seat`, `resume_seat`, `steer_turn`) — answering the question a coding run parked on (`answer_run`); and reading one seat's own trail (`audit.seat.read`) | The owner, whoever leads them, or admin — with `tracker` on the four tracker verbs, and with no app on the rest, since a lead who uses neither app still runs their team. For a seat's controls the owner is the person bound to the seat; for a run's question it is the run's **requester** — the person whose message woke the turn that launched it — and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
+| **Saved view** | Saving a view | With `tracker`: a **personal** view (one naming an owner) is its owner's, or admin's; a **shared** one is its container's lead's — a project's, a unit's, or the person whose page it sits on and whoever leads them — or admin's, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
+| **Container** | A project's policy — its fields, default assignee, tag renames and archives, archiving the project — and re-routing a task to another team | The project's lead, or admin — with `tracker` |
+| **Tidy** | Removing and restoring a work item; renaming, trashing and restoring a page | The container's lead, the item's **reporter** or the page's **creator**, or admin — with the app. An author tidies their own item and never a subtree beneath it |
+| **Subtree** | The org chart — its seats and units — read and written through `/config` (`config.org.read`, `config.org.write`) | `admin` for any of it, or a person who **leads** the part concerned: a unit is in their subtree when they lead it or a unit above it, and a seat when its unit is. A write by a lead is judged change by change on **both sides** of it — see [A lead edits their own team](#a-lead-edits-their-own-team). The company root is nobody's subtree, and no agent takes either verb |
+| **Destructive** | Moving a task out of its project; removing a project's file | The project's lead, or admin — with `tracker` |
+| **Authored** | Editing and removing a comment, on a page or a work item | Whoever wrote it, or admin — with the comment's app |
+| **Admin** | Configuration, secrets, integrations, the deployment, the company-wide trail, the workspace catalogue, a page in the tool-skills container, every directory write, ending every session in the company, and the purges | `admin` |
+| **Directory** | One person's directory row and what hangs off it — reading it, their credentials and sessions, minting and revoking their machine tokens, ending their sessions, changing how they prove who they are — and the directory's own listings: the people, the open invitations, `GET /iam/check` and the answering node's Tier A token labels joined to the rows holding their logins (`GET /iam/node-tokens`) | The person the row is about, by their **ID**, or admin |
 
 **Some verbs are no agent's, whatever their rule says.** Purging a task or a
 page, archiving a project, and writing a tool skill carry a mark beside their
@@ -2066,12 +2247,22 @@ pause a colleague, resume itself, steer another's turn or answer its own run's
 question would be overruling the people who run it, and a seat already has
 `search_knowledge` and a model of its own. The mark composes with the rule rather than
 replacing it — archiving is still the project lead's, and a purge still needs
-`fleet:operate` — and it is checked **first**, so an agent is told it is a seat
-rather than that it lacks a capability it may well hold.
+`admin` — and it is checked **first**, so an agent is told it is a seat
+rather than that it lacks a permission it may well hold.
+
+**And two verbs are only an agent's.** `a2a_ask` and `run_sandbox` carry the
+opposite mark, **seat-only**: no person and no token takes them, whatever they
+hold — `403` with the reason `seat_only` and no permission named, because none
+would change the answer — and an agent seat takes them with no permission at
+all, offered or not by its role. Asking a colleague spends that seat's turn and
+budget, and a coding run hands a box the seat's whole tool surface; which seats
+may do either is the role registry's decision, and a person has no turn for an
+answer to land in. Seat-only is checked where human-only is, before the rule,
+and no row carries both.
 
 A lead may re-order what their report works on; marking somebody's mail read is
 a different gesture and nobody asked a lead to make it. And whether a seat
-works is its lead's to decide, or the deployment's, exactly as what it works
+works is its lead's to decide, or an administrator's, exactly as what it works
 on is — never any reader's: everybody signed in holds a credential, so "any
 operator" would let every reader of the board stop any seat in the company,
 end the turn it is on, or put words in it. Each seat control is decided on
@@ -2100,22 +2291,17 @@ keys the same, and refuses a lead everywhere else with no error to notice.
 
 **Self has no admin path, and that is why it is its own rule.** A seat's memory
 tools take no handle at all, because an agent recalling another's episodes
-would make the per-seat memory a shared one. An operator *reading* a seat's
-memory is a different surface with a grant of its own (`audit:read` over
-`/agents/{id}/memory` and `/agents/{id}/conversations`, decided per seat by a
-verb of its own), and admitting it here too would be a second answer to one
-question.
-
-**Asking a colleague is a write.** It files no row, which is why it looks like
-it belongs nowhere — but it spends somebody else's turn and somebody else's
-budget, so a credential with no write capability at all must not be able to
-make every seat in the company think.
+would make the per-seat memory a shared one. Somebody else *reading* a seat's
+memory is a different verb with a rule of its own — `audit.seat.read`, the
+seat's lead or an administrator, decided per seat over
+`/agents/{id}/memory`, `/agents/{id}/conversations` and the seat's own turns —
+and admitting it here too would be a second answer to one question.
 
 ### A lead edits their own team
 
-The org chart is part of the company document, and whoever holds
-`config:write` may change any of it. A person who **leads** a unit may change
-what is inside it without that grant — the seats and units of their
+The org chart is part of the company document, and an administrator may
+change any of it. A person who **leads** a unit may change what is inside it
+without `admin` — the seats and units of their
 **subtree**: the unit they lead and every unit beneath it, and every seat in
 one of them. The company root, where the CEO's seat and the top-level units
 sit, is nobody's subtree.
@@ -2137,10 +2323,10 @@ subtree:
 | A unit's **own fields** edited | the unit itself, before and after — so a lead renames their own team or restates its purpose, while handing it to another `lead:`, or clearing its lead so it inherits one from above, is refused unless they also lead the unit above it |
 | A new **`lead:`** or **`manages:`** entry | what it names is inside their subtree afterwards — a lead cannot name an outsider as a sub-team's lead, or make one of their reports the CEO's manager; a name that resolves to nothing is refused too |
 | A seat or unit **added** under a name another object's `lead:` or `manages:` entry already states | that object is inside their subtree before the write. A `lead:` may name a seat nobody has added yet, and a `manages:` entry naming a unit's key resolves to a seat of that handle first, so the addition would take the reference over without the object stating it changing at all — a seat added as `ghost` to the lead's team would lead an outside team whose `lead: ghost` was waiting, with the lead above every member of it |
-| A **project**, **space** or **channel**, or a seat's **email** or **contact identity**, set, cleared or changed | never: it takes `config:write`. Each is how something outside the document finds the seat or unit — whoever leads the unit declaring a project or a space leads it, a channel's messages are routed to its unit, and a vendor's actions are attributed by an address or an account id — and who else holds it is not something the company document says: a project outlives the unit that declared it, in the tracker with every task in it, and an account exists at its vendor whether or not a seat names it. A lead declaring an orphaned project as their team's would become its lead |
-| A **credential** set, cleared or changed — a credential field (`mcp_env`, a sandbox's `env`, a setup file, a seat's own app tokens) compared whole, its keys as well as its values, and a `${VAR}` set, cleared or changed in **any** field | never: it takes `config:write`, because a reference names any variable the engine can resolve — the company's secrets and the node's own keyring and tokens alike. Pointing a seat's tools at one hands it to a process the lead configures, and a seat's `email` and contact ids resolve one too and are recited to anybody who looks the seat up, so a lead naming a secret as their own Slack id would read it back. And a key is a grant of its own: an `mcp_env` block naming a per-seat tool server starts that server for the seat, with the environment and headers its template declares, whatever the block holds — `github: {}` included |
-| A **setting** — anything outside `roles:` and `units:` | never: it takes `config:write` |
-| **Nothing** — a write whose document is the one it replaces | never: storing it still makes a new revision and re-activates it on every node, rebuilding every seat's tools, providers and MCP children, which is `POST /config/reload`'s gesture and takes `config:write`. Its dry run is answered for one seat or unit of theirs sent back to its own address, since a check stores nothing |
+| A **project**, **space** or **channel**, or a seat's **email** or **contact identity**, set, cleared or changed | never: it takes `admin`. Each is how something outside the document finds the seat or unit — whoever leads the unit declaring a project or a space leads it, a channel's messages are routed to its unit, and a vendor's actions are attributed by an address or an account id — and who else holds it is not something the company document says: a project outlives the unit that declared it, in the tracker with every task in it, and an account exists at its vendor whether or not a seat names it. A lead declaring an orphaned project as their team's would become its lead |
+| A **credential** set, cleared or changed — a credential field (`mcp_env`, a sandbox's `env`, a setup file, a seat's own app tokens) compared whole, its keys as well as its values, and a `${VAR}` set, cleared or changed in **any** field | never: it takes `admin`, because a reference names any variable the engine can resolve — the company's secrets and the node's own keyring and tokens alike. Pointing a seat's tools at one hands it to a process the lead configures, and a seat's `email` and contact ids resolve one too and are recited to anybody who looks the seat up, so a lead naming a secret as their own Slack id would read it back. And a key decides something of its own: an `mcp_env` block naming a per-seat tool server starts that server for the seat, with the environment and headers its template declares, whatever the block holds — `github: {}` included |
+| A **setting** — anything outside `roles:` and `units:` | never: it takes `admin` |
+| **Nothing** — a write whose document is the one it replaces | never: storing it still makes a new revision and re-activates it on every node, rebuilding every seat's tools, providers and MCP children, which is `POST /config/reload`'s gesture and takes `admin`. Its dry run is answered for one seat or unit of theirs sent back to its own address, since a check stores nothing |
 
 Only what a write **changes** is judged: a reference or a key the object
 already carried was somebody else's decision, and judging it again would make a
@@ -2149,30 +2335,30 @@ lead. A removal is judged by where the object was and nothing else, which
 leaves one residual: a lead may remove a sub-team or a seat that declares a
 project or a space, and the project stays in the tracker with its tasks, or the
 space in the knowledge base with its pages, declared by nothing in the company
-document — an orphan nobody leads until somebody holding `config:write`
+document — an orphan nobody leads until an administrator
 declares it again, since a lead may not. It takes authority away and gives
 none. A seat edited within the lead's subtree may otherwise change anything —
 its model chain, its sandbox, its schedules — among what the company's settings
-offer, which stay `config:write`'s: whether a `cli-agent` provider or a sandbox
+offer, which stay admin's: whether a `cli-agent` provider or a sandbox
 cell on the engine host exists for a lead to choose is the administrator's
 decision.
 
-A refused write is `403 unauthorized` naming `config:write` — the grant that
+A refused write is `403 unauthorized` naming `admin` — the permission that
 would admit all of it — and a `refused` list of every part that is not the
 caller's, each with the place it reaches; a dry run (`?dry_run=true`) answers
 the same, so a lead learns before saving. A lead reads what they may write the
 same way: `GET /config/roles/{handle}` and `GET /config/units/{id}` serve a seat
 or unit of their subtree, masked as every read of the document is, while the
-whole document stays `config:read`'s. A read or a write of one seat or unit
+whole document stays admin's. A read or a write of one seat or unit
 is decided where it sits **before** it is looked up or its body is read — at
 the company root for a name the company does not have — so one in another
 team, one at the root and one that does not exist are refused in the same
-words; only the company's grant is told a name is missing. The chart's
+words; only an administrator is told a name is missing. The chart's
 **shape** is still no secret from them: a refused write's `refused` list names
 the place each part reaches — which unit a seat they named in `manages:` or
 `lead:` sits in — because that place is what they are refused on, so anybody
 bound to a seat can learn which seats exist and where they sit by naming them,
-as `state:read` is shown the org chart whole. A seat's or a unit's fields are
+as everybody is shown the org chart whole. A seat's or a unit's fields are
 what only a read serves, to whoever may read it. The route admits anybody bound to a seat before the body is read, and nobody else; an agent never
 writes the chart, and a lead's write asks for the same recent proof of
 identity every other configuration write does.
@@ -2203,9 +2389,15 @@ own store refuses on every write path.
 **A verb with no row is refused.** Not defaulted, not passed through: a default
 is how a new verb ships ungated, and it ships looking correct. A walk over the
 table fails the build if a verb resolves to no rule, if a rule is declared and
-no verb uses it, or if a grant the vocabulary declares opens nothing at all —
-that last one is what caught `state:read` being asked for by nothing, back when
-reads were "any authenticated principal".
+no verb uses it, or if a permission the vocabulary declares opens nothing at
+all — that last one once caught a read grant being asked for by nothing, back
+when reads were "any authenticated principal". The vocabulary has walks of its
+own: every app is the app of a row a person can take, every app's row admits a
+holder and refuses a non-holder naming exactly that app, human-only and
+seat-only are checked before the rule and no row carries both, and every
+dotted verb — `work.route`, `pages.trash`, `iam.seats.read` — is asked by some
+call site outside the tests, so a verb nothing asks cannot sit in the table
+deciding nothing.
 
 Those three walks hold the table against **itself**, which is not enough on its
 own: a verb removed from the engine leaves behind a row that is perfectly
@@ -2221,7 +2413,7 @@ tool's own schema. It exists because four of them named arguments their tools
 do not have: the owner read empty on every call, every personal rule refuses an
 empty owner, and so `my_work`, `mark_inbox`, `set_pins` and `save_work_view`
 were refused to everybody but an administrator — with nothing to show for it
-but a refusal naming a grant the caller already held.
+but a refusal naming a permission the caller already held.
 
 ### Cannot-tell is not no
 
@@ -2230,8 +2422,13 @@ outcome is its own: the decision reports **unknown**, and a surface answers
 `503 try again` rather than `403 forbidden`. Telling somebody they may not do
 something sends them to go and ask for an authority they already hold.
 
-The admin grant is checked *before* the chart on every rule that has one, so an
-operator is never told "I cannot tell" by a node that is merely lagging.
+Admin is checked *before* the chart on every rule that has an admin path, so
+an administrator is never told "I cannot tell" by a node that is merely
+lagging. **A refusal names the least that would change it** — any one of the
+permissions it lists, added to what the caller holds, admits them: `[tracker]`
+on a tracker row, `[admin]` to somebody missing a relation, both apps where
+either would do, and nothing at all where no permission would — a seat-only
+verb asked by a person.
 
 ### Some gestures ask how recently you proved who you are
 
@@ -2242,8 +2439,8 @@ verb asks for one:
 
 | Window | Sized by | Asked by |
 |---|---|---|
-| none | — | Every read; every work and knowledge verb; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
-| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
+| none | — | Every read; every work and knowledge verb but the two purges; ending your own sessions — while an administrator ending *somebody else's* asks `step_up`, because one row states a window for each arm; and changing your own password, whose current password is itself the proof |
+| `step_up` | `api.auth.session.step_up` (1 hour) | The company's configuration writes, connecting an integration, writing a credential and revealing a secret's value, the deployment's own controls — a budget reset, a backup, the retention and capacity gestures, ending every session in the company — purging a work item or a page, which nothing undoes, and every identity-directory write: enrolling, inviting, cancelling an invitation, editing or removing somebody, resetting their second factor, issuing them a password reset link, minting or revoking a machine token or any other credential, ending somebody else's sessions, and enrolling or replacing your own second factor or regenerating your recovery codes |
 
 **One window, not two.** It is the practice of GitHub's sudo mode — one window
 over every sensitive gesture — at the stricter end of it (GitHub's is two
@@ -2256,9 +2453,9 @@ who they are is one rule whichever door it comes through — the `/iam` reset,
 revoking a factor through `/iam/credentials`, or replacing your own factor
 through `/auth/totp` — because each is the others by another name.
 
-It is decided **on the row**, beside the grant, for the same reason the grant
+It is decided **on the row**, beside the rule, for the same reason the rule
 is: a REST route and a tool asking about one verb get one answer. A row may ask
-its **self arm** a different window from its capability arm, and one does:
+its **self arm** a different window from its other arms, and one does:
 ending every session somebody holds asks nothing of the person themselves —
 it is the first thing they do on finding an intruder in their account, and a
 re-proof of a password the intruder may also hold would make the fastest
@@ -2290,28 +2487,34 @@ a step-up gesture on the day nobody can sign in as a person.
 So what keeps a machine token off the gestures that need a person present —
 revealing a secret, changing somebody's authority or how they prove who they
 are, ending sessions that are not its owner's — is never the clock. It is two
-locks, both in the authority table, and the build holds both:
+locks, one in the authority table and one at the identity record, and the build
+holds both — and neither is a permission the token cannot carry, since a token
+may be minted with `admin`:
 
 - **The row says so.** Every verb that needs somebody at a keyboard states it
-  beside its grant and its window, and a request that **presented a machine
+  beside its rule and its window, and a request that **presented a machine
   token** is refused there — `403 token_refused` —
   whatever its owner may do. Some rows need a person on every arm: revealing a
   secret, every directory write, ending every session in the company, and
   changing how somebody proves who they are (enrolling or replacing a second
   factor, regenerating the recovery codes, revoking a password, a second
-  factor or the recovery codes) — which a person does about *themselves* on no
-  grant at all, so this is the only lock there. Others spare the token's own
+  factor or the recovery codes) — which a person does about *themselves* with no
+  permission at all, so this is the only lock there. Others spare the token's own
   owner: a token may revoke its owner's tokens, itself included, and end its
   owner's sessions, which ends it too — what somebody who finds one leaked
   reaches for — and do neither about anybody else. It used to be a refusal
   each route remembered to make while the table admitted the token on the same
   verb, so the next route on that verb could forget it.
-- A token can never carry `secrets:read` or `people:manage`, the grants behind
-  every one of those gestures about anybody but its owner — refused at its
-  mint and stripped from what it carries on every request.
+- **The record says so.** The identity domain refuses every administrative
+  record — an enrolment, an invitation, an edit of somebody's row, a
+  suspension, a removal, ending everybody's sessions — whose request came
+  through a machine token (`pat:<id>`), `403 token_refused`, whatever the
+  token carries. It sits where the record is formed rather than where a route
+  is, because a record is published by a CLI, a duty and a migration as well
+  as by the routes the table guards.
 
 Answering a step-up is not a verb in the table — it is about nothing and asks
-no grant — so `POST /auth/step-up` refuses a token itself: nobody is there to
+no permission — so `POST /auth/step-up` refuses a token itself: nobody is there to
 confirm.
 
 And **no tool** asks for a proof — a seat has no keyboard, and the operator's
@@ -2375,7 +2578,7 @@ Identity has **two trails**, and they answer different questions.
 | `iam_password_reset_issued` | The directory, when an administrator issues somebody a one-time password reset link, or creates a person and so issues their first password link (`first: true`) — for whom, by whom and until when, never the link | Once per link, by the call whose record issued it — never by a retry that hands the same first link back |
 | `iam_password_changed` | The sign-in surface, when a person changes their own password — which ended every other session and token they held | Once per change |
 | `iam_password_reset` | The sign-in surface, when a reset link is spent — the password set, every session and token the person held ended, and nobody signed in — or a first password link is (`first: true`), which sets the person's first password and has nothing of theirs to end | Once per link |
-| `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a grant, with what it added and removed, by whoever decided it — for a redemption, the person who issued the invitation, never the person redeeming it |
+| `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a permission, with what it added and removed — compared through `Expand`, so storing `[admin]` as `[admin, tracker, knowledge]` moves nothing — by whoever decided it — for a redemption, the person who issued the invitation, never the person redeeming it |
 | `iam_session_generation_bumped` | The identity writer | Once per company-wide invalidation, with the generation it moved to |
 | `statelog_record_unverifiable`, `statelog_record_tampered` | Any domain's applier, for a record signed under a key this node lacks, or failing under one it holds | Once per domain and key id per node process, capped at sixteen ids |
 
@@ -2495,7 +2698,7 @@ every such decision arbitrates on.**
 | What is decided | Subject | How it is taken |
 |---|---|---|
 | Every address, login and seat binding — an enrolment, an invitation's issue, a login or seat change, a removal | `crewlet.iam.log.directory` | conditional on the subject's last record |
-| A person's own content — name, grants, credentials, stage | `crewlet.iam.log.person.<id>` | conditional on the subject's last record |
+| A person's own content — name, permissions, credentials, stage | `crewlet.iam.log.person.<id>` | conditional on the subject's last record |
 | A session | `crewlet.iam.log.session.<lineage>` | create-only, expectation zero |
 | Ending every session at once | `crewlet.iam.log.invalidation` | one object for the whole company |
 
@@ -2622,7 +2825,7 @@ Rotating it is a migration, not a setting.
 |---|---|
 | `iam_people` | One person or machine, with the login, address blind and seat the directory decided for them |
 | `iam_credentials` | The **verifier** for each way somebody proves themselves — a password digest, a machine token's hash, the recovery codes' digests, and an app code's sealed seed. Never a secret that could be presented to anything |
-| `iam_invites` | An address and a human seat spoken for by somebody who has no person yet, and the grants redeeming it confers. The seat is a column of its own (`seat_id`, from replicated migration 0042), written by the apply and recomputed from the row's own document whenever a node's rows were derived under other rules — a reanchored checkpoint, or a snapshot from a peer on another build — so a seat an open invitation holds is one indexed read |
+| `iam_invites` | An address and a human seat spoken for by somebody who has no person yet, and the permissions redeeming it confers. The seat is a column of its own (`seat_id`, from replicated migration 0042), written by the apply and recomputed from the row's own document whenever a node's rows were derived under other rules — a reanchored checkpoint, or a snapshot from a peer on another build — so a seat an open invitation holds is one indexed read |
 | `iam_sessions` | One row per session **lineage**. A re-issue is not a row — the deadline it moves is inside the cookie's own signature — so this grows with sign-ins, not with requests |
 | `iam_revocation_epochs` | One person's **revocation epoch**, in its own table because every request compares against it |
 | `iam_session_generation` | The **fleet-wide generation** every bearer carries: one row, about nobody, that `crewlet iam invalidate-all` moves to end every session and machine token in the company at once |
@@ -2643,7 +2846,7 @@ out of any snapshot a node donates to a joining peer. The operation ledger
 the same records, only the instant each node applied them differs, and a joiner
 that arrived without them could not tell a retry of something the donor
 applied from a first attempt — in this estate, a second enrolment, a second
-grant change or a second bump of somebody's revocation epoch.
+permission change or a second bump of somebody's revocation epoch.
 
 ### Two counters, and why there are two
 
@@ -2653,14 +2856,15 @@ sets of sessions:
 
 - **A person's revocation epoch** (`iam_revocation_epochs`) ends every session
   *that person* holds. Signing out everywhere, an administrator ending their
-  sessions and a second-factor reset all move it, and no capability is needed
+  sessions and a second-factor reset all move it, and no permission is needed
   to move your own:
   gating it would make the fastest response to a stolen cookie the one that
   needs an administrator.
 - **The fleet-wide session generation** (`iam_session_generation`) ends *every*
   session in the company, and every machine token. One row, about nobody,
-  moved by `crewlet iam invalidate-all`, and it requires `fleet:operate` and
-  `people:manage` both.
+  moved by `crewlet iam invalidate-all`, and it requires `admin`, a person
+  present and a recent proof — a Tier A token among them, never a machine
+  token.
 
 The second is not the first at a larger scale, and the difference is what a
 **restore** does. Restoring rolls the identity estate back to the instant the
@@ -2672,9 +2876,9 @@ which is why bumping it is the restore runbook's last step.
 
 It ends **bearers**, and nothing else. A restore rolls back every other change
 to the directory made after the artefact was taken as well — a removal, a
-suspension, a withdrawn credential, a reduced grant — and none of those is a
+suspension, a withdrawn credential, a reduced permission — and none of those is a
 bearer: the person comes back holding the password, the second factor and the
-grants they had, and signs in again like everybody else. No number moved
+permissions they had, and signs in again like everybody else. No number moved
 forward can undo those, because each one is about somebody in particular, so
 the runbook re-applies them by hand, from a record kept outside the estate,
 before it bumps the generation
@@ -2900,7 +3104,9 @@ today is smaller, and lives in two places:
 
 - **Tier A, `api.auth`** — `tokens`, the deployment's own credentials,
   each carrying an id recorded as the author of anything written with it and
-  the `grants` it may use; `max_grants`, the ceiling above; what a password
+  the `grants` it may use (`admin`, `tracker`, `knowledge`); `admin`, whether
+  this node [serves admin](#access-admin-and-one-permission-per-app) at all
+  (`serve` or `refuse`); what a password
   sign-in asks for — `totp` (unset is `required`), `accept_insecure` and
   `min_password_length`; and the `session` and `audit` blocks under it.
   Password sign-in is always served; there is no setting that turns it off. `allow_anonymous_read`,

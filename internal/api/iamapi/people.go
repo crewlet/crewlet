@@ -153,14 +153,20 @@ func (s *Service) GetPerson(w http.ResponseWriter, r *http.Request) {
 // one an invitation's screen offers its redeemer — and the answer says which
 // login was taken. A service account has no address to propose from, so its
 // login is required.
+//
+// # The grants, always stated
+//
+// `grants` is REQUIRED, for a person and a service account alike, and `[]` is
+// the overview alone — see [requireGrants] for why an omission is refused
+// rather than read as a default.
 type personBody struct {
-	Kind   string      `json:"kind"`
-	Login  string      `json:"login"`
-	Name   string      `json:"name"`
-	Email  string      `json:"email"`
-	Seat   string      `json:"seat"`
-	Grants []iam.Grant `json:"grants"`
-	Reason string      `json:"reason"`
+	Kind   string       `json:"kind"`
+	Login  string       `json:"login"`
+	Name   string       `json:"name"`
+	Email  string       `json:"email"`
+	Seat   string       `json:"seat"`
+	Grants *[]iam.Grant `json:"grants"`
+	Reason string       `json:"reason"`
 }
 
 // PostPeople is `POST /iam/people`: a person or a service account, created
@@ -170,10 +176,11 @@ type personBody struct {
 //
 // A person's create names the human seat they will hold — refused `400
 // seat_required` before anything is minted where it names none, because the
-// remedy is the caller's to type — and is answered with their FIRST PASSWORD
-// LINK, `<api.external_url>/dashboard#/reset/<credential>.<secret>`, which
-// sets the password they sign in with once and signs nobody in. It is spent
-// through the reset path every reset link is (internal/api/authapi), lives
+// remedy is the caller's to type — and what they may do, in `grants`, which
+// every create states ([requireGrants]); it is answered with their FIRST
+// PASSWORD LINK, `<api.external_url>/dashboard#/reset/<credential>.<secret>`,
+// which sets the password they sign in with once and signs nobody in. It is
+// spent through the reset path every reset link is (internal/api/authapi), lives
 // [credential.EnrolmentLinkLifetime] — an invitation's week, since it is the
 // same person's position — and is shown here and nowhere else: what the
 // estate holds is its verifier. So the gesture needs `api.external_url`, and
@@ -219,6 +226,11 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		refuseSeatless(w, "a person is created onto the human seat they "+
 			"will hold — name a vacant one (GET /iam/seats?unheld=true lists "+
 			"them)")
+		return
+	}
+	// WHAT THEY MAY DO, STATED, before the key is read for the seat's own
+	// reason: a refusal the caller fixes by typing a field mints nothing.
+	if !requireGrants(w, in.Grants, "a create") {
 		return
 	}
 	// THE ADDRESS AND THE LOGIN ARE TRIMMED as the seat is, and as an
@@ -290,7 +302,7 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		// other path, and it creates nobody until it is redeemed.
 		Stage: iam.StageActive,
 		Name:  in.Name, Email: email, Login: login, Seat: seat,
-		Grants: in.Grants, LinkExpiresAt: expires,
+		Grants: *in.Grants, LinkExpiresAt: expires,
 		OpID: published, Reason: reason,
 	})
 	switch {
@@ -449,11 +461,18 @@ func (b patchBody) refusal() string {
 		return "`grants` is the whole set and `add_grants` and " +
 			"`remove_grants` a change to what they hold: send one or the other"
 	}
-	// A NAME THAT IS NO GRANT is refused rather than removed as nothing, which
-	// is what a mistyped one would otherwise come to.
-	for _, g := range slices.Concat(b.AddGrants, b.RemoveGrants) {
+	// A NAME NOBODY KNOWS IS NEVER ADDED, and `add_grants` adds whatever it
+	// names, so one there is refused naming the set — before anything is
+	// read, since no row could make the addition legitimate. `remove_grants`
+	// MAY name one: a newer peer's name is kept on a row and ignored
+	// (ADR-0033), and taking it off is how an administrator tidies the row.
+	// A whole set is judged against the row it replaces, in [PatchPerson],
+	// since a name the row already carries is kept rather than added.
+	for _, g := range b.AddGrants {
 		if !g.Valid() {
-			return strconv.Quote(string(g)) + " is not a grant"
+			return strconv.Quote(string(g)) + " is not a permission this " +
+				"build knows, so it cannot be added — the permissions are " +
+				grantSet()
 		}
 	}
 	for _, g := range b.AddGrants {
@@ -478,10 +497,13 @@ func (b patchBody) refusal() string {
 //
 // # Nothing is published until what can be judged early has been
 //
-// A stage this build cannot name, a login being cleared and a grant the caller
-// may not confer are refused before the first record ([patchBody.refusal],
+// A stage this build cannot name, a login being cleared, a permission this
+// build does not know being ADDED and a grant the caller may not confer are
+// refused before the first record ([patchBody.refusal], [refuseUnknown],
 // [iamdomain.Writer.MayConfer]) — each used to be met only at its own record,
-// after a seat or a login ahead of it had already moved.
+// after a seat or a login ahead of it had already moved. A name this build
+// does not know that the row already carries is kept, and `remove_grants` may
+// take it off.
 //
 // # A person's seat is moved, never cleared
 //
@@ -523,6 +545,14 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		s.unavailable(w, r, "read a person", err)
+		return
+	}
+	// A WHOLE SET NAMING SOMETHING NOBODY KNOWS is refused only where the
+	// row does not already carry it: restating a newer peer's name keeps
+	// it, and an edit that leaves it alone must not be refused for its
+	// presence. Judged on this read, as the conferral below is; the
+	// record's own snapshot asks again ([iamdomain.Writer.MayConfer]).
+	if in.Grants != nil && !refuseUnknown(w, "grants", *in.Grants, held.Grants) {
 		return
 	}
 	op, ok := s.opIDFor(w, r, "people-update", in)

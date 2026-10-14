@@ -14,7 +14,7 @@
  * # Operator-only, and the rest of the screen is not
  *
  * The answer names nodes, launch commands and the first line of each failure,
- * so the engine refuses it to a reader without `config:read` — and that
+ * so the engine refuses it to a reader without Admin — and that
  * refusal is drawn HERE, in this section's place, while the tool catalogue
  * around it (a push every reader gets) stays exactly as it is.
  */

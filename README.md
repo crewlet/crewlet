@@ -126,8 +126,9 @@ file is the short one — where this node's store, stream and API live — and t
 [quickstart](docs/getting-started/quickstart.md) writes it out in full. Four
 things in it are not optional on a node that serves the dashboard: the
 **keyring** (`secrets.keys`, which signs every state-log record and every
-session cookie — every node needs it), `api.external_url`, the grant ceiling
-`api.auth.max_grants`, and at least one `api.auth.tokens` entry — the token
+session cookie — every node needs it), `api.external_url`, the node's admin
+posture `api.auth.admin` (`serve` or `refuse`), and at least one
+`api.auth.tokens` entry — the token
 above, which is how the first person is invited onto their seat.
 
 The company file is a **bootstrap seed**: it fills an empty store and is

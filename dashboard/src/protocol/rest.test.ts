@@ -464,9 +464,10 @@ describe("what a 403 tells a screen", () => {
   const refusalOf = (body: Record<string, unknown>) => new RestError(403, body).refusal;
 
   test("a rule's refusal carries its reason and the grants that would admit", () => {
-    expect(
-      refusalOf({ error: "unauthorized", reason: "no_grant", grants: ["config:read"] }),
-    ).toEqual({ reason: "no_grant", grants: ["config:read"] });
+    expect(refusalOf({ error: "unauthorized", reason: "no_grant", grants: ["admin"] })).toEqual({
+      reason: "no_grant",
+      grants: ["admin"],
+    });
   });
 
   // NOT A RULE: a seat the chart no longer holds, a write from another site.

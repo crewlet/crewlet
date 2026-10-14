@@ -45,11 +45,12 @@ import (
 //
 // # What it grants
 //
-// The deployment's own ceiling, `api.auth.max_grants`, and no more — which is
-// what a Tier A token gets. `disabled` granted everything unconditionally,
-// which meant a laptop's convenience and the deployment's authority were the
-// same thing; here an operator who has narrowed their ceiling has narrowed
-// this too.
+// Every app, and admin where this node serves it (`api.auth.admin: serve`) —
+// what a Tier A token listing `[admin]` carries here, and no more.
+// `disabled` granted everything unconditionally, which meant a laptop's
+// convenience and the deployment's authority were the same thing; here an
+// operator who has set this node to refuse admin has refused it to this too,
+// and a posture this build cannot read confers nothing at all.
 
 // DevPrincipalLoginPrefix is the class segment the development principal's
 // login carries.
@@ -101,7 +102,7 @@ func NewDevPrincipal(login string, b *config.Bootstrap) (*DevPrincipal, error) {
 	}
 	if b == nil {
 		return nil, fmt.Errorf("-dev-principal needs a configuration to read " +
-			"`api.host` and `api.auth.max_grants` from: without one it cannot " +
+			"`api.host` and `api.auth.admin` from: without one it cannot " +
 			"establish that this node binds loopback, and it is refused rather " +
 			"than assumed")
 	}
@@ -121,7 +122,7 @@ func NewDevPrincipal(login string, b *config.Bootstrap) (*DevPrincipal, error) {
 	}
 	return &DevPrincipal{
 		login:  DevPrincipalLoginPrefix + login,
-		grants: b.API.Auth.MaxGrants,
+		grants: b.API.Auth.Admin.Effective([]iam.Grant{iam.GrantAdmin}),
 	}, nil
 }
 

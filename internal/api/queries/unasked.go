@@ -128,8 +128,9 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 // answer to know what to ask for. The page is [memread.ThreadPage]'s, and the
 // listing carries the seat's whole count beside it.
 func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
-	// A SEAT'S TRAIL, and so the audit read whoever's seat it is — see
-	// [Sources.trailSeat]. An absent handle is still the caller's own seat.
+	// A SEAT'S TRAIL, and so its lead's or an admin's whoever's seat it is
+	// — see [Sources.trailSeat]. An absent handle is still the caller's own
+	// seat.
 	seat, err := s.trailSeat(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err

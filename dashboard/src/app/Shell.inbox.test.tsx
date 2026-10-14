@@ -36,25 +36,29 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-test("the shell watches the viewer's seat and asks for their inbox again when it moves", async () => {
+/**
+ * The shell over a socket whose viewer holds `grants`, recording every seat
+ * it watches and every inbox question it asks.
+ */
+function shellAs(grants: string[]) {
   const store = new Store();
   const socket = new LiveSocket(store);
   const watched: string[] = [];
   socket.watch = (seat: string) => void watched.push(seat);
-  let inboxAsks = 0;
+  const asks = { inbox: 0 };
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     switch (what) {
       case "viewer":
         return Promise.resolve({
           login: "ana.lee",
-          grants: ["state:read"],
+          grants,
           handle: "ana",
           owner: "ana",
           name: "Ana Lee",
           kind: "human",
         });
       case "work_inbox":
-        inboxAsks++;
+        asks.inbox++;
         return Promise.resolve({
           handle: "ana",
           notices: [],
@@ -76,9 +80,14 @@ test("the shell watches the viewer's seat and asks for their inbox again when it
       </Router>
     </ClientContext.Provider>,
   );
+  return { store, view, watched, asks };
+}
+
+test("the shell watches the viewer's seat and asks for their inbox again when it moves", async () => {
+  const { store, view, watched, asks } = shellAs(["tracker"]);
   await act(async () => {});
   expect(watched).toEqual(["ana"]);
-  const before = inboxAsks;
+  const before = asks.inbox;
   expect(before).toBeGreaterThan(0);
 
   act(() => {
@@ -89,10 +98,23 @@ test("the shell watches the viewer's seat and asks for their inbox again when it
   });
   // WELL INSIDE THE POLL, which is the point: the poll alone would not have
   // asked again for another minute.
-  expect(inboxAsks).toBe(before + 1);
+  expect(asks.inbox).toBe(before + 1);
 
   // AND THE WATCH ENDS WITH THE FRAME, so a tab that unmounts it leaves the
   // engine routing nothing to a socket nobody reads.
   view.unmount();
   expect(watched).toEqual(["ana", ""]);
+});
+
+// THE INBOX IS THE TRACKER'S: a reader without Tracker is watched for nothing
+// and asked no inbox — the engine would refuse both. Mutation: watch whatever
+// the viewer holds and the seat is watched.
+test("a reader without Tracker is watched for nothing and asked no inbox", async () => {
+  const { watched, asks } = shellAs(["knowledge"]);
+  await act(async () => {});
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(watched.filter(Boolean)).toEqual([]);
+  expect(asks.inbox).toBe(0);
 });

@@ -79,7 +79,7 @@ func placeTool(t *testing.T, spy *placeSpy,
 // ([authz.ActionWorkPlace] is human-only) — a case calling it as a seat would
 // be refused at the gate and reach no drop at all.
 func dropper() context.Context {
-	return personHolding(iam.GrantStateRead, iam.GrantWorkWrite)
+	return personHolding(iam.GrantTracker)
 }
 
 // A DROP NAMES ITS NEIGHBOUR BY ID, AND ITS LANE AS DROPPED.

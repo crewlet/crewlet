@@ -239,7 +239,7 @@ describe("a query frame", () => {
         what: "events",
         error: "unauthorized",
         reason: "no_grant",
-        grants: ["audit:read"],
+        grants: ["admin"],
       }),
     );
     const refused = await asked.then(
@@ -250,7 +250,7 @@ describe("a query frame", () => {
     expect((refused as QueryError).message).toBe("unauthorized");
     expect((refused as QueryError).refusal).toEqual({
       reason: "no_grant",
-      grants: ["audit:read"],
+      grants: ["admin"],
     });
   });
 

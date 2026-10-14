@@ -66,7 +66,24 @@ func (r *roundTrip) markLedgerLost(cutoff time.Time) {
 	}
 }
 
+// harnessSpaces are the containers every round trip declares: the ones its
+// cases write in, and the root and skills containers it reserves.
+var harnessSpaces = []string{"ENG", "OPS", "PROD", "SUITE", "HOME", "TS"}
+
 func newRoundTrip(t *testing.T) *roundTrip {
+	t.Helper()
+	return newRoundTripOn(t, openLog(t), openNodeStore(t, "node.db"), "node-a")
+}
+
+// harnessReserved is what every round trip's store is told the company holds
+// back and declares — see [newRoundTripOn].
+func harnessReserved() pages.Reserved {
+	return pages.Reserved{Skills: "TS", Root: "HOME", Declared: harnessSpaces}
+}
+
+// openLog stands up a broker and the knowledge base's log on it, both closed
+// with the test.
+func openLog(t *testing.T) *js.DomainLog {
 	t.Helper()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
 	if err != nil {
@@ -96,7 +113,7 @@ func newRoundTrip(t *testing.T) *roundTrip {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	return newRoundTripOn(t, log, openNodeStore(t, "node.db"), "node-a")
+	return log
 }
 
 // openNodeStore opens one node's own store, closed with the test.
@@ -116,6 +133,16 @@ func openNodeStore(t *testing.T, name string) store.ReplicatedHandle {
 // its own id and its own store — the shape a race between two nodes needs.
 func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 	nodeID string) *roundTrip {
+
+	t.Helper()
+	return newRoundTripReserving(t, log, db, nodeID, harnessReserved)
+}
+
+// newRoundTripReserving is [newRoundTripOn] with the store's own idea of what
+// the company reserves and declares — nil for a store built with no seam at
+// all, which is what a case about that zero needs.
+func newRoundTripReserving(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
+	nodeID string, reserved func() pages.Reserved) *roundTrip {
 
 	t.Helper()
 	rows, err := pages.NewRows(db.Reader(), pages.Domain{}.Stream())
@@ -168,10 +195,13 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle,
 		// EVERY HARNESS RESERVES TS AND HOME, so both rules are in force
 		// on every case rather than only on the one that is about them —
 		// a rule installed by its own test alone is one the rest of the
-		// suite proves nothing about.
-		Reserved: func() pages.Reserved {
-			return pages.Reserved{Skills: "TS", Root: "HOME"}
-		},
+		// suite proves nothing about. And it DECLARES the spaces the cases
+		// write in — the two reserved ones among them, as a company's
+		// root and skills containers always are — for the same reason:
+		// every create here passes the declared-space rule, so a case
+		// creating somewhere undeclared fails rather than passing on a
+		// store that checked nothing. See [harnessReserved].
+		Reserved: reserved,
 	})
 	if err != nil {
 		t.Fatalf("build the store: %v", err)

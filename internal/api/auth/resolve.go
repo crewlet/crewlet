@@ -101,13 +101,15 @@ var errBindingUnavailable = errors.New("auth: this node could not resolve " +
 // principalFor composes the principal a Tier A token acts as, three-valued
 // exactly as a session is: resolved, resolved and refused its seat, or unknown.
 //
-// THE CEILING IS APPLIED HERE, at the moment the request is resolved, which is
-// what `api.auth.max_grants` being a decision-time bound means: nothing was
-// written when it changed, so lowering it takes effect on the next request
-// this node serves. A token declaring a grant the ceiling withholds is refused
-// by `crewlet validate` — this is the second half, for the node whose ceiling
-// is lower than the one the document was validated against, which is every
-// node mid-rollout.
+// THE ADMIN POSTURE IS APPLIED HERE, at the moment the request is resolved,
+// which is what `api.auth.admin` being a decision-time bound means: nothing
+// was written when it changed, so a node turned to `refuse` clamps admin away
+// on the next request it serves. A token listing admin on a refusing node is
+// refused by `crewlet validate` — this is the second half, for the node whose
+// posture is not the one the document was validated against, which is every
+// node mid-rollout. [iam.AdminPosture.Effective] expands admin into every app
+// BEFORE it clamps, so a founder's `[admin]` keeps the tracker and the
+// knowledge base on a refusing node.
 func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
 	now time.Time) (iam.Principal, iam.Resolution, *Refusal) {
 
@@ -115,7 +117,7 @@ func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
 		ID:     uuid.NewSHA1(TokenNamespace, []byte(entry.ID)),
 		Login:  iam.TokenLogin(entry.ID),
 		Kind:   iam.KindMachine,
-		Grants: intersect(entry.Grants, g.ceiling),
+		Grants: g.admin.Effective(entry.Grants),
 		Stage:  iam.StageActive,
 	}
 	// PRESENTING THE TOKEN IS THE PROOF, so it is fresh for the step-up
@@ -172,28 +174,6 @@ func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
 	// node will not honour it: the guard writes the 403 everywhere but the
 	// one surface that never reads a seat.
 	return p, iam.Resolved, seatRefusal(binding)
-}
-
-// intersect is the ceiling applied to a declared grant set.
-//
-// AN EMPTY CEILING GRANTS NOTHING, which is the opposite of how an empty list
-// usually reads and is the only safe direction: a node whose configuration
-// names no ceiling has not been told what the deployment allows, and admitting
-// everything on that basis is how a rolling restart hands one node's callers
-// authority the operator withdrew. Config refuses an absent ceiling on a node
-// that serves, so reaching this with one is already a wiring mistake — and it
-// fails closed rather than silently.
-func intersect(declared, ceiling []iam.Grant) []iam.Grant {
-	out := make([]iam.Grant, 0, len(declared))
-	for _, g := range declared {
-		for _, allowed := range ceiling {
-			if g == allowed {
-				out = append(out, g)
-				break
-			}
-		}
-	}
-	return out
 }
 
 // Resolve answers who a request is, three-valued, over the THREE credential
@@ -253,7 +233,7 @@ func (g *Guard) resolve(w http.ResponseWriter, r *http.Request, open bool) (
 		return g.bearer(r, candidate)
 	}
 	if g.sessions != nil {
-		answer := g.sessions.resolve(w, r, g.ceiling, g.proof, g.tokenByLogin, open)
+		answer := g.sessions.resolve(w, r, g.admin, g.proof, g.tokenByLogin, open)
 		if answer.presented {
 			if answer.how == iam.Resolved {
 				// A SESSION ENDS ON ITS OWN AT ITS ABSOLUTE DEADLINE,
@@ -329,8 +309,8 @@ func (g *Guard) bearer(r *http.Request, candidate string) (*http.Request, *Refus
 // was exchanged for is validated against the ENTRY: [Sessions] has already
 // refused one whose entry this node no longer holds, and this composes the
 // principal through [Guard.principalFor], the one function the bearer itself
-// is composed through. So the grants are the entry's cut to this node's
-// ceiling on THIS request, a bound token acts as its seat exactly as the bearer
+// is composed through. So the grants are the entry's under this node's admin
+// posture on THIS request, a bound token acts as its seat exactly as the bearer
 // would (and is refused it exactly as the bearer would), and the session is
 // stepped up by construction for the reason the bearer is: presenting the
 // token was the proof, and a break-glass session that could reach no

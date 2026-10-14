@@ -49,11 +49,11 @@ api:
   port: 8000
   external_url: "https://acme.example.com"
   auth:
-    max_grants: [state:read, config:write]
+    admin: serve
     tokens:
       - id: founder
         token: "${ACME_TOKEN}"
-        grants: [state:read, config:write]
+        grants: [admin]
 secrets:
   active_key_id: k1
   keys:

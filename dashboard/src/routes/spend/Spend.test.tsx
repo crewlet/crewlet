@@ -185,17 +185,7 @@ const params = (what: string) => asks.filter((a) => a.what === what).map((a) => 
 
 const VIEWER = {
   login: "op-1",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane",
@@ -477,6 +467,26 @@ test("the median task tile asks the tracker, and is absent on a non-native track
   await settle();
   expect(screen.queryByText(/median tokens per finished task/)).toBeNull();
   expect(screen.queryByText("Most expensive tasks")).toBeNull();
+});
+
+// THE OVERVIEW IS EVERYBODY'S AND A TASK IS THE TRACKER'S: a reader without
+// Tracker is asked nothing about tasks, and both task readings say what would
+// open them rather than drawing the engine's refusal — whose callout offered
+// "Sign in" to somebody already signed in. Mutation: enable the card's
+// question on `ready` alone and it is asked, and the lock is never drawn.
+test("a reader without Tracker is asked no task question on the overview", async () => {
+  mount("#/spend?window=30d", <Spend />, {
+    tokens: rollup(1),
+    viewer: { ...VIEWER, grants: [] },
+    work_items: new QueryError("unauthorized"),
+  });
+  await settle();
+  expect(params("work_items")).toEqual([]);
+  const card = screen.getByText("Most expensive tasks").closest(".spend-card") as HTMLElement;
+  expect(within(card).getByText("Needs Tracker access")).toBeTruthy();
+  expect(within(card).queryByText("All")).toBeNull();
+  expect(within(card).queryByText(/This answer needs|This needs access/)).toBeNull();
+  expect(screen.queryByRole("button", { name: /sign in/i })).toBeNull();
 });
 
 // "EXHAUSTED" IS THE ENGINE'S `refusing` FOR THE SEAT'S DAY, and the column is

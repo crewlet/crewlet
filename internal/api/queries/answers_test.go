@@ -2,6 +2,7 @@ package queries_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -299,8 +301,10 @@ func TestAgentAnswersOneSeatsLiveState(t *testing.T) {
 	r := registryOver(t, queries.Sources{State: state, Company: companySource(t, cfg)})
 
 	got := ask(t, r, "agent", map[string]any{"id": "ada"})
-	live, _ := got["live"].(*livestate.Overlay)
-	if live == nil || live.Activity != livestate.ActivityWorking {
+	// READ AS A CLIENT READS IT: the overlay reaches a reader through the
+	// mask that shapes it for them (livestate's mask.go), so its Go type is
+	// the mask's and only its wire shape is the answer.
+	if got["live"] == nil || asMap(t, got["live"])["activity"] != string(livestate.ActivityWorking) {
 		t.Fatalf("answer = %+v", got)
 	}
 	if got["agent_id"] != ids["ada"] || got["handle"] != "ada" || got["role"] != "Engineer" {
@@ -1256,4 +1260,109 @@ func windowWidth(t *testing.T, got tokens.Rollup) time.Duration {
 		t.Fatalf("until = %q: %v", got.Until, err)
 	}
 	return until.Sub(since)
+}
+
+// A SEAT'S STATUS IS EVERYBODY'S AND ITS TRANSCRIPT IS ITS TRAIL'S (ADR-0033).
+//
+// The `agent` answer and the `live_call` answer are the overview's — anybody
+// may ask them — and what a seat is SAYING reaches only an admin and whoever
+// leads it: the live call's trigger, the payload of every finished call. To
+// anybody else the call comes back as its status with `body_withheld` set, and
+// each finished call as its columns without its payload. The work item a phase
+// was charged to is the tracker's, withheld from a reader without it whatever
+// else they read — the lead holding nothing included.
+//
+// Mutation: answer the overlay or the history unmasked, or decide the body by
+// the reader's apps rather than by the seat's trail, and the stranger's rows
+// go red; drop the tracker rule and the lead's do.
+func TestAnAgentAnswerCarriesNoTranscriptToAStatusReader(t *testing.T) {
+	t.Parallel()
+	cfg, ids := namesakes(t)
+	state := livestate.New()
+	state.Apply(&livestate.Envelope{
+		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
+		Category: "task", Payload: map[string]any{
+			"agent_id": ids["ada"], "role": "Engineer", "turn_id": "tn-1",
+			"phase": "execute", "iteration": float64(0),
+			"trigger": map[string]any{"type": "external_notification", "text": "ship it"},
+		},
+	})
+	log := openStore(t).Events()
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "p-1", Type: "agent_phase_completed", Source: "engine",
+		Time: time.Now().UTC().Add(-time.Minute), Actor: "Engineer",
+		Tags: map[string]string{"agent_role": "Engineer", "agent_id": ids["ada"],
+			"work_item": "native:task-1", "task_id": "worker-7"},
+		Payload: json.RawMessage(`{"turn_id":"tn-0","phase":"execute","response":"the secret plan"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name    string
+		ctx     context.Context
+		body    bool
+		tracker bool
+	}{
+		{"an admin", asGrants(t, "", iam.GrantAdmin), true, true},
+		{"the seat's lead, holding no permission", asSeat(t, "lead"), true, false},
+		{"a stranger holding every app", asSeat(t, "pat", iam.Apps...), false, true},
+		{"a stranger holding nothing", asSeat(t, "pat"), false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := registryOver(t, queries.Sources{
+				State: state, Events: fleetOf(log), Company: companySource(t, cfg),
+				Chart: leadsChart{lead: "lead", report: "ada"},
+			})
+			got, err := r.Answer(c.ctx, "agent", map[string]any{"id": "ada"})
+			if err != nil {
+				t.Fatalf("agent: %v", err)
+			}
+			wire := asMap(t, got)
+			if wire["body_withheld"] != !c.body {
+				t.Errorf("body_withheld = %v, want %v", wire["body_withheld"], !c.body)
+			}
+			live, _ := wire["live"].(map[string]any)
+			call, _ := live["live_call"].(map[string]any)
+			if call == nil || call["phase"] != "execute" {
+				t.Fatalf("the live call's status was not answered: %v", wire["live"])
+			}
+			if _, shown := call["trigger"]; shown != c.body {
+				t.Errorf("the live call's trigger is shown: %v, want %v", shown, c.body)
+			}
+			history, _ := wire["llm_history"].([]any)
+			if len(history) != 1 {
+				t.Fatalf("llm_history = %v, want the one finished call", wire["llm_history"])
+			}
+			row := history[0].(map[string]any)
+			if row["id"] != "p-1" || row["type"] != "agent_phase_completed" {
+				t.Errorf("the finished call's columns were not answered: %v", row)
+			}
+			if _, shown := row["payload"]; shown != c.body {
+				t.Errorf("the finished call's payload is shown: %v, want %v", shown, c.body)
+			}
+			tags, _ := row["tags"].(map[string]any)
+			for _, tag := range []string{"work_item", "task_id"} {
+				if _, shown := tags[tag]; shown != c.tracker {
+					t.Errorf("the %s tag is shown: %v, want %v", tag, shown, c.tracker)
+				}
+			}
+
+			// AND THE REPAIR QUESTION IS MASKED AS THE PUSH IS.
+			got, err = r.Answer(c.ctx, "live_call", map[string]any{"agent_id": ids["ada"]})
+			if err != nil {
+				t.Fatalf("live_call: %v", err)
+			}
+			repaired, _ := asMap(t, got)["live_call"].(map[string]any)
+			if repaired == nil {
+				t.Fatal("live_call answered no call")
+			}
+			if _, shown := repaired["trigger"]; shown != c.body {
+				t.Errorf("live_call's trigger is shown: %v, want %v", shown, c.body)
+			}
+			if withheld, _ := repaired["body_withheld"].(bool); withheld == c.body {
+				t.Errorf("live_call body_withheld = %v, want %v", withheld, !c.body)
+			}
+		})
+	}
 }

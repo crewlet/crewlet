@@ -156,14 +156,15 @@ test("a refusal on authority names the grant, with the button that fixes it", as
   stubFetch(
     () =>
       new Response(
-        JSON.stringify({ error: "unauthorized", reason: "no_grant", grants: ["config:read"] }),
+        JSON.stringify({ error: "unauthorized", reason: "no_grant", grants: ["admin"] }),
         { status: 403 },
       ),
   );
   render(<Secrets />);
 
-  expect(await screen.findByText(/the answer needs/)).toBeDefined();
-  expect(screen.getByText("config:read")).toBeDefined();
+  expect(
+    await screen.findByText(/This answer needs Admin access\. An admin can give it to you\./),
+  ).toBeDefined();
   expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
   expect(screen.queryByText(/code this build does not know/)).toBeNull();
 });

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -70,6 +71,96 @@ func TestEveryToolShapedActionIsARegisteredTool(t *testing.T) {
 				"the verb is gone and the row goes with it, or it is served "+
 				"somewhere other than a tool and its name takes a dot",
 				action)
+		}
+	}
+}
+
+// EVERY APP OPENS A TOOL A PERSON REACHES.
+//
+// An app is a permission somebody is given so they can USE something, and a
+// person uses the tracker and the knowledge base through the operator
+// catalogue — the dashboard's act route, their assistant, the HTTP write
+// surface all dispatch into it. An app no operator tool belongs to is a
+// permission nobody could be told what it opens: ticked on somebody's row, it
+// would change nothing they can do. internal/authz's own walk holds that every
+// app is named by SOME row; this one holds it against the tools a person is
+// actually served, which that package cannot import.
+func TestEveryAppOpensAPersonFacingTool(t *testing.T) {
+	t.Parallel()
+	opened := map[iam.Grant][]string{}
+	for _, tool := range builtin.OperatorTools(operatorDeps(t)) {
+		app, known := authz.AppOf(authz.Action(tool.Name()))
+		if known && app != "" {
+			opened[app] = append(opened[app], tool.Name())
+		}
+	}
+	for _, app := range iam.Apps {
+		if len(opened[app]) == 0 {
+			t.Errorf("the app %q opens no tool the operator catalogue serves, so a "+
+				"person holding it can do nothing with it", app)
+		}
+	}
+}
+
+// NO SEAT-ONLY VERB IS OFFERED TO A PERSON.
+//
+// `a2a_ask` and `run_sandbox` spend an agent's turn — a colleague seat's, or
+// a coding run the seat's own loop suspends on — so the table refuses them to
+// anybody but a seat before any class is read. A person's catalogue that still
+// listed one would offer a tool every call to which is refused: the shape a
+// model learns to distrust a whole catalogue from, and an act route a screen
+// would draw a button for. And the table must say so for each: a seat-only row
+// whose tool a seat's registry does not register would be a rule nobody
+// reaches.
+func TestNoSeatOnlyVerbIsOfferedToAPerson(t *testing.T) {
+	t.Parallel()
+	offered := map[string]bool{}
+	for _, tool := range builtin.OperatorTools(operatorDeps(t)) {
+		offered[tool.Name()] = true
+	}
+	seatOnly := 0
+	for _, action := range authz.Actions() {
+		only, _ := authz.SeatOnlyOf(action)
+		if !only {
+			continue
+		}
+		seatOnly++
+		if offered[string(action)] {
+			t.Errorf("the operator catalogue offers %q to a person, and the table "+
+				"refuses it to anybody but a seat", action)
+		}
+	}
+	if seatOnly == 0 {
+		t.Fatal("the table marks no verb seat-only, so this walk certifies nothing")
+	}
+}
+
+// EVERY APP ROW BELONGS TO ITS KIND'S APP.
+//
+// A row names the app a verb belongs to, and nothing in the table pairs a verb
+// with the KIND of thing it acts on — so `list_pages` could carry the tracker
+// and every check inside internal/authz would still pass, while a person given
+// the knowledge base alone was refused the pages and one given the tracker
+// alone read them. Where the tool comes from is the one place the kind is
+// stated: the tracker's own catalogue and the knowledge base's. Every one of
+// their tools whose row names an app names that catalogue's app (one that
+// names none — a seat's own, everybody's — is not an app row).
+func TestEveryAppRowHasItsKindsApp(t *testing.T) {
+	t.Parallel()
+	for app, names := range map[iam.Grant][]string{
+		iam.GrantTracker:   append(builtin.WorkTools(), tracker.OperatorOnlyTools()...),
+		iam.GrantKnowledge: append(builtin.PageTools(), builtin.SearchKnowledgeTool),
+	} {
+		for _, name := range names {
+			got, known := authz.AppOf(authz.Action(name))
+			if !known {
+				t.Errorf("%s has no row in the authority table", name)
+				continue
+			}
+			if got != "" && got != app {
+				t.Errorf("%s is one of %s's tools and its row names the app %q",
+					name, app, got)
+			}
 		}
 	}
 }

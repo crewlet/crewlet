@@ -293,16 +293,13 @@ describe("what a change came to", () => {
   // answer — a screen never names a grant itself.
   test("a refusal on authority carries the grants that would admit the caller", async () => {
     stub(async () =>
-      json(
-        { error: "unauthorized", reason: "no_grant", grants: ["fleet:operate"], tool: "set_pins" },
-        403,
-      ),
+      json({ error: "unauthorized", reason: "no_grant", grants: ["admin"], tool: "set_pins" }, 403),
     );
     const result = await act("set_pins", {}, { floors: new SessionFloors() });
     expect(result).toMatchObject({
       kind: "refused",
       code: "unauthorized",
-      grants: ["fleet:operate"],
+      grants: ["admin"],
       sentence: ACT_ERRORS.unauthorized,
     });
   });

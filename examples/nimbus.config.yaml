@@ -226,30 +226,16 @@ api:
     # other credential (a person's session, a machine token, a lead editing
     # their own team) is refused `403 config_managed` on a write that would
     # change the document; a reload and the secret store stay open.  Unset,
-    # as here, the document is edited by whoever the grants admit.  See
+    # as here, the document is edited by whoever holds admin.  See
     # docs/concepts/configuration.md#managed-configuration.
     # company_writers: [gitops]
 
-    # THE CEILING: the most authority this deployment will ever let a
-    # directory record confer.
-    # Required once a port is set, with no default — one granting
-    # everything is a ceiling that does nothing, and one granting a subset
-    # silently locks out whatever it left out.  These are the eleven —
-    # leave out people:manage and nobody can ever invite, bind or remove
-    # anybody, because the first person receives the whole ceiling and may
-    # confer only what they hold.
-    max_grants:
-      - state:read
-      - audit:read
-      - config:read
-      - secrets:read
-      - work:write
-      - knowledge:write
-      - config:write
-      - secrets:write
-      - fleet:operate
-      - people:manage
-      - sandbox:run
+    # Whether THIS NODE grants admin to those who hold it.  `serve` is the
+    # node an administrator signs in on; `refuse` clamps admin away here and
+    # keeps every app, for a node published to the people who use the
+    # company.  Required once a port is set, with no default: admin is host
+    # access, and whether a node publishes it is the operator's decision.
+    admin: serve
 
     tokens:
       # This DEPLOYMENT's machine credentials — break-glass, the operator
@@ -263,21 +249,12 @@ api:
         # 26 characters at minimum, checked on what the ${VAR} resolves to.
         # Generate one with `crewlet secrets keygen`.
         token: "${CREWLET_API_TOKEN_FOUNDER}"
-        # What this credential may do.  Required and non-empty: a
-        # credential's blast radius is stated where it is pinned, never
-        # inferred.  This one is the founder's, so it is all eleven.
-        grants:
-          - state:read
-          - audit:read
-          - config:read
-          - secrets:read
-          - work:write
-          - knowledge:write
-          - config:write
-          - secrets:write
-          - fleet:operate
-          - people:manage
-          - sandbox:run
+        # What this credential may do: `admin`, `tracker`, `knowledge`.
+        # Required and non-empty: a credential's blast radius is stated
+        # where it is pinned, never inferred.  This one is the founder's,
+        # so it is admin, which includes every app.  A pipeline that only
+        # files work would be `[tracker]`.
+        grants: [admin]
 
 # ── The keyring (REQUIRED) ────────────────────────────────────────────
 #

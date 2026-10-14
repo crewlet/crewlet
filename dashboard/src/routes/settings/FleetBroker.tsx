@@ -159,7 +159,7 @@ export function BrokerMembership({
   error?: string | null;
   /**
    * Why that poll was refused — `useQuery`'s own `refusal` — so a reader the
-   * engine turned away is told which grant would admit them (`fleet:operate`)
+   * engine turned away is told which access would admit them (Admin)
    * rather than that the membership "could not be read".
    */
   refusal?: QueryRefusal | LogRefusal | null;

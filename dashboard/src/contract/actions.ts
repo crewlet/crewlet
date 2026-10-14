@@ -31,7 +31,7 @@
  *    their own name, `company` for one that rewrites what every seat's tracker
  *    means (a project's settings, the catalogue), which a screen offers only
  *    where it says so. It is the authority table's: a write decided by a
- *    container's lead or by a deployment grant is `company`.
+ *    container's lead or by admin is `company`.
  *
  * HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
  * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is
@@ -122,7 +122,7 @@ export const ACTIONS = {
     // "EDIT PROJECT" on a project's page: the lead's target date. A project's
     // settings are what every seat's tracker reads, so this is a COMPANY
     // write, offered only on the project's own page — and the engine decides
-    // who may make it: the project's lead, or the deployment's grant.
+    // who may make it: the project's lead, or an admin.
     args: ["project", "target_date"],
     domain: "tracker",
     refreshes: [],

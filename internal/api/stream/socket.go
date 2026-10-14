@@ -49,7 +49,7 @@ import (
 // reads them from its source: each must equal the constant here, and every
 // application close code declared here must have one there. They were two
 // literals with nothing between them, and renumbering one side would have left
-// the dashboard reconnecting for ever against a withdrawn grant.
+// the dashboard reconnecting for ever against a seat it no longer holds.
 //
 // ONE MORE CLOSE IS NOT THE APPLICATION'S: [CloseUndecided], the standard's
 // "try again later", for a credential this node will not vouch for now and
@@ -295,17 +295,24 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query) ht
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
-		if !principal.Can(iam.GrantStateRead) {
-			// A RESOLVED CALLER WHO MAY READ NONE OF IT. Every push
-			// this socket carries is a `state:read` question's answer
-			// or an `audit:read` one's, so a caller holding neither
-			// would be accepted to receive nothing — and one holding
-			// only `audit:read` would receive the event feed without
-			// the roster it names. Refused before the upgrade, where
-			// the status is still visible to the page's HTTP re-ask.
-			httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				map[string]string{"detail": "the live socket needs " +
-					string(iam.GrantStateRead)})
+		// EVERY RESOLVED PRINCIPAL WHOSE STAGE MAY ACT OPENS THE SOCKET
+		// (ADR-0033): what it carries is the overview, which is
+		// everybody's, and what of it a reader may not read — a seat's
+		// body, the audit trail, an inbox without the tracker — is withheld
+		// per kind and per payload by the audience the client is built with
+		// below, never by refusing the socket. It used to refuse a caller
+		// without the board's read grant, which left a person invited with
+		// no app staring at a dashboard that could not connect.
+		//
+		// THE STAGE IS THE AUTHORITY TABLE'S FIRST CHECK, and the query
+		// registry's: every credential this guard resolves is already
+		// refused for a stage that may not act, so this holds the socket
+		// to the rule every other surface states rather than to whatever
+		// the guard happens to do. Refused before the upgrade, where the
+		// status is visible to the page's HTTP re-ask.
+		if !principal.Stage.MayAct() {
+			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+				authz.RefusalDetail(authz.ReasonStage, nil))
 			return
 		}
 		// WHAT THE SOCKET WAS OPENED WITH, which is what decides it again
@@ -398,7 +405,11 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	defer cancel()
 	who := cred.who
 
-	client := NewClient(AudienceOf(who.current().Grants))
+	// THE AUDIENCE IS DECIDED ONCE, here, from the principal the
+	// handshake resolved and the company this node runs — whose seats'
+	// trail it reads included — and never moved while the socket is open
+	// (see [Client.audience] and lifetime.go).
+	client := NewClient(svc.AudienceFor(ctx, who.current()))
 	// REGISTERED BEFORE THE SNAPSHOT. See Hub.Register: the overlap is
 	// deduped by the client, and the gap the other order leaves is not.
 	//
@@ -428,7 +439,10 @@ func serveSocket(ctx context.Context, conn *websocket.Conn,
 	defer svc.listeners.add(l)()
 	var deciding sync.WaitGroup
 	deciding.Go(func() {
-		keepDecided(ctx, conn, l, cred, svc.seatOf, svc.now, seats.recheck)
+		keepDecided(ctx, conn, l, cred, svc.seatOf, svc.now,
+			func(ctx context.Context, p iam.Principal) bool {
+				return !svc.AudienceFor(ctx, p).Equal(client.Audience())
+			}, seats.recheck)
 	})
 	defer deciding.Wait()
 
@@ -571,8 +585,8 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 				defer running.Done()
 				defer func() { <-slots }()
 				// AS WHOEVER THE LAST DECISION SAID, not whoever opened
-				// the socket: a grant narrowed an hour ago must not
-				// still answer here. See lifetime.go.
+				// the socket: a permission taken away an hour ago must
+				// not still answer here. See lifetime.go.
 				runQuery(who.context(ctx), client, query, req)
 			}()
 		default:
@@ -592,7 +606,8 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 // `inbox_changed` frames for that seat — which say whose inbox moved, when and
 // under which reason — so it is decided exactly as the `work_inbox` question
 // about that seat is: [authz.ActionPersonRead], which admits the seat's own
-// holder, whoever leads it through the chart, and the admin grant. Any
+// holder, whoever leads it through the chart, and an admin — each holding the
+// tracker, whose frames these are. Any
 // resolved caller could watch any seat before, which made the routing index a
 // way to follow somebody else's inbox that the question itself refused.
 //
@@ -685,7 +700,7 @@ func (w *watching) watch(ctx context.Context, req request) (websocket.StatusCode
 // record, somebody else's login is their holder's, and anything else is read
 // as the seat it names — and the watch is decided on what it resolved to. A
 // login nobody holds, or one whose holder's seat is gone, is decided on the
-// name as typed, which nobody leads, so only the admin grant learns it names
+// name as typed, which nobody leads, so only an admin learns it names
 // no record (`not_found`, which no retry changes); a directory this node
 // cannot read is `unavailable`, and its own words — which name the seat a
 // login is bound to — go to the log.
@@ -893,8 +908,8 @@ func runQuery(ctx context.Context, client *Client, query Query, req request) {
 		client.Reply(env)
 	default:
 		// The reason reaches the LOG, not the client. A query failure can
-		// carry a database path or a driver's own message, and holding the
-		// grant a question needs does not make a reader somebody that path
+		// carry a database path or a driver's own message, and being
+		// admitted to a question does not make a reader somebody that path
 		// is meant for.
 		log.WarnContext(ctx, "stream_query_failed", "what", req.What, "error", err)
 		client.Reply(queryError(req, CodeQueryFailed))

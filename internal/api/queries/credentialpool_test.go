@@ -189,14 +189,14 @@ func TestAnUnreadableLedgerAnswersThisNodeAndSaysSo(t *testing.T) {
 	}
 }
 
-// ON THE CONFIGURATION READ — which variable holds each model's keys and
-// which of them a vendor is refusing is what the company document's reader is
-// trusted with — and unregistered with nothing to read from.
-func TestTheCredentialPoolIsReadOnTheConfigurationGrant(t *testing.T) {
+// ADMIN'S — which variable holds each model's keys and which of them a vendor
+// is refusing is what the company document's reader is trusted with — and
+// unregistered with nothing to read from.
+func TestTheCredentialPoolIsAdmins(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, poolSources(fleetLedger()))
-	needsExactly(t, r, "credential_pool", iam.GrantConfigRead)
+	requiresExactly(t, r, "credential_pool", iam.GrantAdmin)
 	bare := queries.NewRegistry()
 	queries.Register(bare, queries.Sources{})
 	if slices.Contains(bare.Names(), "credential_pool") {

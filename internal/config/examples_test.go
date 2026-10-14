@@ -361,15 +361,11 @@ api:
   port: 8000
   external_url: "https://crewlet.example.com"
   auth:
-    max_grants: [state:read, config:read, config:write, secrets:read,
-                 secrets:write, work:write, knowledge:write, audit:read,
-                 fleet:operate, sandbox:run]
+    admin: serve
     tokens:
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"
-        grants: [state:read, config:read, config:write, secrets:read,
-                 secrets:write, work:write, knowledge:write, audit:read,
-                 fleet:operate, sandbox:run]
+        grants: [admin]
 
 secrets:
   active_key_id: "2026-01"

@@ -44,7 +44,7 @@ import (
 func TestATokenIsMintedForThePersonTheRouteNames(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	caller := ordinary() // bob, holding state:read and nothing to administer
+	caller := ordinary() // bob, holding every app and nothing to administer
 	got := r.as(caller, http.MethodPost, "/iam/credentials",
 		map[string]any{"person": alice.String(), "label": "mine"})
 	if got.status != http.StatusCreated {
@@ -181,7 +181,7 @@ func TestAMintTheDomainRefusesIsAnsweredForWhatItIs(t *testing.T) {
 		want int
 	}{
 		{"a grant the owner does not hold",
-			fmt.Errorf("%w: config:write is not among [state:read]",
+			fmt.Errorf("%w: admin is not among [tracker]",
 				iamdomain.ErrRefused), http.StatusForbidden},
 		{"an expiry already past", fmt.Errorf("%w: the expiry has passed",
 			iamdomain.ErrInvalidToken), http.StatusBadRequest},
@@ -197,6 +197,88 @@ func TestAMintTheDomainRefusesIsAnsweredForWhatItIs(t *testing.T) {
 		if got.body["token"] != nil {
 			t.Errorf("%s answered a token value", tc.name)
 		}
+	}
+}
+
+// AN ADMIN MINTS A SERVICE ACCOUNT AN ADMIN TOKEN.
+//
+// A token may carry admin (ADR-0033): it acts as its owner, cut on every
+// request to what they still hold and to the node's admin posture, and what
+// keeps it off a gesture that needs a person is that gesture's own row. So an
+// admin minting for a service account that holds admin reaches the domain
+// asking for exactly that — the owner the route names, the minter the caller,
+// the permissions as typed — and the answer names them. An OMITTED list
+// reaches it as nil, which the domain reads as everything the owner holds;
+// `[]` as an empty set, a token that reads the overview alone; and a name this
+// build does not know is refused `400` naming the set before the owner is read
+// or the domain asked.
+//
+// Mutation: default an omitted list here rather than in the domain and the
+// nil case goes red; forward an unknown name and the writer is asked.
+func TestAnAdminMintsAServiceAccountAnAdminToken(t *testing.T) {
+	t.Parallel()
+	service := func(r *rig) {
+		row := unboundServiceAccount()
+		row.Grants = []iam.Grant{iam.GrantAdmin}
+		r.directory.people[ciRelease.String()] = row
+	}
+	target := "/iam/credentials?person=" + ciRelease.String()
+
+	r := newRig(t)
+	service(r)
+	got := r.as(administrator(), http.MethodPost, target,
+		map[string]any{"label": "deploy", "grants": []string{"admin"}})
+	if got.status != http.StatusCreated {
+		t.Fatalf("an admin token for a service account answered %d %v, want 201",
+			got.status, got.body)
+	}
+	if r.writer.minted.PersonID != ciRelease.String() ||
+		r.writer.principal != alice.String() ||
+		!slices.Equal(r.writer.minted.Grants, []iam.Grant{iam.GrantAdmin}) {
+		t.Errorf("the domain was asked for %+v by %q, want an admin token "+
+			"owned by the service account and minted by alice",
+			r.writer.minted, r.writer.principal)
+	}
+	if grants, _ := got.body["grants"].([]any); len(grants) != 1 ||
+		grants[0] != string(iam.GrantAdmin) {
+		t.Errorf("the answer names %v, want [admin]", got.body["grants"])
+	}
+
+	for name, tc := range map[string]struct {
+		body map[string]any
+		want []iam.Grant
+	}{
+		"an omitted list": {map[string]any{"label": "deploy"}, nil},
+		"an empty list": {map[string]any{"label": "deploy",
+			"grants": []string{}}, []iam.Grant{}},
+		"one app, by name": {map[string]any{"label": "deploy",
+			"grants": []string{"tracker"}}, []iam.Grant{iam.GrantTracker}},
+	} {
+		r := newRig(t)
+		service(r)
+		got := r.as(administrator(), http.MethodPost, target, tc.body)
+		if got.status != http.StatusCreated {
+			t.Errorf("%s answered %d %v", name, got.status, got.body)
+			continue
+		}
+		if (tc.want == nil) != (r.writer.minted.Grants == nil) ||
+			!slices.Equal(r.writer.minted.Grants, tc.want) {
+			t.Errorf("%s reached the domain as %#v, want %#v", name,
+				r.writer.minted.Grants, tc.want)
+		}
+	}
+
+	r = newRig(t)
+	service(r)
+	got = r.as(administrator(), http.MethodPost, target,
+		map[string]any{"label": "deploy", "grants": []string{"admin", "billing"}})
+	if got.status != http.StatusBadRequest || got.body["field"] != "grants" ||
+		!strings.Contains(fmt.Sprint(got.body["detail"]), `"billing"`) {
+		t.Errorf("a name this build does not know answered %d %v, want 400 "+
+			"naming it", got.status, got.body)
+	}
+	if len(r.writer.calls) != 0 {
+		t.Errorf("an unknown name reached the writer: %v", r.writer.calls)
 	}
 }
 
@@ -258,13 +340,13 @@ func TestATierATokenNamesWhoATokenIsFor(t *testing.T) {
 	service := uuid.MustParse("018f3a9c-0000-7000-8000-0000000005e1")
 	r.directory.people[service.String()] = iamdomain.PersonRow{
 		ID: service.String(), Kind: iam.KindMachine, Stage: iam.StageActive,
-		Login: "svc:release", Grants: []iam.Grant{iam.GrantStateRead},
+		Login: "svc:release", Grants: []iam.Grant{iam.GrantTracker},
 	}
 	const value = "a-tier-a-token-long-enough-to-pass"
 	b := config.DefaultBootstrap()
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: value,
-		Grants: []iam.Grant{iam.GrantPeopleManage, iam.GrantStateRead}}}
+		Grants: []iam.Grant{iam.GrantAdmin}}}
 	guarded := auth.New(&b).Middleware(r.mux)
 	for _, tc := range []struct {
 		path string
@@ -440,13 +522,13 @@ func TestAPersonMintsTheirOwnTokenFromTheirSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := config.DefaultBootstrap()
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	b.API.ExternalURL = "http://127.0.0.1:8000"
 	rows := sessionRows{session.Identity{Applied: 10,
 		Session: session.LineageRow{Found: true, Epoch: 1, ProvedAt: time.Now()},
 		Person: session.PersonRow{Found: true, Epoch: 1,
 			Stage: iam.StageActive, Login: "bob.sre",
-			Grants: []iam.Grant{iam.GrantStateRead}},
+			Grants: []iam.Grant{iam.GrantTracker}},
 	}}
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: signer, Chart: noSeats{}, External: b.API.ExternalBase(),
@@ -495,7 +577,10 @@ func (d sessionRows) AwaitApplied(_ context.Context, position uint64) error {
 
 const tokenID = "018f3a9c-0000-7000-8000-0000000000f1"
 
-// aliceToken is a token alice holds and the row that verifies it.
+// aliceToken is a token alice holds and the row that verifies it — minted
+// carrying ADMIN from an owner who holds it, so a refusal a case asserts is
+// never one for want of a permission: a token carries admin (ADR-0033), and
+// what keeps it off a gesture is the gesture's own rule.
 func aliceToken(t *testing.T) (credential.Token, credential.TokenRow) {
 	t.Helper()
 	secret, err := credential.NewTokenSecret()
@@ -507,11 +592,11 @@ func aliceToken(t *testing.T) (credential.Token, credential.TokenRow) {
 		Applied: 10, Found: true, IsToken: true,
 		Verifier:  credential.TokenVerifier(presented.ID, secret),
 		ExpiresAt: time.Now().Add(time.Hour),
-		Grants:    []iam.Grant{iam.GrantStateRead},
+		Grants:    []iam.Grant{iam.GrantAdmin},
 		Owner: credential.TokenOwner{
 			Found: true, ID: alice.String(), Kind: iam.KindPerson,
 			Stage: iam.StageActive, Login: "alice.admin",
-			Grants: []iam.Grant{iam.GrantStateRead},
+			Grants: []iam.Grant{iam.GrantAdmin},
 		},
 	}
 }
@@ -523,7 +608,7 @@ func throughTheGuard(t *testing.T, r *rig, row credential.TokenRow, method,
 
 	t.Helper()
 	b := config.DefaultBootstrap()
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	arm, err := auth.NewTokens(auth.TokensDeps{
 		Directory: oneToken{row}, Chart: noSeats{},
 	})

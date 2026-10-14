@@ -10,9 +10,9 @@ import (
 )
 
 // The config family, answered through the SAME functions the /config routes
-// call. Registered on the configuration read: the document exposes which
-// integrations are wired and every ${VAR} reference by name, which a reader of
-// the board has no business holding.
+// call. Admin's (ADR-0033): the document exposes which integrations are wired
+// and every ${VAR} reference by name, which somebody who uses the company's
+// apps has no business holding.
 
 // ConfigAuditLimit bounds the revision history a dashboard asks for.
 const ConfigAuditLimit = 50
@@ -37,10 +37,9 @@ func (s Sources) configDocument(ctx context.Context, _ Params) (any, error) {
 // the identities in it, or one entity out of it.
 //
 // The read half of the Config room's entity editor, whose write half is
-// PUT /config/{kind}/{id}. Registered on `config:read` like every other
-// config answer — this is a slice of the same document, and a per-entity read
-// that was not gated would be a way to fetch the whole document one entity at
-// a time.
+// PUT /config/{kind}/{id}. Admin's like every other config answer — this is a
+// slice of the same document, and a per-entity read that was not gated would
+// be a way to fetch the whole document one entity at a time.
 func (s Sources) configEntities(ctx context.Context, p Params) (any, error) {
 	kind := p.String("kind")
 	if kind == "" {

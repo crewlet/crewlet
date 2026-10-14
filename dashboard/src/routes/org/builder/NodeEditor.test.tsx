@@ -255,7 +255,7 @@ describe("a lead's draft of one unit", () => {
     expect(applyRefuses()).toBe(true);
     expect(
       shownReason(
-        "The company's charter and settings are not part of Engineering: changing them takes the config:write grant.",
+        "The company's charter and settings are not part of Engineering: changing them takes Admin access.",
       ),
     ).toBeDefined();
   });
@@ -266,7 +266,7 @@ describe("a lead's draft of one unit", () => {
     expect(disabled(field("Lead"))).toBe(true);
     expect(
       screen.getByText(
-        "Engineering's own lead decides who may change it, so changing it takes the config:write grant.",
+        "Engineering's own lead decides who may change it, so changing it takes Admin access.",
       ),
     ).toBeDefined();
     tab("Profile");
@@ -283,7 +283,7 @@ describe("a lead's draft of one unit", () => {
   // Each is looked for on the tab that draws it.
   test("a key another system finds a seat or unit by is fixed, with the reason", () => {
     const reason =
-      /Another system finds a seat or unit by this, so setting or changing it takes the config:write grant\./;
+      /Another system finds a seat or unit by this, so setting or changing it takes Admin access\./;
     const drawn = (where: Record<string, readonly string[]>, expected: boolean) => {
       for (const [label, fields] of Object.entries(where)) {
         tab(label);
@@ -980,10 +980,11 @@ describe("seat fields", () => {
 });
 
 /*
- * WHO HOLDS A PERSON'S SEAT is said where the seat is edited, with the
- * gestures that fill or free it — the one [SeatHolding] the seat's page and
- * the chart draw — for a reader the identity directory answers, and asked of
- * nobody else. A seat this draft added holds nobody until a save declares it.
+ * WHO HOLDS A PERSON'S SEAT is said where the seat is edited — the one
+ * [SeatHolding] the seat's page and the chart draw — for every signed-in
+ * reader, since who holds a seat is part of the overview, with the gestures
+ * that fill or free it for an admin alone. A browser nobody signed in on is
+ * asked nothing. A seat this draft added holds nobody until a save declares it.
  */
 describe("who holds a person's seat", () => {
   const humanDev = () => {
@@ -991,8 +992,8 @@ describe("who holds a person's seat", () => {
     doc.units![0]!.roles![1] = { name: "Dev", handle: "dev", kind: "human" };
     return doc;
   };
-  const reader = (grants: string[]) => ({
-    login: "ada.admin",
+  const reader = (grants: string[], login = "ada.admin") => ({
+    login,
     grants,
     handle: "ceo",
     owner: "ceo",
@@ -1021,7 +1022,7 @@ describe("who holds a person's seat", () => {
   test("a vacant seat says so, and offers Invite and Create to whoever manages people", async () => {
     vi.stubGlobal("fetch", seats);
     edit(keyedState(humanDev()), "seat:dev", {
-      viewer: reader(["config:write", "people:manage"]),
+      viewer: reader(["admin"]),
     });
     const person = await screen.findByRole("region", { name: "Person" });
     expect(await within(person).findByText("Nobody holds this seat.")).toBeDefined();
@@ -1029,17 +1030,17 @@ describe("who holds a person's seat", () => {
     expect(within(person).getByRole("button", { name: "Create person" })).toBeDefined();
   });
 
-  test("an auditor reads the holding and is offered no gesture", async () => {
+  test("a reader without Admin reads the holding and is offered no gesture", async () => {
     vi.stubGlobal("fetch", seats);
-    edit(keyedState(humanDev()), "seat:dev", { viewer: reader(["audit:read"]) });
+    edit(keyedState(humanDev()), "seat:dev", { viewer: reader(["tracker", "knowledge"]) });
     const person = await screen.findByRole("region", { name: "Person" });
     expect(await within(person).findByText("Nobody holds this seat.")).toBeDefined();
     expect(within(person).queryByRole("button")).toBeNull();
   });
 
-  test("a reader the directory does not answer is shown nothing, and nothing is asked", async () => {
+  test("a browser nobody signed in on is shown nothing, and nothing is asked", async () => {
     vi.stubGlobal("fetch", seats);
-    edit(keyedState(humanDev()), "seat:dev", { viewer: reader(["config:write"]) });
+    edit(keyedState(humanDev()), "seat:dev", { viewer: reader([], "") });
     await act(async () => {});
     expect(screen.queryByRole("region", { name: "Person" })).toBeNull();
     expect(seats).not.toHaveBeenCalled();
@@ -1056,7 +1057,7 @@ describe("who holds a person's seat", () => {
         data: { name: "Pat", handle: "pat", kind: "human" },
       },
     });
-    edit(added, "new:pat", { viewer: reader(["people:manage"]) });
+    edit(added, "new:pat", { viewer: reader(["admin"]) });
     const person = await screen.findByRole("region", { name: "Person" });
     expect(person.textContent).toContain("once the organization is saved");
     expect(within(person).queryByRole("button")).toBeNull();

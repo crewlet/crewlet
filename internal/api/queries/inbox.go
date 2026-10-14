@@ -23,10 +23,10 @@ import (
 // better was found, and the person's own read and snooze marks. No commercial
 // tracker records why a notification reached you; this one always has.
 //
-// SCOPED, NOT GATED ON A GRANT OF ITS OWN. See [Sources.recordHandle]: a
-// caller reads their own record, and naming anybody else's is
-// [authz.ActionInboxRead] — theirs, whoever leads them, or the deployment's
-// admin grant. Gated on a grant nobody but an administrator holds, the landing
+// THE TRACKER'S, AND SCOPED. It is a question of the tracker's records, so it
+// takes the tracker; within it, see [Sources.recordHandle]: a caller reads
+// their own record, and naming anybody else's is [authz.ActionInboxRead] —
+// theirs, whoever leads them, or an admin. Gated on admin alone, the landing
 // screen would be the most-gated screen in the product, and the human teammate
 // — one of the two readers this dashboard is for — fictional.
 func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {

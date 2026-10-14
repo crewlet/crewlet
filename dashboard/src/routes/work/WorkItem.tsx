@@ -28,6 +28,16 @@
  * behind. The peek heads itself with the task's identity (it has no page bar),
  * stacks the rail above the body in its one column, and leaves out what only
  * the page has room for: the cost and the record.
+ *
+ * # Opened by the person an ask names, without Tracker
+ *
+ * The engine answers `work_item` to a reader without Tracker while an open
+ * ask on the task names them, so that they can answer it (and nothing else).
+ * Every other read here — the project, the sub-tasks, the histories — is the
+ * tracker's, so for such a reader none is asked: the task is drawn from its
+ * own answer, its thread is the one that answer carried, and the ask in it is
+ * answered on its row ([Activity]). The frame lets the task's address through
+ * for exactly this reader (`App.tsx`'s `Screen`).
  */
 
 import { useMemo } from "react";
@@ -44,6 +54,7 @@ import { QueryState } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
 import { RestoreButton } from "~/components/writes.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import {
   authorKinds,
@@ -184,15 +195,20 @@ export function liveOn(
   return null;
 }
 
-/** One task's reads: the task, its project's vocabulary and its sub-tasks. */
+/**
+ * One task's reads: the task, its project's vocabulary and its sub-tasks —
+ * the last two the tracker's, asked only of a reader holding it (see the
+ * file's doc).
+ */
 function useTask(id: string) {
+  const { tracker } = useViewer();
   const state = useQuery("work_item", { id }, { enabled: id !== "", pollMs: ITEM_POLL_MS });
   const item = state.data?.task;
   // ENABLED ON THE ITEM, not just parameterised by it: `undefined` params are
   // an EMPTY question on the wire rather than a skipped one, and the engine
   // refuses a project with no key.
   const project = useQuery("work_project", item ? { key: item.project } : undefined, {
-    enabled: Boolean(item),
+    enabled: Boolean(item) && tracker,
     pollMs: 300_000,
   });
   // A SUBTREE IS ITS OWN QUESTION, and the one read that can see a task's
@@ -200,9 +216,9 @@ function useTask(id: string) {
   const children = useQuery(
     "work_items",
     item ? { container: `project:${item.project}`, parent: item.id, limit: 100 } : undefined,
-    { enabled: Boolean(item), pollMs: SUBTASKS_POLL_MS },
+    { enabled: Boolean(item) && tracker, pollMs: SUBTASKS_POLL_MS },
   );
-  return { state, item, project, children };
+  return { state, item, project, children, tracker };
 }
 
 // ---------------------------------------------------------------------------
@@ -214,7 +230,7 @@ export function WorkItem({ id }: { id: string }) {
   const index = useMemo(() => indexOrg(org), [org]);
   const agents = useAgents();
   const now = useNow();
-  const { state, item, project, children } = useTask(id);
+  const { state, item, project, children, tracker } = useTask(id);
   const chrome = useItemChrome(index, state.data, project.data);
   const { open: openPeek } = usePeekControls();
   const nav = useNavigator();
@@ -266,7 +282,7 @@ export function WorkItem({ id }: { id: string }) {
     <>
       <PageActions>
         {/* WHERE THIS TASK SITS IN THE LIST IT WAS OPENED FROM. */}
-        {item && address && <ListPosition address={address} />}
+        {item && address && tracker && <ListPosition address={address} />}
         {/* WATCH LIVE ONLY WHILE A TURN IS RUNNING ON THIS TASK. */}
         {live && liveTurn && (
           <ButtonLink
@@ -322,15 +338,17 @@ export function WorkItem({ id }: { id: string }) {
                   <ItemTitle item={item} />
                   <ItemDescription item={item} />
                   <Checklists item={item} chrome={chrome} />
-                  <Subtasks
-                    rows={children.data?.items ?? []}
-                    error={children.error}
-                    refusal={children.refusal}
-                    chrome={chrome}
-                    parent={item.removed ? undefined : item}
-                    statusOf={statusFor}
-                    peek={(row: WorkSummary) => openPeek({ kind: "item", id: itemAddress(row) })}
-                  />
+                  {tracker && (
+                    <Subtasks
+                      rows={children.data?.items ?? []}
+                      error={children.error}
+                      refusal={children.refusal}
+                      chrome={chrome}
+                      parent={item.removed ? undefined : item}
+                      statusOf={statusFor}
+                      peek={(row: WorkSummary) => openPeek({ kind: "item", id: itemAddress(row) })}
+                    />
+                  )}
                   <Activity
                     item={item}
                     address={address}
@@ -338,6 +356,7 @@ export function WorkItem({ id }: { id: string }) {
                     index={index}
                     now={now}
                     live={live}
+                    {...(state.data.comments ? { thread: state.data.comments } : {})}
                   />
                 </div>
               </div>
@@ -372,7 +391,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
   const index = useMemo(() => indexOrg(org), [org]);
   const agents = useAgents();
   const now = useNow();
-  const { state, item, project, children } = useTask(itemKey);
+  const { state, item, project, children, tracker } = useTask(itemKey);
   const chrome = useItemChrome(index, state.data, project.data);
   const live = item ? liveOn(agents, item) : null;
   // THE ADDRESS ITS WRITES NAME, as the page's — see [WorkItem].
@@ -418,12 +437,14 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
                 {/* A CHILD NAVIGATES FROM THE PEEK rather than replacing its
                     parent in it: `[` and `]` step the list the peek was
                     opened from, which this task is in and its child is not. */}
-                <Subtasks
-                  rows={children.data?.items ?? []}
-                  error={children.error}
-                  refusal={children.refusal}
-                  chrome={chrome}
-                />
+                {tracker && (
+                  <Subtasks
+                    rows={children.data?.items ?? []}
+                    error={children.error}
+                    refusal={children.refusal}
+                    chrome={chrome}
+                  />
+                )}
                 <Activity
                   item={item}
                   address={address}
@@ -432,6 +453,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
                   now={now}
                   live={live}
                   param="peek_activity"
+                  {...(state.data.comments ? { thread: state.data.comments } : {})}
                 />
               </div>
             </ItemEditsProvider>

@@ -5,7 +5,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -37,12 +39,26 @@ type SeatRow struct {
 	Invitation *SeatInvitation `json:"invitation,omitempty"`
 }
 
-// SeatHolding is one principal bound to a seat.
+// SeatHolding is one principal bound to a seat, as one reader may see it.
+//
+// THE ORG CHART IS EVERYBODY'S, and so is who sits in each of its human seats:
+// a colleague is drawn by the name they go by. What identifies their ACCOUNT —
+// the directory id, the login they sign in with, how far through enrolment
+// they are — is the directory's, read by an admin and by the holder about
+// themselves ([Service.GetSeats]); everybody else is sent the name and the
+// kind and nothing a sign-in form would take.
 type SeatHolding struct {
-	Person string `json:"person"`
+	// Person is the directory id: an admin's and the holder's own.
+	Person string `json:"person,omitempty"`
+	// Name is the name the holder goes by, opened on this node's keyring;
+	// Sealed says it could not be, so a screen draws "name unavailable"
+	// rather than a seat nobody holds.
+	Name   string `json:"name,omitempty"`
+	Sealed bool   `json:"sealed,omitempty"`
 	// Kind says which remedy a seat that must be freed takes: a person is
 	// moved to another human seat or removed, a service account unbound.
-	Kind  iam.Kind  `json:"kind"`
+	Kind iam.Kind `json:"kind"`
+	// Login and Stage are an admin's and the holder's own, as Person is.
 	Login string    `json:"login,omitempty"`
 	Stage iam.Stage `json:"stage,omitempty"`
 }
@@ -62,6 +78,17 @@ type SeatInvitation struct {
 
 // GetSeats is `GET /iam/seats`: every human seat of the running company and
 // what holds it, and with `?unheld=true` only the seats nothing holds.
+//
+// # Everybody's, masked per reader
+//
+// The org chart is everybody's overview (ADR-0033), so the route admits every
+// resolved principal (`iam.seats.read`) and each row is shaped here for whoever
+// asked: a holder's NAME and kind to everybody; their directory id, login and
+// stage to an admin and to the holder about themselves; an OPEN INVITATION,
+// which carries the address it was sent to, to an admin alone; and
+// `?unheld=true` — the helper a create, an invitation or a move picks a seat
+// from, all of them admin's gestures — refused anybody else with the
+// permission that would admit them.
 //
 // # A listing, not a report
 //
@@ -99,6 +126,20 @@ func (s *Service) GetSeats(w http.ResponseWriter, r *http.Request) {
 		}
 		unheld = parsed
 	}
+	principal, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	admin := principal.Can(iam.GrantAdmin)
+	if unheld && !admin {
+		// THE CREATE-INVITE-MOVE HELPER IS ADMIN'S, as all three gestures
+		// are: a vacancy list is where an administrator puts somebody, and
+		// told to anybody else it is a list of which seats an invitation
+		// is out for.
+		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+			authz.RefusalDetail(authz.ReasonNoGrant, []iam.Grant{iam.GrantAdmin}))
+		return
+	}
 	seats, running := s.seats.HumanSeats()
 	if !running {
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
@@ -125,10 +166,9 @@ func (s *Service) GetSeats(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if b := claim.Holder; b != nil {
-			row.Holder = &SeatHolding{Person: b.Person, Kind: b.Kind,
-				Login: b.Login, Stage: b.Stage}
+			row.Holder = s.holding(r, principal, admin, b)
 		}
-		if inv := claim.Invitation; inv != nil {
+		if inv := claim.Invitation; inv != nil && admin {
 			view := &SeatInvitation{ID: inv.Invitation, InvitedBy: inv.InvitedBy,
 				ExpiresAt: inv.ExpiresAt}
 			view.Email, view.Sealed = s.openInvitation(r, inv.Invitation, inv.Sealed)
@@ -137,6 +177,21 @@ func (s *Service) GetSeats(w http.ResponseWriter, r *http.Request) {
 		rows = append(rows, row)
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{"seats": rows})
+}
+
+// holding is one seat's holder as reader p sees it: the name everybody, the
+// account an admin and the holder themselves — see [SeatHolding].
+func (s *Service) holding(r *http.Request, p iam.Principal, admin bool,
+	b *iamdomain.SeatBinding) *SeatHolding {
+
+	out := &SeatHolding{Kind: b.Kind}
+	var opened bool
+	out.Name, opened = s.open(r.Context(), b.Person, iamdomain.FieldName, b.NameSealed)
+	out.Sealed = !opened
+	if admin || p.ID.String() == b.Person {
+		out.Person, out.Login, out.Stage = b.Person, b.Login, b.Stage
+	}
+	return out
 }
 
 // noCompanyHint is what a node running no company says about a seat — the

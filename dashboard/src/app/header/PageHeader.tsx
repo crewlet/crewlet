@@ -68,8 +68,8 @@ import {
 import { href, samePath, useNavigator, useRoute } from "../router.tsx";
 import type { Crumb } from "../crumbs.ts";
 import { resolves } from "../routes.ts";
+import { accessNames } from "~/lib/access.ts";
 import {
-  grantWords,
   grantsMissing,
   isSidebarRow,
   sectionOf,
@@ -466,11 +466,11 @@ export function elsewhereWords(row: WorkspaceRow, s: Section): string {
  *
  * A SECTION CLOSED TO THE READER DRAWS ITS LOCK AND STAYS, for the reason no
  * sidebar row is ever hidden: a section that vanished for a reader without its
- * grant is one they cannot know exists. Closed is `nav.ts`'s `sectionOpen`,
+ * access is one they cannot know exists. Closed is `nav.ts`'s `sectionOpen`,
  * the one rule every lock is drawn by — the reader's own sections (their
- * Account, Appearance) never, every other without the company's grant or its
- * own. The lock names what is missing, because that is what the reader would
- * ask somebody for — and it is drawn only once somebody has said what the
+ * Account, Appearance) and General never, every other without Admin. The lock
+ * names what is missing, because that is what the reader would ask an admin
+ * for — and it is drawn only once somebody has said what the
  * reader holds, since a lock on every section while the first read is out
  * claims a refusal nobody has made. Each row's title is its hint. A CROSS-LINK
  * (the reader's Account, and Budgets, which lives once, under Spend) draws an
@@ -577,7 +577,7 @@ export function SectionColumn({
                 const Glyph = glyphFor(s.icon);
                 // BY THE ONE RULE every lock the navigation draws is decided
                 // by (`nav.ts`'s `sectionOpen`): the reader's own sections
-                // need nothing, and every other needs the company's grant too.
+                // need nothing, and every other names its own access.
                 const needs = grants === null ? [] : grantsMissing(s, grants);
                 const figure = figures[s.key];
                 return (
@@ -600,7 +600,7 @@ export function SectionColumn({
                         {needs.length > 0 && (
                           <>
                             <KeyGlyph size="xs" aria-hidden="true" />
-                            <span className="sr-only">, needs {grantWords(needs)}</span>
+                            <span className="sr-only">, needs {accessNames(needs)} access</span>
                           </>
                         )}
                         {s.elsewhere && (

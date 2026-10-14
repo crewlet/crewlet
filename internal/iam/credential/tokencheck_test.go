@@ -19,13 +19,13 @@ func liveRow(token credential.Token, verifier string) credential.TokenRow {
 	return credential.TokenRow{
 		Applied: token.Position + 10, Found: true, IsToken: true,
 		Verifier: verifier, ExpiresAt: checkAt.Add(24 * time.Hour),
-		Grants:     []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
+		Grants:     []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
 		Epoch:      2,
 		Generation: 1, FleetGeneration: 1,
 		Owner: credential.TokenOwner{
 			Found: true, ID: "0192f00d-0000-7000-8000-00000000000a",
 			Kind: iam.KindPerson, Stage: iam.StageActive, Login: "jane.doe",
-			Grants: []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
+			Grants: []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
 			Epoch:  2,
 		},
 	}
@@ -121,43 +121,46 @@ func TestAPresentedTokenIsDecidedByTheTable(t *testing.T) {
 	}
 }
 
-// A TOKEN NEVER CARRIES A GRANT THAT NEEDS A PERSON PRESENT, WHATEVER ITS ROW
-// SAYS.
-//
-// The mint refuses `secrets:read` and `people:manage`, and this is the half the
-// request path relies on: a token is fresh by construction for the ordinary
-// step-up window, and no token may reach the gestures those grants open. A row
-// carrying one — from a peer whose decide did not refuse it — whose owner holds
-// it too is the case that matters, because the owner check alone would let it
-// through. Mutation: drop the filter and the reveal grant is carried.
-func TestATokenNeverCarriesAGrantThatNeedsAPersonPresent(t *testing.T) {
-	t.Parallel()
-	token, verifier := mintToken(t, 5)
-	row := liveRow(token, verifier)
-	row.Grants = append([]iam.Grant{iam.GrantStateRead},
-		iam.PersonPresentGrants...)
-	row.Owner.Grants = iam.AllGrants
-	if got := row.EffectiveGrants(); !slices.Equal(got,
-		[]iam.Grant{iam.GrantStateRead}) {
-		t.Errorf("a token carries %v, and %v need a person present",
-			got, iam.PersonPresentGrants)
-	}
-}
-
-// A TOKEN CARRIES WHAT ITS OWNER STILL HOLDS, AND REACHES NO FURTHER THAN
-// THEY DO.
+// A TOKEN CARRIES WHAT ITS MINT AND ITS OWNER SHARE, READ THROUGH EXPAND.
 //
 // Re-evaluated per request, so demoting a person demotes every token they
 // made — the mint's own list is a ceiling on the token, never a grant of its
-// own. Mutation: answer the mint's list whole and the withdrawn grant is
-// still carried.
-func TestATokenCarriesOnlyWhatItsOwnerStillHolds(t *testing.T) {
+// own — and both sides are expanded, so admin is just another permission
+// here: a token minted [admin] carries everything while its owner holds admin
+// and the one app its owner keeps once they do not, and a token minted an app
+// its administrator owner never listed carries it. A name this build does not
+// know grants nothing. Mutation: answer the mint's list whole and the
+// withdrawn admin is still carried; drop the owner's Expand and the app an
+// administrator holds through admin is not.
+func TestATokenCarriesWhatItsMintAndItsOwnerShare(t *testing.T) {
 	t.Parallel()
 	token, verifier := mintToken(t, 5)
-	row := liveRow(token, verifier)
-	row.Owner.Grants = []iam.Grant{iam.GrantStateRead} // work:write withdrawn
-	if got := row.EffectiveGrants(); !slices.Equal(got,
-		[]iam.Grant{iam.GrantStateRead}) {
-		t.Errorf("the token carries %v after its owner lost work:write", got)
+	for _, c := range []struct {
+		name   string
+		minted []iam.Grant
+		owner  []iam.Grant
+		want   []iam.Grant
+	}{
+		{"minted admin, owner an administrator", []iam.Grant{iam.GrantAdmin},
+			[]iam.Grant{iam.GrantAdmin}, iam.AllGrants},
+		{"minted admin, owner keeps tracker", []iam.Grant{iam.GrantAdmin},
+			[]iam.Grant{iam.GrantTracker}, []iam.Grant{iam.GrantTracker}},
+		{"minted an app, owner holds it through admin",
+			[]iam.Grant{iam.GrantKnowledge}, []iam.Grant{iam.GrantAdmin},
+			[]iam.Grant{iam.GrantKnowledge}},
+		{"minted an unknown name", []iam.Grant{"swarm"},
+			[]iam.Grant{iam.GrantAdmin, "swarm"}, []iam.Grant{}},
+		{"owner lost the app", []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
+			[]iam.Grant{iam.GrantKnowledge}, []iam.Grant{iam.GrantKnowledge}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			row := liveRow(token, verifier)
+			row.Grants, row.Owner.Grants = c.minted, c.owner
+			if got := row.EffectiveGrants(); !slices.Equal(got, c.want) {
+				t.Errorf("minted %v, owner %v: carries %v, want %v", c.minted,
+					c.owner, got, c.want)
+			}
+		})
 	}
 }

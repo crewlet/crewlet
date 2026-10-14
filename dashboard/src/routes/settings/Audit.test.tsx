@@ -702,32 +702,33 @@ test("an identity entry names whose it is by their login", async () => {
   expect(screen.getAllByText("person 0198f0a0").length).toBeGreaterThan(0);
 });
 
-// A REFUSED TRAIL IS SAID, AND THE REST STAND: the directory's trail is the
-// audit grant's, and a reader refused it keeps every other source.
+// A REFUSED TRAIL IS SAID, AND THE REST STAND: the directory's trail is
+// Admin's, and a reader refused it keeps every other source.
 test("a refused identity trail names the grant, and the other sources stand", async () => {
   restAnswers.identity = () =>
-    json({ error: "unauthorized", reason: "no_grant", grants: ["audit:read"] }, 403);
+    json({ error: "unauthorized", reason: "no_grant", grants: ["admin"] }, 403);
   serving({ work_activity: { records: [commit()], complete: true } });
   mount();
   await waitFor(() =>
-    expect(screen.getByText(/Reading the identity trail needs audit:read/)).toBeTruthy(),
+    expect(screen.getByText(/Reading the identity trail needs Admin/)).toBeTruthy(),
   );
   expect(screen.getByText("took it off the board")).toBeTruthy();
 });
 
 // A SOURCE REFUSED ON AUTHORITY IS WITHHELD, AND THE REST STAND.
 //
-// The section opens on the audit grant, and the configuration's revisions
-// answer to another. An auditor without it was shown the refusal banner alone,
-// which hid every row of the sources they may read.
+// The section opens on Admin, and so do the configuration's revisions. A node
+// that refuses one source anyway, and only that source, still shows the
+// sources it answered rather than the refusal banner alone, which hid every
+// row of the sources the reader may read.
 test("a source refused on authority names its grant, and the other sources stand", async () => {
   serving({
     work_activity: { records: [commit()], complete: true },
-    config_audit: new QueryError("unauthorized", { reason: "no_grant", grants: ["config:read"] }),
+    config_audit: new QueryError("unauthorized", { reason: "no_grant", grants: ["admin"] }),
   });
   mount();
   await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
-  expect(screen.getByText(/Reading the configuration's revisions needs config:read/)).toBeTruthy();
+  expect(screen.getByText(/Reading the configuration's revisions needs Admin/)).toBeTruthy();
   expect(screen.queryByText(/You may not read this/)).toBeNull();
 });
 
@@ -740,7 +741,7 @@ test("a source refused after it answered takes its rows off the grid", async () 
   query.mockImplementation(async (what: string) => {
     if (what !== "config_audit") return {};
     if (asked++ > 0) {
-      throw new QueryError("unauthorized", { reason: "no_grant", grants: ["config:read"] });
+      throw new QueryError("unauthorized", { reason: "no_grant", grants: ["admin"] });
     }
     return [
       {
@@ -760,7 +761,7 @@ test("a source refused after it answered takes its rows off the grid", async () 
       await vi.advanceTimersByTimeAsync(1_000);
     });
   }
-  expect(screen.getByText(/Reading the configuration's revisions needs config:read/)).toBeTruthy();
+  expect(screen.getByText(/Reading the configuration's revisions needs Admin/)).toBeTruthy();
   expect(screen.queryByText("seeded from company.yaml")).toBeNull();
 });
 

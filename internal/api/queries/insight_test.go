@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
@@ -1237,5 +1238,86 @@ func TestALongSearchPhraseIsRefusedNamingTheLimit(t *testing.T) {
 	}
 	if _, err := r.Answer(everyGrant(t), "knowledge", map[string]any{"q": at}); err != nil {
 		t.Errorf("knowledge at the bound: %v", err)
+	}
+}
+
+// countingSearcher is a wired, searchable backend that counts what it is
+// asked, so a case can prove a caller was answered without a search.
+type countingSearcher struct{ calls *atomic.Int32 }
+
+func (countingSearcher) Backend() string                             { return "native" }
+func (countingSearcher) CanSearch(*org.Role, *org.Organization) bool { return true }
+func (s countingSearcher) Search(context.Context, knowledge.Query) knowledge.Result {
+	s.calls.Add(1)
+	return knowledge.Result{Hits: []knowledge.Hit{{PageID: "p1", Title: "Deploy runbook"}}}
+}
+
+// THE KNOWLEDGE QUESTION SEARCHES PAGES, AND ONLY FOR SOMEBODY WHO HOLDS THE
+// KNOWLEDGE BASE (ADR-0033). Everybody may ask it; a hit is a page, so a caller
+// holding the tracker alone is answered `available: false` with the reason
+// `no_access` and never searched for — a screen says their access leaves the
+// pages out, not that the company wrote nothing down — and a caller holding
+// neither app is refused naming both, since nothing it searches is theirs.
+//
+// Mutation: drop the knowledge check and the tracker-only caller is handed a
+// page; drop the refusal and the caller holding nothing is answered.
+func TestTheKnowledgeQuestionSearchesPagesOnlyWithKnowledge(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name     string
+		holding  []iam.Grant
+		searched bool
+		refused  bool
+	}{
+		{"the knowledge base", []iam.Grant{iam.GrantKnowledge}, true, false},
+		{"an admin", []iam.Grant{iam.GrantAdmin}, true, false},
+		{"the tracker alone", []iam.Grant{iam.GrantTracker}, false, false},
+		{"neither app", nil, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			var calls atomic.Int32
+			sources := queries.Sources{
+				Knowledge: func() knowledge.Searcher { return countingSearcher{calls: &calls} },
+				Company:   companySource(t, &config.Company{Name: "Acme"}),
+			}
+			r := queries.NewRegistry()
+			queries.Register(r, sources)
+			got, err := r.Answer(asking(t, c.holding...), "knowledge",
+				map[string]any{"q": "deploy"})
+			if c.refused {
+				var refusal *queries.Refusal
+				if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, iam.Apps) {
+					t.Fatalf("answered %v, want a refusal naming every app %v", err, iam.Apps)
+				}
+				if calls.Load() != 0 {
+					t.Error("a refused caller was searched for")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("knowledge: %v", err)
+			}
+			answer := asMap(t, got)
+			hits, _ := answer["hits"].([]any)
+			if searched := calls.Load() > 0; searched != c.searched {
+				t.Errorf("searched: %v, want %v", searched, c.searched)
+			}
+			if c.searched {
+				if len(hits) != 1 || answer["available"] != true {
+					t.Errorf("a knowledge holder was answered %v", answer)
+				}
+				return
+			}
+			reason := queries.KnowledgeReason(fmt.Sprint(answer["reason"]))
+			if len(hits) != 0 || answer["available"] != false ||
+				reason != queries.KnowledgeNoAccess || !reason.Valid() {
+				t.Errorf("a tracker-only caller was answered %v, want no hits, "+
+					"available false and the no_access reason", answer)
+			}
+			if !strings.Contains(fmt.Sprint(answer["note"]), "Knowledge") {
+				t.Errorf("the note %q does not say which access is missing", answer["note"])
+			}
+		})
 	}
 }

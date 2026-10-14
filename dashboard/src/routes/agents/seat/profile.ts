@@ -85,23 +85,51 @@ export function findSeat(index: OrgIndex, handle: string): Seat | null {
 /**
  * Whether this page asks for a person's own record — their inbox, the order
  * they mean to work in, the claims on their plate — which the engine answers
- * to its owner, to whoever leads them and to `fleet:operate`.
+ * to a TRACKER holder who owns it, leads them or is an admin.
  *
- * THE LEAD IS ASKED FOR TOO, on the chart's own reading of who is in their
- * line, the rule My work reads a report's day by. Asked only on the grant and
- * the owner, a lead opening a report's page was told the record needs
- * `fleet:operate` "or leading them" about somebody they lead, and their day
- * was never drawn.
+ * THE APP FIRST: every one of those questions is the tracker's, so a reader
+ * without Tracker is asked nothing, whoever they lead. THEN THE LEAD, on the
+ * chart's own reading of who is in their line, the rule My work reads a
+ * report's day by. Asked only on Admin and the owner, a lead opening a
+ * report's page was told the record needs Admin "or leading them" about
+ * somebody they lead, and their day was never drawn.
  */
 export function mayReadRecord(
-  viewer: Pick<ViewerState, "operatesFleet" | "handle">,
+  viewer: Pick<ViewerState, "admin" | "tracker" | "handle">,
   index: OrgIndex,
   handle: string,
 ): boolean {
-  if (viewer.operatesFleet) return true;
+  if (!viewer.tracker) return false;
+  if (viewer.admin) return true;
   if (isOwnSeat(viewer, handle)) return true;
   return leadsInLine(index, viewer.handle, handle);
 }
+
+/**
+ * Whether this page asks for an agent seat's TRAIL — its turns, its phases,
+ * its memory, the body of a call it is making — which the engine answers to
+ * an admin and to whoever leads the seat (`audit.seat.read`), and to nobody
+ * else: everybody reads a seat's STATUS, never its transcript.
+ *
+ * Decided on the chart's reading of the line, as [mayReadRecord]'s lead is,
+ * so the page asks only what it will be answered and draws the rest locked,
+ * saying so ([TRAIL_WORDS]), rather than as a refusal.
+ */
+export function mayReadTrail(
+  viewer: Pick<ViewerState, "admin" | "handle">,
+  index: OrgIndex,
+  handle: string,
+): boolean {
+  if (viewer.admin) return true;
+  if (isOwnSeat(viewer, handle)) return true;
+  return leadsInLine(index, viewer.handle, handle);
+}
+
+/**
+ * The other way to a seat's trail, said after the access that opens it
+ * (`GrantRequired`'s `also`): leading the seat.
+ */
+export const TRAIL_WORDS = "Whoever leads this seat reads it too.";
 
 /**
  * The live row for a seat: the roster row whose `id` — the seat's handle — is

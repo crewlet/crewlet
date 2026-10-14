@@ -230,23 +230,22 @@ func TestAPersonalQuestionDefaultsToTheCallersOwnSeat(t *testing.T) {
 	}
 }
 
-// NAMING SOMEBODY ELSE TAKES THE LEAD RELATION OR fleet:operate, and the
-// whole scope rule is decoration without it: any reader could name any handle.
+// NAMING SOMEBODY ELSE TAKES THE LEAD RELATION OR ADMIN, and the whole scope
+// rule is decoration without it: any reader could name any handle.
 //
 // It used to be "any operator credential", which made every token in Tier A a
 // reader of every seat's day. It is [authz.ClassOwnOrLead]'s answer now —
-// the owner, whoever leads them, or the deployment's admin grant — which is the
-// same rule the tracker's own writer enforces at the record.
+// the owner, whoever leads them, or an admin, each with the tracker — which is
+// the same rule the tracker's own writer enforces at the record.
 func TestReadingAnotherPersonsDayNeedsTheLeadRelation(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	// A COLLEAGUE, holding every grant BUT fleet:operate, against a chart
-	// that reports no relation: the most authority a caller can have and
-	// still be refused, which is what makes the refusal about the rule.
+	// A COLLEAGUE, holding every app but not admin, against a chart that
+	// reports no relation: the most authority a caller can have and still
+	// be refused, which is what makes the refusal about the rule.
 	colleague := viewerSources(t, work)
 	_, err := askHolding(t, colleague, "ana", "work_my_work",
-		map[string]any{"handle": "bo"},
-		iam.GrantStateRead, iam.GrantWorkWrite)
+		map[string]any{"handle": "bo"}, iam.Apps...)
 	if !errors.Is(err, queries.ErrUnauthorized) {
 		t.Fatalf("a colleague read bo's day = %v, want unauthorized", err)
 	}
@@ -264,8 +263,8 @@ func TestReadingAnotherPersonsDayNeedsTheLeadRelation(t *testing.T) {
 	if refusal.Reason != authz.ReasonNotSelf {
 		t.Errorf("reason = %q, want the owner-or-lead rule's own", refusal.Reason)
 	}
-	if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantFleetOperate}) {
-		t.Errorf("grants = %v, want the admin grant that would have admitted it",
+	if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantAdmin}) {
+		t.Errorf("grants = %v, want admin, which would have admitted it",
 			refusal.Grants)
 	}
 
@@ -276,7 +275,7 @@ func TestReadingAnotherPersonsDayNeedsTheLeadRelation(t *testing.T) {
 	led.Chart = leadsChart{lead: "ana", report: "bo"}
 	if _, err := askHolding(t, led, "ana", "work_my_work",
 		map[string]any{"handle": "bo"},
-		iam.GrantStateRead); err != nil {
+		iam.GrantTracker); err != nil {
 
 		t.Fatalf("ana reading her report's day: %v", err)
 	}
@@ -292,7 +291,7 @@ func TestReadingAnotherPersonsDayNeedsTheLeadRelation(t *testing.T) {
 	blind.Chart = authz.NoChart{}
 	if _, err := askHolding(t, blind, "ana", "work_my_work",
 		map[string]any{"handle": "bo"},
-		iam.GrantStateRead); !errors.Is(err, queries.ErrUnavailable) {
+		iam.GrantTracker); !errors.Is(err, queries.ErrUnavailable) {
 
 		t.Errorf("an unreadable chart answered %v, want unavailable", err)
 	}
@@ -311,7 +310,7 @@ func TestAHandleNoSeatHoldsIsStillRead(t *testing.T) {
 	work := &stubWork{}
 	if _, err := askHolding(t, viewerSources(t, work), "ana", "work_my_work",
 		map[string]any{"handle": "departed"},
-		iam.GrantStateRead, iam.GrantFleetOperate); err != nil {
+		iam.GrantAdmin); err != nil {
 
 		t.Fatalf("work_my_work for a handle nobody holds: %v", err)
 	}
@@ -326,9 +325,9 @@ func TestAHandleNoSeatHoldsIsStillRead(t *testing.T) {
 //
 // They are the same class today, so the answers agree; what a shared verb
 // would cost is the day they stop agreeing. `conversations` is the case that
-// proved it: it asked the person-record verb for a seat's audit trail, and an
-// auditor holding the grant that governs that trail was refused it — see
-// TestASeatsThreadsAreReadOnTheAuditGrant.
+// proved it: it asked the person-record verb for a seat's trail, and a reader
+// of every seat's trail was refused one seat's threads — see
+// TestALeadReadsTheirSeatsTrailAndNoOneElses.
 func TestEachPersonalQuestionAsksItsOwnVerb(t *testing.T) {
 	t.Parallel()
 	for what, verb := range map[string]authz.Action{
@@ -336,11 +335,11 @@ func TestEachPersonalQuestionAsksItsOwnVerb(t *testing.T) {
 		"work_inbox":   authz.ActionInboxRead,
 		"work_person":  authz.ActionPersonRead,
 	} {
-		// The question's own grant and nothing else, against a chart
+		// The question's own app and nothing else, against a chart
 		// reporting no relation: admitted to ASK, refused the record —
 		// so the refusal is the verb's rather than the registration's.
 		_, err := askHolding(t, viewerSources(t, &stubWork{}), "ana", what,
-			map[string]any{"handle": "bo"}, iam.GrantStateRead)
+			map[string]any{"handle": "bo"}, iam.GrantTracker)
 		var refusal *queries.Refusal
 		if !errors.As(err, &refusal) {
 			t.Errorf("%s naming bo = %v, want a refusal", what, err)
@@ -396,7 +395,7 @@ func TestACallersOwnRecordIsReadUnderTheNameItIsWrittenUnder(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			c.caller.ID, c.caller.Stage = uuid.New(), iam.StageActive
-			c.caller.Grants = []iam.Grant{iam.GrantStateRead}
+			c.caller.Grants = []iam.Grant{iam.GrantTracker}
 			ctx := iam.WithPrincipal(t.Context(), c.caller)
 			if want := iam.ActorFor(c.caller).Name; want != c.want {
 				t.Fatalf("this caller writes under %q; the case wants %q", want, c.want)
@@ -476,9 +475,9 @@ func TestSomebodyElsesLoginIsReadUnderTheirHoldersRecord(t *testing.T) {
 	t.Parallel()
 	admin := iam.Principal{ID: uuid.New(), Kind: iam.KindMachine, Login: "token:ops",
 		Stage:  iam.StageActive,
-		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantFleetOperate}}
+		Grants: []iam.Grant{iam.GrantAdmin}}
 	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead}}
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
 	for _, c := range []struct {
 		name   string
 		caller iam.Principal
@@ -527,9 +526,9 @@ func TestALoginThatNamesNobodyIsNotARosterForAQuestion(t *testing.T) {
 	t.Parallel()
 	admin := iam.Principal{ID: uuid.New(), Kind: iam.KindMachine, Login: "token:ops",
 		Stage:  iam.StageActive,
-		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantFleetOperate}}
+		Grants: []iam.Grant{iam.GrantAdmin}}
 	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead}}
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
 	for _, c := range []struct {
 		name   string
 		caller iam.Principal
@@ -603,7 +602,7 @@ func TestTheInboxIsScopedTheSameWay(t *testing.T) {
 	}
 	if _, err := askHolding(t, viewerSources(t, work), "ana", "work_inbox",
 		map[string]any{"handle": "bo"},
-		iam.GrantStateRead); !errors.Is(err, queries.ErrUnauthorized) {
+		iam.GrantTracker); !errors.Is(err, queries.ErrUnauthorized) {
 
 		t.Errorf("a colleague read bo's inbox = %v, want unauthorized", err)
 	}
@@ -777,9 +776,9 @@ func TestACallerWithNoAuthorityLearnsNothingFromTheDirectoryOnAQuestion(t *testi
 	t.Parallel()
 	stranger := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson,
 		Login: "pat.nobody", Seat: "pat", Stage: iam.StageActive,
-		Grants: []iam.Grant{iam.GrantStateRead}}
+		Grants: []iam.Grant{iam.GrantTracker}}
 	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead}}
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
 	blind := loginDirectory{err: errors.New("engine: ana.diaz is bound to ana " +
 		"and this node cannot say where that seat is now")}
 	for _, question := range []string{"work_my_work", "work_inbox", "work_person"} {
@@ -914,7 +913,7 @@ func TestTheViewerSaysWhetherItMayChangeTheCompany(t *testing.T) {
 	}
 	person := iam.Principal{
 		ID: uuid.New(), Login: "ana.diaz", Via: "session:lineage-1", Kind: iam.KindPerson,
-		Seat: "ana", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead, iam.GrantConfigWrite},
+		Seat: "ana", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin},
 	}
 	for name, tc := range map[string]struct {
 		writers   []string

@@ -82,15 +82,16 @@ func (auditWork) UpdateTask(context.Context, string, string, string, uint64,
 }
 
 // auditedApp is an app serving the act transport and the backup route, both
-// auditing into one record. Two Tier A credentials: `founder`, holding every
-// grant, and `ci`, which may read and nothing else.
+// auditing into one record. Two Tier A credentials: `founder`, holding admin
+// and with it every app, and `ci`, which holds the knowledge base alone — so
+// a tracker write is one the authority table refuses it.
 func auditedApp(t *testing.T, taker *fakeBackup) (*api.App, *recordedAudit) {
 	t.Helper()
 	audit := &recordedAudit{}
 	b := config.DefaultBootstrap()
 	authorize(&b, config.APIToken{ID: "founder", Token: "founder-secret"},
 		config.APIToken{ID: "ci", Token: "ci-secret",
-			Grants: []iam.Grant{iam.GrantStateRead}})
+			Grants: []iam.Grant{iam.GrantKnowledge}})
 	operators, err := operator.New(operator.Options{
 		Halves: func() (operator.Halves, bool) {
 			return operator.Halves{Work: builtin.WorkDeps{

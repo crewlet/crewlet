@@ -3,6 +3,7 @@ package operator_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -104,8 +105,9 @@ func askBody() string {
 // ONLY A PERSON BOUND TO A SEAT MAY ASK, ON EVERY TRANSPORT: the answer runs on
 // the auxiliary model of the asker's own seat and spends the company's tokens
 // on their behalf, so a credential no seat binds has no model to answer on and
-// nobody the spend is charged for. It needs the read grant too, since what an
-// answer discloses is what the pages already show a reader. Neither refusal
+// nobody the spend is charged for. It needs an app too — the knowledge base or
+// the tracker, each corpus searched only for whoever holds its app — since what
+// an answer discloses is what those already show their users. Neither refusal
 // asks the model; the bound person beside them is answered, so a surface that
 // refused everybody fails here too.
 func TestOnlyAPersonBoundToASeatMayAsk(t *testing.T) {
@@ -130,15 +132,18 @@ func TestOnlyAPersonBoundToASeatMayAsk(t *testing.T) {
 		t.Fatalf("an unbound caller spent tokens: %d model calls, %d resolutions",
 			model.asked(), len(model.resolved()))
 	}
-	// A BOUND PERSON WITHOUT THE READ GRANT is refused by the table, before
-	// the tool runs.
-	unread := person("lee.nobody", "jane-founder", iam.GrantWorkWrite)
+	// A BOUND PERSON HOLDING NEITHER APP is refused by the table, before
+	// the tool runs, naming both.
+	unread := person("lee.nobody", "jane-founder")
 	res, err = s.Dispatch(iam.WithPrincipal(t.Context(), unread), operator.Call{
 		Transport: types.TransportMCP, Tool: builtin.AnswerKnowledgeTool,
 		Args: map[string]any{"q": "How do we deploy?"},
 	})
-	if err != nil || !res.Failed || model.asked() != 0 {
-		t.Fatalf("a bound person holding no read grant was answered: (%+v, %v)", res, err)
+	var refused *builtin.DecisionRefused
+	if err != nil || !res.Failed || model.asked() != 0 || !errors.As(res.Cause, &refused) ||
+		!slices.Equal(refused.Decision.Grants, iam.Apps) {
+		t.Fatalf("a bound person holding neither app was answered, or refused "+
+			"other than by the table naming both apps: (%+v, %v)", res, err)
 	}
 
 	status, answer = act(t, h, "founder", builtin.AnswerKnowledgeTool,

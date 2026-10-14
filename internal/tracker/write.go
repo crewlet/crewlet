@@ -50,8 +50,8 @@ var ErrReassignmentBudget = errors.New("tracker: this task has been handed on to
 
 // ErrForbidden reports a write this ACTOR may not make, whatever it carries:
 // somebody else's inbox, pins or priority list, a view protected for its owner,
-// a project's policy or tag vocabulary without the lead's authority or the
-// deployment grant that overrides it.
+// a project's policy or tag vocabulary without the lead's authority or an
+// admin's, which overrides it.
 //
 // ITS OWN SENTINEL, and not the [statelog.ErrConflict] several of these used
 // to wrap, because the two ask for opposite things of the caller. A conflict
@@ -106,11 +106,19 @@ var ErrAlreadyAnswered = errors.New("tracker: that question is already answered"
 // — after a sentence that had already said whose it was.
 type refusal struct {
 	mark error
+	// also is a sentinel of the refusal's own beside its class, or nil —
+	// see [forbiddenAs].
+	also error
 	err  error
 }
 
-func (e *refusal) Error() string    { return "tracker: " + e.err.Error() }
-func (e *refusal) Unwrap() []error  { return []error{e.mark, e.err} }
+func (e *refusal) Error() string { return "tracker: " + e.err.Error() }
+func (e *refusal) Unwrap() []error {
+	if e.also != nil {
+		return []error{e.mark, e.also, e.err}
+	}
+	return []error{e.mark, e.err}
+}
 func (e *refusal) sentence() string { return e.err.Error() }
 
 // sentenced is a refusal this package wrote, whatever its type: [refusal]
@@ -133,6 +141,16 @@ func invalid(format string, args ...any) error {
 // [ErrForbidden]. The sentence names who may.
 func forbidden(format string, args ...any) error {
 	return &refusal{mark: ErrForbidden, err: fmt.Errorf(format, args...)}
+}
+
+// forbiddenAs is [forbidden] carrying a sentinel of its own BESIDE the class:
+// a caller that has to act on this refusal in particular tests for the
+// sentinel, and every other caller reads the class it shares with every
+// refusal of its kind. Wrapped into the sentence with %w instead, the
+// sentinel's own words — "tracker: …" — would be read to a person after a
+// sentence that had already said them.
+func forbiddenAs(sentinel error, format string, args ...any) error {
+	return &refusal{mark: ErrForbidden, also: sentinel, err: fmt.Errorf(format, args...)}
 }
 
 // Sentence is a refusal this package wrote, as a person reads it: the
@@ -562,7 +580,7 @@ var ErrNotAuthor = errors.New("tracker: only its author may edit a comment")
 //
 // # Only the author, whatever else the caller holds
 //
-// The authority table admits the deployment grant beside the author on this
+// The authority table admits an admin beside the author on this
 // verb, because it answers "may you act on this remark" for removal and edit
 // alike. The WRITE answers the narrower question, and answers it the way
 // internal/pages does: a remark somebody else can rewrite is a remark

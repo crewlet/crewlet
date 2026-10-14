@@ -93,8 +93,8 @@ func boundSurface(t *testing.T, trk *fakeTracker, chart *seatChart) *tools.Regis
 }
 
 // asJane calls a tool as a person signed in as `jane.founder`, whom the
-// directory binds to the seat `jane-founder`, holding the ordinary write grant
-// and NOT the admin one — so every relation below is the chart's to answer.
+// directory binds to the seat `jane-founder`, holding the tracker and NOT
+// admin — so every relation below is the chart's to answer.
 func asJane(t *testing.T, reg *tools.Registry, name string,
 	args map[string]any) tools.Result {
 
@@ -102,7 +102,7 @@ func asJane(t *testing.T, reg *tools.Registry, name string,
 	jane := iam.Principal{
 		ID: uuid.New(), Login: "jane.founder", Kind: iam.KindPerson,
 		Seat: "jane-founder", Stage: iam.StageActive,
-		Grants: []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite},
+		Grants: []iam.Grant{iam.GrantTracker},
 	}
 	entry, ok := reg.Lookup(name)
 	if !ok {

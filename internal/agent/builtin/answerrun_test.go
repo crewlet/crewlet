@@ -179,7 +179,7 @@ func TestAnswerRunRefusesAnAnswerTooLongToSplice(t *testing.T) {
 // A RUN'S QUESTION IS ITS REQUESTER'S TO ANSWER, or its seat's lead's — and
 // nobody else's. The requester leads nobody and is admitted as themselves (the
 // run's row names their seat by its handle); the CTO's
-// lead is admitted as its lead; a reader who is neither is refused with the
+// lead is admitted as its lead; a colleague who is neither is refused with the
 // authority's own answer, and nothing reaches the seat's inbox.
 func TestARunIsAnsweredByItsRequesterOrItsSeatsLead(t *testing.T) {
 	t.Parallel()
@@ -190,8 +190,7 @@ func TestARunIsAnsweredByItsRequesterOrItsSeatsLead(t *testing.T) {
 	}{
 		{"the person who asked for the work", boundTo("founder"), true},
 		{"the run's seat's lead", boundTo("jane"), true},
-		{"a reader who is neither", boundTo("sam", iam.GrantStateRead,
-			iam.GrantWorkWrite), false},
+		{"a colleague who is neither", boundTo("sam", iam.Apps...), false},
 		{"a seat, however granted", iam.Principal{ID: uuid.New(), Kind: iam.KindSeat,
 			Login: "agent-ceo", Seat: "agent-ceo", Stage: iam.StageActive,
 			Grants: iam.AllGrants}, false},

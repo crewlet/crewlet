@@ -125,9 +125,9 @@ func TestARerouteIsRefusedToASeatThatDoesNotLead(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
-	// A COLLEAGUE AND NOT [everyGrant], which carries fleet:operate —
-	// every relation class checks the admin grant before it asks the
-	// chart, so the case would assert nothing.
+	// A COLLEAGUE AND NOT [everyGrant], which carries admin — every
+	// relation class checks admin before it asks the chart, so the case
+	// would assert nothing.
 	got := callWorkAs(colleagueCaller(), t, reg, builtin.UpdateWorkItemTool,
 		map[string]any{"item": "ENG-1", "routing_unit": "backend"})
 	if !got.Failed {

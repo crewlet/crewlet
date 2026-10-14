@@ -1842,9 +1842,9 @@ test("every auto-fit and auto-fill track floor is clamped to its container", () 
  * THE SIDEBAR'S FOOT WEARS A CONTROL'S MARKS ONLY ON A CONTROL.
  *
  * The engine's row is the kit's `AppShell.RailRow`, and its statement form
- * ("No access yet", a refusal) is a `div` the kit draws with no pointer, no
- * chevron and no place in the tab order (`EnginePanel.test.tsx` holds that it
- * is drawn so). A rule of ours giving the kit's row a pointer or a hover of
+ * (a refusal of somebody the engine knows) is a `div` the kit draws with no
+ * pointer, no chevron and no place in the tab order (`EnginePanel.test.tsx`
+ * holds that it is drawn so). A rule of ours giving the kit's row a pointer or a hover of
  * its own would put a control's marks back on a row that does nothing, which is
  * what the health card it replaced did until it was fixed. The user block is
  * the other way round: it IS a control, the way to the reader's Account, and

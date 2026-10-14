@@ -380,12 +380,12 @@ finishes first, unless the pause also asked to **stop** it (`stop_running`), in
 which case that turn ends at its next round.
 
 **Who may pause a seat** is the seat's holder — the person the identity
-directory binds to it — whoever leads it, or a principal holding
-`fleet:operate`; resuming it is the same, and neither is ever a seat's to do.
-Everybody signed in holds a credential, so "any operator" would let every
-reader of the board stop any seat in the company. A refusal names the grants
-that would have admitted the caller. See [the authority
-table](identity-and-access.md#the-thirteen-rules).
+directory binds to it — whoever leads it, or an administrator (`admin`);
+resuming it is the same, and neither is ever a seat's to do. No app is asked:
+a lead who uses neither app still runs their team. Everybody signed in holds a
+credential, so "any operator" would let every reader of the board stop any
+seat in the company. A refusal names the permission that would have admitted
+the caller. See [the authority table](identity-and-access.md#the-fifteen-rules).
 
 ```mermaid
 stateDiagram-v2
@@ -441,7 +441,7 @@ stateDiagram-v2
 Short of stopping a turn, a person can **steer** it: send a note that the turn
 reads at its next round boundary and keeps to for the rest of the turn — from
 the live view, or from their own assistant with `steer_turn`. It is the
-seat's holder's, its lead's or a `fleet:operate` holder's to send, as a pause
+seat's holder's, its lead's or an administrator's to send, as a pause
 is — decided on the turn's seat, which only the node running the turn can
 name, so the note asks that node first. The note travels
 on an ephemeral scatter to every node; the node running the turn is the one

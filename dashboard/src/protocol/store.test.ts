@@ -530,6 +530,51 @@ describe("a live call's heavy fields", () => {
     expect(call?.versions).toMatchObject({ prompt: 9, response: 11, narration: 11 });
   });
 
+  // A STATUS READER IS NEVER SENT A BODY, so a withheld call — every body
+  // version zero, no body key, `body_withheld` — is never behind for one:
+  // asked for whole, the engine would answer the same status again. Its
+  // rounds are status and still merge as any call's do. The CONTROL is the
+  // case below, where a version moved past the copy held is fetched.
+  // Mutation: count a withheld body field as one the tab is behind on, and a
+  // status reader asks for its call on every push.
+  test("a status reader never refetches a live call", () => {
+    const store = seated();
+    const socket = new LiveSocket(store);
+    const ask = vi.spyOn(socket, "query");
+    const frame = (data: unknown) => socket.onMessage(JSON.stringify({ kind: "agents", data }));
+    const withheld = (rounds: number) =>
+      pushed(
+        { rounds },
+        { rounds: Array.from({ length: rounds }, () => ({})) },
+        {
+          body_withheld: true,
+        },
+      );
+    frame([withheld(1)]);
+    frame([withheld(2)]);
+    frame([withheld(3)]);
+    expect(ask.mock.calls.filter(([what]) => what === "live_call")).toEqual([]);
+    const call = store.state.agents[0]?.live_call;
+    expect(call?.body_withheld).toBe(true);
+    expect(call?.prompt).toBeUndefined();
+    expect(call?.versions).toMatchObject({ prompt: 0, narration: 0, rounds: 3 });
+    expect(call?.rounds).toHaveLength(3);
+  });
+
+  // A BODY HELD A MOMENT BEFORE IS NOT KEPT once the engine withholds it: a
+  // reader who could read this seat's trail and now cannot is shown none of
+  // it, and is not sent asking for it either.
+  test("a call withheld after it was whole keeps none of its body", () => {
+    const store = seated();
+    store.applyAgents([pushed({ prompt: 4, narration: 4 }, { ...prompt, ...narration(4) })]);
+    const stale = store.applyAgents([pushed({}, {}, { body_withheld: true })]);
+    expect(stale).toEqual([]);
+    const call = store.state.agents[0]?.live_call;
+    expect(call?.prompt).toBeUndefined();
+    expect(call?.round_narration).toBeUndefined();
+    expect(call?.versions).toMatchObject({ prompt: 0, narration: 0 });
+  });
+
   // THE SOCKET ASKS FOR THE CALL WHOLE, once a seat while an ask is out, and the
   // answer lands on the row.
   test("the socket fetches a call it holds behind, once", async () => {

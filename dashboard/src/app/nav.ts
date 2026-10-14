@@ -44,16 +44,7 @@
  */
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
-import type { GRANTS } from "~/contract/identity.ts";
-
-/**
- * A capability a principal carries — the engine's `iam.Grant` vocabulary,
- * which the `viewer` answer reports in `grants`. A closed union so a section
- * naming a grant the engine does not have is a compile error rather than a
- * lock nobody can open — drawn from `contract/identity.ts`, the one list a gate
- * holds against the engine's.
- */
-export type Grant = (typeof GRANTS)[number];
+import { holdsAny, type Grant } from "~/lib/access.ts";
 
 /** The workspaces: the sidebar's navigation rows, and the reader's own Account. */
 export type Workspace =
@@ -119,18 +110,19 @@ export interface Section {
    */
   keywords?: readonly string[];
   /**
-   * The GRANTS that open this section — ANY ONE of them, because the engine
-   * admits some reads on either of two (the identity directory answers both
-   * `people:manage` and `audit:read`). The navigation draws a lock beside a
-   * section the reader holds none of and never hides it, and the frame draws
-   * ONE refusal (`GrantRequired`) in place of the screen for a viewer the
-   * engine has said holds none — a screen that mounted anyway was refused and
-   * drew the refusal as zeros. NAMED rather than a flag, because what a
-   * reader is missing is a grant, and "needs an operator credential" sent a
-   * signed-in person to look for a token they have no use for. A section only
-   * PART of which needs more is not marked: its screen says so where the
-   * guarded part is. Every section also needs `state:read`, which the
-   * `viewer` read itself does, so nothing here repeats it.
+   * The PERMISSIONS that open this section — ANY ONE of them (`lib/access.ts`,
+   * which counts every app an admin carries): `admin` for what runs the
+   * company and the engine and for the company-wide transcripts, an app's
+   * permission for what reads that app. A section naming none is the
+   * OVERVIEW, which every signed-in principal reads — the org chart, agents'
+   * status, spend, schedules — and the socket is dialled for all of them. The
+   * navigation draws a lock beside a section the reader holds none of and
+   * never hides it, and the frame draws ONE refusal (`GrantRequired`) in place
+   * of the screen for a viewer the engine has said holds none — a screen that
+   * mounted anyway was refused and drew the refusal as zeros. NAMED rather
+   * than a flag, because the lock says which access to ask an admin for. A
+   * section only PART of which needs more is not marked: its screen says so
+   * where the guarded part is.
    */
   grants?: readonly Grant[];
   /** Drawn in the renderer (default), or an address reached another way. */
@@ -148,7 +140,8 @@ export interface Section {
    * THE READER'S OWN: it reads and writes nothing of the company — the
    * reader's Account, how the console looks in this browser — so it is open
    * to every signed-in reader, one the engine serves no company to included
-   * (a session without `state:read`, a refused socket). See [sectionOpen].
+   * (a refused socket: a person whose seat was taken out of the chart). See
+   * [sectionOpen].
    */
   personal?: boolean;
 }
@@ -176,7 +169,14 @@ export interface WorkspaceRow {
    * is the same question on every section of it.
    */
   keep?: string[];
-  /** The grants the whole workspace needs, as [Section.grants]: locked, never hidden. */
+  /**
+   * The permissions the whole workspace needs, as [Section.grants]: locked,
+   * never hidden. An APP's workspace names its app — Inbox, My work and Work
+   * are the tracker's, Knowledge the knowledge base's — because every screen
+   * in it reads that app; the one address under one that the app does not
+   * gate is a work item somebody was ASKED about (`App.tsx`), which its own
+   * read decides.
+   */
   grants?: readonly Grant[];
   /** The reader's own, as [Section.personal]: the Account. */
   personal?: boolean;
@@ -266,6 +266,9 @@ export const WORKSPACES: WorkspaceRow[] = [
     chord: "i",
     place: "you",
     renderer: "none",
+    // THE TRACKER'S: the inbox is the notices the tracker routed to the
+    // reader's record, and nothing else lands there.
+    grants: ["tracker"],
     sections: [],
   },
   {
@@ -278,6 +281,8 @@ export const WORKSPACES: WorkspaceRow[] = [
     place: "you",
     renderer: "tabs",
     keep: ["handle"],
+    // THE TRACKER'S: every tab is a question about somebody's work items.
+    grants: ["tracker"],
     sections: [
       {
         key: "queue",
@@ -342,6 +347,11 @@ export const WORKSPACES: WorkspaceRow[] = [
     // lenses are these three sections, a project's are its own `lens=` tabs,
     // and both draw alike (see [SectionRenderer]).
     renderer: "lenses",
+    // THE TRACKER'S, every lens and every project — but not an item somebody
+    // was ASKED about, which `App.tsx` lets them open: the engine answers the
+    // person an open ask names without the tracker, so they can read what they
+    // were asked and answer it.
+    grants: ["tracker"],
     sections: [
       {
         // WORK OPENS ON ITS PROJECTS: the first question about the company's
@@ -434,11 +444,12 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "pencil",
         path: ["agents", "edit"],
         hint: "Change teams, seats and reporting lines",
-        // NO GRANT: the builder answers for itself, saying which of its saves
-        // the reader's grants reach, rather than the frame locking it whole —
-        // its draft is kept in the tab's storage, and a frame refusal drawn
-        // the moment a grant was withdrawn would take the draft off screen
-        // while the person who wrote it is still there to copy it out.
+        // NO PERMISSION: the builder answers for itself, saying which of its
+        // saves the reader reaches — an admin's whole company, a lead's own
+        // units — rather than the frame locking it whole. Its draft is kept in
+        // the tab's storage, and a frame refusal drawn the moment admin was
+        // withdrawn would take the draft off screen while the person who
+        // wrote it is still there to copy it out.
         tab: false,
       },
     ],
@@ -466,7 +477,9 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "brain",
         path: ["live", "turns"],
         hint: "Every turn the seats ran, round by round",
-        grants: ["audit:read"],
+        // THE COMPANY-WIDE TRAIL is admin's: a lead reads their own seats'
+        // turns on each seat's page, never everybody's here.
+        grants: ["admin"],
       },
       {
         key: "runs",
@@ -481,7 +494,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "link",
         path: ["live", "a2a"],
         hint: "The private channels seats opened with each other",
-        grants: ["audit:read"],
+        grants: ["admin"],
       },
       {
         key: "events",
@@ -489,7 +502,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "list",
         path: ["live", "events"],
         hint: "Every engine event",
-        grants: ["audit:read"],
+        grants: ["admin"],
       },
     ],
   },
@@ -506,6 +519,8 @@ export const WORKSPACES: WorkspaceRow[] = [
     // page is read at the full width of the screen. The sections are reached
     // from the landing, the palette and the trail.
     renderer: "none",
+    // THE KNOWLEDGE BASE'S: every section reads its pages.
+    grants: ["knowledge"],
     sections: [
       {
         key: "search",
@@ -527,7 +542,9 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "brain",
         path: ["knowledge", "diaries"],
         hint: "What each agent remembers",
-        grants: ["audit:read"],
+        // EVERY SEAT'S MEMORY AT ONCE is admin's; a lead reads their own
+        // seats' memory on each seat's page.
+        grants: ["admin"],
       },
     ],
   },
@@ -560,6 +577,9 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "layers",
         path: ["spend", "tasks"],
         hint: "Tasks that spent the most tokens",
+        // A TASK'S KEY AND TITLE are the tracker's; the overview's spend is
+        // everybody's.
+        grants: ["tracker"],
       },
       BUDGETS,
     ],
@@ -568,9 +588,10 @@ export const WORKSPACES: WorkspaceRow[] = [
     // LAST AND LOCKED, and the row is never hidden: a section that vanishes
     // when a credential is absent is indistinguishable from one that does not
     // exist, so an operator on a fresh browser would conclude the product has
-    // nowhere to configure anything. General is the one section every
+    // nowhere to configure anything. General is the one company section every
     // reader can read — the charter is the org projection's — so the
-    // workspace names no grant as a whole; each other section names its own.
+    // workspace names no permission as a whole; every other company section
+    // is admin's, and says so on its own row.
     key: "settings",
     label: "Settings",
     icon: "sliders-vertical",
@@ -591,8 +612,8 @@ export const WORKSPACES: WorkspaceRow[] = [
         // THE READER'S OWN TOO, beside their Account: how the console looks
         // in this browser, which no operator configures and nobody else
         // sees. ONE GROUP for both, first, because a person's own settings
-        // are what they look for first. No grant, because it reads and writes
-        // nothing of the company's.
+        // are what they look for first. No permission, because it reads and
+        // writes nothing of the company's.
         key: "appearance",
         label: "Appearance",
         icon: "palette",
@@ -616,7 +637,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         path: ["settings", "people"],
         hint: "People, their credentials and sessions, and this node's API tokens",
         group: "Company",
-        grants: ["people:manage", "audit:read"],
+        grants: ["admin"],
       },
       crossLink(BUDGETS, { key: "budgets", group: "Company" }),
       {
@@ -626,7 +647,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         path: ["settings", "integrations"],
         hint: "Connected tools and their status",
         group: "Connect",
-        grants: ["config:read"],
+        grants: ["admin"],
       },
       {
         key: "tools",
@@ -635,10 +656,10 @@ export const WORKSPACES: WorkspaceRow[] = [
         path: ["settings", "tools"],
         hint: "Agent tools and MCP servers",
         group: "Connect",
-        // NO GRANT: the registry is the `tools` push every reader gets. Only
-        // an MCP server's template reads the configuration (`config:read`),
-        // and that panel says so itself — a lock here told a reader the list
-        // they were looking at was closed to them.
+        // ADMIN'S, like every company setting: the page is where MCP servers
+        // are added and their templates read, and the overview's own `tools`
+        // push already says which tools each seat has on its page.
+        grants: ["admin"],
       },
       {
         key: "models",
@@ -647,7 +668,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         path: ["settings", "models"],
         hint: "Models and their API keys",
         group: "Connect",
-        grants: ["config:read"],
+        grants: ["admin"],
       },
       {
         key: "secrets",
@@ -656,7 +677,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         path: ["settings", "secrets"],
         hint: "The company’s stored credentials",
         group: "Connect",
-        grants: ["config:read"],
+        grants: ["admin"],
       },
       {
         key: "nodes",
@@ -665,7 +686,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         path: ["settings", "nodes"],
         hint: "Engine nodes, the broker and file storage",
         group: "Engine",
-        grants: ["fleet:operate"],
+        grants: ["admin"],
       },
       {
         key: "config",
@@ -674,7 +695,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         path: ["settings", "config"],
         hint: "The active company revision, its history and its diffs",
         group: "Engine",
-        grants: ["config:read"],
+        grants: ["admin"],
       },
       {
         key: "backups",
@@ -683,7 +704,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         path: ["settings", "backups"],
         hint: "Backups and how long records are kept",
         group: "Engine",
-        grants: ["fleet:operate"],
+        grants: ["admin"],
       },
       {
         key: "audit",
@@ -692,7 +713,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         path: ["settings", "audit"],
         hint: "Every change made by people and tokens",
         group: "Engine",
-        grants: ["audit:read"],
+        grants: ["admin"],
       },
     ],
   },
@@ -873,20 +894,6 @@ export function sectionOf(path: string[]): Section | undefined {
   return best;
 }
 
-/**
- * Whether a reader holding `held` may open what `needs` names: anything when
- * it names nothing, and otherwise when they hold ANY ONE of them.
- */
-export function grantsOpen(needs: readonly Grant[] | undefined, held: readonly string[]): boolean {
-  if (!needs || needs.length === 0) return true;
-  return needs.some((grant) => held.includes(grant));
-}
-
-/** What a lock says it needs: `config:read`, or `people:manage or audit:read`. */
-export function grantWords(needs: readonly Grant[]): string {
-  return needs.join(" or ");
-}
-
 function grantsOf(needs: readonly Grant[] | undefined): { grants?: readonly Grant[] } {
   return needs && needs.length > 0 ? { grants: needs } : {};
 }
@@ -940,16 +947,11 @@ export function isSidebarRow(path: readonly string[]): boolean {
 }
 
 /**
- * The grant every company surface reads the company through: the live socket
- * needs it (`internal/api/stream`), and with it every screen that is not the
- * reader's own. `lib/frameSession.ts` names it for the socket's sake.
- */
-export const COMPANY_GRANT: Grant = "state:read";
-
-/**
  * Whether a reader holding `held` may open a section: anything that is the
- * reader's own ([Section.personal]), and otherwise the company's grant AND
- * any one of the section's own.
+ * reader's own ([Section.personal]), and otherwise any one of the section's
+ * permissions — through `lib/access.ts`'s `holdsAny`, so every app an admin
+ * carries opens an app's section. A section naming none is the overview, and
+ * open to every signed-in reader.
  *
  * ONE RULE for every lock the navigation draws and every refusal the frame
  * dispatches: the sidebar's rows, the Settings column and `App.tsx`'s screen
@@ -963,20 +965,18 @@ export function sectionOpen(
   held: readonly string[],
 ): boolean {
   if (section.personal) return true;
-  return held.includes(COMPANY_GRANT) && grantsOpen(section.grants, held);
+  return holdsAny(held, section.grants);
 }
 
 /**
  * What a reader holding `held` lacks to open a section, as its lock says it:
- * nothing; the company's grant, first, since nothing else opens without it; or
- * the section's own.
+ * nothing, or the section's own permissions.
  */
 export function grantsMissing(
   section: Pick<Section, "grants" | "personal">,
   held: readonly string[],
 ): readonly Grant[] {
   if (sectionOpen(section, held)) return [];
-  if (!held.includes(COMPANY_GRANT)) return [COMPANY_GRANT];
   return section.grants ?? [];
 }
 
@@ -1003,15 +1003,50 @@ export function workspaceOpen(row: WorkspaceRow, held: readonly string[]): boole
 
 /**
  * What a closed workspace's lock names, as [grantsMissing] does for a
- * section: nothing when it is open; the company's grant first; then the
- * workspace's own; then every grant that would open one of its sections, once
- * each.
+ * section: nothing when it is open; the workspace's own permissions; then
+ * every permission that would open one of its sections, once each.
  */
 export function workspaceMissing(row: WorkspaceRow, held: readonly string[]): readonly Grant[] {
   if (workspaceOpen(row, held)) return [];
   const whole = grantsMissing({ grants: row.grants }, held);
   if (whole.length > 0) return whole;
   return [...new Set(ownSections(row).flatMap((s) => grantsMissing(s, held)))];
+}
+
+/**
+ * What closes an address to a reader holding `held`, as the frame's refusal
+ * says it — the WORKSPACE's permissions first, since a reader who cannot open
+ * Work cannot open any lens of it, then the SECTION's — or null where nothing
+ * does. `what` is the label of whichever closed it.
+ *
+ * The caller decides what is exempt: a work item somebody was ASKED about is
+ * opened whatever this says (`App.tsx`), because the engine answers the person
+ * an open ask names without the tracker.
+ */
+export function closedBy(
+  path: string[],
+  held: readonly string[],
+): { what: string; needs: readonly Grant[] } | null {
+  const row = workspaceRow(workspaceOf(path));
+  if (row && !row.personal && !holdsAny(held, row.grants)) {
+    return { what: row.label, needs: row.grants ?? [] };
+  }
+  const section = sectionOf(path);
+  if (section && !sectionOpen(section, held)) {
+    return { what: section.label, needs: grantsMissing(section, held) };
+  }
+  return null;
+}
+
+/**
+ * Whether an address names any permission at all — its workspace's or its
+ * section's — so the frame waits for the reader's first answer before drawing
+ * a screen that may be closed to them.
+ */
+export function guardedPath(path: string[]): boolean {
+  const row = workspaceRow(workspaceOf(path));
+  if (row?.personal) return false;
+  return (row?.grants?.length ?? 0) > 0 || (sectionOf(path)?.grants?.length ?? 0) > 0;
 }
 
 /**

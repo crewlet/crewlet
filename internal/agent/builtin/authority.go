@@ -94,8 +94,8 @@ var ErrUndecidable = errors.New("builtin: this node could not decide")
 // ErrNoAuthorizer reports deps nobody wired a decision into.
 //
 // ITS OWN SENTINEL so the refusal a caller sees names the WIRING rather than
-// the caller: "you may not create work items" sends somebody to ask for a
-// grant, and this is a build that never asked anybody anything.
+// the caller: "you may not create work items" sends somebody to ask for
+// access, and this is a build that never asked anybody anything.
 var ErrNoAuthorizer = errors.New("builtin: no authority decision is wired, " +
 	"so nothing here may be called")
 
@@ -196,32 +196,23 @@ func (e *DecisionRefused) Unwrap() error { return ErrRefused }
 // A TOOL WITH NO ROW IS ABOUT NOTHING, which is correct rather than a gap:
 // every class that reads a field refuses an empty one, so a verb whose object
 // somebody forgot is refused rather than admitted. The classes that read no
-// field at all — the ordinary reads, the colleague writes decided by
-// capability — are the rows that are deliberately absent.
+// field at all are the rows that are deliberately absent: an app's own verbs
+// ([authz.ClassApp] — filing an item, writing a page, keeping a file —
+// decided on whether the caller uses the app and on nothing about the
+// object), the overview's ([authz.ClassEverybody]), and the seat-only ones
+// (`a2a_ask`, `run_sandbox`), which the table bars a person from before any
+// class reads anything.
 var subjectOf = map[string]subject{
-	// THE COLLEAGUE WRITES name their KIND and nothing else: the rule
-	// picks work:write or knowledge:write from it, and asks the chart
-	// about no relation at all.
-	"create_work_item":     {kind: authz.KindTask},
-	"update_work_item":     {kind: authz.KindTask},
-	"comment_on_work_item": {kind: authz.KindTask},
-	"merge_work_item":      {kind: authz.KindTask},
-	"a2a_ask":              {kind: authz.KindTask},
-	"write_page":           {kind: authz.KindPage},
-	"save_page":            {kind: authz.KindPage},
-	"comment_on_page":      {kind: authz.KindPage},
-	// A PLACE ARRANGES A TASK ON A BOARD, decided on the task's kind the
-	// way a rank move always was: the order is nobody's object.
-	"place_work_item": {kind: authz.KindTask},
-	// A FILE IS WRITTEN AS AN ITEM IS FILED, into a project: the project's
-	// kind is what picks work:write, and no relation is asked.
-	"write_project_file": {kind: authz.KindProject},
-
-	// THE CONTAINER CLASS asks who leads the project or the container.
-	// `write_work_catalogue` is NOT here: the catalogue is the whole
-	// workspace's and the tool names no container, so its rule is the
-	// company grant rather than a relation.
-	"write_project": {kind: authz.KindProject, container: "project"},
+	// AN ITEM AND ITS THREAD ARE DECIDED ON THE ITEM, because somebody
+	// without the tracker may still read the item an OPEN ASK on it names
+	// them on and post the answer — and which asks are open, and whom
+	// they name, is a stored row ([authz.ClassAppOrAsked]). A tracker
+	// holder is admitted before anything is read; anybody else is told
+	// [authz.ErrUnresolved], and the tool reads the item, probes its asks
+	// ([tracker.AskedOn]) and decides again. See [getWorkItem.CallForTurn]
+	// and [commentOnWorkItem.CallForTurn].
+	"get_work_item":        {kind: authz.KindTask, inTool: true},
+	"comment_on_work_item": {kind: authz.KindTask, inTool: true},
 
 	// THE PERSONAL ONES THAT TAKE NO NAME are about the caller: `my_work`,
 	// `mark_inbox` and `set_pins` take no handle, because a model that
@@ -259,15 +250,17 @@ var subjectOf = map[string]subject{
 	// then refused their own next save.
 	"save_work_view": {kind: authz.KindView, personal: "personal", container: "container"},
 
-	// THE TRASH IS DECIDED BY THE TASK'S OWN PROJECT, which is a stored row
-	// and never an argument: the tools take a key or an id, and an id names
-	// no project. So the gate cannot form the object, and these tools ask
-	// the same action themselves once they have read it.
+	// THE TRASH IS DECIDED BY THE TASK'S OWN ROW — its project and its
+	// reporter — which is stored and never an argument: the tools take a
+	// key or an id, and an id names no project and no author. So the gate
+	// cannot form the object, and these tools ask the same action
+	// themselves once they have read it ([authz.ClassTidy]: the project's
+	// lead, whoever filed the item, or an admin).
 	//
-	// Decided here with the empty object they had, every caller but the
-	// holder of the admin grant was refused as naming no project — a
-	// project's own lead could not take an item out of their own board,
-	// which is the one thing [authz.ClassDestructive] exists to let them do.
+	// Decided here with the empty object they had, every caller but an
+	// admin was refused as naming no project — a project's own lead could
+	// not take an item out of their own board, which is the one thing the
+	// relation exists to let them do.
 	//
 	// The read the tool decides on is OUTSIDE the write's snapshot, so the
 	// project is passed to the writer as a PRECONDITION and the tracker
@@ -649,7 +642,7 @@ func (g *gated) check(ctx context.Context, args map[string]any) error {
 // THE OBJECT IS THE ONE A CALL NAMING NOTHING IS ABOUT. For a verb the gate
 // decides, it is the gate's own object for a call with no arguments
 // ([subject.objectFor]): the caller, for a personal verb that takes no name;
-// the kind alone, for a colleague write the capability decides. For a verb its
+// the kind alone, for an app's own verb, decided on the app alone. For a verb its
 // tool decides ([subject.inTool]) it is the UNRESOLVED object of its kind
 // ([authz.Object.Unresolved], under [unresolvedName]), because what that
 // verb is about is a stored row or a name the call has not given.
@@ -707,6 +700,19 @@ func (d WorkDeps) mayWrite(ctx context.Context, action authz.Action,
 	object authz.Object) *tools.Result {
 
 	return askAuthority(ctx, d.Authorize, action, object)
+}
+
+// decide is [WorkDeps.mayWrite]'s question answered as the [Authorizer]'s own
+// error rather than as a result, for a tool that has to tell a refusal from
+// an undecidable answer — or keep the refusal to report later, against an
+// outcome only the writer can see.
+func (d WorkDeps) decide(ctx context.Context, action authz.Action,
+	object authz.Object) error {
+
+	if d.Authorize == nil {
+		return ErrNoAuthorizer
+	}
+	return d.Authorize(ctx, action, object)
 }
 
 // mayWrite is [WorkDeps.mayWrite] for the knowledge base.

@@ -9,12 +9,18 @@
  * (`unknown_query`) — and a tile saying "no finished tasks" there would be a
  * claim about the company's work this node cannot see. Any other refusal is
  * said in the tile.
+ *
+ * AND NOT ASKED OF A READER WITHOUT TRACKER: a finished task is the
+ * tracker's, so the tile says what would open it rather than sending a
+ * question the engine would refuse.
  */
 
 import { Skeleton } from "@crewlethq/ui";
 import { medianTaskParams } from "./model.ts";
 import { fmtCount, fmtExact, plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { TRACKER, accessNames } from "~/lib/access.ts";
 
 export function TaskMedianTile({
   since,
@@ -26,11 +32,20 @@ export function TaskMedianTile({
   until?: string;
   words: string | null;
 }) {
+  const viewer = useViewer();
   const ready = Boolean(since && until);
   const answer = useQuery("work_items", ready ? medianTaskParams(since!, until!) : undefined, {
-    enabled: ready,
+    enabled: ready && viewer.tracker,
   });
   if (answer.error === "unknown_query") return null;
+  if (!viewer.loading && !viewer.tracker) {
+    return (
+      <div className="spend-tile">
+        <span className="spend-tile-figure spend-muted">{`Needs ${accessNames([TRACKER])} access`}</span>
+        <span className="spend-label">median tokens per finished task</span>
+      </div>
+    );
+  }
   const totals = answer.data?.totals ?? [];
   const median = totals.find((t) => t.op === "median")?.value;
   const count = totals.find((t) => t.op === "count")?.value ?? 0;

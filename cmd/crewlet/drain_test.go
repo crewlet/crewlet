@@ -160,15 +160,11 @@ api:
   port: %d
   external_url: "http://127.0.0.1:%d"
   auth:
-    max_grants: [state:read, audit:read, config:read, secrets:read,
-                 work:write, knowledge:write, config:write, secrets:write,
-                 fleet:operate, sandbox:run]
+    admin: serve
     tokens:
       - id: founder
         token: %s
-        grants: [state:read, audit:read, config:read, secrets:read,
-                 work:write, knowledge:write, config:write, secrets:write,
-                 fleet:operate, sandbox:run]
+        grants: [admin]
 `, filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"),
 		testKeyMaterial(t), port, port, drainProbeToken))
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme

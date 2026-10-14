@@ -111,6 +111,23 @@
             "null"
           ]
         },
+        "admin": {
+          "anyOf": [
+            {
+              "enum": [
+                "serve",
+                "refuse",
+                "",
+                null
+              ]
+            },
+            {
+              "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}",
+              "type": "string"
+            }
+          ],
+          "description": "Whether this node grants admin to those who hold it (serve), or clamps admin away and keeps every app (refuse). Required once the API is served."
+        },
         "allowed_origins": {
           "description": "Additional browser origins this deployment is reached on. Empty = same-origin only.",
           "items": {
@@ -131,21 +148,6 @@
         },
         "company_writers": {
           "description": "Ids of the Tier A tokens that alone may change the company document. Empty = whoever the authority table admits.",
-          "items": {
-            "type": [
-              "string",
-              "number",
-              "boolean",
-              "null"
-            ]
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "max_grants": {
-          "description": "The most authority the directory may confer. Required once the API is served.",
           "items": {
             "type": [
               "string",
@@ -287,7 +289,7 @@
       "additionalProperties": false,
       "properties": {
         "grants": {
-          "description": "What this credential may do. Required and non-empty.",
+          "description": "What this credential may do: admin, tracker, knowledge. Required and non-empty.",
           "items": {
             "type": [
               "string",

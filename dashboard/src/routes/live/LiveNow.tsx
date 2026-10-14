@@ -17,6 +17,12 @@
  *    latest few;
  *  - RECENT PHASES: the settled model calls, paged (`RecentPhases.tsx`).
  *
+ * THE FIRST THREE ARE THE OVERVIEW and every signed-in reader is sent them —
+ * a running turn's STATUS, and a coding run's, its body drawn as not shown
+ * where the engine withheld it. THE LAST TWO ARE THE COMPANY-WIDE TRAIL,
+ * Admin's: for anybody else they are drawn locked and asked nothing, because
+ * a feed the engine never pushes them reads as a quiet company.
+ *
  * The spend panels and the onboarding cards that used to sit here went: the
  * spend is Spend's, on the replicated usage domain, and the onboarding cards
  * pointed at screens the sidebar already names.
@@ -46,8 +52,10 @@ import {
   FilterChip,
   FilterChipGroup,
   Select,
+  Skeleton,
 } from "@crewlethq/ui";
 import {
+  BrainGlyph,
   ChartNoAxesGanttGlyph,
   CircleQuestionMarkGlyph,
   ClockGlyph,
@@ -61,12 +69,13 @@ import { DecisionRow } from "~/components/DecisionRow.tsx";
 import { LiveDot, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { mergeRuns, RunStatus } from "./Runs.tsx";
+import { mergeRuns, RunStatus, runTitle } from "./Runs.tsx";
 import { RecentPhases } from "./RecentPhases.tsx";
 import { useAgents, useEvents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { needsSentence } from "~/lib/refusal.ts";
+import { ADMIN } from "~/lib/access.ts";
+import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { awaitingPerson, indexOrg, workingLongestFirst } from "~/lib/seats.ts";
 import { phaseKey, type PhaseRecord } from "~/lib/phases.ts";
 import { plural, relTime } from "~/lib/format.ts";
@@ -119,9 +128,6 @@ const RUNS_POLL_MS = 30_000;
 
 /** How often a seat's own latest events are read again, when one is chosen. */
 const SEAT_EVENTS_POLL_MS = 15_000;
-
-/** The grant an `event` frame is pushed under (`api/stream`'s audience). */
-const AUDIT_READ = "audit:read";
 
 /**
  * The phases the engine emits, the turn's own two first.
@@ -198,6 +204,9 @@ export function LiveNow() {
   // unselected card is the live ring, which holds no accounting row, so a
   // strip that counted them — or a seat's card listing its spend records,
   // several after every turn — would be drawing a different stream.
+  //
+  // ADMIN'S, the company-wide trail — see the file's doc: asked of nobody
+  // else.
   const series = useQuery(
     "event_series",
     {
@@ -207,7 +216,7 @@ export function LiveNow() {
       feed_only: "true",
       ...(seat ? { seat } : {}),
     },
-    { pollMs: 30_000 },
+    { pollMs: 30_000, enabled: viewer.admin },
   );
   const strip = useMemo(
     () => stripOf(series.data, now, cell, cells),
@@ -218,7 +227,7 @@ export function LiveNow() {
   const seatEvents = useQuery(
     "events",
     { seat, limit: LATEST_EVENTS, feed_only: "true" },
-    { enabled: seat !== "", pollMs: SEAT_EVENTS_POLL_MS },
+    { enabled: viewer.admin && seat !== "", pollMs: SEAT_EVENTS_POLL_MS },
   );
   const latest = seat ? (seatEvents.data?.events ?? []) : pushed.slice(0, LATEST_EVENTS);
 
@@ -425,65 +434,95 @@ export function LiveNow() {
             >
               <Card.Title as="h3">Activity</Card.Title>
             </Card.Header>
-            {/* BOTH READS THIS CARD MAKES OF THE FLEET: the count, and a seat's
-                own latest events, each of which a node can be missing from. */}
-            <CoverageNote
-              coverage={[series.data?.coverage, seat ? seatEvents.data?.coverage : undefined]}
-              what="this activity"
-            />
-            <div className="live-strip">
-              {series.error && !series.data ? (
-                <QueryState error={series.error} refusal={series.refusal} loading={false} />
-              ) : (
-                <ActivityStrip
-                  buckets={strip}
-                  label={`Events over the last ${windowLabel(range.window)}`}
-                  summary={({ peak, total, buckets }) =>
-                    `${plural(total, "event")} over ${buckets} buckets, ${peak} in the busiest.`
-                  }
-                />
-              )}
-            </div>
-            {seat && seatEvents.error && !seatEvents.data ? (
-              // A SEAT'S EVENTS THAT COULD NOT BE READ are not a quiet seat.
-              <QueryState error={seatEvents.error} refusal={seatEvents.refusal} loading={false} />
-            ) : latest.length > 0 ? (
-              <div className="live-feed">
-                {latest.map((ev) => (
-                  <EventRow key={ev.id} event={ev} compact />
-                ))}
-              </div>
-            ) : !seat && !viewer.loading && !viewer.grants.includes(AUDIT_READ) ? (
-              // WITHHELD IS NOT EMPTY: the engine pushes an `event` frame only
-              // to a socket whose principal holds `audit:read`, so for anybody
-              // else this feed stays empty however busy the company is —
-              // "nothing has happened" would be a claim about the company.
-              <EmptyState
+            {viewer.loading ? (
+              <Skeleton variant="text" rows={4} label="Checking your access" />
+            ) : !viewer.admin ? (
+              // THE COMPANY-WIDE TRAIL, Admin's — see the file's doc. Drawn
+              // locked rather than empty: the engine pushes the feed to an
+              // admin's socket alone, so "nothing has happened" would be a
+              // claim about the company.
+              <GrantRequired
                 size="compact"
-                icon={<ChartNoAxesGanttGlyph size={32} />}
-                title="The live feed is not shown to you"
-                description={needsSentence("The live feed", [AUDIT_READ])}
+                what="The activity feed"
+                grants={[ADMIN]}
+                reader={viewer.login}
               />
             ) : (
-              <EmptyState
-                size="compact"
-                icon={<ChartNoAxesGanttGlyph size={32} />}
-                title="Nothing has happened yet"
-                description="Events appear here as agents work."
-              />
+              <>
+                {/* BOTH READS THIS CARD MAKES OF THE FLEET: the count, and a seat's
+                    own latest events, each of which a node can be missing from. */}
+                <CoverageNote
+                  coverage={[series.data?.coverage, seat ? seatEvents.data?.coverage : undefined]}
+                  what="this activity"
+                />
+                <div className="live-strip">
+                  {series.error && !series.data ? (
+                    <QueryState error={series.error} refusal={series.refusal} loading={false} />
+                  ) : (
+                    <ActivityStrip
+                      buckets={strip}
+                      label={`Events over the last ${windowLabel(range.window)}`}
+                      summary={({ peak, total, buckets }) =>
+                        `${plural(total, "event")} over ${buckets} buckets, ${peak} in the busiest.`
+                      }
+                    />
+                  )}
+                </div>
+                {seat && seatEvents.error && !seatEvents.data ? (
+                  // A SEAT'S EVENTS THAT COULD NOT BE READ are not a quiet seat.
+                  <QueryState
+                    error={seatEvents.error}
+                    refusal={seatEvents.refusal}
+                    loading={false}
+                  />
+                ) : latest.length > 0 ? (
+                  <div className="live-feed">
+                    {latest.map((ev) => (
+                      <EventRow key={ev.id} event={ev} compact />
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState
+                    size="compact"
+                    icon={<ChartNoAxesGanttGlyph size={32} />}
+                    title="Nothing has happened yet"
+                    description="Events appear here as agents work."
+                  />
+                )}
+              </>
             )}
           </Card>
         </div>
 
-        <RecentPhases
-          seat={seat}
-          agentId={seatRow?.agent_id ?? ""}
-          phase={phase}
-          failed={failed === "true"}
-          runningKeys={runningKeys}
-          nameOf={nameOfPhase}
-          now={now}
-        />
+        {viewer.admin ? (
+          <RecentPhases
+            seat={seat}
+            agentId={seatRow?.agent_id ?? ""}
+            phase={phase}
+            failed={failed === "true"}
+            runningKeys={runningKeys}
+            nameOf={nameOfPhase}
+            now={now}
+          />
+        ) : (
+          // EVERY SEAT'S SETTLED PHASES are the company-wide trail: asked of
+          // nobody but an admin, and drawn locked for everybody else.
+          <Card padding="none" className="live-card">
+            <Card.Header icon={<BrainGlyph size="sm" />}>
+              <Card.Title as="h3">Recent phases</Card.Title>
+            </Card.Header>
+            {viewer.loading ? (
+              <Skeleton variant="text" rows={4} label="Checking your access" />
+            ) : (
+              <GrantRequired
+                size="compact"
+                what="Recent phases"
+                grants={[ADMIN]}
+                reader={viewer.login}
+              />
+            )}
+          </Card>
+        )}
       </div>
     </>
   );
@@ -535,7 +574,7 @@ function InBoxRow({
     >
       <RunStatus status={run.status} />
       <span className="col live-box-body">
-        <span className="truncate t-cell">{run.task_description || "No task was recorded"}</span>
+        <span className="truncate t-cell">{runTitle(run)}</span>
         <span className="truncate t-caption">
           {who}
           {run.coding_agent ? ` · ${run.coding_agent}` : ""}

@@ -851,21 +851,23 @@ func closedPosture() config.Bootstrap {
 
 // authorize gives a bootstrap its credentials AND the authority behind them.
 //
-// BOTH HALVES, because a principal's grants are the INTERSECTION of what its
-// token declares with the deployment's ceiling, and a fixture that set only
-// one carries none: `api.auth.max_grants` unset is an empty ceiling, which
-// grants nothing whatever a token asks for, and a token declaring nothing
-// carries nothing however wide the ceiling is. Either way every question
-// refuses for want of a grant, and a case about the drain, the socket or a
-// route's shape fails on an authority it never meant to be about.
+// BOTH HALVES, because a principal's grants are what its token declares as
+// the node's admin posture lets it carry, and a fixture that set only one
+// carries none: an `api.auth.admin` left unset is no posture at all, which
+// confers nothing whatever a token asks for, and a token declaring nothing
+// carries nothing however the node is postured. Either way every question
+// past the overview refuses for want of a grant, and a case about the drain,
+// the socket or a route's shape fails on an authority it never meant to be
+// about.
 //
-// A token passed with grants of its own keeps them — that is how a case
-// narrows itself to the authority it IS about.
+// The default is `admin` on a node that serves it, which carries every app
+// with it. A token passed with grants of its own keeps them — that is how a
+// case narrows itself to the authority it IS about.
 func authorize(b *config.Bootstrap, tokens ...config.APIToken) {
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	for i := range tokens {
 		if tokens[i].Grants == nil {
-			tokens[i].Grants = iam.AllGrants
+			tokens[i].Grants = []iam.Grant{iam.GrantAdmin}
 		}
 	}
 	b.API.Auth.Tokens = tokens

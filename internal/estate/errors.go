@@ -63,6 +63,7 @@ var sentinels = []sentinel{
 	{"tracker.ErrNothingToRestore", tracker.ErrNothingToRestore},
 	{"tracker.ErrReassignmentBudget", tracker.ErrReassignmentBudget},
 	{"tracker.ErrReparentAcrossProjects", tracker.ErrReparentAcrossProjects},
+	{"tracker.ErrRestoresOthers", tracker.ErrRestoresOthers},
 	{"tracker.ErrStaleVersion", tracker.ErrStaleVersion},
 	{"tracker.ErrStepUnresolved", tracker.ErrStepUnresolved},
 	{"tracker.ErrStepUnvouched", tracker.ErrStepUnvouched},
@@ -119,6 +120,7 @@ var sentinels = []sentinel{
 	{"iamdomain.ErrOperationReused", iamdomain.ErrOperationReused},
 	{"iamdomain.ErrRefused", iamdomain.ErrRefused},
 	{"iamdomain.ErrSeatRequired", iamdomain.ErrSeatRequired},
+	{"iamdomain.ErrTokenRefused", iamdomain.ErrTokenRefused},
 
 	{"iam.ErrHolderUnseated", iam.ErrHolderUnseated},
 	{"iam.ErrInvalidPrincipal", iam.ErrInvalidPrincipal},

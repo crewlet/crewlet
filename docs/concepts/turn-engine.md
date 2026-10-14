@@ -793,11 +793,11 @@ sequenceDiagram
   loop](subscription-llm-backends.md) cannot take a note at all — its rounds are
   the CLI's — and says so: `steer_unsupported`.
 - **Whose turn it is to steer.** The seat's holder, whoever leads the seat,
-  or a principal holding `fleet:operate` — never a seat, and never any reader,
+  or an administrator (`admin`) — never a seat, and never any reader,
   since everybody signed in holds a credential. The seat is the one thing the
   asking node cannot know, because the turn runs wherever its seat is held, so
-  the decision takes two steps: first on the turn as named — the deployment's
-  grant admits there and then, and a caller who leads nobody is refused with
+  the decision takes two steps: first on the turn as named — `admin` admits
+  there and then, and a caller who leads nobody is refused with
   exactly the answer a seat they do not lead gets — and otherwise a **probe**
   asks the node running the turn which seat it is, and the note is decided on
   that seat before it is offered. A probe nobody answers is `unavailable`,

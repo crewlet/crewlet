@@ -3,9 +3,9 @@
  * names it, or nobody — with the ways to fill or free it.
  *
  * The chart cannot say who holds a human seat: the identity directory does
- * (`GET /iam/seats`). The read takes `people:manage` or `audit:read`, so it is
+ * (`GET /iam/seats`). The read takes Admin or Admin, so it is
  * asked only of a reader holding one; the gestures are drawn only for
- * `people:manage`; and what they open is for THIS seat — every person holds
+ * Admin; and what they open is for THIS seat — every person holds
  * one, so the seat is stated, never chosen. A read that failed is said.
  */
 
@@ -184,12 +184,13 @@ afterEach(() => {
 });
 
 // THE INVITATION IS FOR THIS SEAT, stated rather than chosen: every person
-// holds one, so there is no select to leave empty. Mutation: send the body
-// without the seat and the engine refuses `seat_required`.
+// holds one, so there is no select to leave empty — and it carries the apps
+// ticked, because a person comes to use them. Mutation: send the body without
+// the seat and the engine refuses `seat_required`.
 test("a vacant seat offers its invitation to an administrator, for this seat", async () => {
   location.hash = "#/agents/seats/sam";
   const sent = engine();
-  await mount("sam", ["state:read", "people:manage"]);
+  await mount("sam", ["admin"]);
   const note = (await screen.findByText("Nobody holds this seat.")).closest(
     ".crewlet-callout",
   ) as HTMLElement;
@@ -202,7 +203,11 @@ test("a vacant seat offers its invitation to an administrator, for this seat", a
   fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
   await act(async () => {});
   const post = sent.find((s) => s.method === "POST");
-  expect(post?.body).toEqual({ email: "sam@example.com", grants: [], seat: "sam" });
+  expect(post?.body).toEqual({
+    email: "sam@example.com",
+    grants: ["tracker", "knowledge"],
+    seat: "sam",
+  });
 });
 
 // THE OTHER WAY A PERSON COMES TO EXIST: created on the seat, keyed — the
@@ -212,7 +217,7 @@ test("a vacant seat offers its invitation to an administrator, for this seat", a
 test("a vacant seat creates a person on itself, keyed, and shows their first password link", async () => {
   location.hash = "#/agents/seats/sam";
   const sent = engine();
-  await mount("sam", ["state:read", "people:manage"]);
+  await mount("sam", ["admin"]);
   const note = (await screen.findByText("Nobody holds this seat.")).closest(
     ".crewlet-callout",
   ) as HTMLElement;
@@ -233,7 +238,7 @@ test("a vacant seat creates a person on itself, keyed, and shows their first pas
     kind: "person",
     seat: "sam",
     email: "sam.ito@example.com",
-    grants: [],
+    grants: ["tracker", "knowledge"],
   });
   expect(within(dialog).getByText("https://x/dashboard#/reset/c-first.s")).toBeTruthy();
   expect(within(dialog).getByText("sam.ito")).toBeTruthy();
@@ -244,7 +249,7 @@ test("a vacant seat creates a person on itself, keyed, and shows their first pas
 test("an invited seat names its invitation, and cancelling it frees the seat", async () => {
   location.hash = "#/agents/seats/lee";
   const sent = engine();
-  await mount("lee", ["state:read", "people:manage"]);
+  await mount("lee", ["admin"]);
   const note = (await screen.findByText("lee@example.com")).closest(
     ".crewlet-callout",
   ) as HTMLElement;
@@ -265,16 +270,16 @@ test("an invited seat names its invitation, and cancelling it frees the seat", a
 test("a seat listing that failed is said on the page", async () => {
   location.hash = "#/agents/seats/sam";
   engine(json(500, { error: "internal", message: "boom" }));
-  await mount("sam", ["state:read", "people:manage"]);
+  await mount("sam", ["admin"]);
   expect(await screen.findByText(/The engine failed to answer/)).toBeTruthy();
   expect(screen.queryByText("Nobody holds this seat.")).toBeNull();
   expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
 });
 
-test("an auditor reads the fact and is offered no gesture", async () => {
+test("a reader without Admin reads the fact and is offered no gesture", async () => {
   location.hash = "#/agents/seats/sam";
   engine();
-  await mount("sam", ["state:read", "audit:read"]);
+  await mount("sam", ["tracker", "knowledge"]);
   const note = (await screen.findByText("Nobody holds this seat.")).closest(
     ".crewlet-callout",
   ) as HTMLElement;
@@ -284,7 +289,7 @@ test("an auditor reads the fact and is offered no gesture", async () => {
 test("a held seat names its holder and their stage", async () => {
   location.hash = "#/agents/seats/ana";
   engine();
-  await mount("ana", ["state:read", "audit:read"], "sam");
+  await mount("ana", ["admin"], "sam");
   const note = (await screen.findByText("ana.lee")).closest(".crewlet-callout") as HTMLElement;
   expect(note.textContent).toMatch(/^Held by ana\.lee \(suspended\)/);
   expect(screen.getByText("Nothing open is assigned to them")).toBeDefined();
@@ -301,7 +306,7 @@ test("a held seat names its holder and their stage", async () => {
 test("the holder reading their own seat is spoken to, and is not offered to message it", async () => {
   location.hash = "#/agents/seats/ana";
   engine();
-  await mount("ana", ["state:read", "audit:read"]);
+  await mount("ana", ["admin"]);
   const note = (await screen.findByText("ana.lee")).closest(".crewlet-callout") as HTMLElement;
   expect(note.textContent).toMatch(/^Held by you, as ana\.lee \(suspended\)/);
   expect(screen.getByText("Nothing open is assigned to you")).toBeDefined();
@@ -311,12 +316,17 @@ test("the holder reading their own seat is spoken to, and is not offered to mess
   expect(message.getAttribute("title")).toMatch(/your own seat/);
 });
 
-// THE READ IS ASKED ONLY OF A READER IT ANSWERS: anybody else would be handed
-// a refusal on a page they came to for something else.
-test("a reader holding neither grant is never asked the directory", async () => {
+// WHO HOLDS A SEAT IS PART OF THE OVERVIEW, which every signed-in principal
+// reads: a reader holding no app is asked the directory's listing — the engine
+// masks it for them — and reads the fact with no gesture. Mutation: gate the
+// listing on Admin again and the fact is gone.
+test("a reader holding no app still reads who holds the seat", async () => {
   location.hash = "#/agents/seats/sam";
   const sent = engine();
-  await mount("sam", ["state:read"]);
-  expect(sent.some((s) => s.path === "/iam/seats")).toBe(false);
-  expect(screen.queryByText("Nobody holds this seat.")).toBeNull();
+  await mount("sam", []);
+  expect(sent.filter((s) => s.path === "/iam/seats")).toHaveLength(1);
+  const note = (await screen.findByText("Nobody holds this seat.")).closest(
+    ".crewlet-callout",
+  ) as HTMLElement;
+  expect(within(note).queryByRole("button")).toBeNull();
 });

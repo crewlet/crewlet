@@ -16,8 +16,9 @@
 // /ws/stream served full LLM transcripts — prompts, tool arguments, diary
 // entries — to anyone who could reach the port. There is no such posture now:
 // [Unguarded] is the whole of the exemption, every other route needs a
-// credential whatever its method, and a deliberately public read surface is a
-// named token entry holding read grants and nothing else.
+// credential whatever its method, and a script that only reads what the
+// company is doing holds a service account's machine token carrying no
+// permission at all — the overview is every resolved principal's (ADR-0033).
 //
 // That is also why there is no longer a list of ALWAYS-guarded prefixes. With
 // every route guarded, a list saying which ones especially are would have no
@@ -36,8 +37,8 @@
 // The guard is mounted UNCONDITIONALLY: mounting it only when Tier A carries
 // tokens would be two independent conditions deciding one security property,
 // coinciding only because every real caller happens to supply both. Tier A
-// supplies the POSTURE — which credentials exist and what ceiling their grants
-// are cut to — never the existence of a check.
+// supplies the POSTURE — which credentials exist and whether this node serves
+// admin to those who hold it — never the existence of a check.
 //
 // # A bearer is compared as it arrives, and its value is what protects it
 //
@@ -328,9 +329,11 @@ func Unguarded(path string) bool {
 // to open over a read surface carrying LLM transcripts, diary entries and the
 // whole event stream, and it was a bool whose safe value was its zero and
 // which was `omitempty`, so closing it did not survive an export round trip. A
-// deliberately public reader is a named token entry holding read grants and
-// nothing else. What is still served without a credential is [Unguarded], and
-// only that.
+// deliberately public reader is a service account's machine token carrying no
+// permission at all, which reads the overview every resolved principal reads
+// and nothing else (ADR-0033) — never a Tier A entry, whose `grants` config
+// requires non-empty. What is still served without a credential is
+// [Unguarded], and only that.
 type Guard struct {
 	// tokens maps operator id to that token's whole Tier A entry — its
 	// value and the grants it may use. Empty is a real posture: no candidate can
@@ -344,10 +347,11 @@ type Guard struct {
 	// frame that holds both the request and the entry it matched.
 	tokens tierATokens
 
-	// ceiling is this node's own `api.auth.max_grants`, intersected into
-	// every principal at the moment it is resolved. See
+	// admin is this node's own `api.auth.admin`, applied to every principal
+	// at the moment it is resolved ([iam.AdminPosture.Effective]): admin
+	// served or clamped away, every app kept either way. See
 	// [Guard.principalFor].
-	ceiling []iam.Grant
+	admin iam.AdminPosture
 
 	// proof is `api.auth.session.step_up`: how long a proof of identity
 	// authorises a step-up gesture. See [proofWindow].
@@ -406,7 +410,7 @@ func (g *Guard) BindSeats(bindings SeatBindings) *Guard {
 // New builds the guard from Tier A.
 //
 // It does not fail. Every posture that would leave this surface unreachable —
-// no credential once a port is set, no ceiling, no external address, no
+// no credential once a port is set, no admin posture, no external address, no
 // keyring — and the reserved token id are refused by config validation, which
 // is where a `crewlet validate` on a laptop can catch them rather than a
 // process discovering them at bind time.
@@ -417,19 +421,19 @@ func New(b *config.Bootstrap) *Guard {
 		// the honest reading, and it is the same answer as a config
 		// listing no tokens.
 		//
-		// AND NO CEILING, which grants nothing rather than everything
-		// — see [intersect] for why that direction is the only safe
-		// one.
+		// AND NO ADMIN POSTURE, whose zero confers nothing rather than
+		// everything — see [iam.AdminPosture.Effective] for why that
+		// direction is the only safe one.
 		return &Guard{now: time.Now}
 	}
 	auth := b.API.Auth
 	tokens := tokensOf(b)
 	if len(tokens) > 0 {
 		log.Info("api_auth_tokens_loaded", "count", len(tokens),
-			"grant_ceiling", auth.CeilingHash())
+			"admin", auth.Admin)
 	}
 	return &Guard{
-		tokens: tokens, ceiling: auth.MaxGrants,
+		tokens: tokens, admin: auth.Admin,
 		proof: windowOf(auth.Session), now: time.Now,
 		clients: NewClients(b),
 	}

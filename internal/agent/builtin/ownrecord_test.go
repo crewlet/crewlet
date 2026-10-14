@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -56,6 +57,18 @@ func as(caller iam.Principal, grants ...iam.Grant) context.Context {
 // chart where `lead` leads `dev` and nobody leads anybody else.
 func ownRecordTools(t *testing.T, person *personSpy, views *viewStore) map[string]tools.Callable {
 	t.Helper()
+	return ownRecordToolsDecidedBy(t, person, views, nil)
+}
+
+// ownRecordToolsDecidedBy is [ownRecordTools] decided by authorize, or by the
+// real table over [handleChart] where it is nil.
+func ownRecordToolsDecidedBy(t *testing.T, person *personSpy, views *viewStore,
+	authorize builtin.Authorizer) map[string]tools.Callable {
+
+	t.Helper()
+	if authorize == nil {
+		authorize = builtin.Decide(handleChart{})
+	}
 	trk := newFakeTracker()
 	company := ownRecordCompany()
 	out := map[string]tools.Callable{}
@@ -67,7 +80,7 @@ func ownRecordTools(t *testing.T, person *personSpy, views *viewStore) map[strin
 			Seats:        func() []colleague.Seat { return builtin.Corpus(company, nil, nil) },
 			Actor:        builtin.PrincipalActor,
 		},
-		Authorize: builtin.Decide(handleChart{}),
+		Authorize: authorize,
 	}) {
 		out[tool.Name()] = tool
 	}
@@ -78,18 +91,18 @@ func ownRecordTools(t *testing.T, person *personSpy, views *viewStore) map[strin
 //
 // `set_priorities` with no handle — or with the caller's own — sent the
 // caller's own name through the fuzzy colleague resolver like anybody else's.
-// An unbound `jane.doe` holding the admin grant resolved to the seat `jane`
-// and set THAT seat's priorities; the same caller without the grant was
-// refused their own queue; and the refusal listed the roster. The queue a
-// caller names by omission or by either of their own names is the record
-// every other write of theirs is kept under, for each of the three shapes of
-// caller, with and without the admin grant.
+// An unbound `jane.doe` holding admin resolved to the seat `jane` and set THAT
+// seat's priorities; the same caller without admin was refused their own
+// queue; and the refusal listed the roster. The queue a caller names by
+// omission or by either of their own names is the record every other write of
+// theirs is kept under, for each of the three shapes of caller, with the
+// tracker alone and with admin.
 func TestYourOwnQueueIsNeverLookedUp(t *testing.T) {
 	t.Parallel()
 	for _, c := range ownRecordCallers {
 		for _, grants := range [][]iam.Grant{
-			{iam.GrantWorkWrite},
-			{iam.GrantWorkWrite, iam.GrantFleetOperate},
+			{iam.GrantTracker},
+			{iam.GrantAdmin},
 		} {
 			for _, named := range []string{"", c.caller.Login, c.owner} {
 				person := &personSpy{}
@@ -114,26 +127,38 @@ func TestYourOwnQueueIsNeverLookedUp(t *testing.T) {
 	}
 }
 
-// A NAME NOBODY ANSWERS TO IS REFUSED WITHOUT THE ROSTER, to a caller who may
-// not read it.
+// A NAME NOBODY ANSWERS TO IS REFUSED NAMING THE ROSTER — to a caller the
+// roster question is answered for, and to nobody else.
 //
 // A miss listed every seat in the company, and an ambiguity the seats it
-// matched, to whoever made the write — so a caller refused `lookup_colleague`
-// read the chart one misspelling at a time. The names are in the refusal when
-// the roster question would have been answered, and only then.
-func TestAMissedNameListsTheRosterOnlyToAReader(t *testing.T) {
+// matched, to whoever made the write — so the list is in the refusal exactly
+// when `lookup_colleague` would have been answered. That is everybody the
+// table resolves today, because the roster is everybody's overview; the guard
+// is still asked of the table rather than assumed, so a surface whose decision
+// refuses the roster question withholds the list.
+func TestAMissedNameListsTheRosterToWhoeverMayReadIt(t *testing.T) {
 	t.Parallel()
+	refuseRoster := func(next builtin.Authorizer) builtin.Authorizer {
+		return func(ctx context.Context, action authz.Action, object authz.Object) error {
+			if action == authz.ActionColleagueRead {
+				return fmt.Errorf("%w: the roster is not this surface's to show",
+					builtin.ErrRefused)
+			}
+			return next(ctx, action, object)
+		}
+	}
 	for _, c := range []struct {
-		name   string
-		grants []iam.Grant
-		lists  bool
+		name      string
+		grants    []iam.Grant
+		authorize builtin.Authorizer
+		lists     bool
 	}{
-		{"a caller who may not read the roster",
-			[]iam.Grant{iam.GrantWorkWrite, iam.GrantFleetOperate}, false},
-		{"a caller who may", []iam.Grant{iam.GrantWorkWrite,
-			iam.GrantFleetOperate, iam.GrantStateRead}, true},
+		{"a tracker holder", []iam.Grant{iam.GrantTracker}, nil, true},
+		{"an admin", []iam.Grant{iam.GrantAdmin}, nil, true},
+		{"a caller the roster question is refused", []iam.Grant{iam.GrantAdmin},
+			refuseRoster(builtin.Decide(handleChart{})), false},
 	} {
-		surface := ownRecordTools(t, &personSpy{}, &viewStore{})
+		surface := ownRecordToolsDecidedBy(t, &personSpy{}, &viewStore{}, c.authorize)
 		got, err := surface[tracker.SetPrioritiesTool].Call(
 			as(ownRecordCallers[0].caller, c.grants...),
 			map[string]any{"handle": "nobody-by-this-name", "items": []any{"ENG-1"}})
@@ -166,7 +191,7 @@ func TestAPersonalViewIsTheCallersOwnRecord(t *testing.T) {
 		views := &viewStore{stored: map[string]tracker.View{}}
 		surface := ownRecordTools(t, &personSpy{}, views)
 		got, err := surface[tracker.SaveWorkViewTool].Call(
-			as(c.caller, iam.GrantStateRead, iam.GrantWorkWrite),
+			as(c.caller, iam.GrantTracker),
 			map[string]any{
 				"container": "workspace", "name": "Mine", "type": "list",
 				"personal": true, "protected": true,
@@ -342,14 +367,10 @@ func TestSomebodyElsesLoginNamesTheirHoldersRecord(t *testing.T) {
 			// owner-only verbs refuse whatever the name resolves to.
 			asLead bool
 		}{
-			{"an admin naming an unbound login", as(admin, iam.GrantFleetOperate,
-				iam.GrantWorkWrite, iam.GrantStateRead), "jane.doe", "jane.doe", false},
-			{"an admin naming a bound person's login", as(admin, iam.GrantFleetOperate,
-				iam.GrantWorkWrite, iam.GrantStateRead), "j.bound", "jane", false},
-			{"a lead naming their report's login", as(lead, iam.GrantWorkWrite,
-				iam.GrantStateRead), "dev.person", "dev", true},
-			{"a lead naming somebody they do not lead", as(lead, iam.GrantWorkWrite,
-				iam.GrantStateRead), "j.bound", "", false},
+			{"an admin naming an unbound login", as(admin, iam.GrantAdmin), "jane.doe", "jane.doe", false},
+			{"an admin naming a bound person's login", as(admin, iam.GrantAdmin), "j.bound", "jane", false},
+			{"a lead naming their report's login", as(lead, iam.GrantTracker), "dev.person", "dev", true},
+			{"a lead naming somebody they do not lead", as(lead, iam.GrantTracker), "j.bound", "", false},
 		} {
 			t.Run(verb.name+"/"+c.name, func(t *testing.T) {
 				t.Parallel()
@@ -382,7 +403,7 @@ func TestYourOwnLoginIsYourOwnRecordOnEveryVerb(t *testing.T) {
 			t.Run(verb.name+"/"+typed, func(t *testing.T) {
 				t.Parallel()
 				person, dir := &personSpy{}, &directory{}
-				got := verb.call(as(me, iam.GrantWorkWrite, iam.GrantStateRead),
+				got := verb.call(as(me, iam.GrantTracker),
 					personDeps(person, dir), typed)
 				if reached := whose(t, verb, person, got); reached != "jane" {
 					t.Errorf("%s naming %q reached %q, want the caller's own "+
@@ -401,16 +422,16 @@ func TestYourOwnLoginIsYourOwnRecordOnEveryVerb(t *testing.T) {
 // is not "nobody".
 //
 // A login nobody holds is decided on the name as typed FIRST — which nobody
-// leads, so only the admin grant passes — and only then refused as naming no
+// leads, so only admin passes — and only then refused as naming no
 // record: "nobody holds that" before "you may not" would tell a caller with no
 // authority over anybody which logins exist. A directory this node cannot read
 // is the undecidable arm, never a guess in either direction.
 func TestALoginThatNamesNobodyIsNotARoster(t *testing.T) {
 	t.Parallel()
 	admin := as(iam.Principal{Kind: iam.KindMachine, Login: "token:admin"},
-		iam.GrantFleetOperate, iam.GrantWorkWrite, iam.GrantStateRead)
+		iam.GrantAdmin)
 	colleague := as(iam.Principal{Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead"}, iam.GrantWorkWrite, iam.GrantStateRead)
+		Seat: "lead"}, iam.GrantTracker)
 	for _, verb := range personVerbs() {
 		for _, c := range []struct {
 			name   string
@@ -464,7 +485,7 @@ func TestALoginThatNamesNobodyIsNotARoster(t *testing.T) {
 func TestSomebodyElsesSeatIsWrittenExactly(t *testing.T) {
 	t.Parallel()
 	admin := as(iam.Principal{Kind: iam.KindMachine, Login: "token:admin"},
-		iam.GrantFleetOperate)
+		iam.GrantAdmin)
 	for _, verb := range personVerbs() {
 		if !verb.ownerOnly {
 			continue
@@ -511,11 +532,11 @@ func TestACallerWithNoAuthorityLearnsNothingFromTheDirectory(t *testing.T) {
 	t.Parallel()
 	// `dev` leads nobody in [handleChart]; `lead` leads `dev`.
 	stranger := as(iam.Principal{Kind: iam.KindPerson, Login: "dev.person",
-		Seat: "dev"}, iam.GrantWorkWrite, iam.GrantStateRead)
+		Seat: "dev"}, iam.GrantTracker)
 	lead := as(iam.Principal{Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead"}, iam.GrantWorkWrite, iam.GrantStateRead)
+		Seat: "lead"}, iam.GrantTracker)
 	admin := as(iam.Principal{Kind: iam.KindMachine, Login: "token:admin"},
-		iam.GrantFleetOperate, iam.GrantWorkWrite, iam.GrantStateRead)
+		iam.GrantAdmin)
 	blind := func() *directory {
 		return &directory{err: errors.New("engine: j.bound is bound to jane and " +
 			"this node cannot say where that seat is now")}
@@ -557,7 +578,7 @@ func TestACallerWithNoAuthorityLearnsNothingFromTheDirectory(t *testing.T) {
 			}
 
 			// A LEAD MAY BE ADMITTED ON THE RECORD, so a node that cannot
-			// read the directory cannot say — and the admin grant may be
+			// read the directory cannot say — and an admin may be
 			// told that too. Neither hears the directory's own words.
 			undecidable := func(who string, caller context.Context) {
 				got := verb.call(caller, personDeps(&personSpy{}, blind()), "j.bound")
@@ -578,7 +599,7 @@ func TestACallerWithNoAuthorityLearnsNothingFromTheDirectory(t *testing.T) {
 				}
 			}
 			undecidable("a lead", lead)
-			undecidable("the admin grant", admin)
+			undecidable("an admin", admin)
 		})
 	}
 }

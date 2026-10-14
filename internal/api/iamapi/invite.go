@@ -15,8 +15,12 @@ import (
 
 // inviteBody is what issuing an invitation accepts.
 type inviteBody struct {
-	Email  string      `json:"email"`
-	Grants []iam.Grant `json:"grants"`
+	Email string `json:"email"`
+
+	// Grants is what the invitee will hold once they redeem it. REQUIRED,
+	// and `[]` is the overview alone — see [requireGrants] for why an
+	// omission is refused rather than read as a default.
+	Grants *[]iam.Grant `json:"grants"`
 
 	// Seat is the human seat redeeming the invitation binds the new person
 	// to, by its handle. REQUIRED: a person holds a human seat for as long
@@ -60,7 +64,9 @@ type inviteBody struct {
 //
 // The grants travel on the invitation, so the redemption hands
 // out exactly what was offered rather than deciding again — which is also what
-// stops a redemption being a way to ask for more.
+// stops a redemption being a way to ask for more. They are REQUIRED, `[]` the
+// overview alone, and a name this build does not know is refused naming the
+// set, before anything is minted ([requireGrants]).
 func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 	in, ok := readBody[inviteBody](w, r)
 	if !ok {
@@ -83,6 +89,11 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 			"them)")
 		return
 	}
+	// WHAT THEY WILL BE ABLE TO DO, STATED, before the key is read for the seat's
+	// own reason.
+	if !requireGrants(w, in.Grants, "an invitation") {
+		return
+	}
 	if !s.linksPoint(w, "an invitation") {
 		return
 	}
@@ -100,7 +111,7 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	issued, err := writer.Invite(r.Context(), iamdomain.InviteMint{
-		Email: address, Grants: in.Grants,
+		Email: address, Grants: *in.Grants,
 		Seat:      seat,
 		ExpiresAt: s.now().Add(credential.EnrolmentLinkLifetime),
 		// THE SEED, which the domain derives the invitation's id from and

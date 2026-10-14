@@ -15,8 +15,8 @@ import (
 // person bound to a seat, who passes the route because they may lead somebody,
 // sending a change they could never make was answered `400 summary_required`,
 // and met the `403` that was the real answer only once they had written a
-// sentence for it. The summary is asked last now. The CONTROL is the company's
-// own grant sending the same change, which is admitted and then asked for its
+// sentence for it. The summary is asked last now. The CONTROL is an admin
+// sending the same change, which is admitted and then asked for its
 // summary. Mutation: ask for the summary as the body is read again and every
 // refusal case answers 400.
 func TestAWriteTheCallerMayNotMakeIsRefusedForThatNotForItsSummary(t *testing.T) {
@@ -40,7 +40,7 @@ func TestAWriteTheCallerMayNotMakeIsRefusedForThatNotForItsSummary(t *testing.T)
 			}
 		})
 	}
-	t.Run("the company's grant (the control)", func(t *testing.T) {
+	t.Run("an admin (the control)", func(t *testing.T) {
 		t.Parallel()
 		s := leadSurface(t)
 		res := s.do(t, http.MethodPatch, "/config", `{"mission": "x"}`, nil)

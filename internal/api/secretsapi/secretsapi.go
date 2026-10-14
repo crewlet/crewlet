@@ -9,23 +9,28 @@
 // rows are fleet-wide, and the engine is the only thing that
 // can put one there.
 //
-// # Every route takes a grant, reads included
+// # Every route is admin's, reads included
 //
 // Each is mounted through [authz.Router] with the verb the authority table
-// decides it by: the listing and one row's metadata are `secrets.list`
-// (`config:read`), revealing a value is `secrets.reveal` (`secrets:read`), and
-// storing, rotating, deleting and re-keying are `secrets.write`
-// (`secrets:write`). A listing says which credentials a company holds and when
-// each last changed, which is reconnaissance even without the values.
+// decides it by: the listing and one row's metadata are `secrets.list`,
+// revealing a value is `secrets.reveal`, and storing, rotating, deleting and
+// re-keying are `secrets.write` — all three admin's (ADR-0033), and the two
+// that hand out or change a credential also ask a recent proof, the reveal a
+// person present besides. A listing says which credentials a company holds and
+// when each last changed, which is reconnaissance even without the values, so
+// it is not part of everybody's overview.
+//
+// THE THREE STAY THREE VERBS although one permission admits them: what
+// differs between them is the proof and the presence each row asks, and the
+// route names the verb so the table decides those, rather than a check here
+// that could drift from it.
 //
 // THE ROUTES USED TO DECIDE NOTHING. They resolved the caller for the audit
-// line and asked no grant, which was sound while the only credential this
+// line and asked no permission, which was sound while the only credential this
 // engine had was an operator token: "somebody resolved" meant "the operator".
-// It stopped being sound the day a person could sign in holding `state:read`
-// alone — every one of them could then read, reveal, overwrite and delete the
-// company's credentials. The split between `secrets:read` and `secrets:write`
-// the grant vocabulary draws, so an automation that reseals keys can hold the
-// write and never the read, meant nothing while no route asked either.
+// It stopped being sound the day a person could sign in holding a read-only
+// permission alone — every one of them could then read, reveal, overwrite and
+// delete the company's credentials.
 //
 // # The engine's own key material is not reachable from here at all
 //
@@ -97,8 +102,9 @@ type Identity interface {
 
 // IdentityResealed is what a rekey moved in the identity estate, COUNTED: how
 // many people's records it published and how many values those carried. Never
-// the ids — a caller holding `secrets:write` is not thereby somebody who reads
-// the directory.
+// the ids — a rekey answers the person who ran it, and the count is what they
+// need to retire the old key, while who carries a value under it is the
+// directory's to answer.
 type IdentityResealed struct {
 	People int `json:"people"`
 	Values int `json:"values"`
@@ -245,7 +251,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 }
 
 // reserved refuses a name in the engine's own namespace, and says what to do
-// instead. Every route that takes a name asks it FIRST — before the grant a
+// instead. Every route that takes a name asks it FIRST — before the verb a
 // reveal asks and before a body is read — because no caller of this surface,
 // whatever it holds, may address one.
 func reserved(w http.ResponseWriter, name string) bool {
@@ -288,10 +294,11 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// THE VALUE IS ITS OWN GRANT. The route admitted a caller who may see
-	// that the credential exists; revealing it is `secrets:read`, asked
-	// here because the pattern cannot see the flag — and asked BEFORE the
-	// store is read, so a refused caller never has the value in flight.
+	// THE VALUE IS ITS OWN VERB. The route admitted a caller who may see
+	// that the credential exists; revealing it is `secrets.reveal` — a
+	// person present and a recent proof on top of the listing's admin —
+	// asked here because the pattern cannot see the flag, and asked BEFORE
+	// the store is read, so a refused caller never has the value in flight.
 	if !authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSecretReveal}) {
 		return
 	}

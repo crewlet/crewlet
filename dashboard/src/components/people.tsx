@@ -3,8 +3,8 @@
  * seat, and the writes made about one — inviting a person onto a vacant seat,
  * creating one there, cancelling the invitation that holds it — plus minting a
  * token (a service account's on People & access, your own on the Account
- * page), the grants a write confers, a value shown once, and what a write came
- * to.
+ * page), the ACCESS a write confers (`lib/access.ts`: Admin, and one
+ * permission per app), a value shown once, and what a write came to.
  *
  * # A person is invited or created ON A SEAT, and only there
  *
@@ -21,14 +21,17 @@
  * The chart, the peek beside it and a seat's page each read the seat listing
  * for themselves ([useHumanSeats]), because each is drawn without the others;
  * a write made from any one of them is announced ([directoryMoved]) and every
- * listing on the page reads again.
+ * listing on the page reads again. EVERY SIGNED-IN READER reads the listing —
+ * who holds each human seat is part of the org chart, the overview — and the
+ * engine masks it per reader: the holder's name and kind to everybody, their
+ * login, account and stage to an admin and to the holder, an open invitation
+ * to an admin alone.
  *
  * Every write goes through `lib/iamWrite.ts`, so the step-up, the operation key
  * a retry sends and the four answers are decided once. And they are offered to
- * a reader holding `people:manage` only — the grant every one of them is
- * refused without ([canManagePeople]). The directory is read by auditors
- * (`audit:read`) as well, and a control disabled with one reason on every seat
- * and every row is noise on the record they came to read; the engine refuses
+ * an ADMIN only — the access every one of them is refused without
+ * ([canManagePeople]); a control disabled with one reason on every seat is
+ * noise on a chart everybody else came to read, and the engine refuses
  * whatever reaches it all the same.
  */
 
@@ -51,14 +54,24 @@ import { BanGlyph, KeyGlyph, SendGlyph, UserPlusGlyph } from "@crewlethq/icons/g
 import { DateCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
+  APPS,
   GRANTS,
   TOKEN_DEFAULT_DAYS,
   TOKEN_MAX_DAYS,
-  TOKEN_WITHHELD_GRANTS,
   type HumanSeat,
   type HumanSeatsAnswer,
   type SeatInvitation,
 } from "~/contract/identity.ts";
+import {
+  ACCESS_WORDS,
+  ADMIN,
+  TRACKER,
+  accessLabel,
+  accessLine,
+  expand,
+  holds,
+  isGrant,
+} from "~/lib/access.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import { loginProblem } from "~/lib/login.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -67,12 +80,6 @@ import { useIamGesture, type IamAnswer, type IamGesture } from "~/lib/iamWrite.t
 import { useWaiting } from "~/lib/waiting.ts";
 import { useRest, type RestOptions, type RestResult } from "~/lib/useRest.ts";
 import { rest } from "~/protocol/index.ts";
-
-/** The grant every directory write is decided on. */
-export const PEOPLE_MANAGE = "people:manage";
-
-/** The grant the directory is READ on beside it (`authz.ActionDirectoryRead`). */
-const AUDIT_READ = "audit:read";
 
 /**
  * The word for a credential the engine reports `revoked`: USED for a reset
@@ -113,20 +120,13 @@ export function ExpiresCell({
   );
 }
 
-/** Whether a reader's grants reach the directory's writes. */
-export function canManagePeople(grants: readonly string[]): boolean {
-  return grants.includes(PEOPLE_MANAGE);
-}
-
 /**
- * Whether a reader's grants reach the directory's READS — `people:manage` or
- * `audit:read`, the engine's `authz.ActionDirectoryRead`. A surface that is
- * not the directory's own (the chart, a seat's peek and page) asks it only of
- * such a reader: anybody else would be handed a refusal on a screen they came
- * to for something else.
+ * Whether a reader's access reaches the directory — every write about a
+ * person, and every read of somebody else's row: Admin, the engine's
+ * `authz.ClassDirectory` and `iam.write` rows.
  */
-export function canReadDirectory(grants: readonly string[]): boolean {
-  return grants.includes(PEOPLE_MANAGE) || grants.includes(AUDIT_READ);
+export function canManagePeople(grants: readonly string[]): boolean {
+  return holds(grants, ADMIN);
 }
 
 /**
@@ -169,148 +169,173 @@ export function useDirectoryMoved(heard: () => void, enabled = true): void {
   }, [enabled, heard]);
 }
 
-/** What each grant opens, in a line — beside the grant's own name, never instead of it. */
-export const GRANT_WORDS: Record<(typeof GRANTS)[number], string> = {
-  "state:read": "Read the company's state: the roster, work, pages, spend",
-  "audit:read": "Read transcripts, events and the identity trail",
-  "config:read": "Read the company configuration",
-  "secrets:read": "Reveal a stored credential's value",
-  "work:write": "File and change work items",
-  "knowledge:write": "Write knowledge-base pages",
-  "config:write": "Change the company configuration — host access, by design",
-  "secrets:write": "Store and remove credentials",
-  "fleet:operate": "Operate the deployment: backups, retention, the node gate",
-  "people:manage": "Invite, change and remove people — the grant that grants",
-  "sandbox:run": "Start code-sandbox runs",
-};
-
-/** Grants as written — a directory row's, or what a token carries. */
-export function GrantTags({
-  grants,
-  cap,
-}: {
-  grants?: readonly string[] | null;
-  /**
-   * Draw at most this many and count the rest as one "+n" tag that names
-   * them, for a GRID CELL. Unset draws every grant, for a field that is the
-   * whole answer (a peek, the Account page). See [GRANTS_IN_A_CELL].
-   */
-  cap?: number;
-}) {
-  if (!grants || grants.length === 0) return <EmptyValue label="No grants" />;
-  const shown = cap !== undefined && grants.length > cap ? grants.slice(0, cap) : grants;
-  const rest = grants.slice(shown.length);
+/**
+ * Access as words — a directory row's, an invitation's, or what a token
+ * carries — one tag per part of its [accessLine]: "Admin", or the apps
+ * ("Tracker", "Knowledge"), or "Overview only". A name this build does not
+ * know is drawn raw beside them, so a row never looks as if it held less than
+ * it does.
+ */
+export function AccessTags({ grants }: { grants?: readonly string[] | null }) {
+  const line = accessLine(grants ?? []);
+  if (line === "Overview only") {
+    return (
+      <Tag size="sm" appearance="outline">
+        Overview only
+      </Tag>
+    );
+  }
   return (
     <span className="row gap-1" style={{ flexWrap: "wrap" }}>
-      {shown.map((g) => (
-        <Tag key={g} size="sm" appearance="outline">
-          <span className="mono">{g}</span>
+      {line.split(" · ").map((part) => (
+        <Tag key={part} size="sm" appearance="outline">
+          {part}
         </Tag>
       ))}
-      {rest.length > 0 && (
-        <Tag size="sm" appearance="outline" title={rest.join(", ")}>
-          <span aria-hidden="true">+{rest.length}</span>
-          <span className="sr-only">
-            and {rest.length} more: {rest.join(", ")}
-          </span>
-        </Tag>
-      )}
     </span>
   );
 }
 
 /**
- * How many grants a GRID CELL draws before counting the rest.
+ * The ACCESS PICKER: Admin, then one checkbox per app (`lib/access.ts`).
  *
- * THREE, the seat peek's tool-chip cap, because a list row is a line to scan
- * and not the answer: an administrator holds every grant there is (eleven),
- * and drawn whole in an eight-rem column they stacked one per line, so one
- * row of the People list stood about 290 px tall at 1280 px wide and pushed
- * every other person below the fold. The full set is one press away, in the
- * row's peek, which draws it uncapped.
+ * ADMIN IS ONE SWITCH. It includes every app, so ticking it ticks every app
+ * and LOCKS them — "Included with Admin" — and stores them too (the engine's
+ * own CLI does the same with `-grants admin`), so taking Admin away later
+ * leaves the person their apps rather than nothing. Unticking it unlocks the
+ * apps and keeps them ticked.
+ *
+ * A PERMISSION THE WRITER DOES NOT HOLD is drawn disabled with why — the
+ * engine refuses to confer it anyway (a caller may not confer what they do
+ * not hold), and a box that only fails on submit is a guess. `held` is read
+ * through `expand`, so an admin confers every app. `only` narrows the offer —
+ * a token carries a subset of its owner's.
+ *
+ * A NAME THIS DASHBOARD DOES NOT KNOW that the row already holds is offered
+ * as a box of its own, ticked: the engine keeps such a name and grants nothing
+ * for it, and the writer may remove it but never add one — so unticking it
+ * removes it, and a name nobody held is never offered.
  */
-export const GRANTS_IN_A_CELL = 3;
-
-/**
- * Checkboxes over the grants. One outside `held` is drawn disabled with why —
- * the engine refuses to confer it anyway (a caller may not confer a grant they
- * do not hold), and a box that only fails on submit is a guess. `only` narrows
- * the offer (a token carries a subset of its owner's), and `withheld` greys
- * out what the engine refuses outright, with its reason.
- */
-export function GrantPicker({
+export function AccessPicker({
   value,
   onChange,
   held,
   only,
-  withheld,
-  legend = "Grants",
+  kept = [],
+  legend = "Access",
 }: {
   value: readonly string[];
   onChange: (next: string[]) => void;
   /**
-   * What this write may confer: the viewer's own grants — and, on an edit,
+   * What this write may confer: the viewer's own access — and, on an edit,
    * what the person already holds, which keeping or taking away confers
    * nothing (the engine checks only what an edit ADDS).
    */
   held: readonly string[];
   only?: readonly string[];
-  withheld?: { grants: readonly string[]; reason: string };
+  /** Names this dashboard does not know that the row held before the edit. */
+  kept?: readonly string[];
   legend?: string;
 }) {
-  const offered = GRANTS.filter((g) => !only || only.includes(g));
+  const may = expand(held);
+  const offer = only ? expand(only) : null;
+  const offered = GRANTS.filter((g) => !offer || offer.includes(g));
+  const admin = value.includes(ADMIN);
+  const unknown = kept.filter((g) => !isGrant(g));
+  const toggle = (g: string, on: boolean): string[] => {
+    if (g === ADMIN) {
+      // TICKED, every app the build knows is stored beside it; UNTICKED, the
+      // apps stay — see the doc.
+      // A ROW STORED AS ADMIN ALONE (a Tier A file, an older CLI) is read
+      // through `expand` as it is let go, so it keeps its apps too.
+      return on
+        ? [...new Set([...value, ADMIN, ...APPS])]
+        : expand(value).filter((x) => x !== ADMIN);
+    }
+    return on ? [...value, g] : value.filter((x) => x !== g);
+  };
   return (
     <fieldset className="col gap-1" style={{ border: 0, margin: 0, padding: 0 }}>
       <legend className="t-label">{legend}</legend>
-      {offered.length === 0 && (
+      {offered.length === 0 && unknown.length === 0 && (
         <Text as="p" variant="caption" tone="secondary">
           Nothing to offer.
         </Text>
       )}
       {offered.map((g) => {
-        const refused = withheld?.grants.includes(g)
-          ? withheld.reason
-          : held.includes(g)
-            ? null
-            : "You do not hold this grant, so you cannot confer it.";
+        const included = g !== ADMIN && admin;
+        const refused = may.includes(g)
+          ? null
+          : `You do not hold ${ACCESS_WORDS[g].label}, so you cannot give it.`;
         return (
           <Checkbox
             key={g}
-            label={<span className="mono">{g}</span>}
-            description={refused ?? GRANT_WORDS[g]}
-            checked={value.includes(g)}
-            disabled={refused !== null}
-            onCheckedChange={(on) => onChange(on ? [...value, g] : value.filter((x) => x !== g))}
+            label={ACCESS_WORDS[g].label}
+            description={
+              refused ?? (included ? "Included with Admin." : ACCESS_WORDS[g].description)
+            }
+            checked={included || value.includes(g)}
+            disabled={refused !== null || included}
+            onCheckedChange={(on) => onChange(toggle(g, on))}
           />
         );
       })}
+      {unknown.map((g) => (
+        <Checkbox
+          key={g}
+          label={<span className="mono">{g}</span>}
+          description="A permission this dashboard does not know: it grants nothing here, and is kept until you untick it."
+          checked={value.includes(g)}
+          onCheckedChange={(on) => onChange(toggle(g, on))}
+        />
+      ))}
     </fieldset>
   );
 }
 
 /**
- * What a person conferred these grants will be able to open, said where it is
- * only their Account: every other screen reads the live view, and the engine
- * refuses its socket to anybody without `state:read`. An invitation issued
- * with nothing ticked used to go out with no word, and its person landed on a
- * dashboard that could show them nothing.
+ * What a PERSON given this access will find, said before the write is sent:
+ *
+ *   - NOTHING TICKED is the overview only — the org chart, the agents'
+ *     status, spend and their own account — which every signed-in person
+ *     reads, and nothing of the tracker or the knowledge base;
+ *   - WITHOUT TRACKER, the work the company's agents send to people never
+ *     reaches them: an agent asks a person, assigns them a task or waits on
+ *     their answer through the tracker, and their inbox and My work are its.
+ *     They can still open and answer a work item an agent asks them about.
+ *
+ * Only for a person: a service account is a credential somebody scripts, and
+ * what it needs is the script's business.
  */
-export function ReachNote({
+export function AppReachNote({
   grants,
   you = false,
 }: {
   grants: readonly string[];
-  /** The grants are the reader's own, and the note speaks to them. */
+  /** The access is the reader's own, and the note speaks to them. */
   you?: boolean;
 }) {
-  if (grants.includes("state:read")) return null;
-  return (
-    <Callout variant="warning">
-      Without <span className="mono">state:read</span>{" "}
-      {you ? "you can open nothing but your own" : "they can open nothing but their own"} Account:
-      every other screen reads the company&apos;s live state, which needs it.
-    </Callout>
-  );
+  const have = expand(grants);
+  const who = you ? "you" : "they";
+  if (!APPS.some((app) => have.includes(app)) && !have.includes(ADMIN)) {
+    return (
+      <Callout variant="warning">
+        Overview only: {who} can read the org chart, the agents&rsquo; status and spend, and{" "}
+        {you ? "your" : "their"} own account — nothing in the work tracker or the knowledge base.
+      </Callout>
+    );
+  }
+  if (!have.includes(TRACKER)) {
+    return (
+      <Callout variant="warning">
+        Without {accessLabel(TRACKER)}, the work agents send to people never reaches{" "}
+        {you ? "you" : "them"}: agents assign tasks, ask questions and wait on answers through the
+        tracker. {you ? "You" : "They"} can still open and answer an item an agent asks{" "}
+        {you ? "you" : "them"} about.
+      </Callout>
+    );
+  }
+  return null;
 }
 
 /**
@@ -391,7 +416,10 @@ export function UnboundRemedy({ login }: { login: string }) {
       Work the org chart hands to a seat reaches this credential once the directory binds its row to
       a human seat nothing else holds: <code className="inline">crewlet iam bind ID SEAT</code>, or
       — for a token no row holds yet —{" "}
-      <code className="inline">crewlet iam create -kind machine -login {login} -seat SEAT</code>.
+      <code className="inline">
+        crewlet iam create -kind machine -login {login} -seat SEAT -grants none
+      </code>
+      .
     </>
   );
 }
@@ -400,10 +428,12 @@ export function UnboundRemedy({ login }: { login: string }) {
  * Every human seat of the running company and what holds it (`GET /iam/seats`),
  * or — `enabled` false — nothing asked at all.
  *
- * A caller passes `enabled` as `canReadDirectory(viewer.grants)` once the
- * viewer has answered (`!viewer.asking`), so nobody is asked a question they
- * would be refused. Every listing hears a write made anywhere on the page
- * ([directoryMoved]) and reads again, quietly.
+ * EVERY SIGNED-IN READER may ask it (`iam.seats.read`): the engine masks each
+ * holder per reader — a name and a kind to everybody, the account to an admin
+ * and the holder — so a caller passes `enabled` as "somebody has answered"
+ * (`!viewer.asking && !viewer.anonymous`), never a permission. Every listing
+ * hears a write made anywhere on the page ([directoryMoved]) and reads again,
+ * quietly.
  */
 export function useHumanSeats(enabled: boolean): RestResult<HumanSeat[]> {
   const seats = useRest(
@@ -437,6 +467,8 @@ export function listsNoCompany(seats: RestResult<unknown>): boolean {
  * The seats a bind may name: those NOTHING holds — no person, no service
  * account and no open invitation, which the engine's `?unheld=true` leaves
  * out alike, so the vacancies offered are exactly the ones a bind can take.
+ * An admin's question (the engine refuses it to anybody else), asked only by
+ * the dialogs that move somebody.
  */
 export function useUnheldSeats() {
   return useRest("/iam/seats?unheld=true", async (signal) => {
@@ -496,7 +528,7 @@ export function seatOptions(
 export type SeatGesture = "invite" | "create" | "cancel";
 
 /**
- * The gestures a seat offers a reader holding `people:manage`: a VACANT seat
+ * The gestures a seat offers an admin: a VACANT seat
  * is invited onto or has a person created on it; a seat an open invitation
  * holds offers that invitation's cancellation; a HELD seat offers nothing
  * here — its holder is moved or removed on their row in People & access.
@@ -526,12 +558,27 @@ export const SEAT_GESTURE_WORDS: Record<
 };
 
 /**
- * What holds a seat, in the few words a card has room for: "Held by jane.doe",
- * "Invited · sam@example.com", or "Vacant". NEUTRAL WORDS for a card whose one
- * hue is a seat's state — who holds a seat is not something it is doing.
+ * Who holds a seat, by the name a reader of the chart knows them by: their
+ * own name, which every reader is sent; else their login, which an admin and
+ * the holder are sent; else that the engine's keyring could not open the
+ * name, or — where nothing names them — that somebody does.
+ */
+export function holderName(holder: NonNullable<HumanSeat["holder"]>): string {
+  if (holder.name) return holder.name;
+  if (holder.login) return holder.login;
+  if (holder.sealed) return "a person whose name this node cannot open";
+  return holder.kind === "machine" ? "a service account" : "a person";
+}
+
+/**
+ * What holds a seat, in the few words a card has room for: "Held by Jane
+ * Doe", "Invited · sam@example.com", or "Vacant". NEUTRAL WORDS for a card
+ * whose one hue is a seat's state — who holds a seat is not something it is
+ * doing. An invitation is an admin's to see, so to anybody else a seat it
+ * holds reads as nobody's.
  */
 export function holdingLine(row: HumanSeat): string {
-  if (row.holder) return `Held by ${row.holder.login || row.holder.person}`;
+  if (row.holder) return `Held by ${holderName(row.holder)}`;
   if (row.invitation) {
     const { email, sealed } = row.invitation;
     return email && !sealed ? `Invited · ${email}` : "Invited";
@@ -606,7 +653,7 @@ export function SeatHolding({
   seat: SeatName;
   /** The listing, as [useHumanSeats] read it. */
   seats: RestResult<HumanSeat[]>;
-  /** The reader holds `people:manage`, so the gestures are drawn. */
+  /** The reader is an admin, so the gestures are drawn. */
   manages: boolean;
   /** The reader's own grants. */
   held: readonly string[];
@@ -694,16 +741,29 @@ function SeatHoldingState({
   );
 }
 
-/** What holds a seat, said whole: its holder and their stage, its invitation, or nobody. */
+/**
+ * What holds a seat, said whole: its holder and their stage, its invitation,
+ * or nobody. The holder by NAME, which every reader is sent, and by login
+ * beside it where the reader is sent that too (an admin, the holder).
+ */
 export function HoldingSentence({ row, you = false }: { row: HumanSeat; you?: boolean }) {
   const { holder, invitation } = row;
   if (holder) {
     const stage = holder.stage && holder.stage !== "active" ? ` (${holder.stage})` : "";
+    const named = holder.name !== undefined && holder.name !== "";
+    const login = holder.login ? <code className="inline">{holder.login}</code> : null;
     return (
       <>
         Held by {you && "you, as "}
-        {holder.kind === "machine" && "the service account "}
-        <code className="inline">{holder.login || holder.person}</code>
+        {holder.kind === "machine" && (named || login) && "the service account "}
+        {named ? (
+          <>
+            <strong>{holder.name}</strong>
+            {login && <> {login}</>}
+          </>
+        ) : (
+          (login ?? holderName(holder))
+        )}
         {stage}.
       </>
     );
@@ -736,7 +796,7 @@ function SeatFact({ seat, children }: { seat: SeatName; children: ReactNode }) {
 }
 
 /**
- * Invite somebody onto a vacant human seat: an address and the grants it
+ * Invite somebody onto a vacant human seat: an address and the access it
  * confers. On success the link is shown ONCE — it is the credential, and the
  * engine keeps only a hash of its secret.
  *
@@ -761,7 +821,10 @@ export function InviteDialog({
   const write = useIamGesture();
   const waiting = useWaiting();
   const [email, setEmail] = useState("");
-  const [grants, setGrants] = useState<string[]>([]);
+  // EVERY APP, ADMIN UNTICKED: a person joins to use the company's apps, and
+  // the agents send work to people through the tracker; admin is a decision
+  // somebody makes on purpose.
+  const [grants, setGrants] = useState<string[]>(() => [...APPS]);
 
   const done = write.answer?.kind === "done" ? write.answer.body : null;
   const url = typeof done?.url === "string" ? done.url : "";
@@ -840,8 +903,8 @@ export function InviteDialog({
               />
             )}
           </FormField>
-          <GrantPicker value={grants} onChange={setGrants} held={held} />
-          <ReachNote grants={grants} />
+          <AccessPicker value={grants} onChange={setGrants} held={held} />
+          <AppReachNote grants={grants} />
         </>
       )}
       <IamOutcome answer={write.answer} />
@@ -883,7 +946,8 @@ export function CreatePersonDialog({
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [login, setLogin] = useState("");
-  const [grants, setGrants] = useState<string[]>([]);
+  // EVERY APP, ADMIN UNTICKED, as an invitation's ([InviteDialog]).
+  const [grants, setGrants] = useState<string[]>(() => [...APPS]);
   const [tried, setTried] = useState(false);
   const typed = login.trim();
   const loginWrong = loginProblem("person", typed);
@@ -1020,8 +1084,8 @@ export function CreatePersonDialog({
               />
             )}
           </FormField>
-          <GrantPicker value={grants} onChange={setGrants} held={held} />
-          <ReachNote grants={grants} />
+          <AccessPicker value={grants} onChange={setGrants} held={held} />
+          <AppReachNote grants={grants} />
         </>
       )}
       <IamOutcome answer={write.answer} />
@@ -1192,9 +1256,11 @@ export interface TokenOwner {
 }
 
 /**
- * Mint a token: a label, a lifetime, and grants out of the owner's own — never
- * one a token may not carry, nor one the minter does not hold. The value is
- * shown ONCE; the engine keeps a hash of it.
+ * Mint a token: a label, a lifetime, and access out of the owner's own — never
+ * more than the minter holds. Admin may be ticked: the engine still refuses a
+ * token every gesture that needs a person present, and every administrative
+ * record about a person. The value is shown ONCE; the engine keeps a hash of
+ * it.
  *
  * TWO OWNERS, ONE DIALOG. An administrator mints for a SERVICE ACCOUNT, named
  * by `?person=`; a person mints their OWN (`self`) with no `?person=` at all,
@@ -1210,7 +1276,7 @@ export function MintTokenDialog({
   onDone,
 }: {
   owner: TokenOwner;
-  /** The minter's own grants: a token carries nothing its minter does not hold. */
+  /** The minter's own access: a token carries nothing its minter does not hold. */
   held: readonly string[];
   /** The caller minting their own personal access token. */
   self?: boolean;
@@ -1221,24 +1287,19 @@ export function MintTokenDialog({
   const waiting = useWaiting();
   const [label, setLabel] = useState("");
   const [days, setDays] = useState("");
-  // WHAT STARTS TICKED. A SERVICE ACCOUNT'S MINT: what this mint may send —
-  // the account's grants a token may carry AND the minter holds, since the
-  // account exists to act with them, and the engine refuses a token carrying
-  // a grant its minter does not hold (the picker locks such a box, so one
-  // ticked here would be a refusal nobody could clear). A PERSON'S OWN:
-  // nothing. Every grant they held started ticked, so somebody pressing Mint
-  // without reading held a bearer secret carrying config:write, secrets:write
-  // and fleet:operate for their script; ticked one at a time, a token carries
+  // WHAT STARTS TICKED. A SERVICE ACCOUNT'S MINT: the account's own access
+  // that the minter holds too, since the account exists to act with it, and
+  // the engine refuses a token carrying what its minter does not hold (the
+  // picker locks such a box, so one ticked here would be a refusal nobody
+  // could clear). A PERSON'S OWN: nothing. Everything they held started
+  // ticked, so somebody pressing Mint without reading held a bearer secret
+  // carrying Admin for their script; ticked one at a time, a token carries
   // what its holder chose.
-  const carried = useMemo(
-    () =>
-      self
-        ? []
-        : (owner.grants ?? []).filter(
-            (g) => !(TOKEN_WITHHELD_GRANTS as readonly string[]).includes(g) && held.includes(g),
-          ),
-    [self, owner.grants, held],
-  );
+  const carried = useMemo(() => {
+    if (self) return [];
+    const may = expand(held);
+    return expand(owner.grants ?? []).filter((g) => isGrant(g) && may.includes(g));
+  }, [self, owner.grants, held]);
   const [grants, setGrants] = useState<string[]>(carried);
   const minted = write.answer?.kind === "done" ? write.answer.body : null;
   const token = typeof minted?.token === "string" ? minted.token : "";
@@ -1314,7 +1375,7 @@ export function MintTokenDialog({
         <>
           {self && (
             <Text as="p" variant="body" tone="secondary">
-              A token is for your own assistant or script: it acts as you, carrying only the grants
+              A token is for your own assistant or script: it acts as you, carrying only the access
               you tick below and never more than you hold, and stops working when you change your
               password or sign out everywhere.
             </Text>
@@ -1348,30 +1409,23 @@ export function MintTokenDialog({
               />
             )}
           </FormField>
-          <GrantPicker
-            legend="Grants the token carries"
+          <AccessPicker
+            legend="Access the token carries"
             value={grants}
             onChange={setGrants}
             held={held}
             only={owner.grants ?? []}
-            withheld={{
-              grants: TOKEN_WITHHELD_GRANTS,
-              reason: "A token never carries this: it needs a person present.",
-            }}
           />
-          {/* A TOKEN CARRYING NO GRANT IS STILL A CREDENTIAL, and says what it
-              reaches: KEEPING its owner's own record takes no grant, and
-              READING anything — that record included — takes state:read
-              (`authz`'s read rows). Unsaid, a person holding none was offered
-              "Nothing to offer." beside an enabled Mint; said as "your own
-              inbox, queue, pins and priorities", it promised a script reads
-              every one of which was refused. */}
-          {grants.length === 0 && (
+          {/* A TOKEN CARRYING NOTHING IS STILL A CREDENTIAL, and says what it
+              reaches: the overview every signed-in principal reads, and
+              nothing of an app — its owner's own inbox, queue and pins
+              included, which are the tracker's. Unsaid, a person holding none
+              was offered "Nothing to offer." beside an enabled Mint. */}
+          {expand(grants).every((g) => !isGrant(g)) && (
             <Text as="p" variant="caption" tone="secondary">
-              With no grant ticked, the token only keeps {self ? "your" : "the account's"} own
-              record — marks {self ? "your" : "its"} inbox read, pins views and orders{" "}
-              {self ? "your" : "its"} priorities — and reads nothing, {self ? "your" : "its"} own
-              inbox and queue included: reading takes state:read.
+              With nothing ticked, the token reads the overview — the org chart, the agents&rsquo;
+              status and spend — and nothing in the work tracker or the knowledge base,{" "}
+              {self ? "your" : "the account's"} own inbox and queue included.
             </Text>
           )}
         </>

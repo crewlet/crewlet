@@ -25,8 +25,10 @@ vi.mock("./viewer.ts", () => ({ useViewer: vi.fn() }));
 
 const BOUND: ViewerState = {
   login: "jane.founder",
-  grants: ["state:read", "work:write"],
-  operatesFleet: false,
+  grants: ["tracker"],
+  admin: false,
+  tracker: true,
+  knowledge: false,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -280,8 +282,8 @@ test("a refusal on authority carries the grants the engine named, and draws them
       {
         error: "unauthorized",
         tool: "set_pins",
-        reason: "needs a grant this person does not hold",
-        grants: ["work:write", "fleet:operate"],
+        reason: "needs access this person does not hold",
+        grants: ["tracker"],
       },
       403,
     ),
@@ -295,9 +297,10 @@ test("a refusal on authority carries the grants the engine named, and draws them
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
   const refusal = () => document.querySelector(".write-refusal");
   await waitFor(() => expect(refusal()).not.toBeNull());
-  expect(seen).toMatchObject({ grants: ["work:write", "fleet:operate"] });
-  expect(refusal()?.textContent).toContain("work:write");
-  expect(refusal()?.textContent).toContain("fleet:operate");
+  expect(seen).toMatchObject({ grants: ["tracker"] });
+  expect(refusal()?.textContent).toContain(
+    "This needs Tracker access. An admin can give it to you.",
+  );
 });
 
 // AND A REFUSAL THAT IS NOT ON AUTHORITY NAMES NONE, rather than a grant

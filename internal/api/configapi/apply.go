@@ -278,7 +278,7 @@ type prepared struct {
 //     and the prior masks are restored from, and a revision this build
 //     would refuse must stay replaceable by the write that corrects it.
 //   - The proposal, built by the draft.
-//   - Whether the caller may make it: the company's grant, or a lead inside
+//   - Whether the caller may make it: admin, or a lead inside
 //     their own subtree (admission.go). The engine's own writes are not asked.
 //   - Its hierarchy, DERIVED BEFORE IT IS JUDGED, because a refusal carries
 //     it too.

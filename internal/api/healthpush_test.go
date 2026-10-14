@@ -22,8 +22,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// healthFrames dials the socket as the fixture's credential — which holds
-// `state:read`, the grant the health push declares — and returns the
+// healthFrames dials the socket as the fixture's credential — any resolved
+// principal reads the health push, which is the overview's — and returns the
 // snapshot's health and the first health tick after it, both as the tab
 // decodes them.
 func healthFrames(t *testing.T, a *api.App) (snapshot, tick map[string]any) {
@@ -135,7 +135,7 @@ func TestTheHealthPushIsTheWholeEnvelope(t *testing.T) {
 // GET /health is a probe and unguarded, so what it says about the fleet and
 // the alarm table is a number and one name: the longest-standing alarm's kind.
 // Which nodes hold what, which logs an alarm stands on and what each alarm
-// measured are the `fleet` and `work_retention` answers, behind their grants.
+// measured are the `fleet` and `work_retention` answers, each an admin's.
 //
 // Mutation: carry the alarms' details or the node rows on the envelope, and
 // this fails.

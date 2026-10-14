@@ -30,12 +30,12 @@ vi.mock("~/lib/useQuery.ts", () => ({
           refusal: fleet.refusal,
           refetch: () => {},
         }
-      : // Nobody here holds `fleet:operate`, so nothing beside the table asks
+      : // Nobody here holds Admin, so nothing beside the table asks
         // anything further or draws anything.
         {
           data: {
             login: "ana",
-            grants: ["state:read"],
+            grants: [],
             handle: "",
             owner: "ana",
             name: "",
@@ -74,9 +74,11 @@ afterEach(() => {
 // grants the engine named.
 test("a refused first read names the grant rather than an empty fleet", () => {
   fleet.error = "unauthorized";
-  fleet.refusal = { reason: "operator", grants: ["fleet:operate"] };
+  fleet.refusal = { reason: "operator", grants: ["admin"] };
   mount();
-  expect(screen.getByText("fleet:operate")).toBeDefined();
+  expect(
+    screen.getByText(/This answer needs Admin access\. An admin can give it to you\./),
+  ).toBeDefined();
   expect(screen.queryByText("No nodes are reporting")).toBeNull();
   expect(screen.queryByText(/Refresh failed/)).toBeNull();
 });

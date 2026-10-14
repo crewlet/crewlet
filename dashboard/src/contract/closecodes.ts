@@ -26,8 +26,9 @@ export const CLOSE_UNAUTHENTICATED = 4401;
 
 /**
  * The credential still names somebody who may not have this surface: their
- * seat is gone from the chart, or the grant the socket needs was withdrawn.
- * Reconnecting reaches the same person with the same access, so the socket
- * stops and the page says why.
+ * seat is gone from the chart, or their stage may no longer act. Never for
+ * want of access — the socket serves every principal the engine resolves and
+ * decides each push by what they hold. Reconnecting reaches the same person
+ * in the same standing, so the socket stops and the page says why.
  */
 export const CLOSE_FORBIDDEN = 4403;

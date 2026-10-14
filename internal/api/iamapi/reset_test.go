@@ -3,6 +3,7 @@ package iamapi_test
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -138,11 +139,13 @@ func TestAResetLinkIsRefusedWhereNoPasswordShouldBeSet(t *testing.T) {
 // A RESET LINK IS ISSUED ONLY FOR SOMEBODY WHOSE EVERY GRANT THE ISSUER HOLDS.
 //
 // The issuer is shown the link and can spend it themselves, so issuing one is
-// handing them the person's grants: an administrator holding people:manage and
-// state:read is refused (403, nothing landed, nothing announced) for somebody
-// holding secrets:read. The CONTROL is the same administrator issuing a link
-// for somebody holding only state:read. Mutation: drop the conferral check and
-// the first case is issued a link.
+// handing them the person's grants. Issuing is admin's, and admin carries
+// every app (ADR-0033), so an admin is issued a link for a fellow admin and for
+// somebody holding every app — the CONTROLS — and what refuses one is a name
+// this build does not know on the person's row: kept there and ignored, never
+// one this issuer can be shown to hold (403, nothing landed, nothing
+// announced). Mutation: drop the conferral check and the last case is issued a
+// link.
 func TestAResetLinkIsRefusedForSomebodyHoldingAGrantTheIssuerLacks(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -150,11 +153,12 @@ func TestAResetLinkIsRefusedForSomebodyHoldingAGrantTheIssuerLacks(t *testing.T)
 		grants []iam.Grant
 		status int
 	}{
-		{"a person holding only the issuer's grants (the control)",
-			[]iam.Grant{iam.GrantStateRead}, http.StatusCreated},
-		{"a person holding secrets:read",
-			[]iam.Grant{iam.GrantStateRead, iam.GrantSecretRead},
-			http.StatusForbidden},
+		{"a fellow admin (a control)",
+			[]iam.Grant{iam.GrantAdmin}, http.StatusCreated},
+		{"a person holding every app (a control)",
+			slices.Clone(iam.Apps), http.StatusCreated},
+		{"a person holding a name this build does not know",
+			[]iam.Grant{iam.GrantTracker, "billing"}, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

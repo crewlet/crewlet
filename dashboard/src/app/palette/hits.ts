@@ -11,7 +11,8 @@
  */
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
-import { DESTINATIONS, grantWords, grantsOpen, type Grant } from "../nav.ts";
+import { DESTINATIONS } from "../nav.ts";
+import { accessNames, holdsAny, type Grant } from "~/lib/access.ts";
 import type { Navigator } from "../router.tsx";
 import { resolve } from "../routes.ts";
 import type { Recent } from "~/lib/recents.ts";
@@ -258,7 +259,7 @@ export function recentHits(recents: readonly Recent[], nav: Navigator): Hit[] {
 }
 
 /**
- * Who a destination's lock is read for: nobody signed in, the grants of
+ * Who a destination's lock is read for: nobody signed in, the access of
  * somebody who is, or `null` while the viewer has not said — when nothing is
  * claimed either way, since a lock claimed on a guess is a refusal nobody made.
  */
@@ -270,12 +271,13 @@ export type Standing = { anonymous: true } | { anonymous: false; grants: readonl
  * match always ranks first, so a screen called what was typed is never pushed
  * under one that merely holds it; the hint's prose is never searched.
  *
- * A SCREEN THE READER HOLDS NONE OF THE GRANTS FOR SAYS WHAT WOULD OPEN IT,
+ * A SCREEN THE READER HOLDS NONE OF THE ACCESS FOR SAYS WHAT WOULD OPEN IT,
  * and only then: "needs a token" named a credential a person signing in has no
  * use for, and was drawn beside every guarded row for a reader who already
- * held the grant. To a reader NOBODY SIGNED IN it says "needs sign-in", the
- * step before any grant — naming one would tell them to hold something before
- * they are anybody. To a reader who is, it names the grant.
+ * held the access. To a reader NOBODY SIGNED IN it says "needs sign-in", the
+ * step before any access — naming one would tell them to hold something before
+ * they are anybody. To a reader who is, it names the access ("needs Tracker
+ * access").
  */
 export function destinationHits(
   query: string,
@@ -300,7 +302,7 @@ function lockedHint(
 ): string {
   if (standing === null || !grants || grants.length === 0) return hint;
   if (standing.anonymous) return `${hint} · needs sign-in`;
-  return grantsOpen(grants, standing.grants) ? hint : `${hint} · needs ${grantWords(grants)}`;
+  return holdsAny(standing.grants, grants) ? hint : `${hint} · needs ${accessNames(grants)} access`;
 }
 
 /**

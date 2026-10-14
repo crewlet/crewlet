@@ -15,7 +15,7 @@
  *
  * # What an administrator changes is shown, never edited
  *
- * A login, a name, an address, a seat and grants are the directory's, and a
+ * A login, a name, an address, a seat and access are the directory's, and a
  * person changing their own would be the escalation the directory exists to
  * close — the engine refuses it. The profile reads them and says who changes
  * them.
@@ -80,8 +80,7 @@ import {
   ConfirmDialog,
   endedWord,
   ExpiresCell,
-  GrantTags,
-  GRANTS_IN_A_CELL,
+  AccessTags,
   MintTokenDialog,
 } from "~/components/people.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -96,8 +95,8 @@ import { refusalText } from "~/lib/refusal.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { SignOutEverywhereDialog } from "~/components/SignOutEverywhere.tsx";
 import { handleLabel, indexOrg } from "~/lib/seats.ts";
-import { useOrg } from "~/lib/store-hooks.ts";
-import { LIVE_VIEW_GRANT, useFrameSession } from "~/lib/frameSession.ts";
+import { useConnection, useOrg } from "~/lib/store-hooks.ts";
+import { useFrameSession } from "~/lib/frameSession.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { auth, rest, RestError, type SessionAnswer } from "~/protocol/index.ts";
@@ -197,8 +196,8 @@ function NotAPerson({ session }: { session: SessionAnswer }) {
           )}
         </Text>
         <div className="row gap-2" style={{ flexWrap: "wrap", alignItems: "center" }}>
-          <span className="t-label">Holds</span>
-          <GrantTags grants={session.grants} />
+          <span className="t-label">Its access</span>
+          <AccessTags grants={session.grants} />
         </div>
       </div>
     </Card>
@@ -300,16 +299,16 @@ function Profile({
           <dt>Seat</dt>
           <dd>
             {seat ? (
-              <SeatFact handle={seat} linked={(session.grants ?? []).includes(LIVE_VIEW_GRANT)} />
+              <SeatFact handle={seat} />
             ) : (
               // A PERSON ALWAYS HOLDS ONE (ADR-0032), so this is a session
               // that acts as its own credential rather than as a seat.
               <EmptyValue label="Bound to no seat" />
             )}
           </dd>
-          <dt>Grants</dt>
+          <dt>Your access</dt>
           <dd>
-            <GrantTags grants={row?.grants ?? session.grants} />
+            <AccessTags grants={row?.grants ?? session.grants} />
           </dd>
         </dl>
       </QueryState>
@@ -325,15 +324,17 @@ function Profile({
  * badge and name (the grid's seat cell), then its `@handle`.
  *
  * IT WAS THE NAME AND THE BARE HANDLE, and where the chart could not be read
- * the name fell back to the handle — so it read "Bob bob", and for a reader
- * holding no company grant "cara cara". A seat the chart does not name here is
- * its handle ALONE, since there is no name to put beside it.
+ * the name fell back to the handle — so it read "Bob bob", and before the
+ * chart had arrived "cara cara". A seat the chart does not name here is its
+ * handle ALONE, since there is no name to put beside it.
  *
  * A LINK ONLY WHERE THE SEAT'S PAGE IS SERVED: every screen but this one reads
- * the live socket, which needs [LIVE_VIEW_GRANT], so for a reader without it
- * the seat linked to the panel refusing them the company.
+ * the live socket, which serves every signed-in reader the overview — but not
+ * a reader the engine refused it to (a seat taken out of the chart), for whom
+ * the seat would link to the panel refusing them the company.
  */
-function SeatFact({ handle, linked }: { handle: string; linked: boolean }) {
+function SeatFact({ handle }: { handle: string }) {
+  const linked = useConnection().accessRefused === null;
   const org = useOrg();
   const held = indexOrg(org).byHandle.get(handle);
   const at = handleLabel(handle);
@@ -904,7 +905,7 @@ function Tokens({
       <Card.Body padding="sm">
         <p className="t-caption muted" style={{ margin: 0 }}>
           A token acts as you — for your assistant or a script — carrying what you chose of your
-          grants, never more than you hold now.
+          access, never more than you hold now.
         </p>
       </Card.Body>
       <QueryState
@@ -960,7 +961,7 @@ function Tokens({
               key: "grants",
               header: "Carries",
               drop: 2,
-              cell: (c) => <GrantTags grants={c.grants} cap={GRANTS_IN_A_CELL} />,
+              cell: (c) => <AccessTags grants={c.grants} />,
             },
             {
               key: "revoke",

@@ -342,7 +342,7 @@ func TestANonAuthorCannotRemoveAComment(t *testing.T) {
 		t.Fatalf("the comment came down anyway: %+v", thread)
 	}
 
-	// AND A MODERATOR DOES, which is the arm the deployment grant opens:
+	// AND A MODERATOR DOES, which is the arm admin opens:
 	// somebody has to be able to take down what nobody else can.
 	if _, err := r.store.RemoveComment(t.Context(), author("bob"),
 		page.Page.ID, comment.ID,

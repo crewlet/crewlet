@@ -330,6 +330,8 @@ func TestAnErrorCarriesACodeNotProse(t *testing.T) {
 	}
 }
 
-// reader is an audience holding both read grants, so it receives every kind
-// the fan-out tests exercise. A test about WHO receives what builds its own.
-var reader = stream.AudienceOf([]iam.Grant{iam.GrantStateRead, iam.GrantAuditRead})
+// reader is an administrator's audience, so it receives every kind the
+// fan-out tests exercise and every seat's body whole. A test about WHO receives
+// what builds its own.
+var reader = stream.NewAudience(iam.Principal{Login: "erin.ng",
+	Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin}}, nil)

@@ -1,8 +1,8 @@
 // Package configapi serves /config: the versioned company document, its
 // history, and the write path that activates a new revision.
 //
-// EVERY ROUTE HERE TAKES A GRANT, reads included: `config:read` for every
-// read (`config.read`) and `config:write` for every write (`config.write`),
+// EVERY ROUTE HERE IS ADMIN'S, reads included — `config.read` for every read
+// and `config.write` for every write, both decided on admin (ADR-0033) —
 // mounted through [authz.Router] so a route with no policy fails the boot.
 // Reading this surface exposes the whole company document — its org chart,
 // integrations and the name of every credential it holds — and writing it
@@ -11,14 +11,15 @@
 // THE ORG CHART IS ALSO ITS LEADS'. The routes that can change a seat or a
 // unit — the whole-document writes, a revert and the seat and unit entity
 // routes — are `config.org.write`, and the two entity reads
-// `config.org.read`: the company's grant as before, or a lead inside the
-// units they lead. What a lead's write changes is decided place by place
-// (admission.go), and a setting, a credential or a `${VAR}` is never theirs.
+// `config.org.read`: admin as before, or a lead inside the units they lead.
+// What a lead's write changes is decided place by place (admission.go), and a
+// setting, a credential or a `${VAR}` is never theirs.
 //
 // THE ROUTES USED TO DECIDE NOTHING, which was sound while the only credential
 // was an operator token and stopped being sound the day a person could sign in
-// holding `state:read` alone: every one of them could rewrite the company
-// document, revert it to any revision, and read every `${VAR}` it names.
+// holding a read-only permission alone: every one of them could rewrite the
+// company document, revert it to any revision, and read every `${VAR}` it
+// names.
 //
 // A WRITE HERE DOES NOT APPLY ANYTHING. It stores a revision and moves the
 // activation pointer; every node, including this one, applies it on its own
@@ -213,7 +214,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 		mount(pattern, authz.ActionConfigWrite, h)
 	}
 	// THE ORG CHART'S ROUTES ARE ITS LEADS' TOO. The route admits whoever
-	// could lead some unit — the company's grant, or anybody bound to a
+	// could lead some unit — admin, or anybody bound to a
 	// seat — before the body is read, and what the write changes is then
 	// decided place by place against the two documents (admission.go), a
 	// read against where the seat or unit sits.
@@ -865,7 +866,7 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 					"/iam/people/{person} with seat) or remove them, unbind a " +
 					"service account (PATCH /iam/people/{person} with no seat), " +
 					"cancel an open invitation (DELETE /iam/invitations/{id}) — " +
-					"whoever holds people:manage — then send the write again",
+					"each an admin's gesture — then send the write again",
 			})
 	case errors.As(err, &unknown):
 		log.Warn("config_seat_holders_unreadable",

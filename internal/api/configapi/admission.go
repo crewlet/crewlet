@@ -19,9 +19,9 @@ import (
 // WHO MAY MAKE A WRITE: the admission every /config write path asks, between
 // building the document it proposes and validating it.
 //
-// # The company's grant, or a lead inside their own subtree
+// # Admin, or a lead inside their own subtree
 //
-// Whoever holds `config:write` may change anything in the document. Anybody
+// Whoever holds admin may change anything in the document. Anybody
 // else may write only when EVERY change is inside a subtree they lead, judged
 // on both sides of the write: [config.DiffOrg] states the places each change
 // reaches, and each is asked of the authority table as `config.org.write`
@@ -30,12 +30,12 @@ import (
 // against the revision proposed. A setting, a credential, a `${VAR}` in any
 // field and a key another system finds a seat or unit by — its project, page
 // space, channel, address or contact ids — are never a lead's: all four are
-// asked as `config.write`, the company's grant.
+// asked as `config.write`, which is admin's.
 //
 // A WRITE THAT CHANGES NOTHING IS NOT A LEAD'S EITHER. Storing the document
 // unchanged still makes a new revision and re-activates it on every node,
 // rebuilding every seat's tools, providers and MCP children — the gesture
-// `POST /config/reload` makes, which is `config:write`'s. Admitted because no
+// `POST /config/reload` makes, which is admin's. Admitted because no
 // part of it was refused, anybody bound to a seat could force that fleet-wide
 // rebuild at will with `{"vision": null}`.
 //
@@ -58,16 +58,17 @@ import (
 // in the active revision — at the root for an id it does not hold — before
 // the id is looked up, the body decoded or anything built ([Service.mayReach]),
 // so a seat in another team, a seat at the root and an id the company does
-// not have are refused in the same bytes, and only the company's grant is
-// told an id is missing.
+// not have are refused in the same bytes, and only an admin is told an id is
+// missing.
 //
 // The chart's SHAPE is still no secret from anybody bound to a seat. A
 // refused write names the place each refused part reaches — the unit a seat
 // it names in `manages:` or `lead:` sits in — because that place is what the
 // caller is refused on, and whether a reference is refused at all already
 // depends on what sits outside their subtree; so a lead can learn which
-// seats exist and where they sit by naming them, as `state:read` is served
-// the chart whole. What only a read serves is a seat's or a unit's fields.
+// seats exist and where they sit by naming them, as everybody's overview is
+// served the chart whole. What only a read serves is a seat's or a unit's
+// fields.
 //
 // # Before validation, and before the seat-holder check
 //
@@ -203,15 +204,15 @@ func admit(ctx context.Context, p iam.Principal, prior, next *config.Company,
 }
 
 // refuseAdmission answers a write its caller may not make: the authority
-// table's 403, naming the company's grant — the one that would have admitted
-// all of it — and every part refused.
+// table's 403, naming admin — the one permission that would have admitted all
+// of it — and every part refused.
 func refuseAdmission(w http.ResponseWriter, err *AdmissionError) {
-	detail := authz.RefusalDetail(err.Refused[0].Reason, []iam.Grant{iam.GrantConfigWrite})
+	detail := authz.RefusalDetail(err.Refused[0].Reason, []iam.Grant{iam.GrantAdmin})
 	detail["refused"] = err.Refused
 	detail["hint"] = "a lead may change only the seats and units inside a unit " +
 		"they lead, on both sides of the write, and no setting, credential, " +
 		"${VAR}, project, space, channel, address or contact id; a write that " +
-		"changes nothing re-publishes the company and is config:write's; each " +
+		"changes nothing re-publishes the company and is admin's; each " +
 		"refused part names the place it reaches"
 	httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
 }

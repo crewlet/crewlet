@@ -38,10 +38,10 @@
  *    are still good, and with `?all=true` the expired and redeemed ones the
  *    estate still holds. Never a link: it was shown once.
  *
- * # And written, by a reader holding `people:manage`
+ * # And written, by an admin
  *
  * Creating a service account and minting its token, cancelling an invitation,
- * and — in an opened person's peek — changing a login, a seat or grants,
+ * and — in an opened person's peek — changing a login, a seat or access,
  * suspending and reactivating, resetting a second factor, issuing a password
  * reset link, ending every session, revoking one credential and removing
  * somebody. Every write is announced ([directoryMoved]), so the list and the
@@ -57,10 +57,9 @@
  * Each is one `/iam` write through `lib/iamWrite.ts`: a
  * step-up the engine asks for is confirmed and the same request replayed, an
  * unknown answer is retried under the same operation key, and a refusal is the
- * engine's sentence with the grants that would admit. After each write the
- * lists it moved are read again. The controls are drawn for a reader holding
- * `people:manage` only — see `components/people.tsx` for why an auditor's
- * read view stays as it was.
+ * engine's sentence with the access that would admit. After each write the
+ * lists it moved are read again. The controls are drawn for an admin only,
+ * who is the only reader the section opens for (`nav.ts`).
  *
  * # Labels and verifiers, never values
  *
@@ -72,11 +71,19 @@
  *
  * # Decided by the engine, drawn as it decided
  *
- * Every read is `people:manage` or `audit:read` (`authz.ActionDirectoryRead`).
- * A reader refused sees the refusal and the grants that would have admitted
+ * Every read of somebody else's row is Admin's (`authz.ClassDirectory`). A
+ * reader refused sees the refusal and the access that would have admitted
  * them — never an empty company. The contact identities are the company
- * document's, which takes `config:read`, and a reader without it is told so
+ * document's, which takes Admin too, and a reader without it is told so
  * rather than shown seats nobody can reach.
+ *
+ * # Access is a line, not a list
+ *
+ * A row's ACCESS column says what it amounts to — "Admin" (which includes
+ * every app), the apps it holds ("Tracker · Knowledge"), or "Overview only" —
+ * through `lib/access.ts`'s one reading, so a row stored as `[admin]` and one
+ * stored as `[admin, tracker, knowledge]` read the same, as the engine treats
+ * them.
  */
 
 import { useCallback, useMemo, useState } from "react";
@@ -113,9 +120,9 @@ import {
   DIRECTORY_READ,
   directoryMoved,
   endedWord,
+  holderName,
   ExpiresCell,
-  GrantTags,
-  GRANTS_IN_A_CELL,
+  AccessTags,
   IamOutcome,
   listsNoCompany,
   MintTokenDialog,
@@ -136,7 +143,7 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
-import { needsSentence } from "~/lib/refusal.ts";
+import { ADMIN, accessLine, holds, needsWords } from "~/lib/access.ts";
 import { documentUnits, indexOrg, unitByKey } from "~/lib/seats.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
 import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
@@ -278,7 +285,12 @@ export interface DirectoryFinding {
 
 interface DirectoryCheck {
   findings: DirectoryFinding[] | null;
-  people_with_people_manage: number;
+  /**
+   * Active, enrolled PERSONS holding Admin — never a service account, whose
+   * token can write no administrative record — which the last-admin guard
+   * reads.
+   */
+  people_with_admin: number;
   bindings_unchecked: number;
 }
 
@@ -336,7 +348,7 @@ export const TOKEN_ROW_WORDS: Record<string, Words> = {
   none: {
     label: "No row",
     tone: "neutral",
-    hint: "Nobody in the directory holds this login, so the token acts as itself and is bound to no seat. To have it act as a human seat nothing else holds, create its row bound to one: crewlet iam create -kind machine -login token:<id> -seat <seat>.",
+    hint: "Nobody in the directory holds this login, so the token acts as itself and is bound to no seat. To have it act as a human seat nothing else holds, create its row bound to one: crewlet iam create -kind machine -login token:<id> -seat <seat> -grants none — the row carries nothing itself, since the token's permissions are its Tier A entry's.",
   },
   held: { label: "Row", tone: "success", hint: "A directory row holds this login." },
 };
@@ -349,10 +361,10 @@ export const TOKEN_ROW_WORDS: Record<string, Words> = {
  */
 export const FINDING_WORDS: Record<(typeof FINDING_KINDS)[number], { label: string; tone: Tone }> =
   {
-    no_people_manage_holder: { label: "Nobody can administer", tone: "danger" },
+    no_admin_holder: { label: "Nobody can administer", tone: "danger" },
     person_without_credential: { label: "Active, no credential", tone: "warning" },
     binding_dangling: { label: "Seat gone", tone: "warning" },
-    grant_clamped_by_ceiling: { label: "Grant withheld here", tone: "neutral" },
+    admin_clamped_by_node: { label: "Admin withheld here", tone: "neutral" },
   };
 
 /** A finding's words, or none for a kind this build does not know. */
@@ -526,8 +538,8 @@ function settled(read: RestResult<unknown>): boolean {
 /** A page as large as the directory serves (`iamdomain.MaxPageSize`). */
 const PAGE = 200;
 
-/** The grant the company document — and so every contact identity — is read under. */
-const CONFIG_READ = "config:read";
+/** The access the company document — and so every contact identity — is read under. */
+const CONFIG_READ = ADMIN;
 
 /** Every row of the directory, walked to its last page. */
 async function readDirectory(signal: AbortSignal): Promise<DirectoryRow[]> {
@@ -646,10 +658,10 @@ export function PeopleAndAccess() {
   usePeekNeighbours(
     useMemo(() => (directory.data ?? []).map((p) => personRef(p.id)), [directory.data]),
   );
-  // THE CONTACT IDENTITIES ARE THE COMPANY DOCUMENT'S, which takes
-  // `config:read`. A reader without it is never asked: the refusal is known
-  // before the question, and each seat says what it would take instead.
-  const readsConfig = viewer.grants.includes(CONFIG_READ);
+  // THE CONTACT IDENTITIES ARE THE COMPANY DOCUMENT'S, which takes Admin. A
+  // reader without it is never asked: the refusal is known before the
+  // question, and each seat says what it would take instead.
+  const readsConfig = holds(viewer.grants, CONFIG_READ);
   const config = useQuery("config", undefined, { enabled: readsConfig });
   const contacts = useMemo(() => contactsByHandle(config.data), [config.data]);
 
@@ -696,7 +708,7 @@ export function PeopleAndAccess() {
       <PageNote>
         {manages
           ? "Invite or create people from their human seat in the org chart; change, suspend or remove them here. A link or token is shown once."
-          : "Changing any of this takes people:manage."}
+          : needsWords("Changing any of this", [ADMIN])}
       </PageNote>
       {creating && (
         <ServiceAccountDialog
@@ -842,11 +854,11 @@ export function PeopleAndAccess() {
                 },
                 {
                   key: "grants",
-                  header: "Grants",
+                  header: "Access",
                   floor: "8rem",
                   drop: 1,
-                  sortValue: (p) => (p.grants ?? []).length,
-                  cell: (p) => <GrantTags grants={p.grants} cap={GRANTS_IN_A_CELL} />,
+                  sortValue: (p) => accessLine(p.grants ?? []),
+                  cell: (p) => <TextCell>{accessLine(p.grants ?? [])}</TextCell>,
                 },
               ]}
             />
@@ -920,7 +932,7 @@ export function PeopleAndAccess() {
                           <Contacts contact={contacts.get(s.handle)} />
                         ) : (
                           <EmptyValue
-                            label={needsSentence("Reading where a seat is reached", [CONFIG_READ])}
+                            label={needsWords("Reading where a seat is reached", [CONFIG_READ])}
                           />
                         ),
                     },
@@ -1080,7 +1092,7 @@ function Holder({ seat }: { seat: HumanSeat }) {
       variant={STAGE_WORDS[holder.stage ?? ""]?.tone ?? "neutral"}
       title={STAGE_WORDS[holder.stage ?? ""]?.label ?? holder.stage}
     >
-      <span className="mono">{holder.login || holder.person}</span>
+      {holder.login ? <span className="mono">{holder.login}</span> : holderName(holder)}
     </Tag>
   );
 }
@@ -1240,10 +1252,10 @@ function Invitations({
             },
             {
               key: "grants",
-              header: "Grants",
+              header: "Access",
               drop: 1,
-              sortValue: (i) => (i.grants ?? []).length,
-              cell: (i) => <GrantTags grants={i.grants} cap={GRANTS_IN_A_CELL} />,
+              sortValue: (i) => accessLine(i.grants ?? []),
+              cell: (i) => <TextCell>{accessLine(i.grants ?? [])}</TextCell>,
             },
             {
               key: "by",
@@ -1448,7 +1460,7 @@ export function PersonPeek({ id }: { id: string }) {
         status={<WordTag words={STAGE_WORDS[row.stage]} fallback={row.stage} />}
         facts={[
           { label: "Seat", value: <BoundSeat seat={row.seat} index={index} /> },
-          { label: "Grants", value: <GrantTags grants={row.grants} /> },
+          { label: "Access", value: <AccessTags grants={row.grants} /> },
         ]}
       />
       <div className="col gap-3">
@@ -1473,7 +1485,7 @@ export function PersonPeek({ id }: { id: string }) {
           row={row}
           who={who}
           you={you}
-          administrators={check.data?.people_with_people_manage}
+          administrators={check.data?.people_with_admin}
           manages={canManagePeople(viewer.grants)}
           held={viewer.grants}
           onRemoved={() => {
@@ -1492,9 +1504,9 @@ export function PersonPeek({ id }: { id: string }) {
 
 /**
  * One principal's credentials and sessions, read for this row alone — and, for
- * a reader holding `people:manage`, what may be done about them. A machine is
- * offered what applies to one: its grants, its stage, its tokens and its
- * removal; it has no password, no second factor and no session.
+ * an admin, what may be done about them. A machine is offered what applies to
+ * one: its access, its stage, its tokens and its removal; it has no password,
+ * no second factor and no session.
  *
  * SECTIONS, NOT CARDS: the rail is the panel already, so they run on as plain
  * blocks rather than growing a second frame inside the first.
@@ -1513,7 +1525,7 @@ function Principal({
   who: string;
   /** Whether this row is the person reading it. */
   you: boolean;
-  /** How many active people `GET /iam/check` counts holding `people:manage`. */
+  /** How many active, enrolled PERSONS `GET /iam/check` counts holding Admin. */
   administrators: number | undefined;
   manages: boolean;
   held: readonly string[];
@@ -1544,8 +1556,9 @@ function Principal({
   const live = (credentials.data ?? []).filter((c) => !c.revoked);
   const holdsFactor = live.some((c) => c.method === "totp" || c.method === "recovery");
   const suspended = row.stage === "suspended";
-  // THE ONE ADMINISTRATOR LEFT, by the engine's own count — active, enrolled,
-  // holding `people:manage` — which the reader, signed in, is among.
+  // THE ONE ADMIN LEFT, by the engine's own count — active, enrolled persons
+  // holding Admin, never a service account — which the reader, signed in, is
+  // among.
   const alone = you && canManagePeople(row.grants ?? []) && administrators === 1;
   // EVERY WRITE IS ANNOUNCED ([directoryMoved]), and these reads hear it
   // with the list this peek is beside.
@@ -1565,7 +1578,7 @@ function Principal({
       {manages && (
         <div className="row gap-2" style={{ flexWrap: "wrap" }}>
           <Button size="small" variant="secondary" onClick={() => setGesture("edit")}>
-            Edit login, seat and grants
+            Edit login, seat and access
           </Button>
           {(row.stage === "active" || suspended) && (
             <Button
@@ -1666,7 +1679,7 @@ function Principal({
           {gesture === "reactivate"
             ? `${who} may sign in again with what they held${row.seat ? ", their seat included" : ""}; nothing has to be enrolled again. The sessions, tokens and password reset link the suspension ended stay ended, so issue a new link if they need one.`
             : you
-              ? `You may not act while suspended: every session, token and password reset link you hold ends and your sign-ins are refused${row.seat ? `, and your seat ${seatName} is withheld — it stays yours, and nobody else can hold it meanwhile` : ""}. Your record is kept, and somebody holding people:manage can reactivate you.`
+              ? `You may not act while suspended: every session, token and password reset link you hold ends and your sign-ins are refused${row.seat ? `, and your seat ${seatName} is withheld — it stays yours, and nobody else can hold it meanwhile` : ""}. Your record is kept, and an admin can reactivate you.`
               : `${who} may not act while suspended: every session, token and password reset link they hold ends and their sign-ins are refused${row.seat ? `, and their seat ${seatName} is withheld — it stays theirs, and nobody else can hold it meanwhile` : ""}. Their record is kept, and reactivating lets them sign in again.`}
         </PersonWrite>
       )}
@@ -1796,15 +1809,15 @@ function Principal({
                 header: "Carries",
                 floor: "8rem",
                 drop: 2,
-                // A RESET LINK CARRIES NO GRANT: it sets a password once and
-                // signs nobody in, and "Its holder's grants" beside it read as a
-                // link that opened the account.
+                // A RESET LINK CARRIES NO ACCESS: it sets a password once and
+                // signs nobody in, and "Its holder's access" beside it read as
+                // a link that opened the account.
                 cell: (c) =>
                   c.method === "token" ? (
-                    <GrantTags grants={c.grants} cap={GRANTS_IN_A_CELL} />
+                    <AccessTags grants={c.grants} />
                   ) : (
                     <EmptyValue
-                      label={c.method === "reset" ? "Sets a password once" : "Its holder's grants"}
+                      label={c.method === "reset" ? "Sets a password once" : "Its holder's access"}
                     />
                   ),
               },

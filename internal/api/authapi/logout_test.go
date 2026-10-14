@@ -287,17 +287,20 @@ func TestEndingANamedSessionAlreadyOverWritesNothing(t *testing.T) {
 //
 // `POST /auth/logout/{lineage}` and `DELETE /iam/people/{id}/sessions` are one
 // gesture — ending a person's sessions — and the route used to answer it with
-// a check of its own: the owner, or `fleet:operate` for anybody's, with no
-// step-up. That grant may be minted onto a machine token, so a leaked pipeline
-// token, or a week-old cookie, could end any session whose lineage it knew,
-// while the table said ending somebody else's takes `people:manage`, a recent
-// proof and a person present. Each refusal is the table's own, in its own
-// envelope; the controls are an administrator a minute after proving, who ends
-// it and is recorded as revoking it, and the person themselves on a stale
-// proof, which their own sessions never ask for.
+// a check of its own: the owner, or the deployment's operating permission for
+// anybody's, with no step-up. That permission may be minted onto a machine
+// token, so a leaked pipeline token, or a week-old cookie, could end any
+// session whose lineage it knew, while the table said ending somebody else's
+// takes an administrator, a recent proof and a person present. Each refusal is
+// the table's own, in its own envelope: every app and no admin is refused for
+// the permission, admin through a machine token for the person who is not
+// present, and admin on a stale proof for the proof. The controls are an
+// administrator a minute after proving, who ends it and is recorded as
+// revoking it, and the person themselves on a stale proof, which their own
+// sessions never ask for.
 //
-// Mutation: admit `fleet:operate` again and the first two cases end the
-// colleague's session.
+// Mutation: decide it here again on admin alone, with no step-up or presence,
+// and the token and stale-proof cases end the colleague's session.
 func TestEndingSomebodyElsesNamedSessionIsTheTablesToDecide(t *testing.T) {
 	t.Parallel()
 	const lineage = "0192f00d-0000-7000-8000-0000000000bb"
@@ -314,20 +317,20 @@ func TestEndingSomebodyElsesNamedSessionIsTheTablesToDecide(t *testing.T) {
 		reason authz.Reason
 		ending types.SessionEndReason
 	}{
-		{"the deployment's grant, which used to be enough",
-			[]iam.Grant{iam.GrantFleetOperate}, fresh, "", false,
+		{"every app and not admin",
+			slices.Clone(iam.Apps), fresh, "", false,
 			http.StatusForbidden, authz.ReasonNoGrant, ""},
-		{"a machine token carrying the deployment's grant",
-			[]iam.Grant{iam.GrantFleetOperate}, fresh, token, false,
+		{"a machine token carrying every app",
+			slices.Clone(iam.Apps), fresh, token, false,
 			http.StatusForbidden, authz.ReasonNoGrant, ""},
-		{"a machine token carrying the directory's grant",
-			[]iam.Grant{iam.GrantPeopleManage}, fresh, token, false,
+		{"a machine token carrying admin",
+			[]iam.Grant{iam.GrantAdmin}, fresh, token, false,
 			http.StatusForbidden, authz.ReasonTokenRefused, ""},
-		{"the directory's grant on a stale proof",
-			[]iam.Grant{iam.GrantPeopleManage}, stale, "", false,
+		{"admin on a stale proof",
+			[]iam.Grant{iam.GrantAdmin}, stale, "", false,
 			http.StatusForbidden, authz.ReasonStepUp, ""},
-		{"the directory's grant, freshly proved",
-			[]iam.Grant{iam.GrantPeopleManage}, fresh, "", false,
+		{"admin, freshly proved",
+			[]iam.Grant{iam.GrantAdmin}, fresh, "", false,
 			http.StatusOK, "", types.EndRevoked},
 		{"their own, on a stale proof", nil, stale, "", true,
 			http.StatusOK, "", types.EndLogout},

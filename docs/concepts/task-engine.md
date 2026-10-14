@@ -54,15 +54,15 @@ There is no permission scheme to configure, and there is still an answer to
 "may this caller do that": **one authority table**, fixed in the engine, that
 every surface asks — a seat's own tools and the operator's assistant decide a
 call through the same function over the same chart. The inputs are the ones
-a company already has: the grants a caller carries, and the lead relations
-the org chart draws.
+a company already has: the permissions a caller carries — `admin`, and the
+`tracker` app — and the relations the org chart and the work itself draw.
 
 ```mermaid
 flowchart LR
     CALL["a tool call<br/>(a seat's turn, or the operator's assistant)"]
     TABLE["<b>the authority table</b><br/>one rule per verb"]
-    GRANT["the caller's grants<br/>work:write · config:write · fleet:operate"]
-    CHART["the org chart<br/>who leads this project, unit or person"]
+    GRANT["the caller's permissions<br/>tracker · admin"]
+    CHART["the relations<br/>who leads this project, unit or person;<br/>who reported this item; who was asked"]
     YES["allowed"]
     NO["refused, naming the rule"]
     UNK["cannot tell<br/>(this node cannot read its chart)"]
@@ -76,8 +76,10 @@ flowchart LR
 
 What it says about the work, in short:
 
-- **Filing, updating, commenting and declaring a tag** are any colleague's —
-  the ordinary `work:write` every seat holds.
+- **Reading the board, filing, updating, commenting and declaring a tag** are
+  anybody's who uses the tracker — the `tracker` app, which every agent seat
+  holds. Somebody a colleague put a question to on an item reads that item and
+  posts their answer to it **without** the app, and nothing more.
 - **A project's policy** — its field declarations, its default assignee,
   renaming or archiving a tag — and **re-routing a task** at another team are
   the project **lead's**, because each decides something for everybody who
@@ -88,14 +90,17 @@ What it says about the work, in short:
 - **Saved views** follow what the view is. A personal view is its owner's; a
   shared one is its container's lead's — a project's, a unit's, or the person
   whose page it sits on.
+- **Removing an item and restoring it** are its project lead's — and its
+  **reporter's**: whoever filed a duplicate takes it out again. Moving it to
+  another project stays the lead's, and a purge stays an administrator's.
 - **The workspace catalogue** — task types and workspace fields — takes
-  `config:write`, because it is the company's configuration rather than any
+  `admin`, because it is the company's configuration rather than any
   container's.
 - **Somebody's queue** is theirs and their lead's; their inbox and pins are
   theirs alone.
 
-The deployment's own `fleet:operate` overrides every relation, and no seat
-carries it. A node that cannot read its chart answers **cannot tell** rather
+`admin` overrides every relation, and no seat carries it; every relation on a
+tracker verb also asks for the `tracker` app. A node that cannot read its chart answers **cannot tell** rather
 than no, so a lead is never told they lead nothing because a node was behind.
 The full table is in [The Work Tracker § Who may do
 what](../guides/work-tracker.md#who-may-do-what), and the rules beyond the

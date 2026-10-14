@@ -60,7 +60,7 @@ it wrote would be excluded from every search — and, declaring a `trigger:`,
 injected into every seat's phase as an instruction. A person publishing through
 their own assistant is not refused by that rule — putting skills there on
 purpose is what the container is for — but writing one is a configuration
-change, so it takes **`config:write`** on top of `knowledge:write`: creating,
+change, so it takes **`admin`** rather than the `knowledge` app: creating,
 saving, renaming, trashing, restoring or purging a skill page is decided as
 `pages.skill.write` ([who may write
 where](knowledge-system.md#who-may-write-where)). On Confluence the same

@@ -14,6 +14,7 @@ import {
   fortnight,
   liveRow,
   mayReadRecord,
+  mayReadTrail,
   seatRun,
   pillWord,
   placementWords,
@@ -334,11 +335,15 @@ describe("whose record this page asks for", () => {
       seats: [seat("ana", ["ceo"], []), seat("ceo", [], ["ana"]), seat("bo", [], [])],
     },
   } as never);
-  const reader = (handle: string, operatesFleet = false) => ({ handle, operatesFleet });
+  const reader = (handle: string, admin = false, tracker = true) => ({
+    handle,
+    admin,
+    tracker: tracker || admin,
+  });
 
-  // THE ENGINE'S RULE, all three arms: the owner, whoever leads them, and
-  // `fleet:operate`.
-  test("is the owner's, a lead's and fleet:operate's", () => {
+  // THE ENGINE'S RULE, all three arms, each with Tracker: the owner, whoever
+  // leads them, and an admin, who holds every app.
+  test("is the owner's, a lead's and an admin's", () => {
     expect(mayReadRecord(reader("ceo"), led, "ceo")).toBe(true);
     expect(mayReadRecord(reader("ana"), led, "ceo")).toBe(true);
     expect(mayReadRecord(reader("", true), led, "ceo")).toBe(true);
@@ -347,5 +352,54 @@ describe("whose record this page asks for", () => {
   test("is not asked by a colleague who leads them not, nor by nobody", () => {
     expect(mayReadRecord(reader("bo"), led, "ceo")).toBe(false);
     expect(mayReadRecord(reader(""), led, "ceo")).toBe(false);
+  });
+
+  // A PERSON'S RECORD IS THE TRACKER'S: without the app nobody's is asked —
+  // their own and their report's included — since the engine refuses every
+  // record question to a reader without Tracker.
+  test("is asked by nobody without Tracker, the owner and the lead included", () => {
+    expect(mayReadRecord(reader("ceo", false, false), led, "ceo")).toBe(false);
+    expect(mayReadRecord(reader("ana", false, false), led, "ceo")).toBe(false);
+  });
+});
+
+// A SEAT'S TRAIL — its turns, its memory, the body of a call — is an admin's
+// and its lead's (`audit.seat.read`), and nobody else's, whatever app they
+// hold: everybody reads its status, never its transcript.
+describe("mayReadTrail", () => {
+  const seat = (handle: string, reports: string[], managers: string[]) => ({
+    handle,
+    name: handle,
+    kind: handle === "agent" ? "agent" : "human",
+    placed_by_ref: false,
+    manager: managers[0] ?? "",
+    managers: managers.length ? managers : null,
+    reports: reports.length ? reports : null,
+    auto_reports: null,
+    onboarding_chain: null,
+  });
+  // Ana leads the agent; Bo leads nobody.
+  const roles = ["ana", "agent", "bo"].map((handle) => ({
+    name: handle,
+    handle,
+    kind: handle === "agent" ? "agent" : "human",
+  }));
+  const led = indexOrg({
+    roles,
+    units: [],
+    derived: {
+      units: [],
+      seats: [seat("ana", ["agent"], []), seat("agent", [], ["ana"]), seat("bo", [], [])],
+    },
+  } as never);
+
+  test("is the lead's and an admin's", () => {
+    expect(mayReadTrail({ handle: "ana", admin: false }, led, "agent")).toBe(true);
+    expect(mayReadTrail({ handle: "", admin: true }, led, "agent")).toBe(true);
+  });
+
+  test("is not a colleague's who leads it not, nor nobody's", () => {
+    expect(mayReadTrail({ handle: "bo", admin: false }, led, "agent")).toBe(false);
+    expect(mayReadTrail({ handle: "", admin: false }, led, "agent")).toBe(false);
   });
 });

@@ -26,10 +26,10 @@ import type { CompanyDocument, LogRefusal, QueryRefusal } from "~/protocol/index
 /**
  * The operator-gated half of a seat, said precisely when it cannot be shown.
  *
- * A READ NEVER SENT COMES FIRST. The document takes `config:read` and is not
+ * A READ NEVER SENT COMES FIRST. The document takes Admin and is not
  * asked of a reader without it who leads no unit over the seat (`useSeatSetup`
  * reads that as `withheld`), so there is no answer to draw — and the panel says
- * which grant reads it, in the frame's words (`GrantRequired`), and that
+ * which access reads it, in the frame's words (`GrantRequired`), and that
  * leading the seat's unit does too where it has one. Read as a document that
  * answered with nothing, a person opening their own seat's Settings was told
  * "No company configuration is active" about a company running beside it.

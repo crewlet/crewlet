@@ -140,6 +140,10 @@ type answerRig struct {
 	position string
 	seat     string
 
+	// grants are what the asker holds: both apps unless a case is about
+	// what one of them, or neither, may be answered from.
+	grants []iam.Grant
+
 	// cache is the node's one answer cache, built once and handed to every
 	// catalogue the rig builds — as the operator surface does.
 	cache *builtin.AnswerCache
@@ -164,6 +168,7 @@ func newAnswerRig() *answerRig {
 		budget:   &answerBudget{},
 		position: "tracker@1:10,pages@1:20,vectors@1:5",
 		seat:     "founder",
+		grants:   slices.Clone(iam.Apps),
 		cache:    builtin.NewAnswerCache(builtin.AnswerCacheEntries),
 	}
 }
@@ -179,14 +184,13 @@ func (a askedAs) Call(ctx context.Context, args map[string]any) (tools.Result, e
 }
 
 // asker is who the rig asks as: a person bound to the rig's seat, or — with
-// no seat — a person the directory binds to none. Both hold the read grant
-// the verb asks for.
+// no seat — a principal the directory binds to none, holding the rig's grants.
 func (r *answerRig) asker() iam.Principal {
 	if r.seat == "" {
 		return iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "ci.release",
-			Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead}}
+			Stage: iam.StageActive, Grants: r.grants}
 	}
-	return boundTo(r.seat, iam.GrantStateRead)
+	return boundTo(r.seat, r.grants...)
 }
 
 func (r *answerRig) tool(t *testing.T) tools.Callable {
@@ -552,7 +556,7 @@ func TestASeatIsNeverAnsweredFromTheCompanysKnowledge(t *testing.T) {
 	rig := newAnswerRig()
 	tool := rig.tool(t).(askedAs)
 	tool.caller = iam.Principal{ID: uuid.New(), Kind: iam.KindSeat, Login: "founder",
-		Seat: "founder", Stage: iam.StageActive, Grants: iam.AllGrants}
+		Seat: "founder", Stage: iam.StageActive, Grants: slices.Clone(iam.Apps)}
 	res, _, _ := ask(t, tool, "How do we deploy?")
 	if !res.Failed || !errors.Is(res.Cause, builtin.ErrRefused) {
 		t.Fatalf("a seat was answered: %+v", res)
@@ -642,5 +646,103 @@ func TestALongQuestionIsRefusedNotCut(t *testing.T) {
 	}
 	if rig.model.calls != 0 || len(rig.search.asked) != 0 {
 		t.Fatal("a refused question still searched or spent")
+	}
+}
+
+// AN ANSWER IS WRITTEN ONLY FROM WHAT ITS ASKER MAY READ.
+//
+// An answer quotes its sources, so an answer written from a work item and read
+// by somebody kept off the tracker is the work item read. The pages are
+// searched only for an asker holding the knowledge base and the items only for
+// one holding the tracker — through the one per-app filter every cross-app
+// answer asks — and an asker holding neither is refused by the table before
+// anything is searched or spent. Mutating either search to ignore the asker's
+// apps, or the table to admit an asker with neither, turns this red.
+func TestAnswerKnowledgeSearchesOnlyTheAppsTheAskerHolds(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name         string
+		grants       []iam.Grant
+		pages, items bool
+	}{
+		{"both apps", slices.Clone(iam.Apps), true, true},
+		{"admin, which includes both", []iam.Grant{iam.GrantAdmin}, true, true},
+		{"the tracker alone", []iam.Grant{iam.GrantTracker}, false, true},
+		{"the knowledge base alone", []iam.Grant{iam.GrantKnowledge}, true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newAnswerRig()
+			rig.grants = c.grants
+			res, answer, _ := ask(t, rig.tool(t), "How do we deploy?")
+			if res.Failed {
+				t.Fatalf("refused: %s", res.Output)
+			}
+			if got := len(rig.search.asked) > 0; got != c.pages {
+				t.Errorf("the pages were searched = %v, want %v", got, c.pages)
+			}
+			if got := len(rig.items.asked) > 0; got != c.items {
+				t.Errorf("the work items were searched = %v, want %v", got, c.items)
+			}
+			for _, source := range answer.Sources {
+				if source.Kind == builtin.AnswerSourcePage && !c.pages ||
+					source.Kind == builtin.AnswerSourceTask && !c.items {
+					t.Errorf("the answer cites the %s %q, which this asker may not read",
+						source.Kind, source.Ref)
+				}
+			}
+		})
+	}
+
+	rig := newAnswerRig()
+	rig.grants = nil
+	res, _, _ := ask(t, rig.tool(t), "How do we deploy?")
+	var refused *builtin.DecisionRefused
+	if !res.Failed || !errors.As(res.Cause, &refused) ||
+		!slices.Equal(refused.Decision.Grants, iam.Apps) {
+		t.Fatalf("an asker holding neither app = %+v, want the table's refusal naming "+
+			"both apps", res)
+	}
+	if rig.model.calls != 0 || len(rig.search.asked) != 0 || len(rig.items.asked) != 0 {
+		t.Errorf("refused after searching or spending: model %d, pages %d, items %d",
+			rig.model.calls, len(rig.search.asked), len(rig.items.asked))
+	}
+}
+
+// TWO ASKERS WHO MAY READ DIFFERENT CORPORA NEVER SHARE AN ANSWER.
+//
+// The cache is the node's, and its key used to be the question and the corpus
+// position — so a person holding the tracker alone, asking what a colleague
+// holding both apps had just asked, was handed an answer written from pages
+// they may not read. The apps are in the key; askers who may read the same
+// corpora still share, an admin with somebody holding both apps among them.
+func TestTheTwoAppSetsCacheApart(t *testing.T) {
+	t.Parallel()
+	rig := newAnswerRig()
+	askAs := func(grants ...iam.Grant) builtin.KnowledgeAnswer {
+		t.Helper()
+		rig.grants = grants
+		res, answer, _ := ask(t, rig.tool(t), "How do we deploy?")
+		if res.Failed {
+			t.Fatalf("refused: %s", res.Output)
+		}
+		return answer
+	}
+	if both := askAs(iam.Apps...); both.Cached || rig.model.calls != 1 {
+		t.Fatalf("the first answer: cached %v after %d calls", both.Cached, rig.model.calls)
+	}
+	tracker := askAs(iam.GrantTracker)
+	if tracker.Cached || rig.model.calls != 2 {
+		t.Fatalf("a tracker-only asker was served the answer written for both apps "+
+			"(cached %v after %d model calls)", tracker.Cached, rig.model.calls)
+	}
+	for _, source := range tracker.Sources {
+		if source.Kind == builtin.AnswerSourcePage {
+			t.Errorf("the tracker-only answer cites the page %q", source.Ref)
+		}
+	}
+	if admin := askAs(iam.GrantAdmin); !admin.Cached || rig.model.calls != 2 {
+		t.Errorf("an admin, who reads what both apps hold, was not served the answer "+
+			"written for both (cached %v after %d calls)", admin.Cached, rig.model.calls)
 	}
 }

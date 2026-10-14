@@ -93,7 +93,9 @@ func TestAPersonsWriteSuppressesTheirOwnWake(t *testing.T) {
 func TestAMachineActorCannotSatisfyAnOwnRecordCheck(t *testing.T) {
 	t.Parallel()
 	for _, id := range []string{"ops", "ci", "release-bot"} {
-		token := machine(id)
+		// HOLDING THE TRACKER, which the own-record verbs ask beside the
+		// relation — so what refuses the token below is its NAME.
+		token := machine(id, iam.GrantTracker)
 		actor := builtin.ActorOf(token)
 		if org.ValidHandle(actor.Handle) {
 			t.Errorf("a token acts as %q, which a seat could also be called",

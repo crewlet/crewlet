@@ -173,6 +173,10 @@ func TestBootstrapSchemaEnumsMatchTheValidators(t *testing.T) {
 		// has its own enum to drift.
 		{"LogFile", "format", strs(logging.Formats)},
 		{"LogFile", "level", strs(logging.Levels)},
+		// The node's admin posture: a value the schema offered that the
+		// validator refused would be a node an editor passed and the
+		// engine would not start.
+		{"APIAuth", "admin", strs(iam.AdminPostures)},
 	} {
 		def, ok := defs[tc.def].(map[string]any)
 		if !ok {
@@ -1082,7 +1086,7 @@ var tokenIDBound = iam.MaxLogin - len(iam.TokenLoginPrefix)
 func tokenDoc(id string) string {
 	return "api:\n  auth:\n    tokens:\n      - id: " + id +
 		"\n        token: a-token-value-long-enough-to-pass-the-floor" +
-		"\n        grants: [state:read]\n"
+		"\n        grants: [admin]\n"
 }
 
 // A TIER A TOKEN'S ID IS BOUNDED IN THE ARTIFACT AT THE WIDTH THE VALIDATOR

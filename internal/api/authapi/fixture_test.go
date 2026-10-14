@@ -23,14 +23,14 @@ import (
 // one it chose rather than one the wall clock happened to give.
 var clock = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 
-// bootstrapFor is a Tier A that would serve this surface: an external URL, a
-// ceiling and a keyring.
+// bootstrapFor is a Tier A that would serve this surface: an external URL, an
+// admin posture and a keyring.
 func bootstrapFor(t *testing.T) config.Bootstrap {
 	t.Helper()
 	b := config.DefaultBootstrap()
 	b.API.Host = "127.0.0.1"
 	b.API.ExternalURL = "https://crewlet.example.com"
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	b.API.Auth.Tokens = []config.APIToken{
 		{ID: "ops", Token: "a-token-long-enough-for-the-floor", Grants: iam.AllGrants},
 	}

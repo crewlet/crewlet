@@ -110,7 +110,7 @@ class InertWebSocket {
 }
 
 /** Who is reading: somebody holding the grant a backup is taken under. */
-const OPERATOR = { login: "ops", owner: "ops", grants: ["fleet:operate"] };
+const OPERATOR = { login: "ops", owner: "ops", grants: ["admin"] };
 
 function mount(
   over: Partial<BackupsAnswer> = {},
@@ -342,14 +342,14 @@ test("a directory the host cannot create is said on the field", async () => {
 
 // A READER WITHOUT THE GRANT is told which one before pressing: the button is
 // drawn, disabled with the grant a backup is taken under.
-test("without fleet:operate the button is held and names the grant", async () => {
-  mount({}, { viewer: { login: "jane.doe", owner: "jane.doe", grants: ["state:read"] } });
+test("without Admin the button is held and names the grant", async () => {
+  mount({}, { viewer: { login: "jane.doe", owner: "jane.doe", grants: [] } });
   await settle();
   const button = screen.getByRole("button", { name: "Take a backup" });
   expect(
     button.getAttribute("aria-disabled") ?? String((button as HTMLButtonElement).disabled),
   ).toMatch(/true/);
-  expect(button.getAttribute("title")).toMatch(/needs fleet:operate/);
+  expect(button.getAttribute("title")).toMatch(/needs Admin/);
 });
 
 // CLOSING DOES NOT LOSE THE OUTCOME. The engine finishes a copy whether or not

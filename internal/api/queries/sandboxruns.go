@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -47,8 +48,13 @@ import (
 // absent, because an empty board reads as "nothing failed" rather than "this
 // is not where that is recorded". How a run ENDED is on the event stream: the
 // resumed turn's own events, or a `sandbox_run_failed` naming the reason.
+//
+// AND ONE RUN BY ITS TURN, which `sandbox_tail` reads to learn whose seat a
+// run is before it shows anybody that seat's transcript — the record is the
+// only thing that names it.
 type PendingRuns interface {
 	ListActive(ctx context.Context) ([]sandbox.PendingRun, error)
+	Get(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
 }
 
 // SandboxTails answers a running coding run's live output from the node that
@@ -72,6 +78,11 @@ type SandboxTails interface {
 // three absent for one holding nothing yet — and the answer carries what it
 // lacks, or a reset. A cursor's offset is a whole number of bytes, refused by
 // name otherwise.
+//
+// DECIDED ON THE RUN'S SEAT, as its trail: what a coding agent prints is its
+// transcript, so it is read by whoever reads the seat's trail — its lead, or
+// an admin — and never by everybody the run's status reaches. See
+// [Sources.mayTail].
 func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
 	turnID := strings.TrimSpace(p.String("turn_id"))
 	launchID := strings.TrimSpace(p.String("launch_id"))
@@ -87,11 +98,104 @@ func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
 				"holds through, a whole number of zero or more", ErrBadParams)
 		}
 	}
+	gone, err := s.mayTail(ctx, turnID)
+	if err != nil {
+		return nil, err
+	}
+	if gone {
+		// NO RECORD NAMES THE RUN, so nothing says whose it is — and
+		// nothing is left to show: a settled run's record is deleted, and
+		// a launch with no record is `not_running` with no status, which
+		// is exactly what the tail reader answers for one. Answered here
+		// rather than by asking it, because its own read of the record is
+		// a moment later than this one and could find a record this
+		// decision never saw.
+		return sandbox.TailAnswer{Outcome: sandbox.TailNotRunning,
+			TurnID: turnID, LaunchID: launchID}, nil
+	}
 	return s.SandboxTail.Tail(ctx, sandbox.TailQuery{
 		TurnID: turnID, LaunchID: launchID,
 		Cursor: sandbox.TailCursor{Epoch: p.String("epoch"), Offset: after, Digest: p.String("digest")},
 	})
 }
+
+// mayTail decides whether the caller may read the live output of the run of
+// turnID, and reports a run no record names as gone.
+//
+// # The company-wide trail first, then the run's seat
+//
+// Whoever reads the COMPANY-WIDE trail ([authz.ActionAuditRead]) reads every
+// run's, and is decided before anything is read: the table answers that
+// without a record, and the tail reader's own read of the record is the one
+// that counts for them. Anybody else is decided on the run's SEAT
+// ([authz.ActionSeatTrailRead] — its lead), which only the run's record names,
+// so it is read here: a seat a turn's run belongs to never changes, which is
+// what makes deciding on this read and tailing on the reader's a moment later
+// the same decision.
+//
+// A NODE WITH NO RUN RECORD TO READ decides nothing but the company-wide
+// trail, and refuses with that decision: it can establish no seat a caller
+// might lead.
+//
+// # A caller who leads nobody is refused before the record is read
+//
+// The seat verb is decided FIRST on a run nobody has resolved to a seat yet
+// ([authz.Object.Unresolved], under [unresolvedRunSeat]), as a steer is: the
+// only admission left past the company-wide trail is leading whoever the run
+// turns out to belong to, so a caller who leads nobody — an unbound service
+// account or token, a person with no reports — is refused there, and only a
+// caller the table tells to resolve ([authz.ErrUnresolved]) has the record
+// read for them. Read first, a run store that could not answer told every
+// such caller to come back to a refusal no answer of it could change.
+func (s Sources) mayTail(ctx context.Context, turnID string) (gone bool, err error) {
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return false, unresolved(ctx, "sandbox_tail")
+	}
+	company := authz.Decide(ctx, principal, authz.ActionAuditRead,
+		authz.Object{Kind: authz.KindCompany}, s.Chart, s.clock())
+	switch {
+	case company.Allowed:
+		return false, nil
+	case company.Unknown():
+		return false, fmt.Errorf("%w: this node cannot decide %s yet: %w",
+			ErrUnavailable, authz.ActionAuditRead, company.Err)
+	case s.Sandbox == nil:
+		return false, refused("sandbox_tail", company)
+	}
+	first := authz.Decide(ctx, principal, authz.ActionSeatTrailRead, authz.Object{
+		Kind: authz.KindPerson, ID: turnID, Owner: unresolvedRunSeat, Unresolved: true,
+	}, s.Chart, s.clock())
+	switch {
+	case first.Allowed:
+		return false, nil
+	case errors.Is(first.Err, authz.ErrUnresolved):
+		// LEADS SOMEBODY: read the record and decide on its seat below.
+	case first.Unknown():
+		return false, fmt.Errorf("%w: this node cannot decide %s yet: %w",
+			ErrUnavailable, authz.ActionSeatTrailRead, first.Err)
+	default:
+		return false, refused("sandbox_tail", first)
+	}
+	run, found, err := s.Sandbox.Get(ctx, turnID)
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("%w: the record of run %s, which names its seat, "+
+			"could not be read: %w", ErrUnavailable, turnID, err)
+	case !found:
+		return true, nil
+	}
+	return false, s.mayRead(ctx, principal, authz.ActionSeatTrailRead, run.AgentHandle)
+}
+
+// unresolvedRunSeat is the owner a run nobody has resolved to its seat is
+// decided under. NOT EMPTY, because the owner-or-lead class refuses an empty
+// owner as unnamed before it reaches the arm that asks whether the caller
+// leads anybody; and NOT THE TURN ID, which has a seat handle's shape and so
+// could equal a caller's seat and read as their own record. Parentheses are
+// in neither a login's grammar nor a seat handle's, so nobody's login or seat
+// is ever this.
+const unresolvedRunSeat = "(unresolved)"
 
 // sandboxRuns answers the board, or — with `audience=<name>` — the runs whose
 // question is put to that one person and still waits for them ([putTo]).
@@ -100,15 +204,20 @@ func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
 // ([iam.OwnerOf]): the caller's own with no name or one of theirs, a person's
 // LOGIN to the seat the identity directory binds them to — never read as a
 // seat's handle — and anything else as the seat it names. The directory is
-// asked only once [authz.ActionPersonRead] admits looking, so a caller who
-// leads nobody filters by a seat's handle and cannot read the directory off
-// this filter. NO SCOPE RULE beyond that, unlike the tracker's personal
+// asked only once [authz.ActionPersonRead] admits looking — the caller's own,
+// their lead's or an admin's, each with the tracker, since whose queue
+// somebody is on is the tracker's question — so a caller who leads nobody
+// filters by a seat's handle and cannot read the directory off this filter. NO SCOPE RULE beyond that, unlike the tracker's personal
 // reads: the unfiltered board already carries every run's audience to anybody
 // who may read it, so a narrower answer reveals nothing the wider one did not.
 //
 // A run whose question resolved to nobody carries no audience, and is
 // therefore nobody's by this filter — which is the truth about it: nobody was
 // recorded as the one its question was put to.
+//
+// EVERY RUN'S STATUS IS EVERYBODY'S, and what it was asked, asked back and
+// answered is its seat's trail — see [runKeys] for the split, and
+// [Sources.runReach] for who reads which.
 func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 	runs, err := s.Sandbox.ListActive(ctx)
 	if err != nil {
@@ -121,14 +230,36 @@ func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 		}
 		filtered = true
 	}
+	reach := s.runReach(ctx)
 	out := make([]any, 0, len(runs))
 	for _, run := range runs {
 		if filtered && !putTo(run, who) {
 			continue
 		}
-		out = append(out, serialiseRun(run))
+		out = append(out, serialiseRun(run, reach(run)))
 	}
 	return map[string]any{"runs": out}, nil
+}
+
+// runReach is what the asking principal may read of each coding run: its
+// seat's body where the authority table's `audit.seat.read` admits them to
+// the run's seat — an admin, or its lead — through [Sources.reach], the one
+// decision a seat's live call, its turns and its memory are read under; its
+// work item where they hold the tracker; and their own record, which a run's
+// question may be put to.
+//
+// ONE DECISION PER SEAT per answer, however many runs it has: a board of runs
+// is a handful of seats, and the decision asks the chart.
+func (s Sources) runReach(ctx context.Context) func(sandbox.PendingRun) livestate.Reach {
+	decided := map[string]livestate.Reach{}
+	return func(run sandbox.PendingRun) livestate.Reach {
+		r, ok := decided[run.AgentHandle]
+		if !ok {
+			r = s.reach(ctx, run.AgentHandle)
+			decided[run.AgentHandle] = r
+		}
+		return r
+	}
 }
 
 // putTo reports whether a run's question is put to this record and is still
@@ -182,7 +313,104 @@ func (s Sources) audienceOf(ctx context.Context, asked string) (string, error) {
 	return owner, nil
 }
 
-func serialiseRun(run sandbox.PendingRun) map[string]any {
+// runShown is who one key of a coding run's row is shown to.
+type runShown uint8
+
+const (
+	// runStatus is everybody's: what the run is, where, in what state, at
+	// what cost — the overview.
+	runStatus runShown = iota + 1
+	// runBody is the run's seat's trail: what it was asked, what its
+	// agent called and was answered. Shown to an admin and the seat's lead
+	// ([livestate.Reach.Body]).
+	runBody
+	// runQuestion is the body, and also shown to the people the question
+	// is put to — asked it whatever their reach to the seat that asked, and
+	// unable to answer what they were not shown.
+	runQuestion
+	// runTracker is the tracker's: a work item, shown to whoever holds it.
+	runTracker
+)
+
+// runKeys is THE SPLIT of a coding run's row, declared once: every key
+// [runRow] writes, classified. [serialiseRun] withholds by it, and a walk
+// (TestEverySandboxRunKeyIsClassified) fails the build on a key nobody
+// classified — which is what keeps a field added to the row from reaching
+// everybody's overview because it was added, rather than because somebody
+// decided it is status. It is the same split livestate's `SandboxEntry.For`
+// makes of the live panel's copy of a run (ADR-0033): what a run was asked
+// (`task_description`), the question it parked on, who is waiting on it
+// (`reply`) and the bridge's call log — every argument and output its agent
+// passed through the seat's tools — are the seat's body.
+var runKeys = map[string]runShown{
+	"turn_id":             runStatus,
+	"work_key":            runStatus, // a delivery identity (internal/workkey), not a task key
+	"work_item":           runTracker,
+	"agent_handle":        runStatus,
+	"launch_id":           runStatus,
+	"role":                runStatus,
+	"status":              runStatus,
+	"coding_agent":        runStatus,
+	"placement":           runStatus,
+	"task_description":    runBody,
+	"question":            runQuestion,
+	"audience":            runStatus,
+	"audience_handles":    runStatus,
+	"audience_fallback":   runStatus,
+	"branch":              runStatus,
+	"trace_id":            runStatus,
+	"owner":               runStatus,
+	"box_exists":          runStatus,
+	"paused_at":           runStatus,
+	"pause_ttl_seconds":   runStatus,
+	"started_at":          runStatus,
+	"updated_at":          runStatus,
+	"answerable_in_chat":  runStatus,
+	"reply":               runBody,
+	"bridge_calls":        runBody,
+	"bridge_calls_elided": runStatus, // a count of what was cut, never a call
+	"session_id":          runStatus,
+	"command_id":          runStatus,
+	"delegation_chain":    runStatus,
+	"body_withheld":       runStatus,
+}
+
+// serialiseRun is one coding run's row as reader r receives it: [runRow],
+// with every key [runKeys] does not show them left out — absent rather than
+// empty, because an empty task is a value a board would draw — and
+// `body_withheld` saying whether the body was.
+//
+// A KEY THE TABLE DOES NOT NAME IS WITHHELD, which the walk keeps unreachable:
+// left out is the direction a mistake here has to fail in.
+func serialiseRun(run sandbox.PendingRun, r livestate.Reach) map[string]any {
+	row := runRow(run)
+	asked := r.Record != "" && slices.Contains(run.AudienceHandles, r.Record)
+	for key := range row {
+		switch runKeys[key] {
+		case runStatus:
+		case runBody:
+			if !r.Body {
+				delete(row, key)
+			}
+		case runQuestion:
+			if !r.Body && !asked {
+				delete(row, key)
+			}
+		case runTracker:
+			if !r.Tracker {
+				delete(row, key)
+			}
+		default:
+			delete(row, key)
+		}
+	}
+	row["body_withheld"] = !r.Body
+	return row
+}
+
+// runRow is every fact a coding run's row carries, whoever reads it — see
+// [serialiseRun] for what each reader is shown of it.
+func runRow(run sandbox.PendingRun) map[string]any {
 	// HELD, NOT STAMPED. A box parked on a question is being paid for
 	// whether or not the pause instant reached the row, and drawing the raw
 	// stamp showed exactly that box as a live one — the one reading that
@@ -260,6 +488,10 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		"session_id":       run.SessionID,
 		"command_id":       run.CommandID,
 		"delegation_chain": run.DelegationChain,
+		// WHETHER [runKeys]' body was left out for this reader, so a board
+		// draws "not shown to you" over a run's task rather than a run that
+		// was asked nothing. Set by [serialiseRun].
+		"body_withheld": false,
 	}
 }
 

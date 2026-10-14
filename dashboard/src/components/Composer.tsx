@@ -52,6 +52,8 @@ import { QueryState } from "~/components/common.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { KNOWLEDGE, needsWords } from "~/lib/access.ts";
 import { matchesRow } from "~/app/keymap.ts";
 import { handleLabel, type OrgIndex } from "~/lib/seats.ts";
 import { firstLine, textBudget } from "~/lib/format.ts";
@@ -619,6 +621,8 @@ function LinkTaskDialog({
         </FormField>
         {search.tooLong ? (
           <Callout variant="warning">{search.tooLong}</Callout>
+        ) : search.withheld ? (
+          <Callout variant="info">{search.withheld}</Callout>
         ) : search.error ? (
           <QueryState
             error={search.error}
@@ -677,7 +681,16 @@ function AttachPageDialog({
   // field instead.
   const [title, setTitle] = useState(firstLine(draft));
   const titleBudget = textBudget(title, PAGE_TITLE_MAX_BYTES, "a page's title");
-  const found = useQuery("pages", { title: q.trim(), limit: 8 }, { enabled: q.trim().length >= 2 });
+  // THE KNOWLEDGE BASE'S LISTING, asked only of a reader holding Knowledge:
+  // anybody else is told what would let them find a page, rather than "no
+  // page has that in its title" about a question never answered.
+  const { knowledge, loading: asking } = useViewer();
+  const pagesLocked = !asking && !knowledge;
+  const found = useQuery(
+    "pages",
+    { title: q.trim(), limit: 8 },
+    { enabled: q.trim().length >= 2 && knowledge },
+  );
   const busy = link.busy || save.busy;
 
   const attach = async (page: { id: string; title: string }) => {
@@ -743,11 +756,13 @@ function AttachPageDialog({
             if (page) setChosen({ id: page.id, title: page.title });
           }}
           empty={
-            q.trim().length < 2
-              ? "Type two characters to search."
-              : found.loading
-                ? "Searching…"
-                : "No page has that in its title."
+            pagesLocked
+              ? needsWords("Finding a page", [KNOWLEDGE])
+              : q.trim().length < 2
+                ? "Type two characters to search."
+                : found.loading
+                  ? "Searching…"
+                  : "No page has that in its title."
           }
         />
         <RefusalNote write={link} />

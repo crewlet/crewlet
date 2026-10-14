@@ -23,8 +23,8 @@
  *
  * # Who may make one
  *
- * Whoever may change the company's configuration ([useConfigWriteAccess]: the
- * `config:write` grant, on a document the deployment does not manage for
+ * Whoever may change the company's configuration ([useConfigWriteAccess]:
+ * Admin, on a document the deployment does not manage for
  * somebody else). Not a lead on their own team: a project key is one of the
  * KEYS another system finds a team by, and it outlives the team that declared
  * it, so the engine refuses a lead every write that sets one
@@ -294,7 +294,7 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
       {access.can && (
         <Text as="p" variant="caption" className="row gap-2">
           <KeyGlyph size="xs" aria-hidden="true" />
-          Saving the key takes config:write, since a project outlives its team.
+          Saving the key takes Admin access, since a project outlives its team.
         </Text>
       )}
     </Modal>

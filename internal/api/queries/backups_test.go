@@ -223,14 +223,14 @@ func TestAnUnreadableRegisterIsNotANeverBackedUpFleet(t *testing.T) {
 	}
 }
 
-// THE DEPLOYMENT'S, on fleet:operate — every row names a directory on a named
+// THE DEPLOYMENT'S, and so admin's — every row names a directory on a named
 // host holding the company's sealed credentials — and unregistered without
 // both halves.
 func TestTheBackupsAnswerIsTheDeployments(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, backupSources(t, fourOwners(), ""))
-	needsExactly(t, r, "backups", iam.GrantFleetOperate)
+	requiresExactly(t, r, "backups", iam.GrantAdmin)
 	for name, s := range map[string]queries.Sources{
 		"no register": {Events: fleetOf(auditLog(t))},
 		"no history":  {Backups: fourOwners()},

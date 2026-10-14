@@ -32,6 +32,7 @@ import { ChannelScreen } from "./Conversations.tsx";
 import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { FRAME_ANSWERS } from "~/test/viewer.ts";
 import { noteReader } from "~/lib/reader.ts";
 import { recentsKey, resetForTest } from "~/lib/recents.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -88,7 +89,7 @@ function mount(
   if (org) store.applyOrg(withDerived(org));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
-    Promise.resolve(answers[what] ?? {});
+    Promise.resolve(answers[what] ?? FRAME_ANSWERS[what] ?? {});
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>

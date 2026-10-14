@@ -73,7 +73,7 @@ func TestABatchSaysWhoseCredentialsItMoved(t *testing.T) {
 			_, err := rig.writer.UpdatePerson(t.Context(), iamdomain.PersonUpdate{
 				PersonID: person, OpID: "op-narrow", Reason: "audit role",
 				Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
-					p.Grants = []iam.Grant{iam.GrantStateRead}
+					p.Grants = []iam.Grant{iam.GrantTracker}
 					return p, nil
 				},
 			})

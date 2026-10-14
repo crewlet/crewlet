@@ -1,7 +1,7 @@
 /**
  * A lead's draft: one unit they lead, edited as a document of its own.
  *
- * WHY A DOCUMENT OF ITS OWN. A lead without `config:read` may not read the
+ * WHY A DOCUMENT OF ITS OWN. A lead without Admin may not read the
  * company document, but the engine admits them to the units they lead
  * (`lib/leadScope.ts`): `GET /config/units/{key}` reads one whole — its seats
  * and child units included, credentials masked — and `PUT
@@ -190,19 +190,19 @@ export function scopeLimit(
   const top = draft.units[0];
   const name = top?.data.name || "this unit";
   if (key === COMPANY_KEY && change === "edit") {
-    return `The company's charter and settings are not part of ${name}: changing them takes the config:write grant.`;
+    return `The company's charter and settings are not part of ${name}: changing them takes Admin access.`;
   }
   if (key === COMPANY_KEY && change === "add") {
-    return `Only ${name} and what is inside it can be changed here: the company's top level takes the config:write grant.`;
+    return `Only ${name} and what is inside it can be changed here: the company's top level takes Admin access.`;
   }
   if (top !== undefined && key === top.key && change === "place") {
-    return `Where ${name} sits decides who leads it, so moving or deleting it takes the config:write grant.`;
+    return `Where ${name} sits decides who leads it, so moving or deleting it takes Admin access.`;
   }
   if (top !== undefined && key === top.key && change === "lead") {
-    return `${name}'s own lead decides who may change it, so changing it takes the config:write grant.`;
+    return `${name}'s own lead decides who may change it, so changing it takes Admin access.`;
   }
   if (change === "key") {
-    return "Another system finds a seat or unit by this, so setting or changing it takes the config:write grant.";
+    return "Another system finds a seat or unit by this, so setting or changing it takes Admin access.";
   }
   return null;
 }

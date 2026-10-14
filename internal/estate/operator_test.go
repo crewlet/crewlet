@@ -209,7 +209,7 @@ func (w deskWriter) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
 	return w.d.note("remove_task", opID, w.a), nil
 }
 
-func (w deskWriter) RestoreTask(_ context.Context, opID, _, _ string,
+func (w deskWriter) RestoreTask(_ context.Context, opID, _, _ string, _ bool,
 	_ *tracker.Notify) (tracker.WriteResult, error) {
 	return w.d.note("restore_task", opID, w.a), nil
 }
@@ -364,7 +364,7 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 			return w.WritePriorities(ctx, "op-6", "founder", nil, &match, tracker.PersonAuthority{})
 		}},
 		{"remove_task", func() (tracker.WriteResult, error) { return w.RemoveTask(ctx, "op-7", "t-1", "ENG", false, nil) }},
-		{"restore_task", func() (tracker.WriteResult, error) { return w.RestoreTask(ctx, "op-8", "t-1", "ENG", nil) }},
+		{"restore_task", func() (tracker.WriteResult, error) { return w.RestoreTask(ctx, "op-8", "t-1", "ENG", true, nil) }},
 		{"purge_task", func() (tracker.WriteResult, error) { return w.PurgeTask(ctx, "op-9", "t-1", "ENG", "spam") }},
 		{"edit_comment", func() (tracker.WriteResult, error) {
 			return w.EditComment(ctx, "op-10", "t-1", "ENG", "c-1", "reworded", nil)

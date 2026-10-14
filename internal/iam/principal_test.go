@@ -9,37 +9,45 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestAnUnknownGrantIsIgnoredNotRejected is the rolling-upgrade arm. A newer
-// build writes a capability string this one has never heard of; refusing the
-// whole principal over it would log every person in the company out for the
-// length of the deploy.
-func TestAnUnknownGrantIsIgnoredNotRejected(t *testing.T) {
-	const fromTheFuture = Grant("swarm:conscript")
+// AN UNKNOWN PERMISSION IS KEPT AND IGNORED, NEVER A REASON TO REFUSE.
+//
+// The rolling-upgrade arm, and the one an older estate's renamed names land on
+// too: a row carrying a name this build has never heard of keeps it, the
+// principal still validates (refusing it would log every person in the company
+// out for the length of the deploy), the names this build knows go on working
+// beside it — admin's apps through [Expand] included — and the unknown one
+// opens nothing, asked for directly or not.
+func TestAnUnknownGrantIsKeptAndIgnored(t *testing.T) {
+	const fromTheFuture = Grant("swarm")
 
 	p := Principal{
-		ID:    uuid.New(),
-		Login: "jane.doe",
-		Kind:  KindPerson,
-		Stage: StageActive,
-		Grants: []Grant{
-			GrantWorkWrite, fromTheFuture, GrantStateRead,
-		},
+		ID:     uuid.New(),
+		Login:  "jane.doe",
+		Kind:   KindPerson,
+		Stage:  StageActive,
+		Grants: []Grant{GrantKnowledge, fromTheFuture, GrantAdmin},
 	}
 
 	if err := p.Validate(); err != nil {
-		t.Fatalf("Validate = %v; a grant this build cannot read must not refuse the principal", err)
+		t.Fatalf("Validate = %v; a name this build cannot read must not refuse the principal", err)
 	}
-	if !p.Can(GrantWorkWrite) || !p.Can(GrantStateRead) {
-		t.Fatal("the grants this build DOES know stopped working next to one it does not")
+	for _, g := range AllGrants {
+		if !p.Can(g) {
+			t.Errorf("%q stopped working next to a name this build does not know", g)
+		}
 	}
 	if p.Can(fromTheFuture) {
 		t.Fatalf("%q was granted — this build cannot open a door it has never heard of", fromTheFuture)
 	}
-	if got := p.KnownGrants(); !slices.Equal(got, []Grant{GrantWorkWrite, GrantStateRead}) {
-		t.Errorf("KnownGrants = %v, want the two this build declares", got)
+	if !slices.Contains(p.Grants, fromTheFuture) {
+		t.Error("the unknown name left the row; it is kept and ignored")
 	}
-	if got := p.UnknownGrants(); !slices.Equal(got, []Grant{fromTheFuture}) {
-		t.Errorf("UnknownGrants = %v, want [%q] so a log line can name it", got, fromTheFuture)
+	// AND AN APP IS ITS OWN, without admin: the knowledge holder reads
+	// pages and files no work.
+	app := Principal{Grants: []Grant{GrantKnowledge}}
+	if !app.Can(GrantKnowledge) || app.Can(GrantTracker) || app.Can(GrantAdmin) {
+		t.Errorf("an app holder can %v / %v / %v, want knowledge alone",
+			app.Can(GrantKnowledge), app.Can(GrantTracker), app.Can(GrantAdmin))
 	}
 
 	// THE CONTROL. Validate has to be able to refuse something, or the

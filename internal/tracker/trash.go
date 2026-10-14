@@ -36,6 +36,13 @@ import (
 // gesture that removed it, so a restore brings back exactly what one removal
 // took and never a task that was already in the trash for its own reasons.
 //
+// That inverse is also why a restore can be asked for its task ALONE: whoever
+// filed a task may take it out of the trash, and what went in with it at a
+// project lead's or an admin's hand is not theirs to bring back. Whether
+// anything did is the same read of `RemovedWith` the restore walks, so the
+// writer answers it ([ErrRestoresOthers]) rather than a caller's earlier read
+// that the walk could disagree with.
+//
 // # It is NOT a write on a frozen task
 //
 // [Writer.UpdateTask] refuses every patch on a removed task — "restore it
@@ -68,6 +75,18 @@ import (
 // this operation put it back. A restore answered from its own first copy is
 // NOT this — it is the success that copy was.
 var ErrNothingToRestore = errors.New("tracker: nothing to restore")
+
+// ErrRestoresOthers reports a restore asked to bring its task back ALONE
+// while the gesture that put it in the trash took other tasks with it. It is
+// carried beside [ErrForbidden], the class every surface reads it as.
+//
+// ALONE IS HOW AN AUTHOR RESTORES: whoever filed an item may take it out of
+// the trash, and what went in with it — at a project lead's or an admin's
+// hand — is not theirs to bring back. The writer decides it, over the same
+// read of what went with the task that the restore walks, so the answer and
+// the walk cannot disagree about what a restore would touch. Nothing is
+// written when it refuses.
+var ErrRestoresOthers = errors.New("tracker: other tasks went into the trash with this one")
 
 // SubtreeStopped reports a subtree removal or restore whose ROOT landed and
 // whose walk over the rest stopped part of the way through.
@@ -190,8 +209,11 @@ func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
 // and every one after it moves up a place. Keyed on the place, a re-run of a
 // restore that half-finished answered its remaining steps from the first
 // run's ledger rows and left those tasks in the trash, reporting success.
+//
+// ALONE asks for the task by itself — see [ErrRestoresOthers], which it is
+// refused with, before anything is written, when the removal took others.
 func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
-	notify *Notify) (WriteResult, error) {
+	alone bool, notify *Notify) (WriteResult, error) {
 
 	switch {
 	case id == "":
@@ -204,6 +226,12 @@ func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
 	removedWith, err := w.removedWith(ctx, id)
 	if err != nil {
 		return WriteResult{}, err
+	}
+	if alone && len(removedWith) > 0 {
+		return WriteResult{}, forbiddenAs(ErrRestoresOthers, "%d other tasks "+
+			"went into the trash with task %s, and this restore may bring back "+
+			"that task alone — restoring them is the project lead's or an "+
+			"admin's", len(removedWith), id)
 	}
 	// THE ROOT FIRST AGAIN, and for the mirror of the removal's reason: a
 	// child restored under a still-removed parent is reachable from

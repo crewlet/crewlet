@@ -31,7 +31,6 @@ const read = (over: Partial<Parameters<typeof engineReading>[0]> = {}) =>
 /** One reading of every state the row can say. */
 const EVERY: Record<EngineState, EngineReading> = {
   "signed-out": read({ authRejected: true }),
-  "no-access": read({ noAccess: true }),
   refused: read({ accessRefused: "seat_unavailable" }),
   unreachable: read({ connected: false, lostAt: 1, health: null }),
   connecting: read({ connected: false, lostAt: null, everConnected: false, health: null }),
@@ -54,34 +53,12 @@ describe("which state the row says", () => {
   test("nobody signed in outranks everything, and is the one state a press can fix", () => {
     const r = read({
       authRejected: true,
-      noAccess: true,
       accessRefused: "seat_unavailable",
       connected: false,
       lostAt: 1,
       health: { ...healthy, shutting_down: true },
     });
     expect(r).toMatchObject({ state: "signed-out", tone: "danger", title: "Not signed in" });
-  });
-
-  // NO ACCESS YET IS NOT A FAULT: a person invited with no grants read a red
-  // "Access refused" over the engine's reason. It is said neutrally, and it
-  // outranks a refusal, since a socket refused for want of the grant is this
-  // same state, which the session says. Mutation: give it the refusal's tone,
-  // or let the refusal outrank it, and a line here goes red.
-  test("no access yet is said without alarm, and outranks a refusal and a lost engine", () => {
-    const r = read({
-      noAccess: true,
-      accessRefused: "the live socket needs state:read",
-      connected: false,
-      lostAt: 1,
-      health: null,
-    });
-    expect(r).toMatchObject({
-      state: "no-access",
-      tone: "neutral",
-      title: "No access yet",
-      lead: "Signed in, without the state:read grant the company's live state needs",
-    });
   });
 
   // A PERSON THE ENGINE KNOWS AND REFUSES is not asked to sign in again:
@@ -341,7 +318,7 @@ describe("the row", () => {
     );
   });
 
-  // THE NAMES ARE THE REPORT'S, which takes `fleet:operate`. The push is
+  // THE NAMES ARE THE REPORT'S, which takes Admin. The push is
   // public and names only the one that has stood longest, so a reader who may
   // not ask the report is told that one and how many more, and the report is
   // not asked to refuse them.
@@ -432,14 +409,14 @@ describe("the row", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  // A STATEMENT WEARS NOTHING A CONTROL WEARS. "No access yet" drew a chevron,
-  // a pointer and a hover border on a card that did nothing and could not be
-  // focused. Each of these is repaired by an administrator, so the row says
-  // it and is no control: no button, no chevron, no place in the tab order,
-  // and nothing a press opens. Mutation: give either state the panel's
-  // trigger, or the sign-in's button, and a line here goes red.
-  test("no access yet and a refusal are statements, with nothing to press", () => {
-    for (const statement of [EVERY["no-access"], EVERY.refused]) {
+  // A STATEMENT WEARS NOTHING A CONTROL WEARS. A refusal drew a chevron, a
+  // pointer and a hover border on a card that did nothing and could not be
+  // focused. It is repaired by an admin, so the row says it and is no
+  // control: no button, no chevron, no place in the tab order, and nothing a
+  // press opens. Mutation: give it the panel's trigger, or the sign-in's
+  // button, and a line here goes red.
+  test("a refusal is a statement, with nothing to press", () => {
+    for (const statement of [EVERY.refused]) {
       const { view } = panel(statement);
       const row = view.container.querySelector(".crewlet-app-shell__rail-row")!;
       expect(row.tagName, statement.state).toBe("DIV");

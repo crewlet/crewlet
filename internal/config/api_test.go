@@ -26,10 +26,10 @@ func serving() Bootstrap {
 	// The front end that terminates the https above, named — which is what
 	// a sound deployment behind a proxy looks like.
 	b.API.TrustedProxies = []string{"10.0.0.0/8"}
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	b.API.Auth.Tokens = []APIToken{{
 		ID: "founder", Token: strings.Repeat("k", 32),
-		Grants: []iam.Grant{iam.GrantConfigWrite},
+		Grants: []iam.Grant{iam.GrantAdmin},
 	}}
 	b.Secrets = Secrets{
 		ActiveKeyID: "k1",
@@ -75,9 +75,9 @@ func TestEveryPostureAServedApiCannotBeReachedUnderIsRefused(t *testing.T) {
 		{"no address a browser reaches this on", func(b *Bootstrap) {
 			b.API.ExternalURL = ""
 		}, "api.external_url"},
-		{"no ceiling on what the directory may confer", func(b *Bootstrap) {
-			b.API.Auth.MaxGrants = nil
-		}, "max_grants"},
+		{"no word on whether this node serves admin", func(b *Bootstrap) {
+			b.API.Auth.Admin = ""
+		}, "api.auth.admin"},
 		{"no credential at all", func(b *Bootstrap) {
 			b.API.Auth.Tokens = nil
 		}, "at least one token is required"},
@@ -221,11 +221,11 @@ api:
   port: 8000
   external_url: "https://crewlet.example.com"
   auth:
-    max_grants: [config:write]
+    admin: serve
     tokens:
       - id: founder
         token: "${CREWLET_TEST_WEAK_TOKEN}"
-        grants: [config:write]
+        grants: [admin]
 secrets:
   active_key_id: k1
   keys:
@@ -252,19 +252,103 @@ func TestATokenMustStateWhatItMayDo(t *testing.T) {
 		b.API.Auth.Tokens[0].Grants = nil
 		refuses(t, b, "stated where it is pinned")
 	})
-	t.Run("a grant this build does not know", func(t *testing.T) {
-		t.Parallel()
+}
+
+// A SERVING NODE NAMES ITS ADMIN POSTURE, AND ONLY ONE THIS BUILD KNOWS.
+//
+// Required once the node serves the API, with no default, because either
+// default is a decision about whether this node publishes host access; and an
+// unknown spelling is refused naming the set rather than read as either. The
+// control is each valid posture, which validates; a node serving nothing
+// needs none. Mutation: default an empty posture to serve and the first case
+// validates.
+func TestAServingNodeNamesItsAdminPosture(t *testing.T) {
+	t.Parallel()
+	for _, posture := range iam.AdminPostures {
 		b := serving()
-		b.API.Auth.Tokens[0].Grants = []iam.Grant{"secrets:exfiltrate"}
-		refuses(t, b, "not a grant this build knows")
-	})
-	t.Run("a grant the ceiling withholds", func(t *testing.T) {
-		t.Parallel()
+		b.API.Auth.Admin = posture
+		if posture == iam.AdminRefuse {
+			b.API.Auth.Tokens[0].Grants = iam.Apps
+		}
+		if err := b.Validate(); err != nil {
+			t.Errorf("%q is refused: %v", posture, err)
+		}
+	}
+	unset := serving()
+	unset.API.Auth.Admin = ""
+	err := unset.Validate()
+	if !errors.Is(err, ErrMissing) || !strings.Contains(err.Error(), "api.auth.admin") {
+		t.Errorf("an unset posture on a serving node: %v, want ErrMissing naming "+
+			"api.auth.admin", err)
+	}
+	for _, word := range []string{"serve", "refuse"} {
+		if err == nil || !strings.Contains(err.Error(), word) {
+			t.Errorf("the refusal does not say what %q does: %v", word, err)
+		}
+	}
+	unknown := serving()
+	unknown.API.Auth.Admin = "sometimes"
+	err = unknown.Validate()
+	if !errors.Is(err, ErrUnknownValue) || !strings.Contains(err.Error(), "refuse") {
+		t.Errorf("an unknown posture: %v, want ErrUnknownValue naming the set", err)
+	}
+}
+
+// A TOKEN LISTING ADMIN ON A REFUSING NODE IS REFUSED.
+//
+// The node would clamp it to its apps on every request, so the file says one
+// thing and the node does another — and the break-glass token an operator
+// reaches for on the day nobody can sign in would turn out to run nothing.
+// The controls: the same token on a node serving admin, and an apps-only
+// token on the refusing node, both validate. Mutation: drop the conflict and
+// the first case validates.
+func TestATokenListingAdminOnARefusingNodeIsRefused(t *testing.T) {
+	t.Parallel()
+	b := serving()
+	b.API.Auth.Admin = iam.AdminRefuse
+	b.API.Auth.Tokens[0].Grants = []iam.Grant{iam.GrantTracker, iam.GrantAdmin}
+	err := b.Validate()
+	if !errors.Is(err, ErrConflict) ||
+		!strings.Contains(err.Error(), "api.auth.tokens[0].grants[1]") ||
+		!strings.Contains(err.Error(), "refuse") {
+		t.Errorf("admin on a refusing node: %v, want a conflict at the entry "+
+			"naming the posture", err)
+	}
+	b.API.Auth.Tokens[0].Grants = iam.Apps
+	if err := b.Validate(); err != nil {
+		t.Errorf("an apps-only token on a refusing node is refused: %v", err)
+	}
+	served := serving()
+	if err := served.Validate(); err != nil {
+		t.Errorf("an admin token on a serving node is refused: %v", err)
+	}
+}
+
+// AN UNKNOWN PERMISSION IN TIER A IS REFUSED, NAMING THE SET.
+//
+// Unlike a replicated row, where a newer peer's name is kept and ignored, a
+// Tier A file is something an operator typed — so a name this build does not
+// know is a typo that would leave the token holding less than its author
+// meant, and every `domain:verb` spelling of the old vocabulary is one. Refused at its own entry,
+// naming every permission there is. Mutation: skip the unknown-name check and
+// every case validates.
+func TestAnUnknownGrantIsRefusedNamingTheSet(t *testing.T) {
+	t.Parallel()
+	for _, name := range []iam.Grant{"work:read", "Admin", "swarm"} {
 		b := serving()
-		b.API.Auth.MaxGrants = []iam.Grant{iam.GrantStateRead}
-		b.API.Auth.Tokens[0].Grants = []iam.Grant{iam.GrantSecretWrite}
-		refuses(t, b, "outside `api.auth.max_grants`")
-	})
+		b.API.Auth.Tokens[0].Grants = []iam.Grant{iam.GrantAdmin, name}
+		err := b.Validate()
+		if !errors.Is(err, ErrUnknownValue) ||
+			!strings.Contains(err.Error(), "api.auth.tokens[0].grants[1]") {
+			t.Errorf("%q: %v, want an unknown value at the entry", name, err)
+			continue
+		}
+		for _, g := range iam.AllGrants {
+			if !strings.Contains(err.Error(), string(g)) {
+				t.Errorf("%q: the refusal does not name %q: %v", name, g, err)
+			}
+		}
+	}
 }
 
 // --- the retired keys ---------------------------------------------------- //

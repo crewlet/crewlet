@@ -80,7 +80,7 @@ beforeEach(() => {
         return new Response(
           JSON.stringify(
             sessionStatus === 200
-              ? { person: "p-1", login: "jane.doe", grants: ["state:read"], status: "signed_in" }
+              ? { person: "p-1", login: "jane.doe", grants: [], status: "signed_in" }
               : { error: "invalid_token" },
           ),
           { status: sessionStatus, headers: { "Content-Type": "application/json" } },
@@ -130,10 +130,10 @@ describe("the engine's close codes", () => {
   test("4403 stops the socket and says why", async () => {
     const { store } = started();
     dial(0).open();
-    dial(0).closeWith(4403, "grant withdrawn: state:read");
+    dial(0).closeWith(4403, "your seat is no longer in the chart");
     await vi.advanceTimersByTimeAsync(120_000);
 
-    expect(store.state.accessRefused).toBe("grant withdrawn: state:read");
+    expect(store.state.accessRefused).toBe("your seat is no longer in the chart");
     // No re-dial and no REST fallback: both would be refused by the same
     // decision for as long as the tab stayed open.
     expect(ScriptedWebSocket.dials).toHaveLength(1);
@@ -232,12 +232,12 @@ describe("the engine's close codes", () => {
   test("releasing a socket a refusal stopped keeps the refusal", async () => {
     const { socket, store } = started();
     dial(0).open();
-    dial(0).closeWith(4403, "grant withdrawn: state:read");
+    dial(0).closeWith(4403, "your seat is no longer in the chart");
     socket.hold();
     socket.release();
     await vi.advanceTimersByTimeAsync(120_000);
 
-    expect(store.state.accessRefused).toBe("grant withdrawn: state:read");
+    expect(store.state.accessRefused).toBe("your seat is no longer in the chart");
     expect(ScriptedWebSocket.dials).toHaveLength(1);
   });
 
@@ -286,11 +286,11 @@ describe("the engine's close codes", () => {
 
   test("a 403 handshake stops the socket once the probe says why, and a retry dials again", async () => {
     probeStatus = 403;
-    probeBody = { error: "unauthorized", detail: "the live socket needs state:read" };
+    probeBody = { error: "unauthorized", detail: "your seat is no longer in the chart" };
     const { socket, store } = started();
     dial(0).closeWith(1006);
     await vi.advanceTimersByTimeAsync(0);
-    expect(store.state.accessRefused).toBe("the live socket needs state:read");
+    expect(store.state.accessRefused).toBe("your seat is no longer in the chart");
     // THE CONTROL for the enrolment case: a refusal on authority is the
     // administrator's to repair, and sends nobody to sign in.
     expect(currentSessionNeed()).toBeNull();

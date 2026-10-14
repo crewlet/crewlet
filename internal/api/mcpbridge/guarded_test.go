@@ -66,7 +66,7 @@ func TestABridgedCallActsAsTheRunsSeatBehindTheGuard(t *testing.T) {
 			t.Parallel()
 			b := config.DefaultBootstrap()
 			b.API.Host = "127.0.0.1"
-			b.API.Auth.MaxGrants = iam.AllGrants
+			b.API.Auth.Admin = iam.AdminServe
 			guard := auth.New(&b)
 			if tc.dev != "" {
 				dev, err := auth.NewDevPrincipal(tc.dev, &b)

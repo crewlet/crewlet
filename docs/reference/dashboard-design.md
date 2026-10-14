@@ -743,57 +743,63 @@ press, who the task is filed as ("Filed as Jane Founder") — and the head is th
 title alone, as the kit's sheet head (the page bar's height) is sized for.
 
 **Settings is never hidden, and a lock goes where the closed thing is.** A
-section that vanishes without a credential is indistinguishable from one that
+section that vanishes without access is indistinguishable from one that
 does not exist, so an operator on a fresh browser would conclude the product
 has nowhere to configure anything. ONE RULE decides every lock, `sectionOpen`
-in `nav.ts`: the reader's own sections — their Account and Settings ›
-Appearance — need nothing, and every other needs the `state:read` every
-company screen reads under and any one of its own grants. A sidebar row is
-locked only when NOTHING in its workspace is open, its title naming what would
-open it — what a reader would ask somebody for; a workspace only part of which
-is closed draws its locks where the closed part is, which for Settings is its
-column. So the Settings row is never locked: it carried a key whenever any
-section was closed, and a person holding nothing but their own Account read
-Settings as closed to them while its first group, You, needed nothing. A lock
-is drawn only once somebody has said what the reader holds — the viewer, or the
-session's own answer while the viewer has not — since a lock while the first
-read is out claims a refusal nobody has made. That is ONE READING,
-`useHeldReading` in `lib/viewer.ts` — who the reader is and what they hold,
-from one source — which the sidebar's rows, Settings' column and the frame's
-refusal of a section all take: the column read the viewer
-alone, which never answers a session without `state:read` (it is asked over
-the socket such a session never dials), so for that person every company
-section was drawn open beside a sidebar that locked them. And a session the
-frame knows has no access is read off the session even where an earlier
-socket's viewer answered, since the refusal that closed that socket is the
-very grant the viewer still lists. The command palette says the same
-of a guarded destination in the same words — "needs `config:read`" beside its
-hint. And for a reader with **no access yet** — a session without
-`state:read`, which every company screen reads the company through — every row
-but Settings carries the lock ("Needs `state:read`"): offered unmarked, each
-led to the same panel with nothing beside it saying so, and that panel is drawn
-in place of every screen but the reader's own. In that frame, and in one the
-socket was refused, nothing of the company is offered at all: the sidebar's
-Pinned section is not drawn, and the palette asks none of its questions and
-lists no seat or tool. A refusal DROPS what an earlier socket sent (`Store.setAccessRefused`),
-so a tab whose grant was withdrawn shows exactly what a session that never
-held it does, where it went on naming the company and listing its agents from
-the snapshot it held — an outage keeps the last state, and a refusal is not an
+in `nav.ts`, over three kinds of section (ADR-0033). The reader's own — their
+Account and Settings › Appearance — needs nothing. The OVERVIEW needs nothing
+beyond being signed in: Home, Agents (the org chart, the roster, Teams,
+Schedules and every seat page's status), Live › Now running and Coding runs,
+Spend's overview and Budgets, and Settings › General — what every seat is
+doing, what it has spent and who answers to whom, which everybody who works
+here reads. An APP's sections need that app: Inbox, My work, Work and Spend ›
+Expensive tasks are the tracker's, Knowledge is the knowledge base's. And the
+company-wide TRANSCRIPTS — Live › Turns, Agent-to-agent and the Event log,
+Knowledge › Agent diaries, and a seat's Turns and Memory tabs to anybody but its
+lead — and every other Settings page are admin's. Every comparison goes through
+`lib/access.ts`'s `holdsAny`, which counts every app an admin carries, so an
+administrator is never drawn a lock on an app. A sidebar row is
+locked only when NOTHING in its workspace is open, its title naming the access
+that would open it — what a reader would ask an admin for; a workspace only
+part of which is closed draws its locks where the closed part is, which for
+Settings is its column. So the Settings row is never locked: it carried a key
+whenever any section was closed, and a person holding nothing but their own
+Account read Settings as closed to them while its first group, You, needed
+nothing. A lock is drawn only once somebody has said what the reader holds —
+the viewer, or the session's own answer while the viewer has not — since a
+lock while the first read is out claims a refusal nobody has made. That is ONE
+READING, `useHeldReading` in `lib/viewer.ts` — who the reader is and what they
+hold, from one source — which the sidebar's rows, Settings' column and the
+frame's refusal of a section all take, so the column and the sidebar can never
+lock one reader differently. The command palette says the same of a guarded
+destination in the same words — "Needs Admin access" beside its hint. There is
+NO "no access yet" state: a person somebody gave no app still reads the
+overview, so the socket is dialled for every signed-in principal and the
+frame never replaces the company with a panel saying they hold nothing — they
+hold the overview, and a lock beside each app says what would open it. Only a
+socket the engine REFUSED — a person whose seat was taken out of the chart —
+offers nothing of the company: the sidebar's Pinned section is not drawn, and
+the palette asks none of its questions and lists no seat or tool. A refusal
+DROPS what an earlier socket sent (`Store.setAccessRefused`), so a tab whose
+seat was withdrawn shows exactly what a session that never held one does,
+where it went on naming the company and listing its agents from the snapshot
+it held — an outage keeps the last state, and a refusal is not an
 outage.
 
 **A guarded section says so and nothing else.** Opened by a reader the engine
-has SAID holds none of the grants it needs, a guarded section is replaced by
-one refusal (`app/frame/GrantRequired.tsx`) — "Nodes needs `fleet:operate`",
-who the reader is signed in as and that somebody holding `people:manage` can
-grant it, and **Sign in as somebody else** — drawn by the frame, before the
-screen mounts. The grant is said once, in the title: the button repeated it
-("Sign in as somebody holding `people:manage` or `audit:read`"), and a button
+has SAID holds none of the access it needs, a guarded section is replaced by
+one refusal (`app/frame/GrantRequired.tsx`) — "Nodes needs Admin access",
+who the reader is signed in as and that an admin can give it to them, and
+**Sign in as somebody else** — drawn by the frame, before the
+screen mounts. The access is said once, in the title: the button repeated it
+("Sign in as somebody holding …"), and a button
 does not wrap, so on a phone it ran past both edges of the screen. The reader
 is named from the reading the refusal was decided on (`useHeldReading`), never
 from the viewer beside it, which has not answered in the moment between the
 session's answer and the socket's — named off it, the refusal told a person
-signed in that nobody was. It names a GRANT rather than a credential,
-because a signed-in person lacks a grant, and "needs an operator credential"
+signed in that nobody was. It names ACCESS by the word People & access gives
+it (Admin, Tracker, Knowledge) rather than a credential,
+because a signed-in person lacks access, and "needs an operator credential"
 sent them looking for a credential they have no use for. A screen that mounted anyway was
 refused and drew the refusal as data: "0 nodes" in its header, four tiles of 0
 and "No nodes are reporting", under a banner calling the refusal the last
@@ -804,17 +810,19 @@ of Secrets used to send its guarded reads, be refused, and draw the refusal a
 frame before the frame knew to. That answer is the frame's one reading
 (`useHeldReading`) decided by the one rule (`sectionOpen`), so the session's
 answer decides where the viewer has not: decided on the viewer alone, a
-session whose socket never answers it was held at "Checking your access to
-Nodes" for good, while the session it had already read said it holds no
-`fleet:operate`. A read that FAILED is no answer and does not hold the
+section was held at "Checking your access to Nodes" until the socket's viewer
+answered, while the session it had already read said the reader does not hold
+admin. One address an app's lock does not close is a WORK ITEM SOMEBODY WAS
+ASKED ABOUT (`App.tsx`): the engine answers the person an open ask names
+without the tracker, so the item's own read decides it. A read that FAILED is no answer and does not hold the
 section — treating it as "holds nothing" would lock a reader out until the
 next poll — so the screen mounts, and the guarded screens draw no figure from
 a read that never succeeded. Edit org is
 the one guarded section that answers its own refusal, because its draft is
-kept in the tab's storage: replacing the builder the moment a grant was
-withdrawn would take the draft off screen while the person who wrote it is
+kept in the tab's storage: replacing the builder the moment the reader's
+access was withdrawn would take the draft off screen while the person who wrote it is
 still there to copy it out, and the builder says for itself which of its
-saves the reader's grants reach.
+saves the reader's access reaches.
 
 **A figure beside a row says what it counts.** The kit's `NavItem` takes a
 figure only with the words that name it, and two kinds of figure are two
@@ -838,11 +846,9 @@ dot, the state in words, and, while alarms stand, how many, beside a warning
 triangle ("Engine serving ⚠ 5"). Its words are a few in every state, so it
 keeps one 30px height and the foot never moves when the engine's state does.
 It says the one state that decides what a reader should do, in precedence
-order. Three are about THIS BROWSER rather than the engine: nobody is signed
+order. Two are about THIS BROWSER rather than the engine: nobody is signed
 in ("Not signed in": the row is then the button that goes to the sign-in, and
-opens nothing), **no access yet** (a session without `state:read`, said in
-neutral ink because a person invited with no grants is not a fault, and for
-which the socket is never dialled; see [Signing in](#signing-in-is-a-screen-outside-the-frame)),
+opens nothing; see [Signing in](#signing-in-is-a-screen-outside-the-frame)),
 and the engine knows who this is and will not serve them ("Access refused", a
 seat taken out of the chart). Then the engine is unreachable, the tab is still
 connecting (a neutral dot: nothing has reported yet, which is neither healthy
@@ -858,17 +864,16 @@ its alarms say. "Engine healthy" is said only when the alarm table was
 evaluated and nothing in it fires, and "Engine serving" otherwise, because
 "healthy" beside a count of alarms is a claim the count refutes.
 
-**No access yet and a refusal are statements**, repaired by an administrator
-rather than by a press, so their row wears nothing a control wears: it is the
+**A refusal is a statement**, repaired by an administrator
+rather than by a press, so its row wears nothing a control wears: it is the
 kit's static rail row, with no trailing mark, no pointer, no hover and no
 place in the tab order, where the sign-in row (which carries a key mark) and
 every other state's row (which opens the panel) are buttons. A statement
 wearing a control's marks reads as a control that does nothing. Every screen but the reader's own (their Account and Settings ›
 Appearance) is then replaced by one panel that names who they are from
-`GET /auth/session`, what they hold and why (for no access, that `state:read`
-would open the dashboard, which it then does by itself; for a refusal, the
-engine's reason), and offers the Account, a check or a retry, and the
-sign-out.
+`GET /auth/session`, what they hold and the engine's reason, and offers the
+Account, a retry, and the sign-out. A person somebody gave no app is NOT in
+this state: they read the overview, and the frame draws it.
 
 Pressing the row in any other state opens the panel above it (the kit's
 `Popover`, named "Engine"): the state again with this node's name, then the
@@ -885,7 +890,7 @@ log lines come from; their NAMES are the operator's retention report, the
 document Backups & retention lists them from, asked for when the panel opens
 and again when the count moves, because the push is public and names only the
 one that has stood longest. The report is asked only of a reader holding the
-grant that section opens on (`fleet:operate`); anybody else, or a report not
+access that section opens on (Admin); anybody else, or a report not
 answered yet, is told the longest-standing alarm and how many more stand. A
 name is the alarm's kind read as words, its initialisms kept whole ("Backup
 age", "Trim blocked"), and names one alarm: the engine raises each kind once,
@@ -907,8 +912,8 @@ seat), or nobody (a **Sign in** button). **The reader is called by their own
 name, never their seat's** (`readerName` in `lib/viewer.ts`): their directory
 row's name, as `GET /auth/session` answers it, else their login — and the seat
 is said beside it as the seat, its name off the chart or `@handle` where the
-chart is unread (a session without `state:read`, whose viewer never answers,
-draws the seat the session names). The seat's name is the chart's name for a
+chart is unread (before the socket's first snapshot, or on a socket the
+engine refused, it draws the seat the session names). The seat's name is the chart's name for a
 place and often a role: a person with no name of their own was "Founder" in
 the block and greeted "Good afternoon, Founder" on Home, while their Account
 said they had no name. Home's greeting takes their own name alone, and a person
@@ -922,9 +927,10 @@ seat is one click on, from Account's Profile. **The link says where it goes**:
 its accessible name ends ", your account", its title is the Account row's own
 hint (the one description the palette, the popover and Settings show), and at
 rest it wears the rail's pressable mark, a chevron in quiet ink — it was
-titled with the reader's grants and drew no mark until hovered, so nothing on
-the page said it was the way to a password. The grants are said in the
-popover, under the login. **And it is the Account's row**: the Account has no
+titled with the reader's access and drew no mark until hovered, so nothing on
+the page said it was the way to a password. The reader's access is said in the
+popover, under the login, as the one line People & access uses for it
+("Admin", "Tracker · Knowledge", "Overview only"). **And it is the Account's row**: the Account has no
 sidebar row, so on `#/account` the block is marked current exactly as a row is
 on its own page — raised, with the hairline, no hue. **A session read that
 failed is not nobody**: where `GET /auth/session` failed (a 503, the network)
@@ -956,9 +962,8 @@ zone. There is no company switcher: one engine runs one company.
 
 **The lockup is the company**, beside the product's mark: "Nimbus", on one
 line, and the way home. The product's name stands in only while no company has
-been sent — which includes a session without `state:read`, since the name is
-part of the projection that grant reads, whether it never held the grant or
-had it withdrawn. The kit's own default puts the product first and the company under
+been sent — which includes a socket the engine refused, since a refusal
+drops what an earlier socket sent. The kit's own default puts the product first and the company under
 it; on this screen the company is the subject, and the product is in the mark
 and the tab.
 
@@ -995,7 +1000,7 @@ active ones with a 52 px key column, the name and the open count, the current
 scope outlined; and the footer's **Browse all projects** and **New project…**,
 which is held with its reason for a reader who cannot set a project on the org
 chart: a project is a key another system finds a unit or seat by, so setting
-one takes `config:write`, a unit's lead included.
+one takes Admin, a unit's lead included.
 Archived projects are never offered: they are listed under Projects, and the
 panel says so where a reader looks. It opens under its button on Work's scope
 pages, centred over the page for `g p` anywhere else (nothing behind it moves
@@ -1030,10 +1035,10 @@ or handle; never a person's seat, which the engine refuses a project) and a key 
 no project or node already has it), then continues in Edit org with that
 node's editor open on its **Work** tab at the tracker project field, holding
 the key, not yet applied. The org is what makes a project: the engine creates
-it when the change is saved. Setting a node's project is a `config:write`
+it when the change is saved. Setting a node's project is an admin's
 write even inside a unit somebody leads, because a project is a key another
 system finds the node by, so the button is drawn for every reader and held
-with that reason for one without the grant.
+with that reason for one without Admin.
 
 ### The routes
 
@@ -1044,50 +1049,50 @@ a screen, and every workspace and section the code declares is below.
 | Route | Page | Params |
 |---|---|---|
 | `#/` · `#/home` | **Home** — the landing screen: the company's day, the engine's one sentence, the pulse figures and what needs a decision | |
-| `#/inbox` | **Inbox**: what waits on your decision, and what reached you | `row=` (which item the pane is on) |
-| `#/me` | **My work › Queue** — what one person holds, by due date or in the order somebody put it, reordered by dragging a row | `order=due\|priorities` · `handle=` (whoever leads somebody, or a `fleet:operate` holder, reading their day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
+| `#/inbox` | **Inbox**: what waits on your decision, and what reached you *(needs Tracker access)* | `row=` (which item the pane is on) |
+| `#/me` | **My work › Queue** — what one person holds, by due date or in the order somebody put it, reordered by dragging a row *(the whole of My work needs Tracker access)* | `order=due\|priorities` · `handle=` (whoever leads somebody, or an admin, reading their day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
 | `#/me/asked-of-me` · `#/me/unblocked` · `#/me/collaborating` · `#/me/watching` · `#/me/checklist` | **My work** — Asked of me (answered in place) · Unblocked · Collaborating · Watching · Checklist, each with the engine's own total on its tab | `handle=` |
 | `#/me/asked-by-me` | **My work › Asked by me** — the work this person asked a question on that is still waiting for its answer: the work list, held to the asker | `handle=` · `shape=` and the filter grammar, with the asker LOCKED |
-| `#/work` | **Work › Projects**: Work's landing, All projects' first lens: every project, its lead, its target date and its four counts. The segment and the sort are the ENGINE's question (`shown=` becomes `archived=`, `sort=` travels as written), because the answer stops at the engine's own 200. **Unit** is the one optional column, reached through the **Columns** menu | `shown=active\|archived\|all` · `sort=key\|name\|unit\|todo\|active\|done\|closed\|last_change\|target`, `-` for descending · `cols=` |
+| `#/work` | **Work › Projects**: Work's landing, All projects' first lens: every project, its lead, its target date and its four counts *(the whole of Work needs Tracker access, but for a task somebody was asked about, which the person asked opens without it)*. The segment and the sort are the ENGINE's question (`shown=` becomes `archived=`, `sort=` travels as written), because the answer stops at the engine's own 200. **Unit** is the one optional column, reached through the **Columns** menu | `shown=active\|archived\|all` · `sort=key\|name\|unit\|todo\|active\|done\|closed\|last_change\|target`, `-` for descending · `cols=` |
 | `#/work/tasks` | **Work › Tasks**: All projects' Tasks lens: every task in the company, in one list | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` + the filter grammar |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
 | `#/work/history` | **History**: All projects' History lens: the tracker's own log, on the log frame. One project's changes are that project's History lens | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
 | `#/work/{KEY}` | **Project**: one project as Work's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
-| `#/agents` | **Agents › Org chart** — the hierarchy every seat works inside; for a reader the identity directory answers, what holds each human seat, and — for a `people:manage` holder — where a person is invited or created onto the vacant human seat they will hold | `unit=` · `seat=` |
+| `#/agents` | **Agents › Org chart** — the hierarchy every seat works inside; every human seat with its kind; what holds each one for an admin and for the holder themselves; and — for an admin — where a person is invited or created onto the vacant human seat they will hold | `unit=` · `seat=` |
 | `#/agents/roster` | **Roster** — every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/agents/teams` · `#/agents/teams/{unit}` | **Teams** — every unit with what it is for and its goals; one unit's page | |
 | `#/agents/schedules` · `#/agents/schedules/{scope_type}/{scope_id}/{name}` | **Schedules** — recurring work; one schedule | |
-| `#/agents/edit` | **Edit org**: the builder, opened from the chart's button *(saves with `config:write`, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
-| `#/agents/seats/{handle}` | **Seat** — an agent's or a person's profile; a person's says what holds the seat — its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Create person** — the gestures drawn for a `people:manage` holder. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
+| `#/agents/edit` | **Edit org**: the builder, opened from the chart's button *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
+| `#/agents/seats/{handle}` | **Seat** — an agent's or a person's profile; a person's says what holds the seat — its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Create person** — the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
-| `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs `audit:read`)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
+| `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
 | `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
-| `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** — a channel's own page draws the channel and what crossed it *(needs `audit:read`)* | |
+| `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** — a channel's own page draws the channel and what crossed it *(needs Admin access)* | |
 | `#/live/traces/{id}` | **Trace** — one distributed trace. NO LIST: nothing enumerates traces, so a bare traces address is Not Found, saying a trace is opened from a turn, a run or an event | |
-| `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows *(needs `audit:read`)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `seat=` · `trace=` · `channel=` · `q=` · `failed=true` |
-| `#/knowledge` | **Knowledge**: with no phrase, the landing (the newest change open to read, Recently written, Continue reading, Pinned, Watching, For the agents); with one, the ranked answer grouped by space beside a preview. The spaces row and the search sit on every Knowledge screen | `q=` · `mode=hybrid\|keyword\|semantic` (Hybrid, Keyword, Meaning) · `by=space\|rank` · `space=` (narrows what is shown of the answer) |
+| `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `seat=` · `trace=` · `channel=` · `q=` · `failed=true` |
+| `#/knowledge` | **Knowledge**: with no phrase, the landing (the newest change open to read, Recently written, Continue reading, Pinned, Watching, For the agents); with one, the ranked answer grouped by space beside a preview. The spaces row and the search sit on every Knowledge screen *(the whole of Knowledge needs Knowledge access)* | `q=` · `mode=hybrid\|keyword\|semantic` (Hybrid, Keyword, Meaning) · `by=space\|rank` · `space=` (narrows what is shown of the answer) |
 | `#/knowledge/{CONTAINER}` | **Space** (a knowledge container, by its key): its head, and its pages as an outline read one level at a time, with Create (a document or a folder) at the end of every open level | |
 | `#/knowledge/new` | **New page**: the composer, filed where it was opened from | `space=` · `parent=` (a page id) |
 | `#/knowledge/pages/{id}` | **Page**: addressed by its id, which a rename does not change. The document with its outline, its properties, its comments and what it is connected to; edited as you | `edit=1` · `version=` (History: one revision in the document's place) · `lens=diff\|full` |
 | `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
-| `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes *(needs `audit:read`)*. Handles live here as they do under `seats/` | |
+| `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes *(needs Admin access)*. Handles live here as they do under `seats/` | |
 | `#/spend` | **Spend › Overview**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across the sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
-| `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
-| `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by a `config:write` holder whose credential the document admits), and what is refusing. ONE address: Settings lists it as a cross-link | `window=` is not read here, and is carried through to the other sections |
+| `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs *(needs Tracker access)* | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
+| `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. ONE address: Settings lists it as a cross-link | `window=` is not read here, and is carried through to the other sections |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
-| `#/settings/people` | **People & access** — the identity directory: every person with their stage, login, grants and the seat they are bound to, their credentials and sessions, the invitations nobody has redeemed (`/iam/invitations`), the directory's own report (`/iam/check`), every human seat with whatever holds it — a person, a service account or an open invitation (`/iam/seats`) — and this node's API token labels joined to the rows that bind them (`/iam/node-tokens`) *(needs `people:manage` or `audit:read`)*. A `people:manage` holder also creates service accounts (on a human seat or none) and mints their tokens, cancels invitations, and changes, suspends, resets, signs out and removes people. It invites and creates nobody: a person comes from the vacant human seat they will hold, on the org chart, and the screen links there. An invitation's link, a reset link and a token are shown once and never read back. No tail: a row opens in the peek (`peek=person:{id}`, by the directory's id), which is the only page a directory row has | `peek=person:{id}` (the opened person, closed when a removal made from it lands; an id the directory does not hold — removed elsewhere, or mistyped — is said in the peek) |
-| `#/settings/integrations` · `#/settings/integrations/{kind}` | **Integrations** *(needs `config:read`)* | |
-| `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools & MCP** — every MCP server with what each node did with it, and every tool a seat can call, by origin. Not guarded: the registry is a push every reader gets. Two things on it take `config:read`, and each says so in its own place: the servers' status (`mcp_servers_status`), and which seats hold a server's tools, which is the pushed org's `tool_sources` and reaches only a reader holding that grant. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
-| `#/settings/models` · `#/settings/models/{id}` | **Models & keys** — every `providers.llm` entry, the keys it rotates through by variable name, which a vendor is refusing and when each comes back (`credential_pool`), and the seats whose chain names it; one model's keys whole and its seats, and its **Edit** *(needs `config:read`; the edit `config:write`)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
-| `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(needs `config:read`)* | |
-| `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes** — leases (each seat's holder and **since** when), duties, config rollout, the fleet broker's members as the nodes advertise them and as its metadata group counts them, and where the company's files are kept (the object store's backend and its collector's last passes) *(needs `fleet:operate`)* | |
-| `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(needs `config:read`)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
-| `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(needs `fleet:operate`)*. Domains live only under `backups/` | `at=alarms` (brings the alarm list into view) |
-| `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs `audit:read`)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
+| `#/settings/people` | **People & access** — the identity directory: every person with their stage, login, access and the seat they are bound to, their credentials and sessions, the invitations nobody has redeemed (`/iam/invitations`), the directory's own report (`/iam/check`), every human seat with whatever holds it — a person, a service account or an open invitation (`/iam/seats`) — and this node's API token labels joined to the rows that bind them (`/iam/node-tokens`) *(needs Admin access)*. An admin also creates service accounts (on a human seat or none) and mints their tokens, cancels invitations, and changes, suspends, resets, signs out and removes people. It invites and creates nobody: a person comes from the vacant human seat they will hold, on the org chart, and the screen links there. An invitation's link, a reset link and a token are shown once and never read back. No tail: a row opens in the peek (`peek=person:{id}`, by the directory's id), which is the only page a directory row has | `peek=person:{id}` (the opened person, closed when a removal made from it lands; an id the directory does not hold — removed elsewhere, or mistyped — is said in the peek) |
+| `#/settings/integrations` · `#/settings/integrations/{kind}` | **Integrations** *(needs Admin access)* | |
+| `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools & MCP** — every MCP server with what each node did with it, and every tool a seat can call, by origin *(needs Admin access, like every company setting: it is where MCP servers are added and their templates read; which tools a seat has is on that seat's page, from the overview's `tools` push)*. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
+| `#/settings/models` · `#/settings/models/{id}` | **Models & keys** — every `providers.llm` entry, the keys it rotates through by variable name, which a vendor is refusing and when each comes back (`credential_pool`), and the seats whose chain names it; one model's keys whole and its seats, and its **Edit** *(needs Admin access)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
+| `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(needs Admin access)* | |
+| `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes** — leases (each seat's holder and **since** when), duties, config rollout, the fleet broker's members as the nodes advertise them and as its metadata group counts them, and where the company's files are kept (the object store's backend and its collector's last passes) *(needs Admin access)* | |
+| `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(needs Admin access)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
+| `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(needs Admin access)*. Domains live only under `backups/` | `at=alarms` (brings the alarm list into view) |
+| `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs Admin access)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
 | `#/settings/appearance` | **Appearance**: the mode, the density and the theme gallery for this browser, with a pane previewing the theme the pointer rests on. Not guarded: it is the reader's own and asks the engine nothing. No tail | |
-| `#/account` | **Account** — the signed-in reader's own page, opened from the reader's own name in the user block at the sidebar's foot, from its menu, from Settings' **You** group (it has no sidebar row) or `g u`: the profile the directory holds (an administrator changes it), the password (changed with the current one, which ends every other session and personal token and keeps this browser), the second factor and recovery codes, where they are signed in (this browser marked, any other signed out by name, or everywhere), and their personal access tokens (minted — the value shown once — and revoked). A credential that is not a person's, a Tier A token's session, is told what it is and offered none of it | |
+| `#/account` | **Account** — the signed-in reader's own page, opened from the reader's own name in the user block at the sidebar's foot, from its menu, from Settings' **You** group (it has no sidebar row) or `g u`: the profile the directory holds and the reader's access, "Your access" (an administrator changes both), the password (changed with the current one, which ends every other session and personal token and keeps this browser), the second factor and recovery codes, where they are signed in (this browser marked, any other signed out by name, or everywhere), and their personal access tokens (minted — the value shown once — and revoked). A credential that is not a person's, a Tier A token's session, is told what it is and offered none of it | |
 | `#/login` | **Sign in** *(outside the frame)* — a login or address and a password, the second factor when the engine asks for it, or an API token exchanged for a one-hour session | `next=` — where to go once signed in: a hash route of this dashboard, and anything else lands on Home; `login=` fills the login, and `after=reset` says the password was just set — what a reset link's own **Sign in** sends. Neither is a credential |
 | `#/invite/{id}.{secret}` | **Invitation** *(outside the frame)* — who it is for, who sent it (a person, never a machine: an invitation a Tier A token or a service account issued names no sender) and the seat it binds — or, where the chart no longer holds that seat, that redeeming it will be refused — then a login, a name and a password, typed twice. The link the engine mints lands here | |
 | `#/reset/{id}.{secret}` | **Password link** *(outside the frame)* — whose password the link sets, then the password, typed twice, once: a RESET, which ends every session the person held, or the FIRST password of a person an administrator created on a seat, which ends nothing. Neither signs anybody in, so it ends on the sign-in form. The reset link an administrator issues, and the first password link a person's create hands back, land here | |
@@ -1301,16 +1306,16 @@ beside a peek at 1280 the recent runs drew it 35px wide ("b.") as the one
 flexible column among five sized to their content, so a run gives up its Scope
 first (a role schedule's scope is the seat it woke), then the tick it was for,
 then whom it woke. People & access is a column of the sheet beside a person's
-peek, and every flexible column it keeps has a floor (Seat and Grants `8rem`):
-at zero the seat drew its avatar alone and the grants stacked a row ten lines
-tall while Kind and Login stayed, so it gives up Grants, then Kind, then Login,
-and keeps the name, the stage and the seat. A grant list in ANY grid cell (the
-People list, the invitations, a person's or the Account's tokens) draws three
-grants and counts the rest in one "+n" tag that names them on hover and to a
-screen reader (`GRANTS_IN_A_CELL`, `components/people.tsx`): drawn whole, an
-administrator's eleven stacked one per line in its `8rem` column and stood one
-row of the People list about 290px tall at 1280. A field that IS the answer, the
-peek's Grants or the Account's, draws every grant. The peek's own grids are a 385px
+peek, and every flexible column it keeps has a floor (Seat and Access `8rem`):
+at zero the seat drew its avatar alone and the access stacked a row tall
+while Kind and Login stayed, so it gives up Access, then Kind, then Login,
+and keeps the name, the stage and the seat. Access in ANY cell (the People
+list, the invitations, a person's or the Account's tokens) is the one line the
+dashboard says it in (`AccessTags` over `accessLine`, `lib/access.ts`): one
+**Admin** tag for anybody holding it, never Admin beside the apps it includes;
+otherwise a tag per app, or **Overview only** — at most two tags and any raw
+name this build does not know, so it no longer needs a "+n" tag: eleven grants
+drawn whole once stood one row of the People list about 290px tall at 1280. The peek's own grids are a 385px
 column: a credential's name and a session's state keep `8rem` floors, its
 state pill and a session's start take their own width (`max-content`, short
 by construction, where a fifth of the column cut "In use" to "In u…" and the
@@ -2128,20 +2133,23 @@ refusal probe and no degraded-mode snapshot on its way to the sign-in.
 **The frame asks who this is once, before anything else** — `GET
 /auth/session` (`lib/frameSession.ts`), which the sidebar's user block, the
 refusal panel, the Account, Home's greeting and People & access read too,
-where each used to ask for itself — and **dials only
-for a session holding `state:read`**, the grant the engine refuses the
-socket's handshake without. A `401` is nobody, and the sign-in follows with
-nothing dialled; a read that failed on anything else says nothing about the
-session, and the handshake decides. A session WITHOUT the grant is **no access
-yet**: nothing is dialled — a dial was a refused handshake, its probe and a
-refused snapshot, twice, for every person invited with no grants — and the
-session is asked again every thirty seconds and when the tab comes back,
-because nothing else can tell the tab an administrator has given the grant:
-the identity move that names the person is pushed over the socket it does not
-have. The answer that holds it dials, and the dashboard opens without a
-reload. A socket the engine refuses asks the session again too, so a grant
-withdrawn under an open socket is drawn as no access rather than as "you hold
-`state:read`" beside "the live socket needs `state:read`". The sign-in asks
+where each used to ask for itself — and **dials for
+every session it reads**. The socket admits every principal the engine
+resolves whose stage may act, and what a reader may SEE on it is decided per
+push by their access — the overview for everybody, a seat's transcript for its
+lead and an admin, the tracker's pushes for whoever holds Tracker (ADR-0033) —
+so a person somebody gave no app still reads the org chart, the agents'
+status and their own account, and nothing is held back for them. A `401` is
+nobody, and the sign-in follows with nothing dialled; a read that failed on
+anything else says nothing about the session, and the handshake decides.
+Access given or taken later reaches an open tab by the engine closing its
+socket to reconnect (1013), after which the viewer is asked again — the frame
+does not poll for it. There was a **no access yet** state while the overview
+needed a grant of its own: nothing was dialled for a session without it, and
+the session was asked again every thirty seconds in case an administrator had
+given it; it went with that grant. A socket the engine REFUSES outright — a
+person whose seat was taken out of the chart — is the handshake's refusal,
+drawn by `app/frame/AccessRefused.tsx`. The sign-in asks
 `GET /auth/session` once, to say whose session the browser already holds —
 and not at all when a `401` routed the reader there, which has already said
 it: a signed-out load of `/dashboard` asks once on its way to the sign-in, as
@@ -2165,7 +2173,7 @@ REST call, or from the socket's plain-HTTP re-ask, raises a session need
 with `#/login?next=<where they were>`. The need is STATE rather than an event,
 because the socket can learn it before React has mounted, and a sign-in clears
 it. A `403 second_factor_enrolment_required` does the same toward `#/enrol`. A
-`4403`, a `seat_unavailable` and a refusal that names a grant do NOT: the
+`4403`, a `seat_unavailable` and a refusal that names an access do NOT: the
 person is signed in, and signing in again reaches the same person with the
 same access. A tab that was read by somebody (`lib/reader.ts`) and lands here
 holding no session lost it without a sign-out in this tab — one made here
@@ -2311,7 +2319,7 @@ because a reload keeps it. A sign-out nothing answered, or a revocation the
 engine could not confirm (`503` with an `op_id`), is said, and the page stays.
 Both sign-outs are drawn from `GET /auth/session` rather than from the socket's
 `viewer` question, so a person the socket refuses — a seat taken out of the
-chart, a session without `state:read` — still has them: the user block offers
+chart — still has them: the user block offers
 the two under the session's own login, and the refusal's strip carries a
 **Sign out** of its own.
 
@@ -2402,7 +2410,7 @@ company did.** Top to bottom:
   stopped and idle, and a sub-line naming only the states somebody is in);
   *Waiting on your decision* (the engine's `decisions` count plus the seats
   stopped on their budget that THIS reader can act on — raise the ceiling, a
-  `/config` write a `config:write` holder may make and so may the lead of the
+  `/config` write an admin may make and so may the lead of the
   seat's unit — on a [managed](../concepts/configuration.md#managed-configuration)
   document, only where the reader's credential is one of its writers
   (`mayChangeConfig`) — or hand the item on with
@@ -2415,7 +2423,7 @@ company did.** Top to bottom:
   the window, with the **week's** budget meter captioned as the week's ("63% of
   this week's budget · resets Mon") in the engine's own state — or "No weekly
   budget", which links to Spend › Budgets for a reader who may change the
-  configuration (`mayChangeConfig`: the `config:write` grant, on a document
+  configuration (`mayChangeConfig`: Admin, on a document
   that admits the reader's credential) — who can set one there — and is plain
   text for anybody else. The Tokens tile draws no delta:
   its second line is the budget's, and a bare change in front of it read as a
@@ -2833,15 +2841,18 @@ node, and an agent's colour is its own look (see "The one rule"). The legend at
 the chart's foot counts Working, Needs you, Stopped and Idle from the engine's
 `activity`: a seat with no row yet is counted nowhere, and a person never.
 
-**A human seat's card says what holds it**, for a reader the identity
-directory answers — `people:manage` or `audit:read`, the two grants
-`GET /iam/seats` takes; nobody else is asked, and their card reads "Human ·
-availability" as before. Every person holds exactly one human seat for as long
-as they exist
-([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md)), and the
-company document cannot say who that is, so for such a reader a human card's
-third line is **Held by jane.doe**, **Invited · sam@example.com** (or
-*Invited*, where this node's keyring cannot open the address) or **Vacant** —
+**A human seat's card says what holds it**, for every signed-in reader:
+`GET /iam/seats` is everybody's (`iam.seats.read`), because who holds each
+seat is part of the overview, and the engine masks the listing per reader — a
+holder's name and kind to everybody, their person id, login and stage to an
+admin and to the holder themselves, and an open invitation to an admin alone
+(ADR-0033). Every person holds exactly one human seat for as long as they
+exist ([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md)), and the
+company document cannot say who that is, so a human card's third line is
+**Held by Jane Doe** (the login where no name is sent), **Invited ·
+sam@example.com** (or *Invited*, where this node's keyring cannot open the
+address — and to anybody but an admin an invited seat reads **Vacant**, since
+the invitation is not theirs to see) or **Vacant** —
 in the card's NEUTRAL ink, beside a neutral dot, because who holds a seat is
 not something the seat is doing and the card's one hue is state. The whole
 chart is ONE read of the seat listing, asked once the viewer has said who this
@@ -2849,17 +2860,17 @@ is, kept current on the directory's own terms (every minute and when the tab
 comes back) and read again the moment a directory write anywhere on the page
 lands, so a seat invited from the peek is never "Invited" beside a card still
 saying "Vacant". On a phone the rows carry the same line. A read that FAILED
-for such a reader is said above the canvas or the rows — **The identity
-directory did not answer**, that who holds each human seat (and, for
-`people:manage`, Invite and Create on a vacant one) waits until it does, and
+is said above the canvas or the rows — **The identity
+directory did not answer**, that who holds each human seat (and, for an
+admin, Invite and Create on a vacant one) waits until it does, and
 the refusal's own words beneath — wherever the chart holds a human seat,
-because the cards alone would read exactly as a reader holding neither grant
-sees them.
+because drawn as nothing, an administrator saw a chart whose human cards read
+"Human · availability" and carried no menu, with no word why.
 
 **A vacant human seat is where a person joins.** A person is never invited or
 created anywhere else: Settings › People & access lists, changes and removes
 people but adds none, because a person comes from the seat they will hold. So
-for a reader holding `people:manage` a human card carries a menu — the tree's
+for an admin a human card carries a menu — the tree's
 own pattern, as the builder's node actions are drawn: a strip of icon buttons
 for a pointer ("Invite a person to Jane Doe"), which the canvas draws over the
 end of the card once it is hovered, focused or selected, out of the tab order
@@ -2884,9 +2895,10 @@ invitation it was about, and its dialog with it, before a `202` could say it
 was recorded:
 
 - **Invite** — "Invite a person to Jane Doe", the seat stated as a fact rather
-  than offered as a choice: an **Email address** and the grants, each grant
-  the reader does not hold disabled with why, and, while `state:read` is not
-  ticked, a warning that the person will open nothing but their own Account.
+  than offered as a choice: an **Email address** and the **access picker**
+  — see [People & access](#settings-the-frame-people-secrets-nodes-and-configuration) — opened with every app
+  ticked and Admin not, and the note that warns what an unticked app costs
+  the person.
   It sends `POST /iam/invitations` with the seat, and the **Invitation link**
   comes back **once**, with its expiry and the sentence that it is the
   credential: it works once, this engine sends no mail, and opening it is
@@ -2896,7 +2908,7 @@ was recorded:
   **Name** and a **Login**, both optional — left empty, the engine proposes
   the login from the address, the same proposal an invitation's screen makes,
   and says which it took; one typed is held to the person grammar under the
-  field before anything is posted — and the grants, on the invitation's
+  field before anything is posted — and the access picker, on the invitation's
   terms. It sends `POST /iam/people` (`kind: person`, the seat) under a fresh
   operation key, and the person is created ACTIVE on the seat at once. The
   answer names the login the engine took and shows the **Password link**
@@ -2916,7 +2928,7 @@ Each is one `/iam` write through `lib/iamWrite.ts`, on the terms [People &
 access](#settings-the-frame-people-secrets-nodes-and-configuration) states for
 every directory write — a step-up asked and the request replayed, a `202`
 leaving the dialog only **Done**, a refusal in the engine's words with the
-grants that would admit.
+access that would admit.
 
 **A node opens beside the chart**: a seat its seat (`peek=seat:{handle}`) and
 a unit its unit (`peek=unit:{key}`). Enter does the same, the arrows walk the
@@ -2944,7 +2956,7 @@ carries — headed by the legend; a row's name or Enter opens the seat. The page
 bar carries **Find a seat** (name, handle or unit; the found seat is focused on
 the canvas and opened — its list grows past the field so a seat's name is never
 squeezed out by its handle and unit), **Edit org**, and **Add seat**, which goes
-to the builder for a `config:write` holder and is held with its reason for
+to the builder for an admin and is held with its reason for
 everybody else.
 On a phone Edit org folds into the bar's More menu, so Add seat stays in view.
 It is the same bar on every Agents section, Schedules included, where a found
@@ -2959,35 +2971,36 @@ tinted by the state — the line, how long the turn has run, "Turn 2 · round 7 
 25 · coding run in progress", where the turn number is the task's own count
 (`work_item_turns`, asked by the task's id — see [An item's
 address](#an-items-address)) — then Reports to, Model (the phase chain from
-the org projection, which carries it only to a reader holding `config:read` —
-every other reader is told that grant shows it, never that the seat has no
+the org projection, which carries it only to an admin —
+every other reader is told Admin access shows it, never that the seat has no
 provider — and the model serving the call in flight), one row per capped
 budget window labelled by its own period ("Budget today", "Budget this week")
 with a meter in the engine's state, or "No seat budget; the company's … applies"
 ("No seat budget; the company's 60M/day applies") where only the company's
 ceilings bind it ("No budget" where nothing does),
-Running on (the node that holds the lease and since when for a `fleet:operate`
-holder;
+Running on (the node that holds the lease and since when for an admin;
 every other reader reads what the health push says — this node by name,
 or "another node" — which is what the profile's Setup card says too, and no
 guarded read is sent), Open work (`work_workload`), where its tools come from
-(the projection's `tool_sources`, on the same `config:read` terms as the chain),
+(the projection's `tool_sources`, on the same terms as the chain),
 and its goal, drawn as the inline markdown it is written in. A human seat's
-peek, for a reader the directory answers, adds **Held by** — the holder's
-login with, short of active, their stage ("jane.doe (suspended)"; "The service
+peek adds **Held by** — the holder's name for everybody, and for an admin and
+the holder themselves their login with, short of active, their stage ("jane.doe (suspended)"; "The service
 account `ci:release`" for a machine), "An open invitation ·
 sam@example.com", or "Nobody — the seat is vacant", never the card's line,
 which repeats the term — or says the directory did not answer, does not list
 the seat yet, or is still being read, rather than leaving the fact out. It asks at most three questions,
-and for a human seat one REST read of the directory (`GET /iam/seats`), asked
-only of a reader holding `people:manage` or `audit:read` and never for an
-agent's seat, whose holder is the engine. While the
+and for a human seat one REST read of the directory (`GET /iam/seats`), which
+every signed-in reader is answered (masked per reader) and which is never
+asked for an agent's seat, whose holder is the engine. The open work and the
+turn number are the tracker's questions, asked only of a reader holding
+Tracker. While the
 seat is working the state card ends with **Watch live**, the turn's watch link,
 so the chart's node, then that link, is the way from the company running to
 a turn running: two presses, with no link nested inside the chart's tree item,
 which a keyboard and a screen reader could not reach as itself. **Open profile** and **Message** are the
-rail's foot, pinned to its bottom edge — beside them, for a `people:manage`
-holder, the seat's gestures as buttons (**Invite** and **Create person** on a
+rail's foot, pinned to its bottom edge — beside them, for an admin, the
+seat's gestures as buttons (**Invite** and **Create person** on a
 vacant seat, **Cancel invitation** on an invited one), which on a phone are
 the only place they are; Message opens the New task sheet with
 the seat as assignee and `ask` set — on the project filed under the seat's own
@@ -3040,16 +3053,17 @@ card and the Work tab read.
 identity directory binds a person to a human seat. So above the tabs a
 person's profile says it whole, through the same holding the chart's card and
 the peek draw (`SeatHolding` in `components/people.tsx`): **Held by**
-`jane.doe` — "Held by you, as `jane.doe`" on your own seat, "the service
-account `ci:release`" where a machine holds it — with the stage short of
-active; or the open invitation that names it — its address, until when, and
+the holder's name to everybody — and for an admin and the holder themselves
+their login, `jane.doe`, "Held by you, as `jane.doe`" on your own seat, "the
+service account `ci:release`" where a machine holds it, with the stage short of
+active; or, for an admin, the open invitation that names it — its address, until when, and
 that until it is redeemed, cancelled or lapses nobody else can be invited or
 bound to the seat — with **Cancel invitation**; or **Nobody holds this seat**,
 with **Invite** and **Create person**, the two ways a person comes to exist,
 opening [the chart's dialogs](#the-org-chart-is-the-company-running). The
-gestures are drawn for a reader holding `people:manage`. The answer is
-`GET /iam/seats`, which takes `people:manage` or `audit:read`, so it is asked
-only of a reader holding one; anybody else sees the profile as it was. A read
+gestures are drawn for an admin. The answer is
+`GET /iam/seats`, which every signed-in reader is answered, masked per reader
+— to anybody but an admin a seat an invitation holds reads as nobody's. A read
 that failed is SAID, with the engine's refusal, rather than drawn as nothing —
 the gestures live here, and a page without them would say nothing about why —
 and a seat the chart draws but the listing does not hold yet is one this node
@@ -3120,8 +3134,8 @@ delivery step, because whether a turn reached anybody is decided as it
 closes — the turn's number on its task and the task's title (read by the
 turn's own task, by its id — see [An item's address](#an-items-address) —
 never looked up in the card beside it), its
-elapsed time and, for a reader holding `audit:read` (a seat's `turns` are its
-trail), tokens so far, and the phase's calls, each with the engine's own start time and
+elapsed time and, for a reader the seat's trail is open to — an admin, or
+whoever leads the seat (`audit.seat.read`) — tokens so far, and the phase's calls, each with the engine's own start time and
 duration, the running one last. A call reads as words, never JSON: the tool's
 name whole in a column as wide as the longest name the phase called, then the
 argument that says what it is about bare (`ENG-38`, the query, the command)
@@ -3133,31 +3147,32 @@ three responsibilities to two each, as inline markdown, and "Show all" where
 that cut anything — a charter is the seat's prompt text and is never
 summarised), **Setup**
 (the model chain and tool grants from the org projection, which carries both
-only to a reader holding `config:read`, because both are derived from the
-seat's configuration; a reader without it is told which grant shows them rather
+only to an admin, because both are derived from the
+seat's configuration; anybody else is told Admin access shows them rather
 than that the seat has none; the sandbox, placement and workers from the
-company document, read with `config:read` — or, for the lead of the seat's
+company document, read by an admin — or, for the lead of the seat's
 unit, from the seat's own entity and its home unit's
 (`GET /config/roles/{handle}`, `GET /config/units/{key}`), which the engine
-admits a lead to — and said as unread with the grant that reads them for
+admits a lead to — and said as unread with the access that reads them for
 anybody else, who is never asked, or as absent when the active revision names
 no seat by this handle; the node
-holding the seat now — the fleet's lease, asked only of a `fleet:operate`
-holder, and for anybody else what the health push says, this node by name or
+holding the seat now — the fleet's lease, asked only of an admin, and for
+anybody else what the health push says, this node by name or
 "another node", which the seat's peek says too; and Edit), **Memory** (the
 holder's counted totals and its newest reflection, asked only of a reader
-holding `audit:read`, and for anybody else a sentence naming that grant rather
-than a refusal drawn in the side column) and **Schedules**. A person's
+the seat's trail is open to, and for anybody else a sentence naming Admin
+access and that whoever leads the seat reads it too, rather than a refusal
+drawn in the side column) and **Schedules**. A person's
 Overview is **Their day** — or
 **Your day**, with the way to your Inbox and My work, on your own — with the
 unread notices waiting on them (the inbox's own count, the sidebar badge's
 reading on your own day, "50+" past a page), their priorities — the engine's
 count of what on the list is still open, the figure My work and their Work tab
 read, never the stored list's length, which still names a task they finished
-until their next reorder — and who set them, and pinned views, for the person,
-whoever leads them and a `fleet:operate` holder, and withheld with that sentence
-for anybody else; their open
-work; and About. On your own seat the whole page speaks to you, not only its
+until their next reorder — and who set them, and pinned views, for the person
+and whoever leads them, holding Tracker, and an admin, and withheld with that
+sentence for anybody else; their open
+work, for a reader holding Tracker; and About. On your own seat the whole page speaks to you, not only its
 day — the holder line says "Held by you, as `jane.doe`", the work card "Nothing
 open is assigned to you", the Work tab "What you mean to do first" and "Waiting
 on your answer" — and **Message** is held, saying it is your own seat, because
@@ -3171,9 +3186,11 @@ linking to [Account](#account-the-readers-own-page); the card decides for
 itself whose seat it is on, so the seat's peek carries it too, and a
 colleague's seat draws no such card.
 
-**Turns** is the seat's own turns (`turns{seat}`, an `audit:read` question like
-every turn read — a reader without it is shown the engine's refusal naming
-it — answered from every node, over the thirty
+**Turns** is the seat's own turns (`turns{seat}`, the seat's TRAIL, which the
+engine answers to an admin and to whoever leads the seat, `audit.seat.read` —
+for anybody else the tab is drawn and locked, "This seat's turns needs Admin
+access", with the sentence that whoever leads the seat reads it too, and
+nothing is asked — answered from every node, over the thirty
 days the event store keeps, a page of fifty at a time with "Load older turns"
 following the engine's cursor, and a count of what is loaded — "50+" while an
 older page exists), with **Running now** leading the tab so a turn in flight is
@@ -3198,11 +3215,11 @@ zeros — `#/live/turns` does the same. On a phone a row's summary takes two
 lines with its item under it, and a settled turn has no State line at all. And
 **Where its tokens go**, its week by phase and by model — the buckets that spent
 some, since calls that failed before a model answered recorded none and were a
-bar of nothing named "unknown" — with the way to all of its activity on Live. **Memory** is the seat's TRAIL, which the engine answers on
-`audit:read` whoever's seat it is — not by the owner-or-lead rule a person's
-queue takes — so the tab asks nothing of a reader without that grant and says
-which grant reads it, rather than sending two questions to be refused and
-drawing the refusals as a seat's memory. It is read from the node HOLDING the
+bar of nothing named "unknown" — with the way to all of its activity on Live. **Memory** is the seat's TRAIL too, which the engine answers to an admin and
+to whoever leads the seat (`audit.seat.read`, ADR-0033) — so the tab asks
+nothing of anybody else and says, as Turns does, what would open it, rather
+than sending two questions to be refused and drawing the refusals as a seat's
+memory. It is read from the node HOLDING the
 seat, whose copy is the one kept current, and says which node answered: the diary, the
 episodes (each outcome in the reviewer's own tone — `failed` is red here as on
 a turn; each turn's **Woken by** — the waking event's label, with what it was
@@ -3226,15 +3243,15 @@ turn's trigger reads as plain words, its markdown stripped. A seat no
 node holds says why it shows nothing. **Settings** is the seat's half of the
 company document, read by its handle — the seat and its home unit, whose
 `mcp_env` a seat inherits per variable — through the same one read the Setup
-card makes (`useSeatSetup`): the company document for a reader holding
-`config:read`, the seat's and its unit's own entities for the lead of its
-unit, and nothing asked for anybody else, whose tab names the grant in the
-frame's words ("Reading this seat's settings needs `config:read`", and, for a
-seat in a unit, that whoever leads it or a unit above it reads them too) —
+card makes (`useSeatSetup`): the company document for an admin, the seat's
+and its unit's own entities for the lead of its unit, and nothing asked for
+anybody else, whose tab names the access in the frame's words ("Reading this
+seat's settings needs Admin access", and, for a seat in a unit, that whoever
+leads it or a unit above it reads them too) —
 never "No company configuration is active", which is said only of a read that
 came back with no document, and which a reader nobody asked for was told
 while a company ran; every other outcome — still out (waiting on who the
-reader is included), refused naming the grants, absent — has its own
+reader is included), refused naming the access, absent — has its own
 sentence rather than an empty value. What it draws is
 identity and contacts, the model and budget with each capped window's live
 meter, and a seat's tool credentials by server and **variable name only**: no
@@ -3654,35 +3671,31 @@ nobody else, so the same words are the button's `title` while it is held — a
 pointer resting on it sees why — and a screen reader, which reads a described
 button's description rather than its title, hears it once. A form whose
 primary action is held also writes the reason on the page beside it (the New
-task sheet's foot), because neither reaches a touch screen. The six reasons,
+task sheet's foot), because neither reaches a touch screen. The seven reasons,
 in the order you clear them (`lib/useWriteAccess.ts`) — and being bound to no
 seat is not one of them, since the engine makes a credential's change all the
 same, under its own login:
 
 | You are | The control says |
 |---|---|
-| Refused the company — no access yet (a session without `state:read`, for which nothing is dialled) or a refusal the socket met | The engine is not serving you the company, so nothing in it can be changed here — your Account says what you hold. |
+| Refused the company — a refusal the socket met (your seat was taken out of the chart) | The engine is not serving you the company, so nothing in it can be changed here — your Account says who you are signed in as. |
 | Offline | Offline. Reconnect to make changes. |
 | Not yet known | Checking who you are before anything can be changed. |
 | Anonymous | Sign in to make changes. |
+| Without the app the change lands in — the tracker for a change to work, the knowledge base for one to a page (read off the act's own `domain`) | This change needs Tracker access. An admin can give it to you. (Knowledge, for a page.) |
 | Somebody the engine does not make this change for | This engine does not make this change for you. |
 | Looking at somebody else's record | The screen's own sentence, naming whose record it is — My work read on a report's day holds every control on it (`HoldWrites`), and releases exactly the one change it offers there, a lead's reorder of that queue. |
 
-**The one set of writes drawn for one grant only is the identity
+**The one set of writes drawn for admin only is the identity
 directory's** — People & access, and a human seat's **Invite**, **Create
 person** and **Cancel invitation** on the org chart's card, the seat's peek
-and its page. The directory's readers are administrators (`people:manage`)
-and auditors (`audit:read`), and an auditor reads it as a record: a dozen
-controls on every row, each disabled with the same "needs `people:manage`",
-is noise on exactly the screen they came to read, and never news — the one
-grant that would enable them is the one the screen's own note names. A seat's
-gestures are the same writes about the same directory, and held on every human
-card of the chart, on every peek and on every person's page they would be that
-noise on the company's busiest screens, read by everybody. So they are drawn
-for a `people:manage` holder and left out for everybody else — and a reader
-the directory does not answer is not even told what holds a seat, since the
-listing those words come from is the directory's own read — and the engine
-refuses whatever reaches it all the same.
+and its page. People & access is an admin's to open at all, so its controls
+are never drawn held. A seat's gestures are the same writes about the same
+directory, and held on every human card of the chart, on every peek and on
+every person's page they would be noise on the company's busiest screens,
+read by everybody — never news, since the one access that would enable them
+is Admin. So they are drawn for an admin and left out for everybody else, and
+the engine refuses whatever reaches it all the same.
 
 **One press at a time, by every way in.** A write control refuses a press
 while its last one is still out, and so does every other way into the same
@@ -3805,8 +3818,8 @@ and the same tag; dry-run a merge patch or an entity replacement; save either
 with its audit summary), always conditional on the revision it edited. A seat,
 a unit and a seat's own ceiling are part of that document too, and the org
 builder writes them through it (`lib/useCeilingWrite.ts` writes a ceiling
-raised in place as the seat's own entity). They are decided by the
-`config:write` GRANT rather than by the act catalogue or a seat binding — or,
+raised in place as the seat's own entity). They are decided by
+ADMIN rather than by the act catalogue or a seat binding — or,
 for a seat or a unit inside a unit the reader leads, by that LEAD, whom the
 engine admits to `/config/roles/{handle}` and `/config/units/{key}`
 (`lib/leadScope.ts`) — and, where another system [manages the
@@ -3816,13 +3829,13 @@ their own team included. So their controls ask `useConfigWriteAccess()`, or
 `useOrgWriteAccess(target)` for one part of the org chart, which read
 `viewer.grants` and the reader's scope and then the managed block
 (`viewer.config_writer` and `viewer.config_managed_by`), and are disabled for
-anybody else with a sentence naming the grant and who can give it, the units
+anybody else with a sentence naming the access and who can give it, the units
 the reader leads, or who manages the document (`managedSentence`) — the managed
 block checked after the authority and before a screen's hold, since no screen
 can release it. A screen that decides whether a change is the reader's to make
 before anything is pressed — Home counting a budget-stopped seat as their
 decision, "No weekly budget" or "Set one" offered as a link, the org chart's
-**Add seat** — asks `mayChangeConfig(viewer)`, the grant and the managed block
+**Add seat** — asks `mayChangeConfig(viewer)`, Admin and the managed block
 without this moment's connection or hold. A write the engine answers `403
 step_up_required` is not refused on screen: the transport asks the person to
 confirm who they are and replays it (see [Signing
@@ -4548,6 +4561,22 @@ the accent once, which says what to do, and a second rule drawing it silently
 replaced the info rail the card was meant to carry.
 
 ## Live › Now running and the turn list
+
+**What a seat is doing is everybody's; what it SAID is its trail.** Now
+running, Coding runs, the org chart's state lines and a seat's page are the
+overview, open to every signed-in reader, and the engine splits what it sends
+them into a status half and a body half ([the API's
+rule](api-endpoints.md#a-status-reader-never-receives-a-transcript)): a call's
+prompt, its answer, a tool's arguments and a coding run's task, question and
+reply go to an admin, to whoever leads the seat, and — for a run's parked
+question — to the person it is put to. Anybody else is sent the status with
+`body_withheld: true`, and the dashboard draws each withheld value as **Not
+shown to you** (`WITHHELD_WORDS`, `lib/access.ts`) — a run's question as *Its
+question is not shown to you* — with the one sentence why: what a seat says is
+its trail, which its lead and an admin read. Never as an empty value, because
+"the prompt was empty" and "you may not read the prompt" are opposite facts. A
+work item a call names is the tracker's, and is left off the row for a reader
+without Tracker.
 
 **Now running** (`#/live`) is five cards in fixed places, each saying so when
 it is empty, because a screen whose sections come and go with the data cannot
@@ -6440,7 +6469,14 @@ palette and the trail.
 - **A search that did not run** says which of `no_company`, `no_backend`,
   `no_scope` or `building` it was, with the remedy that reason names: a
   backend to set, spaces to add to `knowledge.scope`, or, while a node that
-  joined recently is still indexing, to try again shortly.
+  joined recently is still indexing, to try again shortly. The fifth reason,
+  `no_access`, is the READER'S rather than the company's — a caller holding
+  Tracker and not Knowledge, whose question searched nothing of the knowledge
+  base — and is said in the words every lock uses ("Search needs Knowledge
+  access. An admin can give it to you."), with nothing to configure. The
+  dashboard asks the question only of a Knowledge holder
+  (`lib/useSearchQuery.ts`), so it is drawn only for an answer that raced an
+  access change.
 - **A space's peek** (opened from a list elsewhere) reads one window of 500
   and COUNTS off the listing's `total`: Recent pages and "n more pages in this
   space" are the space's, never the window's. When the space outgrows the
@@ -6448,9 +6484,10 @@ palette and the trail.
   by title, since the listing is ordered by title rather than by time.
 
 Who files into a space and the tracker project it works in are named for a
-reader who may read the company document, in four states: read (which may be
-"no unit names it"), not held (the reader holds no `config:read`), read in
-flight, refused. "Needs `config:read`" is said only to a reader without it. A
+reader who may read the company document — an admin — in four states: read
+(which may be "no unit names it"), not held (the reader does not hold Admin),
+read in flight, refused. "Needs Admin access" is said only to a reader without
+it. A
 project the space's key does not already name is drawn beside it as a dashed
 key, not only in a tooltip.
 
@@ -6658,7 +6695,7 @@ the page column's, not the window's.
   "used of limit · resets Oct 1" on a kit `Meter` handed the engine's `state`,
   never a fraction judged here, with the reset on the company's calendar. With
   no monthly ceiling it says so, and offers **Set one** (to `#/spend/budgets`)
-  only to a `config:write` holder — and only once a report has SAID so: before the engine's
+  only to an admin — and only once a report has SAID so: before the engine's
   first report the push is `null` and the tile waits, because "nobody has read
   the counter" is not "there is no ceiling" (Home's weekly line reads the same
   slice the same way).
@@ -6670,6 +6707,12 @@ the page column's, not the window's.
   the tasks FINISHED in the window that spent anything, with how many. On a
   company whose tracker is not the engine's, `work_items` is not served and the
   tile is not drawn.
+- **A reader without Tracker is asked nothing about tasks.** The overview is
+  everybody's and a task is the tracker's, so the median tile and the most
+  expensive tasks card each say *Needs Tracker access* — the card with no
+  **All** link, since the list is the tracker's too — and no `work_items` is
+  sent: asked, the engine's refusal drew a callout offering to sign in to
+  somebody already signed in.
 - **Daily tokens by phase** is the kit's `StackedColumns` over the engine's four
   bands, each in its `BANDS` hue, and the legend is always those four — the
   engine answers a band nothing spent in at zero; the split control offers the
@@ -6734,7 +6777,7 @@ window with no ceiling draws no bar, because a bar needs something to be a
 fraction of. A
 counter nobody could read (`durable: false`) says so and draws no figures.
 
-**Every ceiling is editable in place by a `config:write` holder.** The pencil beside it
+**Every ceiling is editable in place by an admin.** The pencil beside it
 turns the figure into a field that takes the spelling the screen draws — `40M`,
 `2.5M`, `750k`, or the digits — and **empty for no ceiling**; a 0 is refused
 before anything is sent, in the engine's terms (empty is the only "none"). A
@@ -6750,7 +6793,7 @@ to what. After a save the figure shows the new ceiling marked **applying…**
 until this node reports the saved epoch, and then re-reads. A conflict saves
 nothing and offers **Reload**; so does a request that may have landed. The
 pencils are drawn for every reader and disabled, with the reason said once
-above the page, for a reader without `config:write` — except a seat's, for
+above the page, for a reader without Admin — except a seat's, for
 the lead of the unit it sits in, whom the engine admits to that seat's write
 (`useOrgWriteAccess`, `lib/leadScope.ts`).
 
@@ -6770,21 +6813,24 @@ block already is the reader, and a row beside it would be the same person
 twice. **Every way a person looks for their own security leads here**, because
 the page was reached only through a text link inside the preferences popover:
 the name opened the seat, the seat said nothing of a password, and Settings
-was all locks to a reader holding no company grant — so a company's people
+was all locks to a reader holding nothing but their own account — so a company's people
 reported that the dashboard had no two-step verification at all. **Every read and write on it names the caller and
 nobody else** — `GET /auth/session` for who this browser is, the self arm of
 `/iam/people/{id}` and its sessions, `GET /iam/credentials` and a token's mint
 and revocation with no `?person=` — so the page holds no id it could be talked
 into swapping for somebody else's.
 
-- **Profile** — login, name, address, kind, seat and grants, read-only, at
-  the card's own inset, with the line that an administrator changes them: a
+- **Profile** — login, name, address, kind, seat and **Your access** (the
+  People list's own words: Admin, the apps they hold, or Overview only),
+  read-only, at the card's own inset, with the line that an administrator
+  changes them: a
   person changing their own would be the escalation the directory exists to
   close. A sealed value reads *sealed*, never blank. The seat is written as
   every seat is — its badge and name, then its `@handle` — and as the handle
   alone where the chart cannot be read (it read *cara cara* once); it links
-  to the seat's page only for a reader holding `state:read`, since for anybody
-  else that page is the panel refusing them the company.
+  to the seat's page for every reader but one the engine refused the company
+  (a seat taken out of the chart), for whom that page is the panel refusing
+  them.
 - **Security** — a line each, with its gesture beside it, in the order a
   person comes to check them: **Two-step verification** first, then — beside
   an app — **Recovery codes**, then **Password**, whose **Change password…**
@@ -6850,25 +6896,25 @@ the screen rather than as tabs in the page bar, in four groups: **You** (the
 reader's own Account, as a cross-link — it is a workspace of its own — and
 Appearance, the mode, density and theme for this browser; first, because a
 person's own settings are what they look for first, Settings is where they
-look for their password and second factor, and a reader holding no company
-grant otherwise found only locks here),
+look for their password and second factor, and a reader holding no app
+otherwise found only locks here),
 **Company** (General, People & access, and Budgets as a cross-link — it lives
 once, under Spend, and its arrow says pressing it leaves Settings; a
 cross-link's spoken label says where it leads by name, "under Spend" or, for
 Account, "outside Settings"), **Connect** (Integrations, Tools &
 MCP, Models & keys, Secrets) and **Engine** (Nodes, Configuration, Backups & retention, Audit
 log). A cross-link is DERIVED from the place it leads to (`crossLink` in
-`nav.ts`) — its name, glyph, hint and grants are that place's — so the
+`nav.ts`) — its name, glyph, hint and access are that place's — so the
 reader's Account is described in one sentence wherever it is offered, and
 every row's title is its hint, the words the palette shows under it. A
 section closed to the reader draws a lock naming what it lacks and **is never
-hidden**: a section that vanished for a reader without its grant is one they
+hidden**: a section that vanished for a reader without its access is one they
 cannot know exists. Closed is one rule, `sectionOpen`: the reader's own
-sections (their Account and Appearance) never are, and every other needs the
-company's grant (`state:read`) and any one of its own — the same rule the
-sidebar locks a row by (a row only when nothing in its workspace is open, so
-Settings never) and the frame draws the no-access panel by, in place of every
-screen but the reader's own. The landing page is one of the column's sections, so its trail reads
+sections (their Account and Appearance) never are, General — the charter —
+is the overview's and open to everybody, and every other Settings section is
+admin's — the same rule the sidebar locks a row by (a row only when nothing in
+its workspace is open, so Settings never) and the frame draws a section's
+refusal by. The landing page is one of the column's sections, so its trail reads
 **Settings › General** rather than "Settings" alone. **On a phone the column
 folds to one row naming the section** the reader is on — "Section · General",
 the word said and not only spoken, since "General" alone read as the page's
@@ -6908,28 +6954,33 @@ screen shares rather than at an inset of its own.
 | Configuration | "epoch *n*" — the epoch this node applied, in words rather than a code | the health push |
 | Backups & retention | how many alarms stand, the count the engine panel shows, drawn only when one does | `retention` |
 
-`fleet`, `retention` and `integrations` are guarded answers with no push
-behind them (`fleet:operate`, `fleet:operate` and `config:read`), so those
+`fleet`, `retention` and `integrations` are admin's answers with no push
+behind them, so those
 figures are a poll — and **they are asked only while the Settings column is on
 screen, and only of a reader the section opens for** (`useSettingsSidebar`,
 at 30 s, 60 s and 120 s), by the rule the column locks it by (`sectionOpen`),
 so no figure is asked for beside a lock. The frame outlives every screen, so a figure hook
 that asked unconditionally would put three operator questions on a timer
-behind every screen of every tab, and three refusals behind a reader who holds
-no credential. On Nodes the column asks no `fleet` of its own: the screen
+behind every screen of every tab, and three refusals behind every reader who
+is not an admin. On Nodes the column asks no `fleet` of its own: the screen
 hands the frame the reading it already polls every 15 s (`usePublishFleet`),
 so "*n* behind on config" and the screen's "Behind on config" tile are one
 reading rather than two polls on two clocks that disagreed for up to 30 s.
 
 **General** is the company's charter — mission, vision and the standing
-policies every executor is given verbatim — read from the org projection, so any
-reader holding `state:read` can open it, as they can Tools & MCP. It is
-edited in the org builder (**Edit in org**).
+policies every executor is given verbatim — read from the org projection, so
+every signed-in reader can open it: it is the overview's, like the org chart.
+It is edited in the org builder (**Edit in org**).
 
 **People & access** is the identity directory, over the routes
-`/iam` serves to a reader holding `people:manage` or `audit:read`: **People**
-is every person in the directory (`/iam/people`) — their login, stage and
-grants, and the seat the directory binds them to — and a row opens that
+`/iam` serves to an admin: **People**
+is every person in the directory (`/iam/people`) — their login, stage,
+**Access** column and the seat the directory binds them to — the Access column
+saying the set in the one line the dashboard says it everywhere (`accessLine`
+in `lib/access.ts`): **Admin** for anybody holding it, since every app is
+included and naming them beside it would read as separate; otherwise the apps
+they hold, **Tracker · Knowledge**; **Overview only** for none; and a name this
+build does not know appended raw, so it is never silently dropped — and a row opens that
 person in the frame's **peek** (`peek=person:{id}`), which reads their row
 (`/iam/people/{id}`), their credentials (`/iam/credentials`) and their
 sessions for itself: in view beside the list on a wide window and a drawer
@@ -6948,16 +6999,15 @@ human seat. **Human seats** is every
 human seat of the running company with whatever holds it (`/iam/seats`) — a
 person or a service account by login and stage, an open invitation as an
 **Invited** tag with its address, or *Nobody holds it* — and where agents
-reach it: its contact identities, read from the company document, which
-takes `config:read`, and said so to a reader without it rather than drawn as
-seats nobody can reach. The tile above it counts **Human seats nobody holds**
+reach it: its contact identities, read from the company document, which is
+admin's like this screen. The tile above it counts **Human seats nobody holds**
 as the seats held by NOTHING — an open invitation holds its seat as surely as
 a person does, and counted as vacant it read as a seat an administrator could
 still invite somebody onto — with "*n* invited" beside the total. **API
 tokens** is this node's Tier A labels joined to the directory rows holding
 their logins (`/iam/node-tokens`): a token whose login nobody holds acts as
 itself, unbound, and the row says so and names the one command that binds it
-— `crewlet iam create -kind machine -login token:<id> -seat <seat>`, a row
+— `crewlet iam create -kind machine -login token:<id> -seat <seat> -grants none`, a row
 created on a human seat nothing else holds — since a label mistyped on either
 side otherwise looks bound until the token presses something. When the company
 document is [managed](../concepts/configuration.md#managed-configuration), the
@@ -6965,20 +7015,20 @@ card names its writers — each row says whether that token is one
 (`company_writer`) — and that only those tokens may change the company, while
 every other credential reads it and can still rotate a credential it names;
 nothing is said when the document is not managed. The directory's
-own report (`/iam/check`) names a company nobody can administer, an active
-person with no credential, a person with no seat, a binding whose seat is gone
-and a grant this node's ceiling withholds, in the engine's order, each kind in
+own report (`/iam/check`) names a company no active person can administer
+(`no_admin_holder`), somebody active with no way in, a binding whose seat is
+gone and a row holding admin that this node refuses (`admin_clamped_by_node`,
+on a node whose `api.auth.admin` is `refuse`), in the engine's order, each kind in
 words keyed on the engine's own list (`FINDING_KINDS` in
 `contract/identity.ts`, held against `iamapi.FindingKinds`), so a kind the
 engine grows is a compile error rather than a raw code on the screen.
 **Invitations** is every invitation nobody has redeemed and that is still good
-(`/iam/invitations`) — address, seat, grants, who sent it, when it expires —
+(`/iam/invitations`) — address, seat, access, who sent it, when it expires —
 and **Show expired and redeemed** asks for every one the estate still holds.
 
-**A `people:manage` holder writes the directory from here — except to add a
-person**, and an `audit:read`-only reader keeps the read view with no control
-in it (see [A write control is never hidden](#a-write-control-is-never-hidden)
-for why the directory's writes are the exception). **People & access invites
+**An admin writes the directory from here — except to add a
+person** (see [A write control is never hidden](#a-write-control-is-never-hidden)
+for why the directory's writes are drawn for an admin alone). **People & access invites
 and creates nobody.** A person holds exactly one human seat from the moment
 they exist, so a person comes from the vacant seat they will hold: **Invite**
 and **Create person** are on that seat's card in the org chart, its peek and
@@ -6989,37 +7039,44 @@ there — **Invite or create from the org chart →**, beside **Identity trail
 
 - **New service account** — a machine: a login in the colon grammar
   (`ci:release`, checked under the field before anything is posted, as an
-  edit's login is against its holder's grammar), a name, grants and an
+  edit's login is against its holder's grammar), a name, its access — the
+  picker opened with nothing ticked, since a service account is a credential
+  somebody scripts and what it needs is the script's business; Admin may be
+  ticked, a service account being the one non-person that may hold it — and an
   optional **Seat** — a human seat nothing holds, for an account that should
   act as that seat (a deploy pipeline acting as its owner's seat, say), sent
   in the same record as the account, because created bare and bound after, a
   pipeline meant to act as a seat acted as itself until a second write landed;
   with **No seat** it acts as itself, under its own login. Then **Mint its
-  token**: a label, a lifetime and grants out of the account's own
-  (`secrets:read` and `people:manage` disabled, since no token carries them,
-  and one the reader does not hold left unticked and disabled, since the
-  engine refuses a token carrying a grant its minter does not hold), the value
-  shown once.
+  token**: a label, a lifetime and access out of the account's own, opened
+  with all of it ticked that the reader holds too — the account exists to act
+  with it — Admin included, since a token may carry admin and what keeps it off
+  the gestures that need a person present are the authority table's two locks
+  rather than the picker; one the reader does not hold is left unticked and
+  disabled, since the engine refuses a token carrying what its minter does not
+  hold. The value is shown once.
 - **Cancel** on an invitation nobody redeemed: its link stops working at once
   and the address and the seat it names are free again — the same dialog the
   seat's own **Cancel invitation** opens.
-- In an **opened person's peek** — **Edit login, seat and grants** (one `PATCH` carrying
+- In an **opened person's peek** — **Edit login, seat and access** (one `PATCH` carrying
   only what changed since the dialog opened — measured against that row and
   not the directory's minute-by-minute re-read, so a login or a seat left alone
   never puts back what another administrator changed meanwhile — and the
-  grants as what was ticked and unticked, `add_grants` and `remove_grants`,
+  access as what was ticked and unticked, `add_grants` and `remove_grants`,
   which the engine applies to what the person holds when it decides, so a
-  grant left alone stays as another administrator left it whichever others
-  are ticked; the seat offered among the vacant ones and their own — with
+  permission left alone stays as another administrator left it whichever
+  others are ticked — the picker the invitation's, Admin one switch that ticks
+  and locks the apps, and the note under it saying what an unticked app costs; the seat offered among the vacant ones and their own — with
   **No seat** for a service account only: a person's seat is MOVED, never
   cleared, since the engine refuses a person's edit that clears it
   (`seat_required`), and removing them is what frees it; a person recorded
   with no seat starts on **Choose a seat** with a warning saying so, and the
   edit sends a seat only once one is chosen, so an unrelated change is never
   refused for it; a
-  grant the person already holds may be unticked whoever edits, since the
+  permission the person already holds may be unticked whoever edits, since the
   engine checks only what an edit adds, while one neither holds stays
-  disabled),
+  disabled — and a name this build does not know, kept on the row, is offered
+  as a ticked box of its own, which unticking removes and nothing can add),
   **Suspend** / **Reactivate** (which of the two is fixed when the dialog
   opens, so its **Try again** after an unknown answer sends the same stage
   even once the re-read shows it landed; a suspension says the person's seat,
@@ -7041,12 +7098,13 @@ there — **Invite or create from the org chart →**, beside **Identity trail
   gesture that ends their sessions says first that it is them and signs this
   browser out at once, and speaks to them throughout, its title and body
   alike ("You may not act while suspended"), and **Suspend** and **Remove** add, where `GET
-  /iam/check` counts nobody else active holding `people:manage`, that
-  afterwards only this node's API token could administer people. **Edit**
-  speaks to them too, and an edit unticking their own `people:manage` says it
-  is them, that they stop administering people once it saves, and the same
-  sentence where nobody else would be left — the engine refuses no one taking
-  away a grant, the last administrator's own included.
+  /iam/check` counts nobody else active holding admin (`people_with_admin`),
+  that afterwards only this node's API token could administer people. **Edit**
+  speaks to them too, and an edit unticking their own Admin says it
+  is them, that they stop administering the company once it saves, and the
+  same sentence where nobody else would be left — a WARNING and never a block:
+  the engine refuses no one taking away a permission, the last administrator's
+  own included, and Tier A's token is the way back in.
 
 Every one of these — and a seat's **Invite**, **Create person** and **Cancel
 invitation** — is one `/iam` write (`lib/iamWrite.ts`): a `403
@@ -7058,7 +7116,7 @@ person's create hands back the same first password link — and a request
 changed before it is pressed is a new one under a new key, since a create's
 key sent with another body is refused as reused — while a token's mint and a
 reset link read no key and a retry issues another; a refusal is the engine's
-sentence with the grants that would admit; a `202` says the change is
+sentence with the access that would admit; a `202` says the change is
 recorded and this node is catching up, and — like a stale refusal — leaves
 the dialog only **Done**, because the gesture is over and pressing it again
 would send it again; and after every answer — a refusal part way and an
@@ -7101,9 +7159,8 @@ one of five, decided by `actionFor` from the same inputs as the tag:
 | **Manage** | anything else configured, including a tool the engine is mid-flight on | goes to `#/settings/integrations/{tool}` |
 | **Learn more** | nothing configured and this build answers no form for it | opens the tool's page on docs.crewlet.ai |
 
-The three that open the form are disabled — never hidden — with *Setting an
-integration up needs config:read to see what it needs, and config:write and
-secrets:write to connect it* for a reader without them. On a [managed
+The section is admin's, so a reader without Admin meets the section's refusal
+in its place rather than a disabled form. On a [managed
 document](../concepts/configuration.md#managed-configuration), for a credential
 that is not one of its writers, the screen leads with a callout carrying the
 managed sentence, and **Connect** and **Continue** are disabled with it — they
@@ -7120,7 +7177,10 @@ square, **Disconnect**, the provisioning passes and each surface's deliveries.
 A dashed tile at the end of the grid, **Add an MCP server**, opens the add form
 on Tools & MCP (`?add=server`) for every other tool an agent can reach. See [integration reconcile](../concepts/integration-reconcile.md#what-the-dashboard-shows).
 
-**Tools & MCP** is the servers first, then the catalogue. **MCP servers** draws
+**Tools & MCP** is admin's, like every company setting: it is where MCP
+servers are added and their launches read, and which tools a seat has is
+already on that seat's page, from the overview's `tools` push. It is the
+servers first, then the catalogue. **MCP servers** draws
 the engine's `mcp_servers_status`: each server's launch (the command and its
 arguments, or the address — never an `env` value or a header), who it
 **reaches** (every agent seat, *n seats* or *No seat*, from each agent seat's
@@ -7136,9 +7196,8 @@ is one line cut at its end, never broken inside a token. A node whose last
 heartbeat carried no status is named once above the grid and its chips read
 *not reported*, never *none*. The **From MCP servers** tile counts *n of m servers
 running* off the same answer — never the registry's origins, which read *0*
-over a table of failing servers. The section takes `config:read` — it names
-nodes, commands and failures — so a reader without it sees the
-refusal in its place and the catalogue around it unchanged. A row opens the
+over a table of failing servers. The status names nodes, commands and
+failures, which is one more reason the section is admin's. A row opens the
 **server's page** (`servers/{name}`): its state, transport, instances, reach
 and tool count, the launch whole, and every node's reason as the heartbeat
 carried it, unclamped — the one place a reason the grid clamps can be read
@@ -7167,9 +7226,8 @@ panel names the seats **granted** its server from the same pushed
 `tool_sources`, so opening a tool, or stepping through them with `[`/`]`,
 asks the engine nothing. That list is derived from each seat's configuration
 (the credentials it declares under `mcp_env`), so the engine pushes it only to
-a reader holding `config:read`, and for anybody else the panel names that
-grant — never "a node older than the field", which is what the same absence
-means to a reader who holds it.
+an admin; an absent list on this admin's screen means a node older than the
+field, and the panel says so.
 
 **Models & keys** draws the engine's `credential_pool`: every model the
 company configures in config order (the order a seat that names no model falls
@@ -7818,15 +7876,12 @@ brings that carries a design-system rule.
   elsewhere was a refused handshake, its probe and a refused snapshot, three
   `401`s where one says it — and any other answer re-dials with the cookie the
   browser holds now. `4403` means the person resolves and may not have this surface —
-  their seat is gone, or `state:read` was withdrawn: the socket STOPS (no
+  their seat is gone: the socket STOPS (no
   reconnect, no REST fallback, both of which the same decision would refuse)
   and every screen but the Account, which reads no socket, is replaced by one
-  panel saying who they are (`GET /auth/session`, asked again on the refusal —
-  an engine's, never the frame's own no-access, which that read recorded),
+  panel saying who they are (`GET /auth/session`, asked again on the refusal),
   what they hold and why, with the *Account*, a *Try again* for after an
-  administrator has acted — or, where the session no longer holds
-  `state:read`, the no-access panel, which asks again on its own and dials once
-  the grant is back — and a
+  administrator has acted, and a
   *Sign out* — the person refused is the person who needs to leave, and the
   engine keeps `/auth/` open to their session for exactly that. Drawn as
   they were, the screens said the engine was "not connected" and showed
@@ -8074,7 +8129,7 @@ while the screen binds the real chart, table, editor and dialogs, and
   the WRITE of an unchanged unit. A draft that changes moves its generation,
   and an answer for an older generation is dropped.
 - **A lead edits one unit as a document of its own.** A reader without
-  `config:write` who leads a unit (`lib/leadScope.ts`) is opened on it
+  Admin who leads a unit (`lib/leadScope.ts`) is opened on it
   rather than refused: `model/scope.ts` reads `GET /config/units/{key}` as
   `{name, units: [that unit]}`, and the request is that unit's —
   `PUT /config/units/{key}` with `If-Match`, the unit whole — so nothing else
@@ -8093,7 +8148,7 @@ while the screen binds the real chart, table, editor and dialogs, and
   one per draft, chosen in the toolbar, and a kept draft is offered only for
   the unit it was made of. Their lost save is settled by reading the unit
   back, and their update stands on the unit the node serves: the revision
-  history is `config:read`'s.
+  history is admin's.
 - **The canvas is handed the chart it draws.** `chart=structure|reporting` is
   the Builder's own section param, chosen in its toolbar, so the canvas is
   given the answer as a prop rather than reading the URL a second time.
@@ -8187,7 +8242,7 @@ while the screen binds the real chart, table, editor and dialogs, and
   does not change, so a second press after a lost answer carries the same id.
   A lost answer is settled from the revision history before anything else
   happens — a lead's by reading the unit back, since the history is
-  `config:read`'s — and while it is unknown the builder records nothing. A
+  admin's — and while it is unknown the builder records nothing. A
   write in flight is never aborted, and a save that lands after the builder
   was left still records the revision and clears the kept draft. The kept log
   is marked with the write id before the save is sent and unmarked once the
@@ -8228,7 +8283,7 @@ while the screen binds the real chart, table, editor and dialogs, and
   differs from nothing; the conflict banner's Show what changed is the newer
   revision against the draft's base for the same reason. Both, and Copy as
   YAML, read the company document, so none is offered to a reader without
-  `config:read`. Until this node applies it, the org chart and Teams carry a
+  Admin. Until this node applies it, the org chart and Teams carry a
   note that they draw the previous revision.
 - **The status is the last answer about the current draft**, whoever asked:
   a save's refusal is placed on the nodes like a check's, and the check
@@ -8239,11 +8294,11 @@ while the screen binds the real chart, table, editor and dialogs, and
   door every view goes through, and say why in the live region; so does a
   lead's draft, for each operation that reaches outside its unit. The actions
   themselves are DISABLED rather than hidden, so a reader without
-  `config:write` still reads what the builder does; Edit and Open seat change
+  Admin still reads what the builder does; Edit and Open seat change
   no draft and stay available. A refused check or save is worded by the
   refusal's code, in the sentence every writer of the company document uses
-  (`configGuardedReason`): only a grant the reader lacks names
-  `config:write`, and a step-up they declined — a configuration write asks
+  (`configGuardedReason`): only access the reader lacks says "Needs Admin
+  access", and a step-up they declined — a configuration write asks
   for one, so it is the refusal an hour-old session meets — says so and
   offers Check again, which sends the check again and so asks them to confirm
   who they are again.

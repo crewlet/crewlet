@@ -142,8 +142,8 @@ type WorkDeps struct {
 	// asked the chart the same two questions a class already asks, from
 	// the tool rather than from the table. Two answers to one question is
 	// exactly what internal/authz exists to remove, and these two had
-	// already diverged from it: neither consulted a grant, so an operator
-	// holding fleet:operate was refused where every HTTP route allowed.
+	// already diverged from it: neither consulted a permission, so an
+	// admin was refused where every HTTP route allowed.
 	Authorize Authorizer
 
 	// Writer resolves the tracker's write side FOR ONE ACTOR.
@@ -1252,7 +1252,8 @@ func (t *getWorkItem) Call(ctx context.Context, args map[string]any) (tools.Resu
 
 func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	// [WorkDeps.actor] rather than the turn — see [listWorkItems.CallForTurn].
-	if _, err := t.deps.actor(ctx, turn); err != nil {
+	actor, err := t.deps.actor(ctx, turn)
+	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
 		return notInATurn(GetWorkItemTool), nil
 	}
@@ -1266,6 +1267,22 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	want, withBody, refusal := detailWants(args)
 	if refusal != "" {
 		return failed(refusal), nil
+	}
+	// WHO MAY READ IT IS DECIDED ON THE ITEM — a tracker holder, or the
+	// person an open ask on it names (workasked.go) — and the second is
+	// only known once the item is read, so a caller the table does not
+	// admit outright has the item read and their asks probed BEFORE any
+	// part of it is read for the answer. Decided after the arguments
+	// because those are refused for what they say, which tells nobody
+	// anything about the board.
+	holder, refused := t.deps.itemGate(ctx, authz.ActionWorkRead)
+	if refused != nil {
+		return *refused, nil
+	}
+	if !holder {
+		if _, refused := t.deps.askedOn(ctx, authz.ActionWorkRead, id, actor.Handle); refused != nil {
+			return *refused, nil
+		}
 	}
 	// THE CHART, so the answer carries the team's NAME beside the key the
 	// row holds. A model acts on the key — it is what a `unit=` filter
@@ -2086,11 +2103,13 @@ func refusalOf(r tools.Result) *tools.Result { return &r }
 //
 // A miss used to list every seat in the company and an ambiguity the seats it
 // matched — to whoever asked. Reading the roster is a verb of its own
-// (`lookup_colleague`, [authz.ActionColleagueRead]), and a caller the table
-// refuses it could otherwise read the whole chart one misspelling at a time,
-// through a write it was allowed to attempt. So the names are in the refusal
-// when that same question would have been answered, and otherwise the refusal
-// says only that nobody, or more than one person, answers to the name.
+// (`lookup_colleague`, [authz.ActionColleagueRead]), so the names are in the
+// refusal exactly when that same question would have been answered, and
+// otherwise the refusal says only that nobody, or more than one person,
+// answers to the name. The roster is everybody's overview, so today that is
+// every caller the table resolves — and it is still ASKED of the table rather
+// than assumed here, so the day the roster has a rule of its own a write a
+// caller may attempt is not the way round it.
 func (d WorkDeps) resolveHandle(ctx context.Context, tool, field,
 	arg string) (string, string) {
 
@@ -2128,7 +2147,8 @@ func (d WorkDeps) resolveHandle(ctx context.Context, tool, field,
 }
 
 // mayReadRoster reports whether this call's caller may read the company's
-// roster — the question `lookup_colleague` is decided on.
+// roster — the question `lookup_colleague` is decided on, which admits every
+// principal the guard resolves ([authz.ClassEverybody]).
 //
 // AN UNDECIDABLE ANSWER IS A NO, which is the one direction this may fail in:
 // what hangs on it is only whether a refusal carries a list of names, and a
@@ -2566,7 +2586,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		// ASKED HERE AND NOT AT THE GATE, because the object is not in
 		// the arguments: which project this task is filed under comes
 		// out of the row that was just read, and the verb as a whole is
-		// an ordinary colleague write. A chart that could not answer is
+		// the tracker's to anybody who uses it. A chart that could not answer is
 		// told apart from one that said no by [Authorizer]'s own error
 		// kinds — under the bool this used to be, a node that was merely
 		// behind told a lead that re-routing their own project's work is
@@ -3274,13 +3294,36 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"(`decision`) or answers one (`choice`), never both — they are two " +
 			"comments, by two people."), nil
 	}
-	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
-	switch {
-	case errors.Is(err, tracker.ErrNoTask):
-		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q.",
-			clip(ref))), nil
-	case err != nil:
-		return readFailure(ctx, CommentOnWorkTool, err), nil
+	// WHO MAY POST HERE IS DECIDED ON THE ITEM — see workasked.go. A
+	// tracker holder goes on exactly as ever; anybody else is admitted
+	// only as THE ANSWER to an open ask on the item that names them, so
+	// what can never be an answer is refused before the item is read, and
+	// the rest once the item and its asks have been.
+	holder, refused := t.deps.itemGate(ctx, authz.ActionWorkComment)
+	if refused != nil {
+		return *refused, nil
+	}
+	var before tracker.TaskDetail
+	if holder {
+		before, err = t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
+		switch {
+		case errors.Is(err, tracker.ErrNoTask):
+			return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q.",
+				clip(ref))), nil
+		case err != nil:
+			return readFailure(ctx, CommentOnWorkTool, err), nil
+		}
+	} else {
+		// A QUESTION OF YOUR OWN IS NOT AN ANSWER: `ask` and `decision`
+		// put one to somebody, which is the tracker's to do.
+		if decided || strings.TrimSpace(argString(args, "ask")) != "" {
+			return *t.deps.answerOnly(ctx, "`ask` and `decision` put a new "+
+				"question to somebody, which takes the tracker."), nil
+		}
+		if before, refused = t.deps.askedOn(ctx, authz.ActionWorkComment, ref,
+			actor.Handle); refused != nil {
+			return *refused, nil
+		}
 	}
 
 	now := t.deps.now()
@@ -3322,7 +3365,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		ask = resolved
 	}
-	thread, threadRefusal := t.deps.resolveThread(ctx, tracker.ThreadQuery{
+	query := tracker.ThreadQuery{
 		Task:    before.Task.ID,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
 		Ask:     ask,
@@ -3336,9 +3379,23 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// itself — already answered.
 		Comment: comment.ID,
 		Choice:  comment.Choice,
-	})
+	}
+	var thread tracker.ResolvedThread
+	var threadRefusal *tools.Result
+	if holder {
+		thread, threadRefusal = t.deps.resolveThread(ctx, query)
+	} else {
+		// STRICT ON THIS ARM: the answer is the whole of what admits this
+		// caller, so an inference this node could not make is a read that
+		// failed rather than a remark that answers nothing.
+		thread, threadRefusal = t.deps.readThread(ctx, query)
+	}
 	if threadRefusal != nil {
 		return *threadRefusal, nil
+	}
+	if !holder && thread.Answers == "" {
+		return *t.deps.answerOnly(ctx, "this comment answers no open question "+
+			"addressed to you. Name it with `answers` (its comment id)."), nil
 	}
 	comment.Ask = thread.Asked
 	if thread.Answers != "" {
@@ -3370,13 +3427,16 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// could leave. The gesture is resolved against the CURRENT row inside
 	// the decide, and it is `Auto` because nobody pressed watch: at the
 	// cap the comment lands and the watch is skipped.
-	patch := tracker.TaskPatch{
-		Comment: comment,
-		Watch: &tracker.WatchIntent{
+	patch := tracker.TaskPatch{Comment: comment}
+	if holder {
+		// NOT FOR SOMEBODY ADMITTED ONLY TO ANSWER: following the item
+		// would wake them on every later change to a board they do not
+		// use, and the asker hears their answer whether or not they do.
+		patch.Watch = &tracker.WatchIntent{
 			// THE AUTHOR'S, the same address the explicit gesture
 			// takes.
 			Handle: actor.Handle, Watch: true, Auto: true,
-		},
+		}
 	}
 	opID := opIDFor(actor, t.Name(), "comment", comment.ID, args)
 	got, err := writer.UpdateTask(ctx, opID, before.Task.ID, before.Task.Project,

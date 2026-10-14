@@ -288,11 +288,11 @@ func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 }
 
 // gateOperator is who runs the gesture in these cases: a machine credential
-// holding `fleet:operate`, the grant the route asks and the identity estate's
+// holding admin, the permission the route asks and the identity estate's
 // writer asks again at the record.
 var gateOperator = iam.Principal{
 	Login: "ops:cli", Kind: iam.KindMachine,
-	Grants: []iam.Grant{iam.GrantFleetOperate},
+	Grants: []iam.Grant{iam.GrantAdmin},
 }
 
 // identityLogs is every identity-claiming domain this node runs, in the

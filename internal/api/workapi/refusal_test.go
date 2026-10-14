@@ -31,8 +31,8 @@ import (
 // sentence and nowhere else to write one.
 //
 // So the three are asked the SAME question by a caller holding the same
-// grants — create an item, with state:read and nothing else — and the three
-// texts compared byte for byte. The HTTP surface is the one that refuses at
+// access — create an item, holding the knowledge base and not the tracker —
+// and the three texts compared byte for byte. The HTTP surface is the one that refuses at
 // its ROUTE, before any tool runs, which is exactly why it is the one that
 // could drift.
 //
@@ -41,7 +41,7 @@ import (
 // comparison above is one that can fail.
 func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
 	t.Parallel()
-	grants := []iam.Grant{iam.GrantStateRead}
+	grants := []iam.Grant{iam.GrantKnowledge}
 	r := newRig(t, chart{})
 	deps := r.halves().Work
 	args := map[string]any{"title": "rotate the key", "project": "ENG"}

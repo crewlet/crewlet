@@ -9,7 +9,7 @@
 
 Tier A's `api.auth.company_writers` lists the token ids that alone may
 **change** the company document. Empty, the document is edited by people:
-whoever the authority table admits to a write — `config:write`, or a unit's
+whoever the authority table admits to a write — `admin`, or a unit's
 lead inside the subtree they lead — makes it. Set, the document is *managed*:
 some other system — a GitOps pipeline, a Kubernetes operator rendering it from
 custom resources — is its source, and writes it with its own Tier A token.
@@ -42,7 +42,7 @@ no credential at all and are refused by the Tier A that declares the document
 managed; a `-company` bootstrap seed is ignored, loudly. The one reading of the
 list is `config.APIAuth.MayWriteCompany`, which the viewer answer also reads as
 `config_writer`, so the dashboard offers an edit only where the engine would
-take it: `config_writer`, and either `config:write` or the lead of the unit
+take it: `config_writer`, and either `admin` or the lead of the unit
 being edited.
 
 What stays open is what changes no byte of the company: a **reload** (and an
@@ -77,12 +77,12 @@ renders the company; refusing them that is an outage the setting caused.
 
 It is not a privilege boundary. It prevents silent drift between the managing
 system and the running document; it does not keep a credential from changing
-what the document does. Every credential holding `secrets:write` still writes
-the secret store, and a `config:write` holder can reload, so a credential that
-is not a writer can rewrite any value the document references through a
-`${VAR}` — a model's key, a webhook secret, an endpoint — and publish it, or
-have the next activation publish it. A deployment that needs separation must
-not grant either to anybody it would not let write the document.
+what the document does. Every administrator still writes the secret store and
+can reload, so a credential that is not a writer can rewrite any value the
+document references through a `${VAR}` — a model's key, a webhook secret, an
+endpoint — and publish it, or have the next activation publish it. A
+deployment that needs separation must not grant `admin` to anybody it would
+not let write the document.
 
 It does not decide who may READ the document — reads are unchanged — nor who
 may write the secret store, the work tracker, the knowledge base or anything

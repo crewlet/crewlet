@@ -64,17 +64,7 @@ const EVERY_TOOL = [
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -1369,6 +1359,84 @@ test("a reply sent closes the banner that said who it answers", async () => {
     },
   ]);
   expect(screen.queryByText(/^Replying to/)).toBeNull();
+});
+
+// AN ASKED PERSON OPENS THE ITEM AND ANSWERS WITHOUT TRACKER. The engine
+// answers the person an open ask names with the item AND its thread (the
+// detail's `comments`) and takes their answer on it, so the page asks the
+// tracker nothing else — no project, no subtasks, no paged history it would
+// refuse — draws the thread it was handed, and offers the answer where the
+// question was put to them. The CONTROL is an ask put to somebody else on the
+// same page, which offers nothing. Mutation: ask the paged histories whatever
+// the reader holds, or offer the answer only to a Tracker holder, and a line
+// here goes red.
+test("an asked person opens the item and answers without Tracker", async () => {
+  const ask = (id: string, to: string, question: string) => ({
+    id,
+    task: "t-1",
+    author: "ada",
+    author_kind: "agent" as const,
+    body: question,
+    created_at: "2031-04-12T09:00:00Z",
+    ask: to,
+    decision: {
+      question,
+      options: [
+        { id: "eu", label: "EU first" },
+        { id: "us", label: "US first" },
+      ],
+      recommended: "eu",
+      role: "approver" as const,
+    },
+  });
+  mount(<WorkItemPage id="ENG-42" />, {
+    viewer: {
+      login: "sam.ito",
+      grants: ["knowledge"],
+      handle: "sam",
+      owner: "sam",
+      name: "Sam Ito",
+      kind: "human",
+      acts: ["comment_on_work_item"],
+    },
+    answers: {
+      work_item: detail({
+        comments: [
+          ask("c-1", "sam", "Which region do we ship first?"),
+          ask("c-2", "jane", "Who signs the release off?"),
+        ],
+      }),
+    },
+  });
+  await settle();
+  for (const kind of [
+    "work_project",
+    "work_items",
+    "work_activity",
+    "work_comments",
+    "work_item_turns",
+  ]) {
+    expect(
+      asked.some((a) => a.kind === kind),
+      kind,
+    ).toBe(false);
+  }
+  expect(
+    screen.getByText(/You can read this task and answer what you were asked on it\./),
+  ).toBeTruthy();
+  // THE THREAD IT WAS HANDED, both asks drawn — and the answer offered on the
+  // one put to them alone.
+  const mine = screen.getAllByText("Which region do we ship first?")[0]!.closest("article")!;
+  const theirs = screen.getAllByText("Who signs the release off?")[0]!.closest("article")!;
+  expect(within(theirs).queryByRole("button", { name: "Accept" })).toBeNull();
+  // NO REPLY BOX AND NO COMPOSER: the one write they may make is the answer.
+  expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Comment on ENG-42" })).toBeNull();
+  fireEvent.click(within(mine).getByRole("button", { name: "Accept" }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "comment_on_work_item", args: { item: "ENG-42", answers: "c-1", choice: "eu" } },
+  ]);
 });
 
 // AN ASK'S QUESTION STARTS FROM THE COMMENT'S FIRST LINE, WHOLE. It was

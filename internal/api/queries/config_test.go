@@ -75,29 +75,29 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 	return svc, ids
 }
 
-func TestTheConfigQueryIsOperatorOnly(t *testing.T) {
+func TestTheConfigQueryIsAdmins(t *testing.T) {
 	t.Parallel()
 	// Reading the document exposes the whole company — its org chart,
 	// which integrations are wired, and every ${VAR} reference by name.
-	// That is what makes it need `config:read` of its own, and the socket
-	// must not be the way around it: the ordinary dashboard reader holds
-	// `state:read` and must reach none of these.
+	// That is what makes it admin's, and the socket must not be the way
+	// around it: somebody who uses every app of the company and is not an
+	// admin must reach none of these.
 	surface, _ := configSurface(t, companyDoc)
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Config: surface})
 
 	narrow := iam.WithPrincipal(t.Context(), iam.Principal{
 		ID: uuid.New(), Login: "token:reader", Kind: iam.KindMachine,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantStateRead},
+		Stage: iam.StageActive, Grants: iam.Apps,
 	})
 	for _, what := range []string{"config", "config_audit", "config_diff", "config_entities"} {
 		if _, err := r.Answer(narrow, what, nil); err == nil {
-			t.Errorf("%s answered the ordinary dashboard reader", what)
+			t.Errorf("%s answered somebody holding every app", what)
 		}
-		// The control: the grant it DOES need is answered, or the
+		// The control: the permission it DOES need is declared, or the
 		// assertion above would pass on a question nothing can reach.
-		if got := r.Needs(what); got != iam.GrantConfigRead {
-			t.Errorf("%s needs %q, want %q", what, got, iam.GrantConfigRead)
+		if got := r.PostureOf(what).Grant(); got != iam.GrantAdmin {
+			t.Errorf("%s requires %q, want %q", what, got, iam.GrantAdmin)
 		}
 	}
 }

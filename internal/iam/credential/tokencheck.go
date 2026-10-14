@@ -193,27 +193,29 @@ func CheckToken(presented Token, row TokenRow, now time.Time,
 	return TokenCheck{TokenValid, ""}
 }
 
-// EffectiveGrants is what a valid token carries on this request: the grants
-// its mint named that its owner STILL holds.
+// EffectiveGrants is what a valid token carries on this request: in
+// [iam.AllGrants] order, every permission the mint named that its owner STILL
+// holds, both sides read through [iam.Expand].
 //
-// RE-EVALUATED PER REQUEST, never frozen at the mint, so taking a grant away
-// from a person takes it away from every token they made. The deployment's
-// ceiling is the caller's to apply on top, as it is for every credential.
+// RE-EVALUATED PER REQUEST, never frozen at the mint, so taking a permission
+// away from a person takes it away from every token they made. Through
+// [iam.Expand] on both sides, because a token minted [admin] carries every app
+// its owner keeps when admin is taken away from them, and a token minted
+// [tracker] by an administrator who never ticked the app separately still
+// carries it. A name this build does not know grants nothing, here as
+// everywhere. The node's admin posture is the caller's to apply on top, as it
+// is for every credential.
 //
-// AND NEVER A GRANT THAT NEEDS A PERSON PRESENT ([iam.PersonPresentGrants]),
-// whatever the row says. The mint refuses them, and this is the half the
-// request path relies on: a token is fresh by construction for `step_up`, so
-// no proof's age keeps it off the gestures those grants open — stripping them
-// here does, beside the authority table's own refusal of a token on every
-// gesture that needs a person present — and a row carrying one (from a peer
-// whose decide did not refuse it, or from anywhere else) grants it nothing.
+// ADMIN IS CARRIED LIKE ANY OTHER PERMISSION. What keeps a token off the
+// gestures that need a person present is not a permission it cannot hold: it
+// is internal/authz's `presence` on the row, which refuses any request a token
+// presented there, and internal/iamdomain's refusal of an administrative
+// identity record written through one.
 func (row TokenRow) EffectiveGrants() []iam.Grant {
-	out := make([]iam.Grant, 0, len(row.Grants))
-	for _, g := range row.Grants {
-		if slices.Contains(iam.PersonPresentGrants, g) {
-			continue
-		}
-		if slices.Contains(row.Owner.Grants, g) && !slices.Contains(out, g) {
+	minted, owner := iam.Expand(row.Grants), iam.Expand(row.Owner.Grants)
+	out := make([]iam.Grant, 0, len(iam.AllGrants))
+	for _, g := range iam.AllGrants {
+		if slices.Contains(minted, g) && slices.Contains(owner, g) {
 			out = append(out, g)
 		}
 	}

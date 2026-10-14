@@ -94,8 +94,8 @@ func TestACompanyWriterThatNamesNoTokenIsWarnedAbout(t *testing.T) {
 		b := config.RunnableBootstrap()
 		b.Retention.BackupOwner = "platform-oncall"
 		b.API.Auth.Tokens = []config.APIToken{
-			{ID: "operator", Token: value, Grants: []iam.Grant{iam.GrantConfigWrite}},
-			{ID: "founder", Token: value, Grants: []iam.Grant{iam.GrantConfigWrite}},
+			{ID: "operator", Token: value, Grants: []iam.Grant{iam.GrantAdmin}},
+			{ID: "founder", Token: value, Grants: []iam.Grant{iam.GrantAdmin}},
 		}
 		return &b
 	}

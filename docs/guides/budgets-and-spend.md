@@ -78,7 +78,7 @@ than reading as one that has refused nothing.
 
 Both ceilings are part of the company document. The **company's**
 `token_budget` and a **seat's** are written through
-[`/config`](configure-via-api.md) (`config:write`) — a seat's on its own with
+[`/config`](configure-via-api.md) (`admin`) — a seat's on its own with
 `PUT /config/roles/{handle}` — and every node enforces them once it has applied
 that epoch. The write is a revision recorded with a summary such as "Raise the
 company's daily token ceiling from 2M to 5M". A seat ceiling the company's own

@@ -230,7 +230,7 @@ type authMounter interface {
 // /setup were a plain `Routes(*http.ServeMux)` and decided no grant at all:
 // the guard in front of them answers only whether somebody resolved, which
 // meant "the operator" while an operator token was the only credential and
-// meant "anybody" the day a person could sign in holding `state:read`. A
+// meant "anybody" the day a person could sign in at all. A
 // surface that cannot state its policy where it mounts has no type to be
 // mounted as here.
 //
@@ -978,9 +978,8 @@ func (o Options) missing() error {
 
 // mountDeployment registers the routes that operate the DEPLOYMENT rather
 // than the company: the backup, the retention gestures, the capacity window
-// and the fleet broker's membership. Every one takes [iam.GrantFleetOperate],
-// through the
-// authority table's [authz.ActionFleetOperate] for a write and
+// and the fleet broker's membership. Every one is admin's ([iam.GrantAdmin]),
+// through the authority table's [authz.ActionFleetOperate] for a write and
 // [authz.ActionFleetRead] for a read, stated where it is mounted.
 //
 // # They decided nothing, and the guard in front of them decides nothing either
@@ -989,13 +988,13 @@ func (o Options) missing() error {
 // because each was written while the only credential this engine had was an
 // operator token and "somebody resolved" meant "the operator". The guard in
 // front of every route answers the same question and no other: is there a
-// principal. So once a person could sign in holding `state:read` alone, or a
-// pipeline hold `work:write`, every one of them could clear a spend ceiling,
-// copy the node's whole durable state to a directory of their choosing,
-// move the floor the trim deletes against, and evict a machine from the
-// fleet. Through [authz.Router] each route is refused `403` naming the
-// grant, and a route mounted without a policy is a boot failure rather than
-// an open door.
+// principal. So once a person could sign in holding nothing but the company's
+// overview, or a pipeline hold the tracker alone, every one of them could
+// clear a spend ceiling, copy the node's whole durable state to a directory of
+// their choosing, move the floor the trim deletes against, and evict a machine
+// from the fleet. Through [authz.Router] each route is refused `403` naming
+// admin, and a route mounted without a policy is a boot failure rather than an
+// open door.
 //
 // THE READS TOO — the maintenance status and the reanchor confirmation value
 // — because `/work/retention*` is the deployment's surface whole, which is
@@ -1005,7 +1004,7 @@ func (o Options) missing() error {
 //
 // # A write asks for a recent proof of identity, and a read does not
 //
-// The two verbs carry the same grant and differ in the step-up alone: every
+// The two verbs ask the same permission and differ in the step-up alone: every
 // write here changes what the deployment does for everybody on it, so it asks
 // for a proof inside `api.auth.session.step_up`, while the two reads — the
 // maintenance window's status and the value a reanchor must echo — change

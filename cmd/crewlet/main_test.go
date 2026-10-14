@@ -274,16 +274,17 @@ func bootstrapFor(t *testing.T, port int) *config.Bootstrap {
 	b.API.Host = "127.0.0.1"
 	b.API.Port = port
 	// A COMPLETE SERVING POSTURE. Once a port is set, Tier A must carry an
-	// external URL, a grant ceiling and a credential of its own, and every
+	// external URL, an admin posture and a credential of its own, and every
 	// guarded route needs that credential presented — so a fixture short
 	// of any of them fails on its own configuration rather than on its
-	// subject. [getJSON] is what presents it.
+	// subject. [getJSON] is what presents it, carrying admin and with it
+	// every app.
 	if port != 0 {
 		b.API.ExternalURL = "http://127.0.0.1:" + strconv.Itoa(port)
 	}
-	b.API.Auth.MaxGrants = iam.AllGrants
+	b.API.Auth.Admin = iam.AdminServe
 	b.API.Auth.Tokens = []config.APIToken{
-		{ID: "fixture", Token: cliFixtureToken, Grants: iam.AllGrants},
+		{ID: "fixture", Token: cliFixtureToken, Grants: []iam.Grant{iam.GrantAdmin}},
 	}
 	b.Secrets.ActiveKeyID = "test"
 	b.Secrets.Keys = []config.SecretKey{{ID: "test", Material: testKeyMaterial(t)}}
@@ -660,11 +661,11 @@ func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = freePort(t)
-	// THE GRANT A BACKUP TAKES, and only that. The token carried none and
-	// took a backup all the same, because the route asked only whether
-	// somebody resolved; it takes `fleet:operate` now.
+	// THE PERMISSION A BACKUP TAKES. The token carried none and took a
+	// backup all the same, because the route asked only whether somebody
+	// resolved; it takes `admin` now.
 	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "a-test-token",
-		Grants: []iam.Grant{iam.GrantFleetOperate}}}
+		Grants: []iam.Grant{iam.GrantAdmin}}}
 	if boot.Node.ID != "" {
 		t.Fatalf("the bootstrap names node %q itself, so this case proves nothing",
 			boot.Node.ID)

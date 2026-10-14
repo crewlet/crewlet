@@ -140,15 +140,16 @@ func TestAPasswordSetIsOneRecordThatEndsEveryTokenAndLink(t *testing.T) {
 	}
 }
 
-// A GRANT GAINED REVOKES AN OUTSTANDING RESET LINK.
+// A PERMISSION GAINED REVOKES AN OUTSTANDING RESET LINK.
 //
-// A link is judged at its issue against the grants of whoever issued it, and
-// the issuer is shown it and can spend it — so a grant the person gains while
-// it is outstanding, judged against nobody holding the link, would reach
-// whoever spends it. The edit that adds a grant revokes the link in its own
-// record. The CONTROL is an edit that only takes a grant away, which leaves the link opening. Mutation:
-// drop the revocation from UpdatePerson and the link still opens once the
-// person holds config:write.
+// A link is judged at its issue against the permissions of whoever issued it,
+// and the issuer is shown it and can spend it — so a permission the person
+// gains while it is outstanding, judged against nobody holding the link, would
+// reach whoever spends it. The edit that adds one revokes the link in its own
+// record. The CONTROLS are an edit that only takes a permission away, and one
+// that spells out an app the person already holds through admin — neither
+// adds anything, so the link keeps opening. Mutation: drop the revocation from
+// UpdatePerson and the link still opens once the person holds admin.
 func TestAGrantGainedRevokesAnOutstandingResetLink(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -181,18 +182,18 @@ func TestAGrantGainedRevokesAnOutstandingResetLink(t *testing.T) {
 
 	edit(func(held []iam.Grant) []iam.Grant {
 		return slices.DeleteFunc(slices.Clone(held),
-			func(g iam.Grant) bool { return g == iam.GrantSecretRead })
+			func(g iam.Grant) bool { return g == iam.GrantKnowledge })
 	})
 	if !opens() {
-		t.Fatal("an edit that only took a grant away revoked the link — " +
+		t.Fatal("an edit that only took a permission away revoked the link — " +
 			"the control")
 	}
 
 	edit(func(held []iam.Grant) []iam.Grant {
-		return append(slices.Clone(held), iam.GrantConfigWrite)
+		return append(slices.Clone(held), iam.GrantAdmin)
 	})
 	if opens() {
-		t.Error("the link still opens after its person gained config:write, " +
+		t.Error("the link still opens after its person gained admin, " +
 			"which nobody holding it was judged against")
 	}
 }

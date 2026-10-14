@@ -51,6 +51,14 @@ import { CONTAINER_SHAPE, ITEM_KEY_SHAPE, KEY_SHAPE, resolve, resolves } from ".
 import { ALL_PROJECTS, scopeAt } from "./scope.ts";
 import { segmentsOf } from "~/test/routes.ts";
 
+/** Every Settings section's own address — the company's, beside the reader's
+ *  own two and General, which `nav gates by app` sets apart. */
+function settingsPaths(): string[][] {
+  return workspaceRow("settings")!
+    .sections.filter((s) => !s.elsewhere && !s.personal && s.path.length > 1)
+    .map((s) => s.path);
+}
+
 describe("parsing", () => {
   test("a bare hash is the overview", () => {
     expect(parseHash("#/").path).toEqual([]);
@@ -243,18 +251,19 @@ describe("the navigation grammar", () => {
     expect(sections).toBeGreaterThan(25);
   });
 
-  // A LOCK GOES WHERE THE CLOSED THING IS, by ONE rule. The reader's own
-  // sections need nothing; every other needs the company's grant AND one of
-  // its own; a workspace is closed only when nothing in it is open, and one
-  // that names grants of its own needs one of them as well as its section's.
+  // A LOCK GOES WHERE THE CLOSED THING IS, by ONE rule: any one of a
+  // section's permissions opens it (Admin counting every app), a section
+  // naming none is the overview everybody reads, and a workspace is closed
+  // only when nothing in it is open — needing its own permission beside its
+  // section's, never instead of it.
   test("one rule opens a section, and a workspace only when nothing in it is", () => {
     const settings = workspaceRow("settings")!;
     const people = settings.sections.find((s) => s.key === "people")!;
-    expect(sectionOpen(people, ["state:read", "audit:read"])).toBe(true);
-    expect(sectionOpen(people, ["audit:read"]), "the company's grant too").toBe(false);
-    expect(grantsMissing(people, [])).toEqual(["state:read"]);
-    expect(grantsMissing(people, ["state:read"])).toEqual(["people:manage", "audit:read"]);
-    // THE READER'S OWN SECTIONS NEED NOTHING, the company's grant included.
+    expect(sectionOpen(people, ["admin"])).toBe(true);
+    expect(sectionOpen(people, ["tracker", "knowledge"]), "every app is not Admin").toBe(false);
+    expect(grantsMissing(people, ["admin"])).toEqual([]);
+    expect(grantsMissing(people, [])).toEqual(["admin"]);
+    // THE READER'S OWN SECTIONS NEED NOTHING.
     for (const key of ["account", "appearance"]) {
       const own = settings.sections.find((s) => s.key === key)!;
       expect(sectionOpen(own, []), key).toBe(true);
@@ -263,21 +272,73 @@ describe("the navigation grammar", () => {
     // SETTINGS IS NEVER CLOSED: its You group is the reader's own.
     expect(workspaceOpen(settings, [])).toBe(true);
     expect(workspaceMissing(settings, [])).toEqual([]);
-    const home = workspaceRow("home")!;
-    expect(workspaceOpen(home, [])).toBe(false);
-    expect(workspaceMissing(home, [])).toEqual(["state:read"]);
     expect(workspaceOpen(workspaceRow("account")!, [])).toBe(true);
-    // A WORKSPACE'S OWN GRANTS ARE NEEDED BESIDE ITS SECTION'S, never
-    // instead of them: folded into one list they would admit either.
-    const guarded: WorkspaceRow = { ...workspaceRow("live")!, grants: ["fleet:operate"] };
-    expect(workspaceOpen(guarded, ["state:read", "audit:read"])).toBe(false);
-    expect(workspaceMissing(guarded, ["state:read", "audit:read"])).toEqual(["fleet:operate"]);
-    expect(workspaceOpen(guarded, ["state:read", "fleet:operate"])).toBe(true);
+    // A WORKSPACE'S OWN PERMISSION IS NEEDED BESIDE ITS SECTION'S.
+    const guarded: WorkspaceRow = { ...workspaceRow("live")!, grants: ["tracker"] };
+    expect(workspaceOpen(guarded, [])).toBe(false);
+    expect(workspaceMissing(guarded, [])).toEqual(["tracker"]);
+    expect(workspaceOpen(guarded, ["tracker"])).toBe(true);
     // THE READER'S OWN ADDRESSES, which the frame draws for anybody signed in.
     expect(personalPath(["account"])).toBe(true);
     expect(personalPath(["settings", "appearance"])).toBe(true);
     expect(personalPath(["settings"])).toBe(false);
     expect(personalPath(["work"])).toBe(false);
+  });
+
+  // EVERY PLACE IS THE OVERVIEW'S, ONE APP'S, OR ADMIN'S — and the table says
+  // which, so the sidebar, the palette and the frame's lock read one answer.
+  // The tracker's screens open with Tracker (or Admin, which includes it) and
+  // nothing else; the knowledge base's with Knowledge; the company-wide
+  // transcripts and every Settings page but You and General with Admin; and
+  // the overview — Home, the agents' status, what is running, spend — with
+  // nothing at all. Mutation: drop a row's permission, or give a transcript
+  // an app's, and the matching line here goes red.
+  test("nav gates by app", () => {
+    const at = (...path: string[]) => sectionOf(path) ?? workspaceRow(workspaceOf(path))!;
+    const opens = (path: string[], held: string[]) => {
+      const row = workspaceRow(workspaceOf(path))!;
+      const section = sectionOf(path);
+      return workspaceOpen(row, held) && (!section || sectionOpen(section, held));
+    };
+    const TRACKER_ONLY = [["inbox"], ["me"], ["work"], ["work", "tasks"], ["spend", "tasks"]];
+    for (const path of TRACKER_ONLY) {
+      expect(opens(path, ["tracker"]), path.join("/")).toBe(true);
+      expect(opens(path, ["admin"]), path.join("/")).toBe(true);
+      expect(opens(path, ["knowledge"]), path.join("/")).toBe(false);
+      expect(opens(path, []), path.join("/")).toBe(false);
+    }
+    for (const path of [["knowledge"], ["knowledge", "skills"]]) {
+      expect(opens(path, ["knowledge"]), path.join("/")).toBe(true);
+      expect(opens(path, ["admin"]), path.join("/")).toBe(true);
+      expect(opens(path, ["tracker"]), path.join("/")).toBe(false);
+    }
+    const ADMIN_ONLY = [
+      ["live", "turns"],
+      ["live", "a2a"],
+      ["live", "events"],
+      ["knowledge", "diaries"],
+      ...settingsPaths().filter((p) => !["settings", "appearance"].includes(p[1] ?? "settings")),
+    ];
+    expect(ADMIN_ONLY.length).toBeGreaterThan(10);
+    for (const path of ADMIN_ONLY) {
+      expect(opens(path, ["admin"]), path.join("/")).toBe(true);
+      expect(opens(path, ["tracker", "knowledge"]), path.join("/")).toBe(false);
+    }
+    const OVERVIEW = [
+      [],
+      ["agents"],
+      ["live"],
+      ["live", "runs"],
+      ["spend"],
+      ["spend", "budgets"],
+      ["settings"],
+      ["settings", "appearance"],
+      ["account"],
+    ];
+    for (const path of OVERVIEW) {
+      expect(opens(path, []), path.join("/") || "home").toBe(true);
+      expect(at(...path).grants ?? [], path.join("/") || "home").toEqual([]);
+    }
   });
 
   // ALREADY IN THE SIDEBAR is a fact about the sidebar: every row's landing,

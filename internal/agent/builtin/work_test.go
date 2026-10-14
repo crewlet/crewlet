@@ -620,7 +620,7 @@ func callWork(t *testing.T, reg *tools.Registry, name string, args map[string]an
 // callWorkAs is [callWork] for a case that is about WHO is calling.
 //
 // A CASE ABOUT AUTHORITY MUST NOT USE [everyGrant], which carries
-// fleet:operate — the grant every relation class checks BEFORE the chart, so
+// admin — the permission every relation class checks BEFORE the chart, so
 // a fixture holding it is allowed by a chart that refuses everything and the
 // case asserts nothing.
 func callWorkAs(ctx context.Context, t *testing.T, reg *tools.Registry,

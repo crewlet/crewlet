@@ -131,6 +131,12 @@ type WorkReader interface {
 		loc *time.Location) (tracker.DecisionsAnswer, error)
 	TurnPlaces(ctx context.Context, runs []string,
 		fresh statelog.Freshness) (map[string]tracker.TurnPlace, error)
+	// Thread is the read a comment's write makes to find the question it
+	// answers — here so `work_item` can ask [tracker.AskedOn] whether an
+	// open ask on the item names the caller, through the SAME read the
+	// answer they would post is resolved by (see [Sources.workItem]).
+	Thread(ctx context.Context, q tracker.ThreadQuery,
+		fresh statelog.Freshness) (tracker.ResolvedThread, error)
 }
 
 // PageReader is the knowledge read side this surface calls.
@@ -305,18 +311,90 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	// AND THE COMPANY'S CLOCK, so the rail's due date says how it stands on
 	// the calendar the board's overdue mark was cut on — see
 	// [tracker.DueStanding].
+	//
+	// DECIDED BEFORE IT IS ANSWERED, and twice for somebody without the
+	// tracker — see [Sources.mayReadItem].
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "work_item")
+	}
+	unread, err := s.mayReadItem(ctx, principal, authz.Object{
+		Kind: authz.KindTask, ID: ref, Unresolved: true})
+	if err != nil {
+		return nil, err
+	}
 	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
 		Comments: true, History: true, Links: true, Fields: true,
 		Units: s.chartUnits(),
 		Clock: &tracker.DayClock{Now: s.clock(), Zone: s.zone()},
 	}, fresh)
 	switch {
+	case unread && errors.Is(err, tracker.ErrNoTask):
+		// A MISSING ITEM IS THE REFUSAL A CALLER NOT ASKED ON IT GETS, to
+		// somebody the item would have been decided for: "no such item"
+		// before "you may not" would tell a person without the tracker
+		// which keys exist.
+		if _, refusal := s.mayReadItem(ctx, principal,
+			authz.Object{Kind: authz.KindTask, ID: ref}); refusal != nil {
+			return nil, refusal
+		}
+		return nil, ErrNotFound
 	case errors.Is(err, tracker.ErrNoTask):
 		return nil, ErrNotFound
 	case err != nil:
 		return nil, err
 	}
+	if unread {
+		asked, err := tracker.AskedOn(ctx, s.Work, detail.Task.ID,
+			iam.RecordOwner(principal), fresh)
+		if err != nil {
+			// THE PROBE COULD NOT READ THE THREAD, which says nothing
+			// about whether this caller was asked: unknown, never a
+			// refusal a person would take as "you were not asked".
+			return nil, fmt.Errorf("%w: this node cannot yet say whether an "+
+				"open ask on %s names you: %w", ErrUnavailable, ref, err)
+		}
+		object := authz.Object{Kind: authz.KindTask, ID: detail.Task.ID,
+			Container: detail.Task.Project}
+		if asked {
+			object.Asked = iam.RecordOwner(principal)
+		}
+		if _, err := s.mayReadItem(ctx, principal, object); err != nil {
+			return nil, err
+		}
+	}
 	return detail, nil
+}
+
+// mayReadItem decides `get_work_item` ([authz.ActionWorkRead]) on object for
+// principal, and renders the decision as the error this surface refuses with.
+//
+// # Read the item, then decide again — only for somebody without the tracker
+//
+// A tracker holder reads any item, which the table answers before anything is
+// read. Somebody WITHOUT it reads one item: the one an open ask on it names
+// them on (ADR-0033's asked arm), so they can read what they were asked and
+// answer it. Only the item says whether an ask names them, so the table
+// answers that caller [authz.ErrUnresolved] — read it, resolve its asks, and
+// ask again — and this reports it as unread=true with no error. The second
+// decision, on the object the read resolved, is the answer.
+//
+// AN UNDECIDABLE DECISION IS [ErrUnavailable] and never a refusal, for
+// [Sources.mayRead]'s reason.
+func (s Sources) mayReadItem(ctx context.Context, principal iam.Principal,
+	object authz.Object) (unread bool, err error) {
+
+	d := authz.Decide(ctx, principal, authz.ActionWorkRead, object, s.Chart, s.clock())
+	switch {
+	case object.Unresolved && errors.Is(d.Err, authz.ErrUnresolved):
+		return true, nil
+	case d.Unknown():
+		return false, fmt.Errorf("%w: this node cannot decide %s on %s yet: %w",
+			ErrUnavailable, authz.ActionWorkRead, object.ID, d.Err)
+	case !d.Allowed:
+		return false, refused("work_item", d)
+	}
+	return false, nil
 }
 
 // workComments answers one page of a task's thread, walking back from the
@@ -622,12 +700,12 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 // SCOPED BY [Sources.recordHandle], the same rule `work_my_work` and
 // `work_inbox` take: an absent handle is the caller's own record, and naming
 // anybody else's is [authz.ActionPersonRead] — theirs, whoever leads them, or
-// the deployment's admin grant.
+// an admin, each with the tracker.
 //
 // It DEMANDED a handle and checked nothing, on the reasoning that the whole
 // surface is guarded so the caller already holds the company's credential.
 // That reasoning stopped holding once a guarded surface meant "somebody
-// signed in" rather than "the operator": every person holding `state:read`
+// signed in" rather than "the operator": every person holding the tracker
 // reaches this question, and its answer carries the richest personal record
 // the engine keeps — somebody's unread notices, what they mean to work on
 // next, and who set that order. The parameter selected whose. A scope rule

@@ -45,18 +45,10 @@ const EVERY_ACT = ["update_work_item", "create_work_item", "answer_knowledge"];
 
 const JANE: ViewerState = {
   login: "founder",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
-  operatesFleet: true,
+  grants: ["admin", "tracker", "knowledge"],
+  admin: true,
+  tracker: true,
+  knowledge: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -75,7 +67,9 @@ const ANONYMOUS: ViewerState = {
   ...JANE,
   login: "",
   grants: [],
-  operatesFleet: false,
+  admin: false,
+  tracker: false,
+  knowledge: false,
   handle: "",
   owner: "",
   name: "",
@@ -93,7 +87,7 @@ const UNBOUND: ViewerState = {
   ...ANONYMOUS,
   login: "ci",
   owner: "ci",
-  grants: ["state:read", "work:write"],
+  grants: ["tracker"],
   acts: EVERY_ACT,
   anonymous: false,
   unbound: true,
@@ -919,19 +913,21 @@ describe("the actions, made as the person", () => {
 
   // A WRITE ROW IS NEVER HIDDEN: it is drawn for every reader, and where
   // this browser cannot act its hint is the sentence that says why — and a
-  // press on it says so again instead of doing anything.
+  // press on it says so again instead of doing anything. (A reader holding no
+  // Tracker is sent no task search, so no task is at hand to assign.)
   test.each([
-    ["an anonymous reader", ANONYMOUS, WRITE_REASONS.anonymous],
+    ["an anonymous reader", ANONYMOUS, WRITE_REASONS.anonymous, [/Ask an agent/, /Create task/]],
     [
       "a person the engine does not make it for",
       { ...JANE, acts: ["answer_knowledge"] },
       WRITE_REASONS.not_served,
+      [/Assign ENG-420/, /Ask an agent/, /Create task/],
     ],
-  ])("for %s each is drawn, disabled with the reason", async (_, viewer, reason) => {
+  ])("for %s each is drawn, disabled with the reason", async (_, viewer, reason, labels) => {
     engine((tool) => json({ tool, outcome: "applied", position: "", receipt: {} }));
     const p = mount({ viewer, answers: TASKS });
     await p.type("cluster join");
-    for (const label of [/Assign ENG-420/, /Ask an agent/, /Create task/]) {
+    for (const label of labels) {
       expect(p.row(label).textContent).toContain(reason);
     }
     await act(async () => {
@@ -941,10 +937,10 @@ describe("the actions, made as the person", () => {
     expect(p.closed).not.toHaveBeenCalled();
   });
 
-  // A BROWSER THE ENGINE SERVES NO COMPANY IS OFFERED NONE OF ONE. A person
-  // whose state:read was withdrawn kept a palette listing the agents and tools
-  // of the snapshot they held, and one invited with none was offered Ask and
-  // Create held as "Offline" — online, and refused. The CONTROL is the same
+  // A BROWSER THE ENGINE REFUSED IS OFFERED NONE OF THE COMPANY. A person
+  // whose seat was taken out of the chart kept a palette listing the agents
+  // and tools of the snapshot they held, and was offered Ask and Create held
+  // as "Offline" — online, and refused. The CONTROL is the same
   // palette before the refusal, which lists the seat and asks its questions.
   // Mutation: keep the snapshot on a refusal, ask regardless, or rank offline
   // first in the gate, and a line here goes red.
@@ -957,7 +953,7 @@ describe("the actions, made as the person", () => {
     expect(screen.getAllByText("task_activity").length).toBeGreaterThan(0);
     expect(asked.some((q) => q.kind === "work_search")).toBe(true);
 
-    act(() => p.store.setAccessRefused("grant withdrawn: state:read"));
+    act(() => p.store.setAccessRefused("your seat is no longer in the chart"));
     asked = [];
     await p.type("swe");
     expect(screen.queryByText("SWE")).toBeNull();

@@ -84,6 +84,13 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 	if container == "" {
 		return Written{}, invalid("container", "a page needs a container to live in")
 	}
+	// THE DECLARED SPACES FIRST, and for every actor: a key nothing
+	// declares is no space at all, whoever typed it — and a seat refused
+	// for that is told the true reason rather than one about the reserved
+	// containers.
+	if err := s.refuseUndeclared(container); err != nil {
+		return Written{}, err
+	}
 	if err := s.refuseReserved(actor, container, true); err != nil {
 		return Written{}, err
 	}

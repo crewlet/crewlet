@@ -117,17 +117,7 @@ const org = {
 
 const OPERATOR = {
   login: "U0FOUNDER",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane",
@@ -152,9 +142,7 @@ function mount(id?: string, { refuse = false, answer = pool() } = {}) {
     if (what === "viewer") return Promise.resolve(OPERATOR);
     if (what === "credential_pool") {
       return refuse
-        ? Promise.reject(
-            new QueryError("unauthorized", { reason: "operator", grants: ["config:read"] }),
-          )
+        ? Promise.reject(new QueryError("unauthorized", { reason: "operator", grants: ["admin"] }))
         : Promise.resolve(answer);
     }
     return new Promise(() => {});
@@ -335,7 +323,9 @@ test("a refused reader sees the refusal alone — no tiles, no empty list", asyn
   const { view } = mount(undefined, { refuse: true });
   await settle();
   // THE ENGINE'S REFUSAL, naming the grant that would have admitted the reader.
-  expect(await screen.findByText("config:read")).toBeDefined();
+  expect(
+    await screen.findByText(/This answer needs Admin access\. An admin can give it to you\./),
+  ).toBeDefined();
   expect(view.container.querySelector(".crewlet-statcard")).toBeNull();
   expect(screen.queryByText(/No model configured/)).toBeNull();
 });

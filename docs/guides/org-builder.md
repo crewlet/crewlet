@@ -20,14 +20,14 @@ under [Editing a node](#editing-a-node), field by field.
 ## Opening the builder
 
 The builder reads and writes the company document, so it needs what any other
-client of it needs: `config:read` to read it, credentials masked, and
-`config:write` to save it — a removal included, since it is one more change to
-the same document. A save may ask you to confirm your password first, as every
-configuration write does. Without `config:write`, the lead of a unit edits the
-units they lead instead ([Editing as a unit lead](#editing-as-a-unit-lead)).
+client of it needs: `admin`, to read it — credentials masked — and to save it,
+a removal included, since it is one more change to the same document. A save
+may ask you to confirm your password first, as every configuration write does.
+Without `admin`, the lead of a unit edits the units they lead instead
+([Editing as a unit lead](#editing-as-a-unit-lead)).
 
-The credential is a person signed in with those grants, or an API token that
-carries them, exchanged for a session on the dashboard's sign-in screen.
+The credential is a person signed in holding `admin`, or an API token that
+carries it, exchanged for a session on the dashboard's sign-in screen.
 There is no posture in which it is not needed — `api.auth.disabled` is
 retired, and `crewlet run -dev-principal` is a flag on a node reached over
 loopback rather than a configuration a browser can meet. What the builder
@@ -39,7 +39,7 @@ signed in:
 | the active revision | the organization, ready to edit |
 | `404 no_active_revision`, and the organization the node pushes names no company | creating the company |
 | `404 no_active_revision`, while the organization names a company | "This node is still catching up". Try again once the node has applied the fleet's revision, or use another node |
-| `401` or `403`, to somebody signed in | "Reading the configuration needs config:read.", with **Sign in as somebody else** |
+| `401` or `403`, to somebody signed in | "Reading the configuration needs Admin access.", with **Sign in as somebody else** |
 | `401` or `403`, to nobody signed in | "Editing the organization needs you to sign in.", with **Sign in**, which comes back to the builder |
 | a plain `404`, or an answer that is not JSON | "This process does not serve the configuration." The process has no configuration store; open the dashboard on a node running the engine |
 | nothing | the engine could not be reached, with **Retry** |
@@ -57,7 +57,7 @@ Signing in as somebody else — in another tab, since the session cookie is the
 browser's — while a draft is open keeps the draft on screen. The builder reads
 the company again and checks the draft as the new reader, and forgets the
 copy it kept for the last one; if the engine refuses it, editing pauses until
-somebody whose grants reach the company signs in. Signing out empties the
+somebody who may edit it — an administrator, or its lead — signs in. Signing out empties the
 tab's kept draft too.
 
 When another system [manages the company
@@ -81,7 +81,7 @@ two seats may share one:
 | `unit=<key>` | that unit's editor |
 | `add=agent`, `add=human` or `add=unit` | the Add on that kind at the company's top level (the org chart's **Add seat** is `add=agent`) |
 | `unit=<key>` and `add=…` | the Add under that unit |
-| `unit=<key>` or `seat=<handle>`, and `project=<KEY>` | that node's editor on its **Work** tab, its tracker project set to the key and not yet applied: Work's **New project** continues here, and saving it is what creates the project. Setting a project takes `config:write`, so a reader without it finds the field held with that reason |
+| `unit=<key>` or `seat=<handle>`, and `project=<KEY>` | that node's editor on its **Work** tab, its tracker project set to the key and not yet applied: Work's **New project** continues here, and saving it is what creates the project. Setting a project takes `admin`, so a reader without it finds the field held with that reason |
 
 It happens once, on arrival, and only when the builder can edit: once the
 draft is loaded, and not while a kept draft waits for **Keep** or
@@ -332,7 +332,7 @@ current draft:
 | *N problems* | the engine would refuse it; each problem is marked on the unit or seat it names, and problems about the whole document are listed above the chart |
 | Could not reach the engine to check | the dry run got no answer; the builder retries with an increasing wait |
 | The configuration changed | another revision was activated after this draft was started |
-| Needs config:write | the session was accepted and does not carry `config:write`; sign in as somebody who holds it |
+| Needs Admin access | the session was accepted and does not carry `admin`; sign in as somebody who holds it |
 | Needs confirmation | the write asks you to confirm your password first and the confirmation was declined; **Check again** asks again |
 | Refused | the engine refused the check for another reason, which the banner under the toolbar gives |
 | Needs sign-in | nobody is signed in, or the session ended; sign in |
@@ -380,14 +380,13 @@ another character and colour before adding it.
 **A new human seat is vacant until somebody is put on it**, which no save
 does: who holds a seat is the identity directory's, not the company
 document's. Once the save is applied, the seat's card in **Agents › Org
-chart** reads **Vacant** to a reader holding `people:manage` or `audit:read`,
-and a `people:manage` holder invites somebody onto it or creates a person on
+chart** reads **Vacant** — to everybody, since who holds a seat is the
+overview's — and an administrator invites somebody onto it or creates a person on
 it from there, its peek, its page or the **Person** section of its editor's
 **Profile** tab — see [Putting a person in the
 seat](../concepts/humans-in-the-org.md#putting-a-person-in-the-seat). That
-section shows who holds the seat, with **Invite**, **Create person** and
-**Cancel invitation** for a `people:manage` holder, read-only to `audit:read`
-and absent for anybody else. Those gestures write the identity directory at
+section shows who holds the seat, by name, to everybody, with **Invite**,
+**Create person** and **Cancel invitation** for an administrator alone. Those gestures write the identity directory at
 once, about the seat the running company holds, so the draft's **Apply** and
 **Undo** reach none of them — and a seat added in the draft is filled only
 once it is saved, since the directory knows only the seats a saved revision
@@ -466,7 +465,7 @@ not a field somebody sets.
 | Lead | Any seat. The empty choice shows the lead the unit inherits from the unit above it, as the last check reported it. |
 | Channel | An empty channel inherits the one above it. |
 | References | The unit's `knowledge` list: free-text references, not a read scope. |
-| Owns: tracker project, knowledge space | The unit's `project` and `space`: where unrouted work for the unit goes and where it files its own. Not a permission. Each names a container on whichever tracker and knowledge base the company runs, the engine's own included, so each is shown unless the company runs none (`tracker.backend: none`, `knowledge.backend: none`). Changing either takes `config:write`, because a lead's authority is derived from them. |
+| Owns: tracker project, knowledge space | The unit's `project` and `space`: where unrouted work for the unit goes and where it files its own. Not a permission. Each names a container on whichever tracker and knowledge base the company runs, the engine's own included, so each is shown unless the company runs none (`tracker.backend: none`, `knowledge.backend: none`). Changing either takes `admin`, because a lead's authority is derived from them — and a `space` is where pages may be created at all. |
 | Schedules: enabled | Each schedule can be switched on or off. |
 
 Shown and not changed: each schedule's cron, timezone, runner and task, and the
@@ -490,7 +489,7 @@ credentials are written in the configuration document.
 | Token ceilings: daily, weekly, monthly | Agent seats. One box per calendar window on the company's clock, each optional: an empty box is no ceiling on that window, and a 0 is refused rather than read as unlimited. A turn runs only while every capped window has room, and the company's own `token_budget` applies on top. The check warns about a ceiling that can never refuse anything — a week at or above seven days of the daily one, a seat at or above the company. |
 | Schedules: enabled | Agent seats. |
 | Integrations | Agent seats; see below. |
-| Owns: tracker project, knowledge space | Agent seats. The seat's own `project` and `space`: where unrouted work for the seat goes and where it files its own. Not a permission. Shown unless the company runs no tracker or no knowledge base, as for a unit. Changing either takes `config:write`. |
+| Owns: tracker project, knowledge space | Agent seats. The seat's own `project` and `space`: where unrouted work for the seat goes and where it files its own. Not a permission. Shown unless the company runs no tracker or no knowledge base, as for a unit. Changing either takes `admin`. |
 
 Shown with the reason they are not changed here: per-phase models
 (`llm_review` and the other `llm_*` fields), sandbox (enabled, where it runs),
@@ -630,7 +629,7 @@ with the remedy for that holder, then keeps the draft:
 
 A person is never unbound: they hold a human seat for as long as they exist,
 so the engine refuses an unbind of a person, and moving them or removing them
-is what frees it. Each remedy is a `people:manage` holder's to make, and there
+is what frees it. Each remedy is an administrator's to make, and there
 is nothing to retry until it has landed; the seat's page in the org chart says
 what holds it. The same refusal meets a held seat replaced
 ([Replacing a seat](#replacing-a-seat)), and a document written outside the
@@ -766,7 +765,7 @@ since a first revision has nothing to differ from), and **Copy as YAML**,
 which reads the active company as YAML (credentials redacted, as every
 configuration read is) so a `company.yaml` kept in a repository can be
 brought back in step. `crewlet config import company.yaml` writes it back.
-Both read the company document, so a lead without `config:read` is offered
+Both read the company document, so a lead without `admin` is offered
 neither.
 
 ### Keeping a company file in sync
@@ -875,13 +874,13 @@ edits is no longer active at all, the banner offers **Discard and reload**.
 ## Editing as a unit lead
 
 The lead of a unit edits that unit and everything inside it without
-`config:write`: its own fields, its seats, the units inside it and theirs,
+`admin`: its own fields, its seats, the units inside it and theirs,
 seats added, moved between its teams, reordered or removed. A lead is the seat a unit
 names as its lead, or inherits from the unit above it when it names none, so
 leading a unit is leading every unit inside it, a sub-unit with a lead of its
 own included. The person leads through the human seat they hold — every
-person holds one — and needs no configuration grant; whoever holds
-`config:write` edits the whole company as above, units they lead included.
+person holds one — and needs no permission for it; an administrator edits the
+whole company as above, units they lead included.
 
 Such a person opening Edit org is shown the unit they lead rather than the
 company, and the toolbar says so: **Editing *unit* as its lead**. Somebody who
@@ -909,11 +908,11 @@ naming each part, and the builder marks each on the seat or unit it is about:
   space, a channel, an email address, a contact identity — on any seat or
   unit, one the draft adds included, and every credential, a `${VAR}`
   anywhere and a tool server's `mcp_env` block included. These take
-  `config:write`. The builder draws the first kind disabled with the reason,
+  `admin`. The builder draws the first kind disabled with the reason,
   asks for no contact identity when a lead adds a human seat, and refuses to
   replace a seat that holds one.
 
-A lead reads no revision history, which takes `config:read`. A save whose
+A lead reads no revision history, which takes `admin`. A save whose
 answer is lost is settled by reading the unit back: still on the base
 revision, it did not land; at a newer one holding exactly the unit as sent,
 it did; anything else is a newer company, which the draft is updated onto as
@@ -926,7 +925,7 @@ they lead: a seat's profile shows its settings, read through
 `GET /config/roles/{handle}` and its unit's own fields, and its token ceilings
 are changed in Spend › Budgets and with **Raise budget** where a decision about
 a stopped seat offers it, through `PUT /config/roles/{handle}`. The company's
-own ceilings stay `config:write`'s.
+own ceilings stay `admin`'s.
 
 ## Undo, redo and the keyboard
 

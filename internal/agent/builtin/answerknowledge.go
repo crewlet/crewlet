@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -13,9 +14,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -33,8 +36,9 @@ import (
 //
 // Nobody's seat runs this and no turn exists: a person typed a question into
 // the dashboard and is waiting for a paragraph. So it is an OPERATOR tool, and
-// one only a PERSON BOUND TO A SEAT may call ([authz.ActionKnowledgeAnswer] is
-// the read grant and human-only; this tool refuses the rest): it runs on the
+// one only a PERSON BOUND TO A SEAT may call ([authz.ActionKnowledgeAnswer]
+// admits whoever uses either app and is human-only; this tool refuses the
+// rest): it runs on the
 // auxiliary model of the seat the identity directory binds them to — the
 // human seat every person holds (ADR-0032). A principal no seat binds — a
 // pipeline's token or a service account, never a person (ADR-0032) — has no
@@ -79,12 +83,25 @@ import (
 // have been written from has changed. The cache is the NODE's
 // ([AnswerDeps.Cache]), handed in rather than built with the catalogue: a
 // surface builds its catalogue per request, and a cache built with it would
-// hold one request's answers. The key is the normalised question and
-// the CORPUS POSITION: where this node's pages, tracker and vector logs have
-// been applied through. A cache hit spends nothing and says `cached: true`. A
-// company whose knowledge base is not native has no position to key on — an
-// external wiki can change under the answer without this node hearing — so
-// its answers are never cached.
+// hold one request's answers. The key is the normalised question, the APPS
+// the asker uses and the CORPUS POSITION: where this node's pages, tracker and
+// vector logs have been applied through. A cache hit spends nothing and says
+// `cached: true`. A company whose knowledge base is not native has no position
+// to key on — an external wiki can change under the answer without this node
+// hearing — so its answers are never cached.
+//
+// # Each corpus only for an asker who uses its app
+//
+// The pages are the knowledge base's and the work items the tracker's, and an
+// answer QUOTES them: an answer written from a work item, read by somebody
+// kept off the tracker, is the work item read. So the pages are searched only
+// for an asker holding the knowledge base and the items only for one holding
+// the tracker ([authz.Shows], the one per-app filter every cross-app answer
+// goes through), and the table refuses an asker holding neither before
+// anything is searched ([authz.ClassAnyApp]). The apps are in the cache key for
+// the same reason: two askers who may read different corpora asked different
+// questions, however alike they typed them, and one's answer handed to the
+// other would carry what the second may not read.
 
 // AnswerKnowledgeTool is the tool's wire name.
 const AnswerKnowledgeTool = "answer_knowledge"
@@ -360,7 +377,19 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"bound to is not in the company chart.", actor.Handle)), nil
 	}
 
-	key, cacheable := t.cacheKey(question)
+	// WHAT THIS ASKER MAY BE ANSWERED FROM, decided once and used for the
+	// search and the cache alike — see the file head.
+	principal, _ := iam.From(ctx)
+	reach := answerReachOf(principal)
+	if !reach.pages && !reach.tasks {
+		// THE TABLE REFUSES THIS before the tool runs; refused here too,
+		// because an answer from nothing would be one written from what
+		// the model already believes rather than from the company.
+		return refused(tools.RefusalForbidden, AnswerKnowledgeTool+" answers from the "+
+			"knowledge base and the tracker, and your access includes neither. An "+
+			"admin can give it to you."), nil
+	}
+	key, cacheable := t.cacheKey(question, reach)
 	if cacheable {
 		if hit, ok := t.deps.Cache.get(key); ok {
 			hit.Cached, hit.Tokens = true, AnswerTokens{}
@@ -384,7 +413,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalBudgetExhausted, budgetSentence(refusal)), nil
 	}
 
-	sources, excerpts, searched := t.retrieve(ctx, question, company, role)
+	sources, excerpts, searched := t.retrieve(ctx, question, company, role, reach)
 	if !searched {
 		return refused(tools.RefusalUnavailable, "The company's knowledge could not be "+
 			"searched just now, so this says nothing about whether it is written down. "+
@@ -459,9 +488,36 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return jsonResult(answer)
 }
 
-// cacheKey is the question's cache key at this node's corpus position, and
-// false where the corpus cannot say where it is.
-func (t *answerKnowledge) cacheKey(question string) (string, bool) {
+// answerReach is which of the two corpora one asker may be answered from.
+type answerReach struct{ pages, tasks bool }
+
+// answerReachOf is what p may be answered from, through [authz.Shows] — the one
+// per-app filter every cross-app answer asks.
+func answerReachOf(p iam.Principal) answerReach {
+	return answerReach{
+		pages: authz.Shows(p, authz.KindPage),
+		tasks: authz.Shows(p, authz.KindTask),
+	}
+}
+
+// key is the reach as the cache key spells it: the apps it reads from, in a
+// fixed order, so two askers who may read the same corpora share answers and
+// two who may not never do.
+func (r answerReach) key() string {
+	var apps []string
+	if r.tasks {
+		apps = append(apps, string(iam.GrantTracker))
+	}
+	if r.pages {
+		apps = append(apps, string(iam.GrantKnowledge))
+	}
+	slices.Sort(apps)
+	return strings.Join(apps, ",")
+}
+
+// cacheKey is the question's cache key for one asker's reach at this node's
+// corpus position, and false where the corpus cannot say where it is.
+func (t *answerKnowledge) cacheKey(question string, reach answerReach) (string, bool) {
 	if t.deps.Cache == nil || t.deps.Corpus == nil {
 		return "", false
 	}
@@ -469,7 +525,7 @@ func (t *answerKnowledge) cacheKey(question string) (string, bool) {
 	if !ok || position == "" {
 		return "", false
 	}
-	return NormalizeQuestion(question) + "\x00" + position, true
+	return NormalizeQuestion(question) + "\x00" + reach.key() + "\x00" + position, true
 }
 
 // NormalizeQuestion is the form two questions that are one question share:
@@ -479,19 +535,23 @@ func NormalizeQuestion(q string) string {
 	return strings.Join(strings.Fields(strings.ToLower(q)), " ")
 }
 
-// retrieve runs both searches and reads each hit's text. searched is false
-// when NEITHER corpus could be searched — which is not "nothing matched".
+// retrieve runs the searches the asker's reach allows and reads each hit's
+// text. searched is false when no corpus that was asked could be searched —
+// which is not "nothing matched" — and a corpus the asker may not read is
+// never asked, so it is neither a source nor a reason the search failed.
 func (t *answerKnowledge) retrieve(ctx context.Context, question string,
-	company *org.Organization, asker *org.Role) ([]AnswerSource, []prompts.KnowledgeSource, bool) {
+	company *org.Organization, asker *org.Role,
+	reach answerReach) ([]AnswerSource, []prompts.KnowledgeSource, bool) {
 
 	sources := []AnswerSource{}
 	var excerpts []prompts.KnowledgeSource
 	searched := false
 
 	// THE COMPANY'S OWN ACCOUNT: a nil seat, which is how the operator
-	// surface's search_knowledge reads — the person holds the company's
-	// credential, and the search is not narrowed to their seat's scope.
-	if t.search.CanSearch(nil, company) {
+	// surface's search_knowledge reads — an asker who uses the knowledge
+	// base reads the whole of it, and the search is not narrowed to their
+	// seat's scope.
+	if reach.pages && t.search.CanSearch(nil, company) {
 		result := t.search.Search(ctx, knowledge.Query{
 			Text: question, Org: company, Limit: AnswerPageSources,
 			Mode: knowledge.ModeHybrid,
@@ -517,7 +577,7 @@ func (t *answerKnowledge) retrieve(ctx context.Context, question string,
 		}
 	}
 
-	if t.items != nil {
+	if reach.tasks && t.items != nil {
 		answer, err := t.items.Search(ctx, tracker.SearchQuery{
 			Text: question, Limit: AnswerTaskSources, Mode: knowledge.ModeHybrid,
 		})

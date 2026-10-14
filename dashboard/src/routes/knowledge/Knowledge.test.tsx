@@ -22,7 +22,7 @@
  *  - WATCHING IS ASKED BY THE SEAT THE READER ACTS AS, so a credential bound
  *    to no seat, which a watch never subscribes, asks for nothing.
  *  - A SPACE'S PEEK COUNTS OFF THE TOTAL, never off the rows one read
- *    returned, and WHO FILES THERE HAS FOUR STATES: "needs config:read" is
+ *    returned, and WHO FILES THERE HAS FOUR STATES: "needs Admin" is
  *    said only to a reader who does not hold it, never to one whose read of
  *    the company document is merely in flight.
  */
@@ -85,17 +85,7 @@ const ORG = {
 /** The person signed in on this browser, who writes as their seat. */
 const JANE = {
   login: "U0FOUNDER",
-  grants: [
-    "config:read",
-    "config:write",
-    "secrets:write",
-    "fleet:operate",
-    "people:manage",
-    "audit:read",
-    "state:read",
-    "work:write",
-    "knowledge:write",
-  ],
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -857,7 +847,7 @@ test("watching asks by the reader's seat, and asks nothing for an unbound creden
 
   const unbound = {
     login: "svc:docs",
-    grants: ["state:read", "knowledge:write"],
+    grants: ["knowledge"],
     handle: "",
     owner: "svc:docs",
     name: "",
@@ -1021,8 +1011,8 @@ function pageRow(n: number) {
   };
 }
 
-/** A signed-in reader holding `config:read`, which who files here is read under. */
-const READER = { ...JANE, grants: ["state:read", "config:read"] };
+/** A signed-in reader holding Admin, which who files here is read under. */
+const READER = { ...JANE, grants: ["admin"] };
 
 /**
  * Render the space's peek; `config` undefined leaves that read in flight,
@@ -1081,9 +1071,9 @@ test("a space read whole says nothing about a window", async () => {
 });
 
 test("who files here: a reader without the grant is told so, and one whose read is in flight is not", async () => {
-  const asked = mountPeek({ rows: 1, total: 1, viewer: { ...READER, grants: ["state:read"] } });
+  const asked = mountPeek({ rows: 1, total: 1, viewer: { ...READER, grants: [] } });
   await waitFor(() =>
-    expect(screen.getByText("Who files here needs config:read to read")).toBeTruthy(),
+    expect(screen.getByText("Who files here needs Admin access to read")).toBeTruthy(),
   );
   // NOTHING IS ASKED that the engine has already said this reader may not read.
   expect(asked.some((a) => a.what === "config")).toBe(false);
@@ -1091,7 +1081,7 @@ test("who files here: a reader without the grant is told so, and one whose read 
   cleanup();
   mountPeek({ rows: 1, total: 1 });
   await waitFor(() => expect(screen.getByText("Who files here is still being read")).toBeTruthy());
-  expect(screen.queryByText(/needs config:read/)).toBeNull();
+  expect(screen.queryByText(/needs Admin/)).toBeNull();
 
   // REFUSED: the read answered with an error, which is neither of the above.
   cleanup();

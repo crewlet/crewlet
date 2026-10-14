@@ -38,7 +38,7 @@ func TestAnOperatorsAssistantFinishesACreateWithTheOpIDItWasAnswered(t *testing.
 		},
 	})})
 	sess := dialOperator(t, s,
-		machine("token:founder", iam.GrantStateRead, iam.GrantWorkWrite))
+		machine("token:founder", iam.GrantTracker))
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()

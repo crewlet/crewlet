@@ -29,7 +29,9 @@ vi.mock("~/lib/viewer.ts", () => ({
   useViewer: () => ({
     login: "",
     grants: [],
-    operatesFleet: false,
+    admin: false,
+    tracker: false,
+    knowledge: false,
     handle: "",
     owner: "",
     name: "",

@@ -32,9 +32,11 @@ import (
 // two proof routes and the password change are refused by the AUTHORITY TABLE
 // (`token_refused`, the proof verb's row needing a person present) and the
 // step-up by its own
-// check, since confirming who you are is no verb in the table. The request
-// goes through the REAL guard so the credential shape is the guard's own
-// answer.
+// check, since confirming who you are is no verb in the table. The token here
+// carries ADMIN, minted from an owner who holds it (ADR-0033 lets a token
+// carry it), so the refusal is the person-present rule's and no permission
+// could stand in for it. The request goes through the REAL guard so the
+// credential shape is the guard's own answer.
 //
 // Mutation: spare the proof verb's self arm in internal/authz and the recovery
 // codes are regenerated for the token's holder; drop the step-up's own check
@@ -53,11 +55,11 @@ func TestAMachineTokenManagesNoProof(t *testing.T) {
 		Applied: 10, Found: true, IsToken: true,
 		Verifier:  credential.TokenVerifier(presented.ID, secret),
 		ExpiresAt: clock.Add(time.Hour),
-		Grants:    []iam.Grant{iam.GrantStateRead},
+		Grants:    []iam.Grant{iam.GrantAdmin},
 		Owner: credential.TokenOwner{
 			Found: true, ID: owner.String(), Kind: iam.KindPerson,
 			Stage: iam.StageActive, Login: "jane.doe",
-			Grants: []iam.Grant{iam.GrantStateRead},
+			Grants: []iam.Grant{iam.GrantAdmin},
 		},
 	}
 	b := bootstrapFor(t)

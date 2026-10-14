@@ -320,11 +320,11 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine) (guardedMounter,
 		},
 		Opener:       sealer,
 		ExternalBase: boot.API.ExternalBase(),
-		// THIS NODE'S OWN CEILING, which the report compares a person's
-		// declared grants against: it is applied at decision time and
-		// never written, so a fleet mid-rollout legally disagrees and
-		// nothing else would say so.
-		Ceiling: boot.API.Auth.MaxGrants,
+		// THIS NODE'S OWN ADMIN POSTURE, which the report reads to say
+		// whose admin this node clamps away: it is applied at decision
+		// time and never written, so a fleet whose nodes disagree is a
+		// legal state and nothing else would say so.
+		Admin: boot.API.Auth.Admin,
 		// THE ENGINE'S RULE, not one written here: the request path's own
 		// seat table applied to a person's row, which the report asks and
 		// nothing restates. The seam it replaced asked only whether the
@@ -709,8 +709,8 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 			// a page" was refused for every person who used it.
 			DefaultContainer: engine.LiveSeatSpace(e),
 			// THE SKILLS CONTAINER, so a person's write into it is asked
-			// for the grant a tool skill takes rather than admitted on
-			// knowledge:write alone — the store exempts every person,
+			// for admin, which a tool skill takes, rather than admitted on
+			// the knowledge base alone — the store exempts every person,
 			// because capability is not its question.
 			SkillsContainer: engine.LiveSkillsContainer(e),
 			Await:           e.AwaitEstate,

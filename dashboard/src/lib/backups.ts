@@ -22,7 +22,7 @@ import type {
   BackupPolicy,
 } from "~/contract/backups.ts";
 import { RestError } from "~/protocol/rest.ts";
-import { needsSentence } from "./refusal.ts";
+import { needsWords } from "./access.ts";
 
 /**
  * How long the dashboard waits for a copy, in milliseconds.
@@ -153,9 +153,9 @@ export function backupRefusal(err: unknown): { field: boolean; message: string }
     return { field: true, message: err.detail || err.code || "The engine refused this directory." };
   }
   if (err.unauthorized) {
-    // THE GRANT THE REFUSAL NAMED — `fleet:operate` — or, for nobody signed
-    // in, that somebody has to be.
-    return { field: false, message: needsSentence("Taking a backup", err.grants) };
+    // THE ACCESS THE REFUSAL NAMED — Admin — or, for nobody signed in, that
+    // somebody has to be.
+    return { field: false, message: needsWords("Taking a backup", err.grants) };
   }
   if (err.status === 0) {
     return {

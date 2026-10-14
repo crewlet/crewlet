@@ -753,38 +753,43 @@ the reconcile loop — carries the kind `system` and no credential, which no
 token's name could say. See [the API
 reference](../reference/api-endpoints.md#the-config_audit-query).
 
-### `config:write` is host access
+### `admin` is host access
 
-The grant that writes this document is **one** grant, and it is conferred the
-way shell on the engine's hosts is — because that is what it is. The
+The permission that writes this document is **one** permission — `admin`,
+which also runs the company's credentials, people and deployment — and it is
+conferred the way shell on the engine's hosts is, because that is what it is. The
 configuration runs code: an `mcp_servers` entry is a command every engine host
 executes, a seat's `mcp_env` and its per-phase model keys (`llm_*`, a
 `cli-agent` provider among them) decide what the seat's children run and which
 credentials they are handed, a `sandbox` cell of `run_in: self` runs a coding
 agent on the engine host itself, and a seat's worker grants decide which of its
-tools a worker holds. So whoever holds `config:write` can run anything on every
-engine host and read whatever a process there can — the keyring included — and
-with it every other grant. There is deliberately no separate "runtime" grant:
-it would be this one's whole practical reach under a second name, and a
-`max_grants` ceiling that withheld it would withhold every settings edit too.
+tools a worker holds. So whoever holds `admin` can run anything on every
+engine host and read whatever a process there can — the keyring included.
+There is deliberately no separate "runtime" permission: it would be this one's
+whole practical reach under a second name. What a node can do is refuse admin
+altogether — `api.auth.admin: refuse` clamps it away on that node and keeps
+every app — which is how a node published to the people who use the company is
+kept from being one anybody runs it through.
 
 What that means in practice:
 
 - Grant it to the people and pipelines you would give a shell on those hosts,
   and no one else. A machine token **can** carry it — applying a configuration
   from a deploy job is what one is for — so minting one with it is handing that
-  job host access.
-- `people:manage` being a separate grant does **not** bound a `config:write`
-  holder. It keeps directory changes a reviewable gesture of their own; a
-  holder of host access can reach the store the directory lives in regardless.
+  job host access. What it cannot do through a token is what needs a person
+  present: reveal a secret, change who may do anything, or end everybody's
+  sessions ([two locks](identity-and-access.md#some-gestures-ask-how-recently-you-proved-who-you-are)).
+- Everything a company does *with* its apps — filing work, writing pages —
+  needs no admin: that is `tracker` and `knowledge`, which is what most people
+  hold.
 
 The org chart inside this document is also written by its **leads**, who need
-no grant for it: a person who leads a unit may change the seats and units
+no permission for it: a person who leads a unit may change the seats and units
 inside it, judged change by change on both sides of the write, and never a
 setting, a credential, a `${VAR}` in any field, or a project, space, channel,
 address or contact id ([A lead edits their own
 team](identity-and-access.md#a-lead-edits-their-own-team)). What that reaches
-is bounded by what the settings offer, which stay `config:write`'s: a lead may
+is bounded by what the settings offer, which stay admin's: a lead may
 point a seat in their team at any model chain the company declares and enable
 its sandbox in any cell the company configures — so if a `cli-agent` provider
 or a sandbox cell on the engine host exists, a lead can hand it to their own
@@ -804,9 +809,10 @@ was a bool whose safe value was its zero, declared `omitempty`, so `false` did
 not survive an export round trip. A deployment that had closed it re-opened
 itself the first time its configuration went through `PUT /config`.
 
-A deliberately public read surface is now a **named token entry holding read
-grants and nothing else** — listable, revocable without a restart, and present
-in the audit log, none of which a posture flag could be. A file that still
+A script that only reads what the company is doing now holds **a service
+account's token with no permission at all** — it reads the overview and
+nothing else — listable, revocable without a restart, and present in the audit
+log, none of which a posture flag could be. A file that still
 carries the key is refused, exactly as one carrying any key this build does not
 know is — Tier A is decoded strictly, so an unknown field is an error rather
 than something ignored — which is what keeps it from silently running the
@@ -821,8 +827,8 @@ loopback address — the *bind*, not `api.external_url`, because the bind is wha
 physically stops another machine reaching this — and the binary must be a
 development build, so no copied setting can carry it into a deployment that
 pulled a tag. That is also why it is a flag: a field is the thing that gets
-copied into an image. It grants `api.auth.max_grants` and no more, where
-`disabled` granted everything regardless.
+copied into an image. It grants every app, and `admin` only where
+`api.auth.admin` is `serve`, where `disabled` granted everything regardless.
 
 `api.auth.oidc` is retired too: the engine no longer signs anybody in through
 an identity provider. A person signs in with a login, a password and — unless
@@ -930,7 +936,7 @@ validate` on a laptop rather than by a process at bind time:
 | Setting | Why it cannot be defaulted |
 |---------|----------------------------|
 | `api.external_url` | The session cookie's `Secure` flag and `__Host-` prefix follow its scheme, its host is the origin every write is checked against, and it is every link a person follows — an invitation, a password link, a page's address in a notification. Without a public listener it is also what every webhook URL is built on. The engine sits behind a TLS-terminating proxy and can read none of that off the request |
-| `api.auth.max_grants` | The ceiling on what a directory record may confer. One granting everything is a ceiling that does nothing; one granting a subset silently locks out whatever it left out |
+| `api.auth.admin` | Whether this node grants `admin` to those who hold it (`serve`) or clamps it away and keeps every app (`refuse`). Admin is host access, so whether a node publishes it is the operator's decision, never a default |
 | `api.auth.tokens` | A fresh deployment's identity estate is empty, so a Tier A token is what creates the company and then puts its first person on their seat — and on a running one it is the way back in when an administrator has locked themselves out |
 
 With `api.public.port` set on an `ingress` node, **`api.public.external_url`** is required as well:
@@ -1023,8 +1029,7 @@ session exchanged from a listed Tier A token and a lead writing their own team
 are each refused — every one of them is an edit the managing system's next
 reconcile would overwrite. It is judged after the route's own grant and before
 the body is read, so a refusal costs no parse. Reads are unchanged: every
-credential holding `config:read` still reads `/config`, its history and its
-diffs.
+administrator still reads `/config`, its history and its diffs.
 
 | Refused for a credential not listed | Still open to whoever the authority table admits |
 |---|---|
@@ -1054,13 +1059,13 @@ the button.
 
 **It prevents drift; it is not a privilege boundary.** `company_writers`
 stops a person's edit from being silently overwritten, and nothing more. Every
-credential holding `secrets:write` still writes the secret store, and a
-`config:write` holder can reload, so a credential that is not a writer can
+administrator still writes the secret store and can reload, so a credential
+that is not a writer can
 still change what the managed document *does* by rewriting a value it
 references — a model's API key, a webhook secret, or any URL or endpoint kept
 as a `${VAR}` — and publishing it with `POST /config/reload`. A deployment that
 needs to keep somebody away from the company's behaviour must not grant them
-those.
+`admin`.
 
 **The dashboard shows the document as managed.** The [`viewer`](../reference/api-endpoints.md#queries)
 answer says whether the caller's credential may change the document
@@ -1135,7 +1140,7 @@ If you also use the [secret store](secret-store.md), run `crewlet secrets rekey`
 
 ### Reads and export
 
-Every configuration read **redacts** credentials: `GET /config` (JSON and `?format=yaml`), `GET /config/revisions/{id}`, the revision diff, the entity reads (`GET /config/roles/{handle}`, `/config/units/{id}`, `/config/llm-providers/{key}`, `/config/mcp-servers/{name}`), the dashboard's `config` and `config_entities` queries, `crewlet config show` and `crewlet config diff`. The read path opens the whole document, then replaces every credential value with the literal marker `"__redacted__"`, so the caller sees the config's shape and never a credential. The `/org` view — read by every holder of `state:read` — needs no masking because it carries no credential field at all: it is an explicit projection of the charter and the organization tree (see [API endpoints](../reference/api-endpoints.md#get-org)). A revision sealed under a key the node does not hold is refused rather than served.
+Every configuration read **redacts** credentials: `GET /config` (JSON and `?format=yaml`), `GET /config/revisions/{id}`, the revision diff, the entity reads (`GET /config/roles/{handle}`, `/config/units/{id}`, `/config/llm-providers/{key}`, `/config/mcp-servers/{name}`), the dashboard's `config` and `config_entities` queries, `crewlet config show` and `crewlet config diff`. The read path opens the whole document, then replaces every credential value with the literal marker `"__redacted__"`, so the caller sees the config's shape and never a credential. The `/org` view — read by everybody signed in, as the overview — needs no masking because it carries no credential field at all: it is an explicit projection of the charter and the organization tree (see [API endpoints](../reference/api-endpoints.md#get-org)). A revision sealed under a key the node does not hold is refused rather than served.
 
 **What counts as a credential is structural.** A field is a credential because its Go type carries a `secret` tag (`secret:"true"`, or `secret:"content"` for a file's body, which is read whole — see [setup steps](code-sandbox.md#setup-steps--provisioning-the-box)), never because of how its value or its key reads, and a tag on a list or a map covers every element. The tagged company fields today: LLM `api_keys`, the embeddings and sandbox `api_key`, a `cli-agent` provider's `cli.auth.token`, `cli.auth.credential_bundle` and `cli.env`, the integration tokens, admin tokens, API and app keys, webhook and signing secrets, a seat's `integrations.slack` bot token and signing secret, `integrations.mattermost.bot_token` and GitHub App private key and webhook secret, every `mcp_env` value on a seat or a unit, `mcp_servers[].env` and `mcp_servers[].headers`, `role.sandbox.env`, and each sandbox setup step's `env` and `files` (under `providers.sandbox.setup` and `role.sandbox.setup`). Everything else (URLs, hosts, flags, model names, the org chart) is served exactly as stored, including every toggle an operator set explicitly: a schedule kept with `enabled: false` reads as disabled, so sending the read back never re-enables it. A test fails the build when a field whose name reads like a credential, or a `map[string]string` named `env`, `headers` or `files`, is added without the tag — in either tier, since Tier A's credentials carry it too (`secrets.keys[].material`, `api.auth.tokens[].token`, `stream.token` and `store.objects.s3.secret_access_key`, listed under [credential positions](../reference/cli.md#credential-positions-x-crewlet-secret)) — so a new credential field is masked by declaring it rather than by remembering to. The same tag marks each of these positions `"x-crewlet-secret": true` in the [generated JSON Schema](../reference/cli.md#credential-positions-x-crewlet-secret), held by a second test to exactly the set a read masks, so tooling that writes a company without the engine (an editor, a CI linter, a Kubernetes operator rendering the document from its own `Secret`s) knows where a `${VAR}` belongs instead of a value.
 

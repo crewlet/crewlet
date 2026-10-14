@@ -79,6 +79,13 @@ const NOTHING_HELD: Record<string, unknown> = {
 };
 
 /**
+ * The one heavy field that is STATUS — each round's timing and tokens — which
+ * a call whose body is withheld from this reader still carries and versions.
+ * Every other detail is the seat's BODY (`LiveCall.body_withheld`).
+ */
+const STATUS_DETAIL: ReadonlySet<keyof CallVersions> = new Set(["rounds"]);
+
+/**
  * One seat's live call as a push states it, merged onto the copy a tab holds —
  * and whether the push says the tab missed a change it no longer carries.
  *
@@ -91,6 +98,12 @@ const NOTHING_HELD: Record<string, unknown> = {
  * yet. A push naming a version newer than the one held, without the field, is
  * a tab that missed the push which carried it: `stale`, and the field stays
  * what is held until the call is fetched whole.
+ *
+ * A CALL WHOSE BODY IS WITHHELD (`body_withheld`) names every body version
+ * zero and carries no body field, so it is never `stale` for one — a status
+ * reader is never sent a body, and asking for the call whole would only fetch
+ * the same status again — and no body the tab held is kept: a reader who could
+ * read this seat's trail a moment ago and cannot now is shown none of it.
  */
 export function mergeLiveCall(
   held: LiveCall | null | undefined,
@@ -98,6 +111,7 @@ export function mergeLiveCall(
 ): { call: LiveCall | null; stale: boolean } {
   if (!next) return { call: null, stale: false };
   const same = !!held && sameCall(held, next);
+  const withheld = next.body_withheld === true;
   const merged: Record<string, unknown> = { ...next };
   const versions: Partial<CallVersions> = {};
   let stale = false;
@@ -105,6 +119,11 @@ export function mergeLiveCall(
     keyof CallVersions,
     readonly string[],
   ][]) {
+    if (withheld && !STATUS_DETAIL.has(detail)) {
+      for (const f of fields) delete merged[f];
+      versions[detail] = 0;
+      continue;
+    }
     const pushed = next.versions[detail];
     const have = same ? held.versions[detail] : 0;
     const carried = fields.every((f) => f in next);
@@ -146,6 +165,9 @@ function newerDetail(held: LiveCall, older: LiveCall): LiveCall | null {
     keyof CallVersions,
     readonly string[],
   ][]) {
+    // NO BODY ONTO A CALL HELD WITHOUT ONE: the newer pushes said this reader
+    // is no longer sent it, whatever an answer read before them carried.
+    if (held.body_withheld === true && !STATUS_DETAIL.has(detail)) continue;
     const version = older.versions[detail];
     if (version <= held.versions[detail] || !fields.every((f) => f in older)) continue;
     merged ??= { ...held };
@@ -223,9 +245,10 @@ export interface StoreState {
   /**
    * Why the engine KNOWS who this browser is and will not serve it this
    * surface, or null. Set by a `4403` close (the seat is gone from the chart,
-   * or the grant the socket needs was withdrawn), by a `403` handshake, and by
-   * the frame for a session it read without that grant, which it never dials;
-   * cleared when a socket opens or is dialled again. Distinct from `authRejected`, whose repair is
+   * or the person's stage may no longer act) and by a `403` handshake — never
+   * for want of access, since the socket serves every principal the engine
+   * resolves and decides each push by what they hold; cleared when a socket
+   * opens or is dialled again. Distinct from `authRejected`, whose repair is
    * a credential: signing in again reaches the same person with the same
    * access, so the only repair is an administrator's.
    */
@@ -576,10 +599,10 @@ export class Store {
    *
    * A REFUSAL DROPS WHAT THE ENGINE SERVED. It is a decision about who may
    * read the company, so what an earlier socket sent stops being shown the
-   * moment it lands: a tab whose `state:read` was withdrawn went on naming the
-   * company, listing its agents and tools in the palette, from the snapshot it
-   * held — while a session that never held the grant, sent nothing, named and
-   * listed none of it. An outage keeps the last state on purpose ("showing the
+   * moment it lands: a tab whose seat was taken out of the chart went on
+   * naming the company, listing its agents and tools in the palette, from the
+   * snapshot it held — while a session refused at its first handshake, sent
+   * nothing, named and listed none of it. An outage keeps the last state on purpose ("showing the
    * last state received"); a refusal is not an outage. `health` stays: it is
    * the unguarded `/health`, not the company.
    */

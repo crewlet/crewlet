@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,13 +16,14 @@ import (
 	"github.com/crewlet/crewlet/internal/version"
 )
 
-// devBootstrap is a Tier A that would accept the flag: a loopback bind and a
-// ceiling for it to be cut to.
+// devBootstrap is a Tier A that would accept the flag: a loopback bind, on a
+// node that REFUSES admin — so what the development principal carries is held
+// to the posture rather than to "everything".
 func devBootstrap(t *testing.T) config.Bootstrap {
 	t.Helper()
 	b := config.DefaultBootstrap()
 	b.API.Host = "127.0.0.1"
-	b.API.Auth.MaxGrants = []iam.Grant{iam.GrantStateRead, iam.GrantWorkWrite}
+	b.API.Auth.Admin = iam.AdminRefuse
 	return b
 }
 
@@ -146,7 +148,7 @@ func TestTheDevPrincipalResolvesARequestThatPresentedNothing(t *testing.T) {
 	t.Parallel()
 	b := devBootstrap(t)
 	b.API.Auth.Tokens = []config.APIToken{
-		{ID: "founder", Token: "a-real-credential-long-enough", Grants: []iam.Grant{iam.GrantStateRead}},
+		{ID: "founder", Token: "a-real-credential-long-enough", Grants: []iam.Grant{iam.GrantTracker}},
 	}
 	dev, err := auth.NewDevPrincipal("alice", &b)
 	if err != nil {
@@ -187,19 +189,20 @@ func TestTheDevPrincipalResolvesARequestThatPresentedNothing(t *testing.T) {
 		t.Errorf("kind = %q: it is a credential belonging to this process, "+
 			"not a person who enrolled", seen.Kind)
 	}
-	// IT CARRIES THE CEILING AND NO MORE. `api.auth.disabled` granted
-	// everything unconditionally, which made a laptop's convenience and
-	// the deployment's authority the same thing.
-	for _, want := range b.API.Auth.MaxGrants {
+	// IT CARRIES WHAT THIS NODE SERVES AND NO MORE. `api.auth.disabled`
+	// granted everything unconditionally, which made a laptop's
+	// convenience and the deployment's authority the same thing; on a node
+	// refusing admin, the development principal has every app and not
+	// admin. TestTheDevPrincipalCarriesAdminOnlyWhereTheNodeServesIt is
+	// the posture table.
+	for _, want := range iam.Apps {
 		if !seen.Can(want) {
 			t.Errorf("the development principal does not carry %s", want)
 		}
 	}
-	for _, withheld := range []iam.Grant{iam.GrantSecretWrite, iam.GrantFleetOperate} {
-		if seen.Can(withheld) {
-			t.Errorf("the development principal carries %s, which the ceiling "+
-				"withholds", withheld)
-		}
+	if seen.Can(iam.GrantAdmin) {
+		t.Errorf("the development principal carries admin on a node whose " +
+			"api.auth.admin is refuse")
 	}
 
 	// A REAL CREDENTIAL STILL WINS, so a developer testing what a narrow
@@ -219,6 +222,51 @@ func TestTheDevPrincipalResolvesARequestThatPresentedNothing(t *testing.T) {
 		t.Errorf("a wrong credential answered %d, want 401: it was served as "+
 			"the development principal, which hides the typo somebody is "+
 			"about to spend an afternoon on", status)
+	}
+}
+
+// THE DEVELOPMENT PRINCIPAL CARRIES ADMIN ONLY WHERE THE NODE SERVES IT.
+//
+// It is what a Tier A token listing `[admin]` would carry on the same node —
+// [iam.AdminPosture.Effective] over admin — so a laptop set to refuse admin
+// cannot be administered through the bypass either, and a posture this build
+// cannot read confers nothing at all rather than being read as either one.
+//
+// Mutation: build the principal from every grant, ignoring the posture, and
+// the refuse and invalid rows fail; drop the expansion and serve's apps are
+// missing.
+func TestTheDevPrincipalCarriesAdminOnlyWhereTheNodeServesIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		posture iam.AdminPosture
+		want    []iam.Grant
+	}{
+		{iam.AdminServe, []iam.Grant{iam.GrantAdmin, iam.GrantTracker, iam.GrantKnowledge}},
+		{iam.AdminRefuse, []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}},
+		{"sometimes", []iam.Grant{}},
+	} {
+		b := devBootstrap(t)
+		b.API.Auth.Admin = tc.posture
+		dev, err := auth.NewDevPrincipal("alice", &b)
+		if err != nil {
+			t.Fatalf("%s: NewDevPrincipal: %v", tc.posture, err)
+		}
+		var seen iam.Principal
+		how := iam.Unknown
+		handler := auth.New(&b).WithDevPrincipal(dev).Middleware(
+			http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				seen, how = iam.From(r.Context())
+			}))
+		handler.ServeHTTP(httptest.NewRecorder(),
+			httptest.NewRequest(http.MethodGet, "/events", nil))
+		if how != iam.Resolved || seen.Login == "" {
+			t.Fatalf("%s: the request never reached the handler as the "+
+				"development principal, so nothing below is asserted", tc.posture)
+		}
+		if !slices.Equal(seen.Grants, tc.want) {
+			t.Errorf("api.auth.admin %q: the development principal carries %v, "+
+				"want %v", tc.posture, seen.Grants, tc.want)
+		}
 	}
 }
 

@@ -321,15 +321,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		if n.pages, err = pages.NewStore(pages.Options{
 			Publisher: running.publisher, DB: sl.estate().Reader(),
 			// LIVE off the epoch for the reason the searcher below is:
-			// `knowledge.skills_container` and `knowledge.root_space`
-			// are Tier B, and this store is built once per node while an
-			// apply can move either key underneath it.
+			// `knowledge.skills_container`, `knowledge.root_space` and
+			// every `space:` are Tier B, and this store is built once per
+			// node while an apply can move any of them underneath it.
 			Reserved: func() pages.Reserved {
-				current := e.Company()
-				if current == nil {
-					return pages.Reserved{}
-				}
-				return reservedContainers(current.Config)
+				return reservedContainers(e.Company())
 			},
 		}); err != nil {
 			return fmt.Errorf("engine: pages store: %w", err)
@@ -1582,8 +1578,8 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 		Mentions:         seatMentions{org: c.Org},
 		DefaultContainer: LiveSeatSpace(e),
 		// THE TOOL-SKILLS CONTAINER, read off the CURRENT epoch for the
-		// reason the defaults are: a write into it is asked the grant a
-		// tool skill takes, and the store itself refuses a seat every
+		// reason the defaults are: a write into it is asked for the admin
+		// a tool skill takes, and the store itself refuses a seat every
 		// write there ([pages.Reserved]).
 		SkillsContainer: e.skillsContainer,
 		Await:           await,
@@ -1592,8 +1588,8 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 
 // LiveSkillsContainer is the tool-skills container off the CURRENT epoch, for
 // the page tools a surface outside this package builds — the operator's
-// assistant and the HTTP write surface — so a write into it is asked the
-// grant a tool skill takes wherever it arrives from. See
+// assistant and the HTTP write surface — so a write into it is asked for the
+// admin a tool skill takes wherever it arrives from. See
 // [builtin.PageDeps.SkillPage].
 func LiveSkillsContainer(e *Engine) func() string { return e.skillsContainer }
 
@@ -1682,15 +1678,29 @@ func (e *Engine) AwaitEstate(ctx context.Context, at statelog.Position) error {
 }
 
 // reservedContainers are the containers a seat's own writes are held back
-// from, each under its own rule — see [pages.Reserved].
-func reservedContainers(cfg *config.Company) pages.Reserved {
-	if cfg == nil {
+// from, each under its own rule, and every container the company DECLARES — the
+// only ones a page is created in, by anybody — see [pages.Reserved].
+//
+// THE DECLARED SPACES ARE [chartContainers]'s, the very list the containers are
+// made from on every apply: every unit's and seat's `space:`, the root and the
+// tool skills, in one canonical form. A second walk of the chart here would be
+// how a page could be refused a space whose container exists, or created in
+// one that does not.
+//
+// NOTHING IS DECLARED by a node running no company, which is the meaningful
+// zero: every create is refused until there is a chart to say where pages go.
+func reservedContainers(current *Company) pages.Reserved {
+	if current == nil || current.Config == nil {
 		return pages.Reserved{}
 	}
-	return pages.Reserved{
-		Skills: strings.TrimSpace(cfg.SkillsContainerKey()),
-		Root:   strings.TrimSpace(cfg.RootSpaceKey()),
+	held := pages.Reserved{
+		Skills: strings.TrimSpace(current.Config.SkillsContainerKey()),
+		Root:   strings.TrimSpace(current.Config.RootSpaceKey()),
 	}
+	for _, container := range chartContainers(current) {
+		held.Declared = append(held.Declared, container.Key)
+	}
+	return held
 }
 
 // seatMentions resolves the handles a body names to the seats that exist.

@@ -88,6 +88,7 @@ import { Badge } from "./InboxColumn.tsx";
 import { NoticeActions } from "./NoticeActions.tsx";
 import { TaskLink } from "./TaskLink.tsx";
 import { Thread, type ThreadOf } from "./Thread.tsx";
+import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 
 interface PaneProps {
   row: InboxRow | null;
@@ -488,7 +489,11 @@ function RunPane({
   const [text, setText] = useState("");
   const [answered, setAnswered] = useState<string | null>(null);
   const question = run.question ?? "";
-  const heading = firstSentence(question) || "The run paused on a question";
+  const heading =
+    firstSentence(question) ||
+    (questionWithheld(run)
+      ? `The run paused on a question. ${QUESTION_WITHHELD}.`
+      : "The run paused on a question");
   const hold = holdLine(run, now);
   const blocked = text.trim() ? undefined : "Write the answer first.";
   const send = async () => {
