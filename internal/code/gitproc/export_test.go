@@ -8,6 +8,12 @@ func SetTimings(p *Pool, slotWait, killGrace time.Duration) {
 	p.slotWait, p.killGrace = slotWait, killGrace
 }
 
+// ResolveMemory is what New sizes the lanes by under o, the node's own
+// memory read by read.
+func ResolveMemory(o Options, read func() (Memory, error)) (Memory, error) {
+	return resolveMemory(o, read)
+}
+
 // SetCaptureMax scales CaptureMax for the overflow case.
 func SetCaptureMax(p *Pool, n int) { p.captureMax = n }
 

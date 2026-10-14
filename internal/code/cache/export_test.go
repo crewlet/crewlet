@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -214,20 +215,106 @@ func ForgetMaintenance(c *Cache, repoID string) error {
 }
 
 // SetMaintenanceMemory sets what the maintenance runs beside the largest may
-// be estimated at together. Before any pass.
+// be charged at together. Before any pass.
 func SetMaintenanceMemory(c *Cache, n int64) { c.maintMemory = n }
 
 // MaintenanceMemory is what the maintenance runs beside the largest may be
-// estimated at together.
+// charged at together.
 func MaintenanceMemory(c *Cache) int64 { return c.maintMemory }
 
-// MaintenanceEstimate is the memory a maintenance run of repoID's current
-// incarnation is estimated at.
-func MaintenanceEstimate(c *Cache, repoID string) int64 {
+// SetNodeMemory makes every later read of the node's memory — each
+// maintainer pass's first step — answer bytes, from the case rather than the
+// pool.
+func SetNodeMemory(c *Cache, bytes int64) {
+	c.memMu.Lock()
+	defer c.memMu.Unlock()
+	c.memSource = func() (gitproc.Memory, error) { return gitproc.Memory{Bytes: bytes, From: "the case"}, nil }
+}
+
+// NodeMemoryUnreadable makes every later read of the node's memory fail
+// with err.
+func NodeMemoryUnreadable(c *Cache, err error) {
+	c.memMu.Lock()
+	defer c.memMu.Unlock()
+	c.memSource = func() (gitproc.Memory, error) { return gitproc.Memory{}, err }
+}
+
+// SetMaintenanceBudget makes the node's memory what leaves its background
+// work a budget of n — what the reserve fixed at Open plus n — from now on:
+// what everything in flight is held to together, and what one step's charge
+// may never exceed. Between passes.
+func SetMaintenanceBudget(c *Cache, n int64) {
+	bytes := n + c.memReserve
+	SetNodeMemory(c, bytes)
+	c.memMu.Lock()
+	c.memory = gitproc.Memory{Bytes: bytes, From: "the case"}
+	c.memMu.Unlock()
+	c.maint.setBudget(n)
+}
+
+// MaintenanceBudget is what everything in flight is held to together now.
+func MaintenanceBudget(c *Cache) int64 { return c.maint.budgetNow() }
+
+// MemoryReserve is what a node of memory bytes whose git pool admits
+// transfers transfers and has cores read slots keeps of its memory for
+// everything but its background work.
+func MemoryReserve(transfers, cores int, memory int64) int64 {
+	return memoryReserve(transfers, cores, memory)
+}
+
+// MemoryReserved is what c keeps of the node's memory for everything but its
+// background work, as Open fixed it.
+func MemoryReserved(c *Cache) int64 { return c.memReserve }
+
+// BitmapCharge, IndexCharge, GraphCharge and FsckCharge are the memory each
+// step over repoID's current incarnation is charged at against the node's
+// budget: its own figure an object, and room beside it for one transfer of
+// the repository.
+func BitmapCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, BitmapBytesPerObject) }
+
+// IndexCharge is the index without a bitmap's charge (BitmapCharge).
+func IndexCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, IndexBytesPerObject) }
+
+// GraphCharge is the commit-graph's charge (BitmapCharge).
+func GraphCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, GraphBytesPerObject) }
+
+// FsckCharge is Verify's connectivity check's charge (BitmapCharge).
+func FsckCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, FsckBytesPerObject) }
+
+func chargeOf(c *Cache, repoID string, perObject int64) int64 {
 	e := lookup(c, repoID)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.current.objects * MaintenanceBytesPerObject
+	return charge(e.current.objects, perObject)
+}
+
+// ObjectsOf is how many objects repoID's current incarnation holds, as its
+// rows count them.
+func ObjectsOf(c *Cache, repoID string) int64 {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.current.objects
+}
+
+// Indexed is what repoID's current incarnation holds of the maintainer's:
+// how many packs its multi-pack-index covers (0, none), whether it has its
+// bitmap, and whether the commit-graph is there.
+func Indexed(c *Cache, repoID string) (packs int, bitmap, graph bool) {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.current.midx.Packs, e.current.midx.Bitmap, e.current.midx.Graph
+}
+
+// HoldOther charges mem against the node's budget as a process beside the
+// maintenance runs — a round's index, a check — would be, and answers
+// whether it was admitted and a function taking it back out of flight.
+func HoldOther(c *Cache, mem int64) (bool, func()) {
+	if c.maint.admitOther(mem) != admitted {
+		return false, func() {}
+	}
+	return true, func() { c.maint.doneOther(mem) }
 }
 
 // BeforeMaintaining makes every maintenance run call f with its own context

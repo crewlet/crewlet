@@ -217,6 +217,35 @@
 // because a multi-pack-index naming a pack the sweep removes fails every
 // read of the repository. A cache without the bitmap is slower, never wrong.
 //
+// And never a step the node's memory cannot hold. Every git process the cache
+// runs over a whole repository holds memory in proportion to its objects —
+// a bitmap about [BitmapBytesPerObject] an object, some 60 GB for the largest
+// repository the defaults admit; the index without one [IndexBytesPerObject];
+// the commit-graph [GraphBytesPerObject]; Verify's check
+// [FsckBytesPerObject] — so each is charged its own figure, and room beside it
+// for one transfer of the same repository (gitproc.TransferBytesPerObject),
+// against the node's BUDGET: its memory as the git pool read it (the least of
+// the machine's and every cgroup limit above the process, v2's and v1's),
+// read again at every maintainer pass so a container resized in place is held
+// to its new limit, less gitproc.TransferMemory for every transfer the pool
+// admits and [ServingMemoryPerCore] for every core the memory backs — the
+// store, the broker, the engine and the read lane — never for cores it has no
+// memory for. Everything in flight — the runs, the largest included, a
+// round's index, a check — is held to it together. A step whose charge alone
+// is past it never runs on the node: a refused bitmap leaves the repository
+// indexed WITHOUT one, so a repository that outgrew the node's memory still
+// keeps its pushes inside an index (a bitmap written while it could be kept
+// until [MidxRoundPacks] packs gather outside it); each step refused is
+// logged once an incarnation and counted, and a refused bitmap is kept on a
+// gauge while it stays refused and raised as code_maintenance_refused
+// ([Cache.AlarmReading]), at the budget's own threshold: a git node's largest
+// repository with a bitmap is bound by its memory before its disk. A check a
+// person asks for whose charge is past the budget is refused
+// ([ErrNoMemory]). And the first repository a pass holds back for room is
+// given the room it needs, so a stream of small ones never starves it. A pool
+// that cannot read the node's memory refuses to start, naming what: a budget
+// guessed from nothing is the OOM it exists to prevent.
+//
 // # The directory
 //
 //	<git.cache_dir>/
@@ -396,4 +425,18 @@
 // 0.23 s with it, for a 0.19 s write, and a thousand 57 and 45 ms for a 35 ms
 // write: the peel is no reason for the round's index below thousands of
 // tagged packs.
+//
+// The MEMORY each whole-repository git process holds (BenchmarkMidx's memory
+// arms: the one process's peak anonymous memory, sampled every millisecond),
+// over the 100 MB and the gigabyte: the index without a bitmap 18.5 and
+// 182 MiB (66 and 64 bytes an object), with its bitmap 136 MiB and 1 985 MiB
+// (484 and 702), the commit-graph 12.7 and 112 MiB (45 and 39.5), the
+// connectivity check 110 and 452 MiB (390 and 160), and a clone of main
+// 132 MiB and 670 MiB walking the history with no bitmap, 36 and 330 MiB
+// counting from the maintainer's — the figures BitmapBytesPerObject,
+// IndexBytesPerObject, GraphBytesPerObject, FsckBytesPerObject and
+// gitproc.TransferBytesPerObject are set from. Each process's peak resident
+// size, the packs' pages it maps included, was about one and a half to two
+// times its anonymous memory over the 100 MB (VmHWM: 243 MiB for the bitmap),
+// which the kernel takes back under pressure.
 package cache

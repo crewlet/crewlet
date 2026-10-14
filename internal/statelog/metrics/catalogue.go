@@ -637,6 +637,36 @@ func Catalogue() []Instrument {
 				"the repositories this node serves.",
 		},
 		{
+			Name: CodeCacheMaintenanceRefusals, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason", "step"},
+			Shows: "Steps of the background work on a repository this node's " +
+				"git cache found it will not run, counted once for each copy " +
+				"of a repository the cache holds and each step, by `reason` " +
+				"and `step`. `memory`: the step's charge — its own figure an " +
+				"object of the repository, and 240 more for room beside it " +
+				"for a clone of the repository — is more than this node can " +
+				"give its background work, which is its memory (its cgroup's " +
+				"limit where one is set) less what it keeps for its git " +
+				"lanes, the store, the broker and the engine. `bitmap` (1000 " +
+				"bytes an object): the repository is indexed without one, and " +
+				"a clone walks its history; `index` (80): it is served from " +
+				"its packs' own indexes, a round's index included; `graph` " +
+				"(56): its walks parse every commit. Slower, never wrong. " +
+				"Rising is repositories outgrowing the node; the " +
+				"code_maintenance_refused alarm stands while any bitmap is " +
+				"refused.",
+		},
+		{
+			Name: CodeCacheMaintenanceRefused, Kind: KindGauge, Unit: UnitCount,
+			Shows: "Repositories this node's git cache cannot write a bitmap " +
+				"of now, because one needs more memory than the node can give " +
+				"its background work — as its latest pass found them; each is " +
+				"indexed without one. Above zero raises " +
+				"code_maintenance_refused; falling back is a repository " +
+				"purged, evicted or rebuilt smaller, or a node given more " +
+				"memory, which the cache reads again every ten seconds.",
+		},
+		{
 			Name: CodeCacheRebuildRefusals, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"reason", "rule"},
 			Shows: "Rebuilds this node's git cache refused, by the `reason` " +

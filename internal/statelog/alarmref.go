@@ -100,6 +100,13 @@ var alarmMeaning = map[Kind]string{
 		"answer for them twice while it answered for the rest. Those files " +
 		"cannot be downloaded or read until they are restored, or the store " +
 		"serves them again.",
+	KindCodeMaintenanceRefused: "This node's git cache cannot write the bitmap " +
+		"of some repositories, because a bitmap over each — about 1000 bytes " +
+		"an object, with room for a clone of the repository beside it — needs " +
+		"more memory than the node can give its background work: its memory, " +
+		"or its cgroup's limit, less what it keeps for its git lanes, the " +
+		"store, the broker and the engine. Those repositories are indexed " +
+		"without a bitmap and served more slowly: a clone walks their history.",
 }
 
 const alarmHeader = `# Alarms

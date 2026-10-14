@@ -71,7 +71,9 @@ type VerifyReport struct {
 //     maintenance slot: refused when the lane is full rather than queued
 //     ([gitproc.ErrBusy], answered beside the report so far), because the
 //     lane never waits — the maintainer keeps one of its slots for exactly
-//     this.
+//     this — and held to the node's memory budget like the background work
+//     beside it: busy too when what is in flight leaves it no room, and
+//     refused ([ErrNoMemory]) when its charge alone is past the budget.
 //
 // With repair and any problem, the repository is rebuilt — a whole read at
 // the log's head into the next incarnation (Rebuild), counted under reason
@@ -504,10 +506,31 @@ func (r *refLines) Write(p []byte) (int, error) {
 // fsck runs git's connectivity check in inc, in a free maintenance slot, and
 // answers a problem when git found one. A slot refused is Verify's error,
 // never a problem: nothing was checked.
+//
+// It is held to the node's memory like every whole-repository process the
+// cache starts (memory.go): a connectivity check holds FsckBytesPerObject an
+// object of its repository — some 11 GB over the largest the defaults admit —
+// and is charged that and room beside it for one transfer of the repository
+// against the budget the maintenance in flight shares. A check whose charge alone is past the
+// budget is refused ([ErrNoMemory]) — this node cannot check the repository
+// at its memory, and one with more can — and one the work in flight leaves
+// no room for is busy ([gitproc.ErrBusy]), as a full lane is: refused rather
+// than queued, and answered when it is asked again.
 func (c *Cache) fsck(ctx context.Context, e *entry, inc *incarnation, label string) (string, error) {
 	e.mu.Lock()
 	held := inc.diskBytes + inc.metaBytes
+	mem := charge(inc.objects, FsckBytesPerObject)
 	e.mu.Unlock()
+	switch c.maint.admitOther(mem) {
+	case pastBudget:
+		return "", fmt.Errorf("cache: verify %s: %w: its connectivity check needs about %d bytes, and this node "+
+			"can give its background work %d of its memory — run it on a node with more memory", label,
+			ErrNoMemory, mem, c.maint.budgetNow())
+	case heldBack:
+		return "", fmt.Errorf("cache: verify %s: %w — its connectivity check needs about %d bytes, which the "+
+			"background work in flight leaves no room for; run it again", label, gitproc.ErrBusy, mem)
+	}
+	defer c.maint.doneOther(mem)
 	var firstOut string
 	findings := 0
 	out := gitproc.NewLines(func(line []byte) error {

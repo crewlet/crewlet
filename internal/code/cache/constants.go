@@ -3,6 +3,7 @@ package cache
 import (
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/httpx"
 )
 
@@ -167,6 +168,11 @@ const MidxPacks = 64
 // 1.4 s with it against 9.6 at 128 packs over the 100 MB, 14 s against 111
 // over the gigabyte — which no round writes, since its walk is no request's
 // to wait for.
+//
+// It is also the most packs that gather outside a bitmap the node wrote while
+// its memory could hold one, once it no longer can, before the index without
+// a bitmap replaces it (plan, maintain.go): the most this cache leaves outside
+// an index anywhere else.
 const MidxRoundPacks = 256
 
 // MidxDebounce is how long a repository's packs must have stood still before
@@ -246,57 +252,121 @@ const MidxMinInterval = 10 * time.Minute
 // MidxMinInterval.
 const MidxDutyCycle = 10
 
-// MaintenanceBytesPerObject is the memory one maintenance run is estimated
-// to hold for every object its repository's packs hold: what a run is
-// charged against MaintenanceMemoryPerCore.
+// THE MEMORY OF EACH WHOLE-REPOSITORY PROCESS, an object of its repository —
+// what the node's memory budget charges each by (memory.go), beside room for
+// one transfer of the same repository (gitproc.TransferBytesPerObject). Each
+// MEASURED by BenchmarkMidx's memory arms: git 2.43, the peak ANONYMOUS memory
+// of the one git process, sampled every millisecond from /proc, over
+// BenchmarkMidx's histories — a source repository's composition, commits a
+// seventh of the objects, in 64 packs — of 100 MB (296 000 objects) and a
+// gigabyte (2.97 million). The packs' own pages a process maps in are not
+// counted: the kernel takes those back under pressure rather than killing
+// anybody. The objects are the packs' rows' own counts, so a charge is a
+// multiplication, never a read of the disk.
+
+// BitmapBytesPerObject is the memory the maintainer's multi-pack-index WITH
+// ITS BITMAP holds for every object of its repository.
 //
-// 320 BYTES, MEASURED (git 2.43, four shared vCPUs, the peak anonymous
-// memory of each of a run's processes): the costlier of a run's two steps is
-// the multi-pack-index's BITMAP. Over a source repository's composition
-// (BenchmarkMidx's history, commits a seventh of the objects) it held
-// 722 MiB over 3.0 million objects — 255 bytes an object — and 3.7 GiB over
-// 14.8 million (266), the commit-graph 112 MiB and 636 MiB beside them; over
-// histories of fifty files a commit, the shape first measured, 198 bytes an
-// object over 2.1 million, 244 over 1 060 000 and 424 over 212 000, a fixed
-// part still showing. So an object costs the bitmap more the more commits
-// there are of it, and a little more the larger the repository: rounded up
-// a fifth past the largest measurement, which covers the default largest
-// repository (code.DefaultRepoMaxBytes, 20 GiB) at that growth. Resident
-// size was larger, but the rest was the packs' own pages mapped in, which
-// the kernel takes back under pressure, so it is not what a run holds. The
-// objects are the packs' rows' own counts, so the estimate is a
-// multiplication, never a read of the disk. 256, the figure this replaced,
-// was rounded up past the fifty-files histories alone, and fell short of
-// the composition measured since.
-const MaintenanceBytesPerObject = 320
+// 1 000 BYTES: it held 1 985 MiB over the gigabyte — 702 bytes an object — and
+// 136 MiB over 100 MB (484), the bitmap's walk keeping more of the history at
+// once the more of it there is: about 220 bytes an object more for every
+// tenfold. At that growth the largest repository the defaults admit
+// (code.DefaultRepoMaxBytes, 20 GiB, some 60 million objects) holds about
+// 990 an object — some 60 GB for one bitmap, which few nodes have to give,
+// and why a refused bitmap leaves the index without one rather than nothing
+// (IndexBytesPerObject). 320, the figure this replaced, was 255 bytes an
+// object over the gigabyte sampled more coarsely, and fell short of the
+// bitmap's peak by a factor of almost three: on a node held to it, a run the
+// budget admitted could take three times what the budget kept for it.
+const BitmapBytesPerObject = 1000
+
+// IndexBytesPerObject is the memory the multi-pack-index WITHOUT A BITMAP —
+// a full round's own, and the maintainer's where the bitmap cannot be had —
+// holds for every object of its repository.
+//
+// 80 BYTES, a fifth past the larger measurement: 182 MiB over the gigabyte
+// (64 bytes an object) and 18.5 MiB over 100 MB (66). It is a merge of the
+// packs' indexes, an entry an object, so it follows the objects and nothing
+// else — a ninth of the bitmap's at the gigabyte and less beyond it, which is
+// what lets a node index a repository whose bitmap it cannot hold.
+const IndexBytesPerObject = 80
+
+// GraphBytesPerObject is the memory the commit-graph holds for every object of
+// its repository.
+//
+// 56 BYTES, a fifth past the larger measurement: 112 MiB over the gigabyte
+// (39.5 bytes an object) and 12.7 MiB over 100 MB (45). It reads every commit,
+// a seventh of a source repository's objects, so it is charged by the objects
+// the rows count, as the rest are.
+const GraphBytesPerObject = 56
+
+// FsckBytesPerObject is the memory Verify's connectivity check (fsck
+// --connectivity-only) holds for every object of its repository.
+//
+// 192 BYTES, a fifth past the larger repository's figure: 452 MiB over the
+// gigabyte (160 bytes an object) and 110 MiB over 100 MB (390, a fixed part of
+// some 70 MiB showing). A check of the largest repository the defaults admit
+// holds some 11 GB — as much as the node's background work is ever given, so
+// it is held to the same budget (Cache.Verify).
+const FsckBytesPerObject = 192
 
 // MaintenanceMemoryPerCore is how much memory the maintenance runs BESIDE
-// THE LARGEST ONE IN FLIGHT may be estimated at together, for every core
-// the git pool has (its read lane's slots): a pass starts a run only while
+// THE LARGEST ONE IN FLIGHT may be charged at together, for every core the
+// node's memory backs at gitproc.CoreMemory a core (the read lane's slots,
+// fewer where the memory is short of them): a pass starts a run only while
 // that holds, so a node that has just joined, whose largest repositories
-// fall due together, indexes them as memory allows rather than all at once.
+// fall due together, indexes them a few at a time rather than all at once.
 //
-// THE LARGEST RUN IS NOT CHARGED. A repository's bitmap is the price of
-// serving it — a node that serves a repository of N objects holds N × 320
-// bytes once to write it, at whatever moment it is written — so a run over
-// a repository past the whole allowance starts whenever a slot is free, and
-// only what the allowance holds runs beside it: never two such repositories
-// at once. What the allowance bounds is the multiplication — up to a lane's
-// worth of the largest repositories together — not the largest one.
+// THE LARGEST RUN IS NOT CHARGED AGAINST IT. A repository's bitmap is the
+// price of serving it — a node that serves a repository of N objects holds
+// N × BitmapBytesPerObject once to write it, at whatever moment it is
+// written — so what the allowance bounds is the multiplication, up to a
+// lane's worth of the largest repositories together, not the largest one.
+// What bounds THAT is the node's MEMORY BUDGET (memory.go): everything in
+// flight, the largest run included, is held to it together, and a step whose
+// charge alone is past the budget never starts on the node at all.
 //
 // A QUARTER OF A GIBIBYTE A CORE: gitproc.TransfersPerProcess holds the
 // transfer lane under 896 MiB a core inside the 2 GiB a vCPU of the
-// compute-optimised instance shapes, leaving about 1.1 GiB a core for the
-// store, the broker, the engine and the read lane's processes; a quarter of
-// a GiB of that is the maintainer's. On a four-core node it is 1 GiB — the
-// runs of over three million objects beside the largest, or every slot of
-// repositories of typical size (under 100 000 objects: 31 MiB each) at once
-// — and it binds only when several repositories of millions of objects are
-// due together. A JUDGMENT CALL: larger lets a joining node's backlog clear
-// sooner at the risk of the memory the store and the broker need; smaller
-// runs the largest repositories one after another, each holding back the
-// rest of the backlog behind it for as long as its bitmap takes.
+// compute-optimised instance shapes (gitproc.CoreMemory), leaving about
+// 1.1 GiB a core for the store, the broker, the engine and the read lane's
+// processes; a quarter of a GiB of that is the maintainer's, and the rest is
+// ServingMemoryPerCore. On a four-core node it is 1 GiB — the bitmaps of
+// some 860 000 objects beside the largest, or every slot of repositories of
+// typical size (under 100 000 objects: 118 MiB each with the room for a
+// transfer beside them) at once — and it binds only when several
+// repositories of hundreds of thousands of objects are due together. A
+// JUDGMENT CALL: larger lets a joining node's backlog clear sooner at the
+// risk of the memory the store and the broker need; smaller runs the largest
+// repositories one after another, each holding back the rest of the backlog
+// behind it for as long as its bitmap takes.
 const MaintenanceMemoryPerCore int64 = 256 << 20
+
+// ServingMemoryPerCore is what a git node keeps, for each core of its git
+// pool its memory backs, for the store, the broker, the engine and the read
+// lane's processes: with the transfer lane's, what the background work's
+// budget leaves out.
+//
+// WHAT gitproc.CoreMemory LEAVES, 896 MiB: a core's 2 GiB less the transfer
+// lane's share at its default four transfers (gitproc.TransfersPerProcess ×
+// gitproc.TransferMemory) and less the maintainer's own
+// (MaintenanceMemoryPerCore). So at the pool's default lanes a node gives its
+// maintenance MaintenanceMemoryPerCore for each core its memory backs — the
+// share every figure here was sized with — and a node with more memory than
+// CoreMemory a core everything past what its other work is sized to hold:
+// 16 GiB on four cores gives 9 GiB, a bitmap of up to some 7.7 million
+// objects with room for a clone of the repository beside it, an index without
+// one of up to some 30 million (docs/concepts/code-host.md works these
+// through, and TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures computes
+// them). And a node with less — 16 GiB seen beside 64 cores, a container
+// limited in memory and not in CPU — keeps it only for the eight cores its
+// memory backs, as its pool sized its transfer lane, so it gives its
+// maintenance 2 GiB rather than nothing. Derived rather than measured, as the
+// lanes' own bounds are: the store's page caches, the broker and the engine
+// share it with the read lane's processes, and none of them is held to a
+// figure of its own.
+const ServingMemoryPerCore = gitproc.CoreMemory - gitproc.TransfersPerProcess*gitproc.TransferMemory -
+	MaintenanceMemoryPerCore
 
 // RebuildCooldown is how soon after a repository's last rebuild ATTEMPT
 // another is refused, when the first of a line of attempts did not end the

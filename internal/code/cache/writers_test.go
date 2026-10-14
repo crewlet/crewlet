@@ -311,7 +311,8 @@ var cacheWriters = []struct{ file, kind, why string }{
 	{"internal/code/cache/maintain.go", kindGit + " commit-graph",
 		"the maintainer's commit-graph"},
 	{"internal/code/cache/maintain.go", kindRuntime,
-		"runMaintenance runs its plan's steps, whose argument lists are this file's two literals above"},
+		"runMaintenance runs its plan's steps, whose argument lists are this file's three literals above: " +
+			"the index with its bitmap and without one, and the graph"},
 	{"internal/code/cache/scratch.go", kindOS,
 		"a push's scratch repository and an advertisement view under scratch/: their directories, HEAD, " +
 			"config and alternates, and a view's packed-refs linked from its incarnation"},

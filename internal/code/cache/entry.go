@@ -215,6 +215,11 @@ type incarnation struct {
 	// total in step.
 	diskBytes, metaBytes int64
 	midx                 midxState
+	// memoryRefused is the steps the node's memory has refused it — each
+	// one whose charge alone is more than the node can give its background
+	// work — and said so: each logged and counted once an incarnation,
+	// however many passes, rounds and checks find it again.
+	memoryRefused maintStep
 	// lastUsed is when a reader last took or released it.
 	lastUsed time.Time
 	// stamped is the last use the disk records (lastUsedOn): read at boot,

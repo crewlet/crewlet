@@ -3,6 +3,7 @@ package cache_test
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
@@ -39,6 +40,14 @@ type world struct {
 	// maintenance lane is ONE slot — the lane a case holds whole by holding
 	// one process.
 	processes int
+	// memory is every boot's pool's node memory; 0 is a tebibyte, so every
+	// case's lanes and maintenance budget are its own, never whatever the
+	// machine running the suite has left after its pool's lanes — which,
+	// for a pool of eight cores on a sixteen-gigabyte runner, is little. A
+	// case about the budget sets it, or sets machineMemory, which makes the
+	// pool read the machine's own as a node's does.
+	memory        int64
+	machineMemory bool
 }
 
 // newWorld prepares a fresh cache directory and a real gitproc pool over the
@@ -64,23 +73,31 @@ func (w *world) prepare(t testing.TB, dir string) {
 		t.Fatalf("Prepare: %v", err)
 	}
 	t.Cleanup(layout.Release)
-	w.layout, w.pool = layout, newPoolOf(t, layout, w.gitPath, w.processes)
+	memory := cmp.Or(w.memory, 1<<40)
+	if w.machineMemory {
+		memory = 0
+	}
+	w.layout, w.pool = layout, newPoolOf(t, layout, w.gitPath, w.processes, memory)
 }
 
 // reboot prepares w's directory again: the boot's Prepare.
 func (w *world) reboot(t testing.TB) { w.prepare(t, w.layout.Dir) }
 
 // newPool is a real pool over layout's HOME.
-func newPool(t testing.TB, layout cache.Layout) *gitproc.Pool { return newPoolOf(t, layout, "", 0) }
+func newPool(t testing.TB, layout cache.Layout) *gitproc.Pool {
+	return newPoolOf(t, layout, "", 0, 1<<40)
+}
 
 // newPoolOf is a pool over layout's HOME running the git at path ("" is the
-// one on PATH) with processes slots (0 is two).
-func newPoolOf(t testing.TB, layout cache.Layout, path string, processes int) *gitproc.Pool {
+// one on PATH) with processes slots (0 is two), on a node of memory bytes (0
+// is the machine's own, read as a node's is).
+func newPoolOf(t testing.TB, layout cache.Layout, path string, processes int, memory int64) *gitproc.Pool {
 	t.Helper()
 	if processes == 0 {
 		processes = 2
 	}
-	pool, err := gitproc.New(t.Context(), gitproc.Options{Path: path, Home: layout.Home, MaxProcesses: processes})
+	pool, err := gitproc.New(t.Context(), gitproc.Options{Path: path, Home: layout.Home, MaxProcesses: processes,
+		Memory: memory})
 	if err != nil {
 		t.Fatalf("gitproc.New over %s: %v", layout.Home, err)
 	}

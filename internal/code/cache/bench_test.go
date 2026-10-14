@@ -634,7 +634,7 @@ func (w *syncWorld) coldCache(b *testing.B, root string, n, fetch int, mutate ..
 		b.Fatalf("Prepare: %v", err)
 	}
 	o := cache.Options{
-		Layout: layout, MaxBytes: 1 << 40, Git: newPoolOf(b, layout, "", runtime.NumCPU()), Objects: w.store,
+		Layout: layout, MaxBytes: 1 << 40, Git: newPoolOf(b, layout, "", runtime.NumCPU(), 1<<40), Objects: w.store,
 		Fetch: silent{w.log}, Limits: code.DefaultLimits, HookCommand: []string{"/bin/true"},
 		Metrics: w.rec, Now: time.Now,
 	}
@@ -1109,6 +1109,9 @@ func packOut(b *testing.B, pool *gitproc.Pool, c *cache.Cache, dir string, revs 
 //     then the commit-graph, in the maintenance lane at one thread — the
 //     run MidxMinInterval and MidxDutyCycle pace, and
 //     gitproc.PackWorkDeadline bounds.
+//   - memory/step=… (100MB and 1GB) is the memory each git process the cache
+//     runs over the whole repository holds — the figures its memory budget
+//     charges by (memoryArms says which).
 //   - stale=k (100MB and 1GB) is once k pushes of stalePushBytes have
 //     landed outside the maintainer's index: op=count counts main's objects
 //     from the bitmap, the walk a bitmap that many pushes behind leaves a
@@ -1170,8 +1173,12 @@ func BenchmarkMidx(b *testing.B) {
 				})
 			}
 			if !stale {
+				// No memory arms over 5 GB: its bitmap holds some 10 GB
+				// beside the history the in-memory store already holds,
+				// past what a machine that runs the rest has.
 				return
 			}
+			w.memoryArms(b, c, s, repo, objects)
 			if err := cache.ForgetMaintenance(c, repo); err != nil {
 				b.Fatal(err)
 			}
@@ -1202,6 +1209,101 @@ func BenchmarkMidx(b *testing.B) {
 						packOut(b, w.pool, c, s.Dir, "refs/heads/main")
 					}
 				})
+			}
+		})
+	}
+}
+
+// memorySteps are what BenchmarkMidx's memory arms price, in the order they
+// run: each git process a cache runs over a whole repository, with what it
+// finds in the incarnation when it starts.
+var memorySteps = []struct {
+	name string
+	// args is the process; none is a clone (packOut), run in the read lane as
+	// a request's transfer runs; the rest run in the maintenance lane.
+	args []string
+	// index is the multi-pack-index the incarnation holds when it starts:
+	// "" none, "plain" one without a bitmap, "bitmap" the maintainer's.
+	index string
+	// graph: the commit-graph is there when it starts.
+	graph bool
+}{
+	{name: "index", args: []string{"multi-pack-index", "write", "--no-progress"}},
+	{name: "clone-walk", index: "plain"},
+	{name: "bitmap", args: []string{"multi-pack-index", "write", "--bitmap", "--no-progress"}},
+	{name: "graph", args: []string{"commit-graph", "write", "--reachable", "--no-progress"}, index: "bitmap"},
+	{name: "clone", index: "bitmap", graph: true},
+	{name: "fsck", args: []string{"fsck", "--connectivity-only", "--no-dangling", "--no-progress"}, index: "bitmap",
+		graph: true},
+}
+
+// memoryArms are BenchmarkMidx's memory/step=… arms over repo, synced in s:
+// the memory each git process a cache runs over the whole repository holds —
+// the figures the node's memory budget charges by (BitmapBytesPerObject,
+// IndexBytesPerObject, GraphBytesPerObject, FsckBytesPerObject,
+// gitproc.TransferBytesPerObject). Each is the peak ANONYMOUS memory of the one
+// git process, sampled every millisecond from /proc (peakAnon; Linux only —
+// elsewhere only the times are reported), divided by the objects the packs
+// hold: the packs' own pages it maps in are not counted, since the kernel
+// takes those back under pressure rather than killing anybody.
+//
+//   - step=index is a multi-pack-index without a bitmap — a full round's own,
+//     and the maintainer's where the node cannot hold the bitmap.
+//   - step=bitmap is the maintainer's index with its bitmap: a walk of the
+//     whole history.
+//   - step=graph is the commit-graph a run writes after its index.
+//   - step=clone-walk and step=clone are the pack a clone of main is served
+//     (packOut) with only the index without a bitmap and with the
+//     maintainer's bitmap — what one transfer of the repository holds beside
+//     a run.
+//   - step=fsck is Verify's connectivity check.
+func (w *syncWorld) memoryArms(b *testing.B, c *cache.Cache, s cache.Synced, repo string, objects int64) {
+	b.Helper()
+	run := func(b *testing.B, args []string) {
+		b.Helper()
+		if _, err := w.pool.Run(b.Context(), gitproc.Cmd{
+			Dir: s.Dir, Args: args, Config: c.ServeConfig(), Class: gitproc.ClassMaintenance, Deadline: time.Hour,
+		}); err != nil {
+			b.Fatalf("git %v: %v", args, err)
+		}
+	}
+	// holding puts the incarnation in the state a step starts from.
+	holding := func(b *testing.B, index string, graph bool) {
+		b.Helper()
+		if err := cache.ForgetMaintenance(c, repo); err != nil {
+			b.Fatal(err)
+		}
+		switch index {
+		case "plain":
+			run(b, memorySteps[0].args)
+		case "bitmap":
+			run(b, memorySteps[2].args)
+		}
+		if graph {
+			run(b, memorySteps[3].args)
+		}
+	}
+	for _, step := range memorySteps {
+		b.Run("memory/step="+step.name, func(b *testing.B) {
+			var peak int64
+			measured := false
+			for b.Loop() {
+				b.StopTimer()
+				holding(b, step.index, step.graph)
+				b.StartTimer()
+				n, ok := peakAnon(func() {
+					if step.args == nil {
+						packOut(b, w.pool, c, s.Dir, "refs/heads/main")
+						return
+					}
+					run(b, step.args)
+				})
+				peak, measured = max(peak, n), ok
+			}
+			b.ReportMetric(float64(objects), "objects")
+			if measured {
+				b.ReportMetric(float64(peak)/float64(objects), "anon-B/object")
+				b.ReportMetric(float64(peak)/(1<<20), "anon-MiB")
 			}
 		})
 	}

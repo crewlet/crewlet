@@ -64,13 +64,27 @@ type Cache struct {
 	// a push's scratch is written by its client's receive-pack, so only the
 	// disk knows.
 	scratchBytes atomic.Int64
-	// maint is the maintenance runs in flight, each with its estimated
-	// memory, and maintMemory what the runs beside the largest of them may
-	// be estimated at together (MaintenanceMemoryPerCore for each of the
-	// pool's cores): a pass admits a run against both (maintain.go). A
-	// field, so the suite can narrow it (export_test.go).
+	// maint is the whole-repository work in flight against the node's
+	// memory — the maintenance runs, the round's indexes, Verify's checks —
+	// and the budget it is held to, and maintMemory what the runs beside the
+	// largest may be charged at together (MaintenanceMemoryPerCore for each
+	// core the node's memory backs): a pass admits a run against both
+	// (maintain.go). maintMemory a field, so the suite can narrow it
+	// (export_test.go).
 	maint       maintFlight
 	maintMemory int64
+	// memReserve is what the node keeps of its memory for everything but its
+	// background work, fixed at Open from the pool's lanes (memory.go).
+	// Under memMu: memory, the node's memory as last read; memSource, where
+	// each maintainer pass reads it again (the pool's ReadMemory, or the
+	// suite's figure); memFailing, that the last read failed and said so.
+	// refusals is what the maintainer's latest walk found refused for it.
+	memReserve int64
+	memMu      sync.Mutex
+	memory     gitproc.Memory
+	memSource  func() (gitproc.Memory, error)
+	memFailing bool
+	refusals   memoryRefusals
 	// mark is the code log as this process has seen it answered, and
 	// rereads counts the marks made for whole reads (Cache.reread): one log
 	// under every repository, so what one round learns of it reaches all.
@@ -120,11 +134,11 @@ type Cache struct {
 // git runs proc-receive with no arguments, so the probe never fires for git.
 const hookProbe = "--crewlet-probe"
 
-// Open opens a prepared cache: takes over the claim [Prepare] took, clears
-// what the previous process left in flight, rewrites the hook (and waits
-// until it can be exec'd) and indexes every repository Prepare found. It runs
-// no git, reads no rows, and reads nothing of repos/ that Prepare already
-// read.
+// Open opens a prepared cache: takes over the claim [Prepare] took, derives its
+// memory budget, clears what the previous process left in flight, rewrites
+// the hook (and waits until it can be exec'd) and indexes every repository
+// Prepare found. It runs no git, reads no rows, and reads nothing of repos/
+// that Prepare already read.
 //
 //  1. o is validated ([ErrOptions]); o.Layout must be one Prepare returned
 //     ([ErrNotACache] otherwise), and is opened once.
@@ -132,7 +146,10 @@ const hookProbe = "--crewlet-probe"
 //     [Cache.Stop]: two engines pointed at one git.cache_dir would empty
 //     each other's tmp/ and scratch/ at boot and race on every repository's
 //     files, so the second is refused at its Prepare ([ErrCacheInUse]).
-//     Any failure from here gives the claim back.
+//     Any failure from here gives the claim back. What its background work
+//     may hold of the node's memory is derived from the memory its git pool
+//     read (memory.go): the pool refuses a node whose memory cannot be read,
+//     so a cache is never opened on a guessed budget.
 //  3. scratch/ and tmp/ are each renamed into trash/ and made again empty —
 //     an instant at any size. What they held belonged to requests of the
 //     process that made it, so every one of them is an orphan now; trash/
@@ -163,7 +180,6 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 		faults: o.Faults, log: o.Logger, metrics: o.Metrics, now: o.Now, knobs: o.knobs,
 		fetchConcurrency: FetchConcurrency, fetches: newFetchSlots(NodeFetches), roundPacks: MidxRoundPacks,
 		midxPacks:    MidxPacks,
-		maintMemory:  int64(o.Git.Slots(gitproc.ClassRead)) * MaintenanceMemoryPerCore,
 		releaseClaim: sync.OnceFunc(b.claim.Release),
 		kicks:        make(chan struct{}, 1), maintKicks: make(chan struct{}, 1),
 		entries: map[string]*entry{}, idle: make(chan struct{}),
@@ -188,6 +204,7 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 		}
 	}()
 
+	c.initMemory(o.Git)
 	if err := c.clearBoot(); err != nil {
 		return nil, err
 	}
@@ -199,7 +216,8 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 		return nil, err
 	}
 	c.log.Info("code_cache_opened", "dir", c.dir, "repos", len(c.entries), "bytes", c.heldBytes.Load(),
-		"budget", o.MaxBytes, "trashed", trashed)
+		"budget", o.MaxBytes, "trashed", trashed, "memory", c.memory.Bytes, "memory_from", c.memory.From,
+		"memory_reserved", c.memReserve, "maintenance_budget", c.maint.budgetNow())
 	c.setGauges()
 	opened = true
 	return c, nil

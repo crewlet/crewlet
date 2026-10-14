@@ -745,7 +745,7 @@ func TestTheMaintainerLeavesAMaintenanceSlotForAPerson(t *testing.T) {
 }
 
 // MAINTENANCE RUNS BESIDE THE LARGEST AS MEMORY ALLOWS: a bitmap holds about
-// 320 bytes an object of its repository, and a node that has just joined
+// BitmapBytesPerObject an object of its repository, and a node that has just joined
 // finds its largest repositories due together — so the runs beside the
 // largest in flight are held to an allowance, while the largest itself, the
 // price of serving its repository at all, starts whenever a slot is free.
@@ -784,7 +784,7 @@ func TestMaintenanceRunsBesideTheLargestAsMemoryAllows(t *testing.T) {
 	for _, repo := range []string{large, small1, small2} {
 		defer w.sync(t, c, repo).Release()
 	}
-	el, e1, e2 := cache.MaintenanceEstimate(c, large), cache.MaintenanceEstimate(c, small1), cache.MaintenanceEstimate(c, small2)
+	el, e1, e2 := cache.BitmapCharge(c, large), cache.BitmapCharge(c, small1), cache.BitmapCharge(c, small2)
 	allowance := max(e1, e2)
 	if el <= allowance || e1+e2 <= allowance || e1 == 0 {
 		t.Fatalf("estimates %d (large), %d and %d against an allowance of %d: the case needs the large run past "+
@@ -808,12 +808,13 @@ func TestMaintenanceRunsBesideTheLargestAsMemoryAllows(t *testing.T) {
 	}
 }
 
-// A MAINTENANCE RUN IS ESTIMATED BY ITS REPOSITORY'S OBJECTS, as the packs'
-// rows count them — a multiplication, never a read of the disk — and the
+// A MAINTENANCE RUN IS CHARGED BY ITS REPOSITORY'S OBJECTS, as the packs'
+// rows count them — a multiplication, never a read of the disk: its own
+// figure an object, and room for a transfer of the repository beside it — and the
 // count is exact on every incarnation the maintainer may run on: set whole by
 // a full round (a restart's first, which installs nothing it already holds),
 // and raised by every pack a delta installs.
-func TestAMaintenanceRunIsEstimatedByItsRepositorysObjects(t *testing.T) {
+func TestAMaintenanceRunIsChargedByItsRepositorysObjects(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
 	repo := w.repo(t, 1)
@@ -822,21 +823,22 @@ func TestAMaintenanceRunIsEstimatedByItsRepositorysObjects(t *testing.T) {
 		_, row := w.push(t, repo, "refs/heads/main", nil)
 		objects += row.Objects
 	}
+	perObject := int64(cache.BitmapBytesPerObject + gitproc.TransferBytesPerObject)
 	c := w.open(t)
 	w.sync(t, c, repo).Release()
-	if got, want := cache.MaintenanceEstimate(c, repo), objects*cache.MaintenanceBytesPerObject; got != want {
-		t.Errorf("a cold sync's estimate is %d, want %d objects at %d bytes", got, objects, cache.MaintenanceBytesPerObject)
+	if got, want := cache.BitmapCharge(c, repo), objects*perObject; got != want {
+		t.Errorf("a cold sync's charge is %d, want %d objects at %d bytes", got, objects, perObject)
 	}
 	c = w.reopen(t, c)
 	w.sync(t, c, repo).Release()
-	if got, want := cache.MaintenanceEstimate(c, repo), objects*cache.MaintenanceBytesPerObject; got != want {
-		t.Errorf("after a restart's full round, which installs nothing, the estimate is %d, want %d", got, want)
+	if got, want := cache.BitmapCharge(c, repo), objects*perObject; got != want {
+		t.Errorf("after a restart's full round, which installs nothing, the charge is %d, want %d", got, want)
 	}
 	_, row := w.push(t, repo, "refs/heads/main", nil)
 	objects += row.Objects
 	w.sync(t, c, repo).Release()
-	if got, want := cache.MaintenanceEstimate(c, repo), objects*cache.MaintenanceBytesPerObject; got != want {
-		t.Errorf("after a delta installed a pack, the estimate is %d, want %d", got, want)
+	if got, want := cache.BitmapCharge(c, repo), objects*perObject; got != want {
+		t.Errorf("after a delta installed a pack, the charge is %d, want %d", got, want)
 	}
 }
 
