@@ -31,7 +31,7 @@ func TestAWrongUsageCopyAnswersNoSpendRead(t *testing.T) {
 	wrongCopyOf(t, e, name)
 	_, err := e.UsageReads().Spend(t.Context(), q)
 	var unserved *estate.ErrUnserved
-	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "its copy of "+name) {
+	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "'s copy of "+name+" is out of service") {
 		t.Fatalf("a spend read on a single node whose usage copy is wrong = %v — want "+
 			"an unserved estate naming the usage copy", err)
 	}

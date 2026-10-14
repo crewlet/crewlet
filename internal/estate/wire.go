@@ -200,14 +200,15 @@ const (
 	unservedOutOfService unservedReason = "out_of_service"
 )
 
-// outOfService says which copy of this node's is out of service, in the words
-// a walk's note and a peer's reply carry.
-func outOfService(domain string) string {
+// outOfService says which of node's copies is out of service, in the words a
+// walk's note and a peer's reply carry — naming the node itself, as every
+// other refusal a node gives does ("<node>'s copy of <domain> lags its log").
+func outOfService(node, domain string) string {
 	if domain == SeatCopy {
-		return "its copy of a domain seat admission depends on is out of service — " +
+		return node + "'s copy of a domain seat admission depends on is out of service — " +
 			"wrong rather than behind"
 	}
-	return "its copy of " + domain + " is out of service — wrong rather than behind, " +
+	return node + "'s copy of " + domain + " is out of service — wrong rather than behind, " +
 		"so it answers none of " + domain + "'s operations until it recovers"
 }
 
