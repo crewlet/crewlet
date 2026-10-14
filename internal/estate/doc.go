@@ -9,16 +9,16 @@
 //
 // A node WITHOUT the `data` role keeps nothing that has to outlive it: its
 // store is scratch, its broker is a leaf with JetStream off, and it holds no
-// copy of the tracker's or the knowledge base's rows. Its seats still read and
-// write both, constantly — every board, every task, every page a tool touches
-// — so something has to answer them. EVERY DATA NODE HOLDS THE WHOLE ESTATE
-// and SERVES it over the broker ([Serve]), and every node's tools are handed
-// facades of one [Router], which answers in-process where this node's copy
-// serves and asks another data node otherwise. So are the operator's surfaces
-// — the API's tracker and knowledge-base routes and the operator's own MCP —
-// for the reason a data node's own seats are: read straight off the node's
-// copy, a node whose copy was out of service answered its operator from the
-// very copy it had stopped serving its seats from.
+// copy of the tracker's, the knowledge base's or chat's rows. Its seats still
+// read and write all three, constantly — every board, every task, every page
+// and every room a tool touches — so something has to answer them. EVERY DATA
+// NODE HOLDS THE WHOLE ESTATE and SERVES it over the broker ([Serve]), and every
+// node's tools are handed facades of one [Router], which answers in-process
+// where this node's copy serves and asks another data node otherwise. So are
+// the operator's surfaces — the API's tracker, knowledge-base and chat routes
+// and the operator's own MCP — for the reason a data node's own seats are: read
+// straight off the node's copy, a node whose copy was out of service answered
+// its operator from the very copy it had stopped serving its seats from.
 //
 // # One subject per serving node, never a scatter
 //
@@ -40,19 +40,26 @@
 // unanswered is asked again of the next data node, which is exactly the
 // lost-acknowledgement case that id exists for; and so is one a node answered
 // UNVOUCHED, whose ledger cannot say whether it landed while another node's
-// may. A PAGE write has no id a caller holds: the store mints one per call, so
-// a repeat is a second write (a second comment) or a refusal of its own first
-// copy (a create whose title is now taken). An unanswered page write is
-// therefore NEVER repeated, and is reported as [ErrOutcomeUnknown] — which is
-// the honest answer, and the one a tool turns into "read the page before
-// writing again".
+// may. A PAGE write's operation is derived from the caller's key where the
+// call carries one ([statelog.CallKey]), and a repeat under that key is the same
+// operation, asked again as a tracker write is. Where it carries none the store
+// mints an id per call, so a repeat is a second write (a second comment) or a
+// refusal of its own first copy (a create whose title is now taken): an
+// unanswered unkeyed page write is therefore NEVER repeated, and is reported as
+// [ErrOutcomeUnknown] — which is the honest answer, and the one a tool turns
+// into "read the page before writing again". A CHAT write is the page write's
+// case exactly ([statelog.CallKey]); the erase and the prune take their caller's
+// whole operation id, and are repeated under it as a purge is.
 //
 // A node that answers "I did not run it" — its copy is out of service, it runs
 // no native backend, its copy lags its logs, or it could not reach the
 // caller's floor in time — did not execute anything, so every class moves on
 // from it. When no data node runs the operation, it is refused as [ErrUnserved],
 // naming who was asked and what each said — never an empty answer, which would
-// say the company has none of what was asked for.
+// say the company has none of what was asked for. A WRITE that some node never
+// answered is the exception: that node may have run it, so the walk ends in
+// [ErrOutcomeUnknown] and the same operation id is the retry, since
+// "nobody ran it" is the claim a caller acts on by writing again.
 //
 // # A copy that is WRONG is out of service; one that LAGS is a worse node
 //
@@ -128,4 +135,13 @@
 // cross — this one's included — is a build failure until it is registered or
 // exempted by name. An operation answered in-process returns its own error,
 // which answers every question without the wire's help.
+//
+// AN UNEXPORTED ERROR TYPE IS A BUILD FAILURE TOO, because the far side
+// rebuilds a type from its exported fields and so cannot rebuild one of those
+// at all: it arrives as its message alone. That is not only a lost errors.As.
+// Each package's Sentence — the words a PERSON is shown for a refusal — finds
+// them by unwrapping the package's refusal type, and the tracker's, the pages
+// log's and chat's were all unexported, so every refusal decided on another
+// data node reached a person with "tracker:", "pages: invalid:" or "chat:
+// invalid:" in front of it.
 package estate

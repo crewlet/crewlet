@@ -40,7 +40,32 @@ var (
 
 	// ErrBadParams is a request this surface understood and refused.
 	ErrBadParams = errors.New("queries: bad parameters")
+
+	// ErrCallerRefused is a question refused because of WHO is asking: a
+	// credential the guard accepted that names no identity this question
+	// may be answered as. Every one is a [*CallerRefusal], which carries
+	// the code a client switches on and the sentence naming the fix.
+	ErrCallerRefused = errors.New("queries: refused to this caller")
 )
+
+// CallerRefusal is an [ErrCallerRefused]: the CODE a client tests for — the
+// act transport's own, so one caller meets one code on every surface — and
+// the sentence that names what to change.
+//
+// NOT [ErrUnauthorized], which says a credential is missing and sends a person
+// to find one, and NOT [ErrBadParams], which says the request was wrong: the
+// request was well formed and the credential valid, and what is missing is an
+// identity in the company — a line of the company document. Both transports
+// answer it under its own code with its sentence, the REST one as a `403`.
+type CallerRefusal struct {
+	Code   string
+	Detail string
+}
+
+func (e *CallerRefusal) Error() string { return ErrCallerRefused.Error() + ": " + e.Detail }
+
+// Unwrap makes a CallerRefusal an [ErrCallerRefused] to errors.Is.
+func (e *CallerRefusal) Unwrap() error { return ErrCallerRefused }
 
 // RefusalDetail is a [ErrBadParams] refusal's own sentence, for the caller.
 //
@@ -442,8 +467,8 @@ func unavailableIfTransient(err error) error {
 //     the store could not be reached, which is neither "held" nor "absent".
 //   - the estate router finding no copy to answer from: no data node serves
 //     the estate right now ([estate.ErrUnserved]) — no live node holds data,
-//     or none that does answers. The tracker and the knowledge base are read
-//     through the router, as a seat's tools read them, so a copy out of
+//     or none that does answers. The tracker, the knowledge base and chat are
+//     read through the router, as a seat's tools read them, so a copy out of
 //     service or a peer restarting reaches this surface as this.
 //
 // ASKED BY THE ANSWERS as well as the registry, for the answers that read what

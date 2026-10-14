@@ -15,24 +15,25 @@ import (
 
 // The native tracker and knowledge base, read for a screen.
 //
-// # These read THIS NODE'S OWN COPY, and that is the whole reason they are cheap
+// # These read A DATA NODE'S COPY, and that is the whole reason they are cheap
 //
 // Every other way to answer "what is on the board" is a listing over the
 // fleet's own record — O(keys) message deliveries, on a request path, for a
-// page a dashboard refreshes. This node's copy is what makes it a SQL query
-// instead, and it is the same copy a seat's own tools read, so an operator and
-// an agent looking at one task see one task.
+// page a dashboard refreshes. A copy of the replicated estate is what makes it
+// a SQL query instead, and it is reached through the same estate router a
+// seat's own tools read through, so an operator and an agent looking at one
+// task see one task: this node's copy while it serves, another data node's
+// while it does not. Only a data node serves these screens — Tier A refuses
+// `ingress` without `data` — so the router is here for the copy that is out
+// of service, never for a node holding none.
 //
-// The two halves reach that copy differently, and the difference is visible in
-// the answers rather than hidden here: the tracker's rows are derived by an
-// applier from an ordered log, so every answer carries the level it was served
-// at and what it could not account for; the wiki's are maintained by a
-// projector following a bucket's change feed, which could only say hydrated or
-// not.
+// Both halves' rows are derived by a state-log applier from an ordered log, so
+// every answer carries the level it was served at and the position it
+// answered at, rather than a flag saying whether the copy was ready.
 //
 // # A COPY THAT HAS NOT CAUGHT UP SAYS SO rather than answering empty
 //
-// Both native backends are state-log domains now, so both say it the same way:
+// Both native backends are state-log domains, so both say it the same way:
 // through the coverage every answer carries, which is a POSITION rather than a
 // boolean. "This company has no work" is an answer a person acts on — they
 // file the duplicate, they conclude the migration failed — and a node that has
@@ -57,10 +58,13 @@ import (
 // whose caller is allowed to choose. So the function is the unit here, and
 // there is no level constant beside it to reach for by mistake.
 //
-// The rules themselves are [tracker.ParseFreshness]'s and not restated here.
-// One grammar serves the board, the socket, the REST route and a seat's own
-// tools, and a second reading of these keys would be the one place a freshness
-// key meant something slightly different.
+// The rules themselves are [statelog.ParseFreshness]'s and not restated here.
+// One grammar serves every domain's questions, the socket, the REST routes and
+// a seat's own tools, and a second reading of these keys would be the one
+// place a freshness key meant something slightly different. The FRAMEWORK'S
+// rather than a domain's, because this function serves every domain: read
+// through the tracker's, a bad `read_level` on a chat or a wiki question was
+// refused as "tracker: …", naming a domain the caller never asked about.
 //
 // WHAT THIS ADDS is the SURFACE, which the grammar cannot know: an absent or
 // unpermitted level resolves to this surface's default through
@@ -68,7 +72,7 @@ import (
 // all — it renders the level and the lag beside the rows, so a person who
 // asked for a weaker answer is shown the one they got.
 func freshness(p Params) (statelog.Freshness, error) {
-	got, err := tracker.ParseFreshness(p)
+	got, err := statelog.ParseFreshness(p)
 	if err != nil {
 		return got, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
@@ -404,8 +408,8 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 // turns tab rather than on every poll of the detail.
 //
 // FROM THE TRACKER'S ROWS, NOT THE EVENT HISTORY. `turns{work_item=}` answers
-// a similar-looking question from each node's event store, which keeps thirty
-// days and is scattered across the fleet; this is the task's own durable
+// a similar-looking question from each data node's event store, which keeps
+// thirty days and is scattered across the fleet; this is the task's own durable
 // account — the same rows its `spend` sums — so a turn listed here is a turn
 // the cost panel counted, on any node, at any age.
 func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {

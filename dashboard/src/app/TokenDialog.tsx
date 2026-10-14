@@ -23,13 +23,13 @@ import { Button, Callout, FormField, InlineCode, Input, Modal, Text } from "@cre
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { apiToken, clearToken, storeToken } from "~/protocol/index.ts";
 
-export function TokenDialog({
-  onClose,
-  onSaved,
-}: {
-  onClose: () => void;
-  onSaved: (token: string) => void;
-}) {
+/**
+ * WHAT A SAVE OR A SIGN-OUT MOVES IS NOT THIS DIALOG'S TO SAY: both announce
+ * the change through `protocol/authToken.ts`, where the shell's socket and
+ * every screen holding a person's state hear it — as they hear a token another
+ * tab saved, which no dialog here was open for.
+ */
+export function TokenDialog({ onClose }: { onClose: () => void }) {
   const [value, setValue] = useState(() => apiToken());
   const [refused, setRefused] = useState(false);
 
@@ -41,7 +41,6 @@ export function TokenDialog({
       return;
     }
     setValue("");
-    onSaved("");
     onClose();
   }
 
@@ -54,7 +53,6 @@ export function TokenDialog({
       setRefused(true);
       return;
     }
-    onSaved(token);
     onClose();
   }
 

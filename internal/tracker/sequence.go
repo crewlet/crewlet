@@ -243,7 +243,7 @@ type WriteResult struct {
 	// Warnings are what the caller should know and was not refused for —
 	// a body carrying more task keys than the applier will resolve, a tag
 	// that nearly matched an existing one. THE APPLY MUST NEVER DEPEND ON
-	// ONE: every node applies the same record, and only this node saw the
+	// ONE: every data node applies the same record, and only this node saw the
 	// warning.
 	Warnings []string
 }
@@ -1072,7 +1072,7 @@ func requiredFields(ctx context.Context, tx *sql.Tx, project Project, task Task)
 
 // bodyWarnings is what a writer is told and not refused for.
 //
-// THE APPLY MUST NOT DEPEND ON IT. Every node applies the same record and
+// THE APPLY MUST NOT DEPEND ON IT. Every data node applies the same record and
 // resolves the same first [MaxReferencesPerBody] keys in document order, so
 // the cap is deterministic without this — the warning exists so the person who
 // wrote a body full of keys learns that most of them link nothing, rather than

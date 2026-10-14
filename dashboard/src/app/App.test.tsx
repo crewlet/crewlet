@@ -8,7 +8,7 @@
  * sees, and it is the one least likely to be exercised by hand.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
@@ -109,24 +109,34 @@ describe("the shell", () => {
   test("every workspace is in the sidebar, Settings included", () => {
     // A SECTION THAT VANISHES without a credential is indistinguishable from
     // one that does not exist, so Settings is always a row and carries a lock.
+    // DERIVED FROM THE TABLE: a list written here was one workspace short the
+    // day Chat arrived, and passed.
     mount();
     const nav = screen.getByRole("navigation", { name: "Navigation" });
-    for (const label of [
-      "Home",
-      "Inbox",
-      "My work",
-      "Work",
-      "Agents",
-      "Live",
-      "Knowledge",
-      "Spend",
-    ]) {
-      expect(nav.textContent, label).toContain(label);
+    const rows = WORKSPACES.filter((ws) => ws.place !== "foot");
+    expect(rows.length).toBeGreaterThan(5);
+    for (const ws of rows) {
+      expect(nav.textContent, ws.label).toContain(ws.label);
     }
     const foot = screen.getByRole("navigation", { name: "Settings" });
     expect(foot.textContent).toContain("Settings");
     // THE LOCK IS SAID, not only drawn: this reader holds no credential.
     expect(foot.textContent).toContain("most sections need an operator credential");
+  });
+
+  // A GUARDED WORKSPACE KEEPS ITS ROW AND SAYS WHAT IT NEEDS — Chat, every
+  // read of which is a person's — and an open one says nothing of the kind.
+  test("a guarded workspace's row carries the lock, and an open one does not", () => {
+    mount();
+    const nav = screen.getByRole("navigation", { name: "Navigation" });
+    const rows = WORKSPACES.filter((ws) => ws.place !== "foot");
+    expect(rows.some((ws) => ws.guarded)).toBe(true);
+    for (const ws of rows) {
+      const link = within(nav).getByRole("link", { name: new RegExp(`^${ws.label}\\b`) });
+      expect(link.textContent?.includes("needs an operator credential"), ws.key).toBe(
+        ws.guarded === true,
+      );
+    }
   });
 });
 
@@ -208,6 +218,7 @@ describe("routing", () => {
       ["agents", "teams", "platform"],
       ["work", "ENG-42"],
       ["knowledge", "pages", "66666666-6666-4666-8666-666666666666"],
+      ["chat", "88888888-8888-4888-8888-888888888888"],
       ["settings", "nodes", "node-a"],
       ["settings", "integrations", "slack"],
       ["settings", "secrets", "SLACK_SIGNING_SECRET"],
@@ -329,15 +340,39 @@ describe("routing", () => {
 // that succeeded. Derived from the table, so a section marked guarded later is
 // held to this without anybody remembering to add it here.
 describe("a guarded section, for a reader without an operator credential", () => {
-  const settings = WORKSPACES.find((row) => row.key === "settings")!;
-  const guarded = settings.sections.filter((s) => s.guarded && !s.answersRefusal);
+  // EVERY WORKSPACE'S, never one workspace's: a walk over Settings alone let
+  // Chat's three guarded-in-all-but-name sections draw a second, weaker
+  // refusal of their own with nothing here to notice.
+  const guarded = WORKSPACES.flatMap((row) =>
+    row.sections.filter((s) => s.guarded && !s.answersRefusal && !s.elsewhere),
+  );
 
   const anonymous = { operator_id: "", operator: false };
 
   test("the table still guards the sections it did", () => {
-    expect(guarded.map((s) => s.key)).toEqual(
-      expect.arrayContaining(["integrations", "secrets", "nodes", "config", "backups", "audit"]),
+    expect(guarded.map((s) => s.path.join("/"))).toEqual(
+      expect.arrayContaining([
+        "settings/integrations",
+        "settings/secrets",
+        "settings/nodes",
+        "settings/config",
+        "settings/backups",
+        "settings/audit",
+        "chat",
+        "chat/mentions",
+        "chat/search",
+      ]),
     );
+  });
+
+  // AND A ROOM, which is the page a chat reader lives on: it is in the rooms
+  // section (`sectionOf`), so the frame's one refusal covers it too.
+  test("a chat room draws the one refusal, not the screen's own", async () => {
+    location.hash = buildHash(["chat", "88888888-8888-4888-8888-888888888888"]);
+    const { view } = mountAs(Promise.resolve(anonymous));
+    expect(await screen.findByText("Rooms needs an operator credential")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
+    expect(view.container.querySelector(".chat-frame")).toBeNull();
   });
 
   test("every guarded section draws the one refusal, and not a figure", async () => {
@@ -447,6 +482,84 @@ describe("a guarded section, for a reader without an operator credential", () =>
       view.unmount();
       cleanup();
     }
+  });
+});
+
+// CHAT, AS A PERSON. Each of its three pages is one component told which list
+// to draw, so a dispatch that swapped two of them draws the wrong list under a
+// correct trail and title — and "rendered something" passes that. Its
+// sections are drawn by ONE renderer, the screen's rail: a frame strip beside
+// it would be a second set of links to the same places.
+describe("chat, for a person", () => {
+  const served = {
+    read_level: "session",
+    complete: true,
+    position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 3 },
+  };
+
+  /** The frame, as a person bound to `ada`, recording every question asked. */
+  function mountChat(hash: string) {
+    location.hash = hash;
+    const asked: string[] = [];
+    const store = new Store();
+    store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
+    const socket = new LiveSocket(store);
+    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = async (what) => {
+      asked.push(what);
+      switch (what) {
+        case "viewer":
+          return { operator_id: "U0ADA", operator: true, handle: "ada", name: "Ada" };
+        case "chat_channels":
+          return { ...served, read_state: true, channels: [] };
+        case "chat_mentions":
+          return { ...served, mentions: [] };
+        default:
+          // EVERYTHING ELSE IS A QUESTION THIS NODE DOES NOT SERVE: the frame
+          // reads what it is asking for, and an empty object is no answer.
+          throw new QueryError("unknown_query");
+      }
+    };
+    const view = render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    return { asked, view };
+  }
+
+  /** The links on the page to `path`, wherever they are drawn. */
+  function linksTo(view: ReturnType<typeof render>, path: string[]): number {
+    return view.container.querySelectorAll(`a[href="${buildHash(path)}"]`).length;
+  }
+
+  test.each(["#/chat", "#/chat/mentions", "#/chat/search"])(
+    "%s draws each chat list once, and no section strip",
+    async (hash) => {
+      const { view } = mountChat(hash);
+      await screen.findByRole("navigation", { name: "Your rooms" });
+      expect(linksTo(view, ["chat", "mentions"]), "links to Mentions").toBe(1);
+      expect(linksTo(view, ["chat", "search"]), "links to Search chat").toBe(1);
+      expect(view.container.querySelector(".section-tabs")).toBeNull();
+      expect(view.container.querySelector(".section-column")).toBeNull();
+    },
+  );
+
+  test("#/chat/mentions draws the mention feed", async () => {
+    const { asked } = mountChat("#/chat/mentions");
+    expect(await screen.findByText(/Where you were named/)).toBeDefined();
+    expect(asked).toContain("chat_mentions");
+    expect(screen.queryByRole("searchbox", { name: "Search the company's chat" })).toBeNull();
+  });
+
+  test("#/chat/search draws the search, and asks for no mentions", async () => {
+    const { asked } = mountChat("#/chat/search");
+    expect(
+      await screen.findByRole("searchbox", { name: "Search the company's chat" }),
+    ).toBeDefined();
+    expect(screen.queryByText(/Where you were named/)).toBeNull();
+    expect(asked).not.toContain("chat_mentions");
   });
 });
 

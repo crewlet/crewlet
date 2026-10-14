@@ -133,6 +133,10 @@ func newTimeOrderedID() string { return statelog.NewOpID(time.Now(), "") }
 // name is held in this container" is the whole of what happened, while the
 // framework's wording for it — the object already exists — names an object
 // nobody asked about.
+//
+// PAGES ONLY: the node gate publishes on a node's subject and goes to the
+// framework directly ([Store.gateNode]), because this wording there would name
+// a page after a node id.
 func (s *Store) publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
 	result, err := s.publisher.Publish(ctx, req)
 	return result, refusal(err, req.Subject.ID)

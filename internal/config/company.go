@@ -67,6 +67,9 @@ type Company struct {
 	// search.
 	Knowledge Knowledge `yaml:"knowledge,omitempty" json:"knowledge"`
 
+	// Chat is which chat surface this company talks on.
+	Chat Chat `yaml:"chat,omitempty" json:"chat,omitempty"`
+
 	// SkillVariables is an operator-defined name -> value map substituted
 	// into tool-skill text wherever a skill writes ${name}.
 	//
@@ -247,17 +250,18 @@ func (c *Company) ValidateRunnable() error {
 
 // ValidateAdmission reports only the ADMISSION rules: the rules a submitted
 // document is refused for and a stored revision is merely warned about.
-// Today they are the org's duplicate seat names, duplicate unit names and a
-// unit reference on a seat declared inside another unit (see
+// Today they are the org's duplicate seat names, duplicate unit names, a unit
+// reference on a seat declared inside another unit and a schedule whose
+// five-field cron the grammar refuses (see
 // [org.Organization.ValidateAdmission]), duplicate sandbox setup step names
 // within one list, a GitHub App on a human seat, an avatar the dashboard
 // cannot draw or one on a human seat ([Company.validateAvatars]), a
 // cli-agent entry's credential configured where its CLI never reads it
 // ([LLMProvider.validateCLICredentials]), a cli-agent model with no provider
-// segment on a CLI that reads one ([LLMProvider.validateCLIModel]), and a
-// seat whose code work hands a
-// cli-agent entry to another CLI's coding agent
-// ([Company.validateSandboxCodingAgents]).
+// segment on a CLI that reads one ([LLMProvider.validateCLIModel]), a seat
+// whose code work hands a cli-agent entry to another CLI's coding agent
+// ([Company.validateSandboxCodingAgents]), and two units declaring one
+// channel on native chat ([Company.validateUnitRooms]).
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -268,7 +272,7 @@ func (c *Company) ValidateAdmission() error {
 func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateSetupStepNames(),
 		c.validateHumanSeatApps(), c.validateAvatars(), c.validateCLIAgentCredentials(),
-		c.validateCLIAgentModels(), c.validateSandboxCodingAgents())
+		c.validateCLIAgentModels(), c.validateSandboxCodingAgents(), c.validateUnitRooms())
 }
 
 // validateHumanSeatApps refuses a per-seat GitHub App on a human seat.
@@ -515,6 +519,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	p.wrap(c.Scheduling.validate(field("scheduling")))
 	p.wrap(c.Integrations.validate(field("integrations")))
 	p.wrap(c.validateKnowledgeBackend())
+	p.wrap(c.validateChat())
 	p.wrap(c.validateContainerKeys())
 	p.wrap(c.validateProviderKeys())
 	p.wrap(c.validateWorkers())
@@ -556,6 +561,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		p.wrap(c.Units[i].validate(idx(field("units"), i)))
 	}
 	p.wrap(c.Tracker.Native.validate(field("tracker.native")))
+	p.wrap(c.Chat.Native.validate(field("chat.native")))
 	// A NATIVE BLOCK ON A COMPANY THAT IS NOT NATIVE describes nothing,
 	// and the failure that produces is silence: an operator sets an inbox
 	// horizon for inbox rows somebody else's tracker will never write.
@@ -955,14 +961,26 @@ func (c *Company) TrackerBackendFor() TrackerBackend {
 }
 
 // RunsStateLog reports whether this company keeps any of its own records on
-// the stream: the engine's own tracker or its own knowledge base.
+// the stream: the engine's own tracker, its own knowledge base or its own
+// chat.
 //
-// EITHER ONE, because either starts a node's state log and the log runs every
-// registered domain or none. So the question is not which native backend a
-// company chose but whether it chose one at all, and the node that starts the
-// log and the rule that refuses an in-memory stream for it both ask it here.
+// ANY ONE, because any of them starts a node's state log and the log runs
+// every registered domain or none. So the question is not which native
+// backend a company chose but whether it chose one at all, and the node that
+// starts the log and the rule that refuses an in-memory stream for it both
+// ask it here.
+//
+// CHAT AS MUCH AS THE OTHER TWO, and it is the axis a company is least likely
+// to have chosen on purpose: a company on Jira and Confluence that declares no
+// Mattermost or Slack DERIVES native chat ([Company.ChatBackendFor]), so
+// leaving chat out of this answer started no log for exactly that company —
+// its rooms were never read and its seats' chat tools had no store behind
+// them, with nothing to say so, because the chat axis validated and the node
+// booted.
 func (c *Company) RunsStateLog() bool {
-	return c.TrackerBackendFor() == TrackerNative || c.KnowledgeBackendFor() == KnowledgeNative
+	return c.TrackerBackendFor() == TrackerNative ||
+		c.KnowledgeBackendFor() == KnowledgeNative ||
+		c.ChatBackendFor() == ChatNative
 }
 
 // VectorsEnabled reports whether the corpus is embedded and searched by
@@ -1084,14 +1102,18 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 	if c == nil {
 		return false
 	}
+	// A CHAT VENDOR IS DECLARED WHERE [chatVendors] SAYS, which is the one
+	// statement of it the chat backend is derived from too: Slack counts on
+	// a seat's own app as well as on the org block.
+	if vendor, ok := chatVendorNamed(surface); ok {
+		return vendor.declaredAt(c) != ""
+	}
 	in := c.Integrations
 	switch surface {
 	case "jira":
 		return in.Jira != nil
 	case "confluence":
 		return in.Confluence != nil
-	case "mattermost":
-		return in.Mattermost != nil
 	case "github":
 		return in.GitHub != nil
 	case "gitlab":
@@ -1100,16 +1122,6 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.Datadog != nil
 	case "atlassian":
 		return in.Atlassian != nil
-	case "slack":
-		if in.Slack != nil {
-			return true
-		}
-		for role := range c.EachRole() {
-			if role.Integrations.Slack != nil {
-				return true
-			}
-		}
-		return false
 	default:
 		// A SURFACE THIS BUILD DOES NOT KNOW, which on a rolling upgrade is
 		// a peer's. True rather than false, because the only caller deletes

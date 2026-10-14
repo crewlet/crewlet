@@ -1,7 +1,8 @@
 /**
  * The runtime audit: what a person did through a running node on the surfaces
  * that keep no record of their own — every operator tool call that is not a
- * proven read, and every `POST /backup`. The Audit log's fifth source.
+ * proven read, every `POST /backup`, and every chat erase and prune an
+ * operator made. The Audit log's fifth source.
  *
  * EXACTLY WHAT `internal/events/types` PUBLISHES — held there by
  * `TestTheAuditLogReadsEveryRuntimeAuditType`.
@@ -12,4 +13,9 @@
 export const OPERATOR_SOURCE = "operator";
 
 /** Every event type the runtime audit writes. */
-export const RUNTIME_AUDIT_TYPES = ["operator_acted", "backup_requested"] as const;
+export const RUNTIME_AUDIT_TYPES = [
+  "operator_acted",
+  "backup_requested",
+  "chat_erased",
+  "chat_pruned",
+] as const;

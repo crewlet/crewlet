@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -133,11 +136,11 @@ type PageWriter interface {
 	Create(ctx context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error)
 	SavePage(ctx context.Context, actor pages.Actor, pageID string, save pages.Save) (pages.Written, error)
 	Rename(ctx context.Context, actor pages.Actor, pageID, title string, quiet bool,
-		key pages.CallKey) (pages.Written, error)
+		key statelog.CallKey) (pages.Written, error)
 	Comment(ctx context.Context, actor pages.Actor, pageID string,
 		in pages.NewComment) (pages.Comment, pages.Written, error)
 	EditComment(ctx context.Context, actor pages.Actor, pageID, commentID,
-		body string, key pages.CallKey) (pages.Comment, pages.Written, error)
+		body string, key statelog.CallKey) (pages.Comment, pages.Written, error)
 }
 
 // KnowledgeSearcher is the native knowledge search over this node's corpus,
@@ -150,6 +153,94 @@ type PageWriter interface {
 type KnowledgeSearcher interface {
 	Answer(ctx context.Context, q knowledge.Query) (knowledge.Result, error)
 	Building(ctx context.Context) bool
+}
+
+// ChatReader is the engine's own chat's read side the surfaces ask of.
+//
+// THE VIEWER IS AN ARGUMENT OF EVERY READ, which is the domain's own shape
+// rather than a choice made here: a room's contents are not a fact about the
+// company the way a page is, so every read is answered for one seat and
+// answers a room that seat may not read exactly as one nobody holds — on
+// whichever data node answers it, because the rule is the reader's own.
+type ChatReader interface {
+	Channels(ctx context.Context, viewer string, q chat.ChannelsQuery,
+		fresh statelog.Freshness) (chat.ChannelListing, error)
+	Channel(ctx context.Context, viewer, channelID string,
+		fresh statelog.Freshness) (chat.ChannelDetail, error)
+	ChannelNamed(ctx context.Context, viewer, name string,
+		fresh statelog.Freshness) (chat.ChannelDetail, error)
+	Messages(ctx context.Context, viewer string, q chat.TranscriptQuery,
+		fresh statelog.Freshness) (chat.Transcript, error)
+	Thread(ctx context.Context, viewer string, q chat.ThreadQuery,
+		fresh statelog.Freshness) (chat.Thread, error)
+	Mentions(ctx context.Context, viewer string, q chat.MentionQuery,
+		fresh statelog.Freshness) (chat.MentionFeed, error)
+
+	// Readable is every room the viewer may READ, which is wider than the
+	// rooms it is in. It is no operation of its own: it is the
+	// authorization half of a search ([opChatSearch]), resolved on the node
+	// that holds the index the search reads, so the set and the hits are
+	// one copy's answer.
+	Readable(ctx context.Context, viewer string, fresh statelog.Freshness) ([]string, error)
+
+	// At is this copy's applied position on the chat log.
+	At() statelog.Position
+}
+
+// ChatWriter is the engine's own chat's write side. The author is an argument
+// of every call, as the knowledge base's is, because one node's chat serves
+// every seat and every operator through one store.
+//
+// # What it deliberately does not carry
+//
+// A UNIT ROOM'S MEMBERSHIP. The org chart is its sole writer, and the chart's
+// apply runs where the estate is held, against that data node's own write
+// side — the tracker's projects and the knowledge base's containers are
+// written the same way — so no surface on any node has a unit room's members
+// to set, and an operation for it would be a second writer the chart cannot
+// see.
+type ChatWriter interface {
+	CreateChannel(ctx context.Context, actor chat.Actor, in chat.NewChannel) (chat.Written, error)
+	OpenDirect(ctx context.Context, actor chat.Actor, participants []string,
+		key statelog.CallKey) (chat.Written, bool, error)
+	PatchChannel(ctx context.Context, actor chat.Actor, channelID string,
+		patch chat.ChannelPatch, key statelog.CallKey) (chat.Written, error)
+	SetMembers(ctx context.Context, actor chat.Actor, channelID string,
+		members []chat.Member, key statelog.CallKey) (chat.Written, error)
+	Join(ctx context.Context, actor chat.Actor, channelID string,
+		key statelog.CallKey) (chat.Written, error)
+	Leave(ctx context.Context, actor chat.Actor, channelID string,
+		key statelog.CallKey) (chat.Written, error)
+	Post(ctx context.Context, actor chat.Actor, channelID string,
+		in chat.NewMessage) (chat.Written, error)
+	Reply(ctx context.Context, actor chat.Actor, channelID, replyTo string,
+		in chat.NewMessage) (chat.Written, error)
+	Edit(ctx context.Context, actor chat.Actor, channelID, messageID string,
+		in chat.EditMessage) (chat.Written, error)
+	Delete(ctx context.Context, actor chat.Actor, channelID, messageID string,
+		key statelog.CallKey) (chat.Written, error)
+	React(ctx context.Context, actor chat.Actor, channelID, messageID, emoji string,
+		key statelog.CallKey) (chat.Written, error)
+	Unreact(ctx context.Context, actor chat.Actor, channelID, messageID, emoji string,
+		key statelog.CallKey) (chat.Written, error)
+
+	// The operator's destructive writes, which no seat is handed: the
+	// compliance erase and a room's prune, each under the operation id the
+	// caller minted, as a purge is.
+	Erase(ctx context.Context, actor chat.Actor, opID, channelID string,
+		messageIDs []string, reason string) (chat.Written, error)
+	Prune(ctx context.Context, actor chat.Actor, opID, channelID string,
+		cutoff time.Time) (chat.Written, error)
+}
+
+// ChatSearcher is the chat keyword index over this node's corpus.
+//
+// THE INDEX, NOT A SEARCH FOR A VIEWER: it takes the visible rooms on the
+// query and refuses a query naming none ([search.ErrNoViewer]). Which rooms
+// those are is resolved from the viewer by [opChatSearch], beside it, on the
+// same node.
+type ChatSearcher interface {
+	SearchMessages(ctx context.Context, q search.ChatQuery) ([]search.ChatHit, error)
 }
 
 // Backend is one data node's answer to every operation, over its copy of the
@@ -166,6 +257,9 @@ type Backend struct {
 	Pages      PageReader
 	PageWriter PageWriter
 	Knowledge  KnowledgeSearcher
+	Chat       ChatReader
+	ChatWriter ChatWriter
+	ChatSearch ChatSearcher
 
 	// Committed waits until this node's applier of the floor's log holds a
 	// position — the floor every request carries, the node's own included.
@@ -221,13 +315,21 @@ var errNotAdmitting = errors.New("estate: this copy admits no seat yet")
 // The domains an operation's floor may be on, and each one's stream, from the
 // domain's own declaration. An operation's floor is on its OWN domain's log and
 // no other: see [ready].
+//
+// THE THREE DOMAINS AN OPERATION READS OR WRITES, and not the other two the
+// estate carries: the vectors and the usage days are written by a fleet duty
+// and by each data node's own publisher, never through an operation, and no
+// operation reads their rows — the searches that rank by the vectors read an
+// index, which carries no floor at all.
 var (
 	trackerDomain = tracker.Domain{}.Name()
 	pagesDomain   = pages.Domain{}.Name()
+	chatDomain    = chat.Domain{}.Name()
 
 	floorStreams = map[string]string{
 		trackerDomain: tracker.Domain{}.Stream().Name,
 		pagesDomain:   pages.Domain{}.Stream().Name,
+		chatDomain:    chat.Domain{}.Stream().Name,
 	}
 )
 
@@ -1156,7 +1258,7 @@ type renamePageArgs struct {
 	PageID string
 	Title  string
 	Quiet  bool
-	Key    pages.CallKey
+	Key    statelog.CallKey
 }
 
 var opRenamePage = define("pages.rename", opOnceWrite, pagesDomain, false,
@@ -1193,7 +1295,7 @@ type editCommentArgs struct {
 	PageID    string
 	CommentID string
 	Body      string
-	Key       pages.CallKey
+	Key       statelog.CallKey
 }
 
 var opEditComment = define("pages.edit_comment", opOnceWrite, pagesDomain, false,
@@ -1271,10 +1373,422 @@ var opKnowledgeBuilding = define("knowledge.building", opRead, "", false,
 		return b.Knowledge.Building(ctx), nil
 	})
 
-// served is what a node runs, as a seat's admission asks it.
-type served struct {
+// ---- the engine's own chat ---------------------------------------------- //
+//
+// THE SAME CLASSES AS THE KNOWLEDGE BASE'S, for the knowledge base's reason: a
+// chat write names its author and its caller's key ([statelog.CallKey]) on its own
+// arguments, and the store derives the operation — and a message's or a new
+// room's id — from that key, so a call that carries one is the same operation
+// however often it is asked, and one that carries none is minted afresh by the
+// store on whichever node runs it: a repeat would be a second message. So every
+// gesture is a once-write that turns repeatable under the caller's key
+// ([op.repeatableWhen]), and the two that take a whole operation id from their
+// caller — the erase and the prune — are idempotent writes, as a purge is.
+//
+// EVERY READ CARRIES THE CHAT LOG'S FLOOR, the search included: what a seat may
+// read is decided by membership ROWS, and a seat that has just joined a room —
+// through whichever data node took the join — must find it among the rooms its
+// next read and its next search cover.
+
+type chatChannelsArgs struct {
+	Viewer string
+	Query  chat.ChannelsQuery
+	Fresh  statelog.Freshness
+}
+
+var opChatChannels = define("chat.channels", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatChannelsArgs) (chat.ChannelListing, error) {
+		if b.Chat == nil {
+			return chat.ChannelListing{}, errNoHalf
+		}
+		return b.Chat.Channels(ctx, a.Viewer, a.Query, a.Fresh)
+	})
+
+type chatChannelArgs struct {
+	Viewer    string
+	ChannelID string
+	Fresh     statelog.Freshness
+}
+
+var opChatChannel = define("chat.channel", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatChannelArgs) (chat.ChannelDetail, error) {
+		if b.Chat == nil {
+			return chat.ChannelDetail{}, errNoHalf
+		}
+		return b.Chat.Channel(ctx, a.Viewer, a.ChannelID, a.Fresh)
+	})
+
+type chatChannelNamedArgs struct {
+	Viewer string
+	Name   string
+	Fresh  statelog.Freshness
+}
+
+// A ROOM BY ITS ADDRESS, answered for a room the viewer may not read exactly
+// as for a name nobody holds — the reader's rule, kept on whichever node
+// answers.
+var opChatChannelNamed = define("chat.channel_named", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatChannelNamedArgs) (chat.ChannelDetail, error) {
+		if b.Chat == nil {
+			return chat.ChannelDetail{}, errNoHalf
+		}
+		return b.Chat.ChannelNamed(ctx, a.Viewer, a.Name, a.Fresh)
+	})
+
+type chatMessagesArgs struct {
+	Viewer string
+	Query  chat.TranscriptQuery
+	Fresh  statelog.Freshness
+}
+
+var opChatMessages = define("chat.messages", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatMessagesArgs) (chat.Transcript, error) {
+		if b.Chat == nil {
+			return chat.Transcript{}, errNoHalf
+		}
+		return b.Chat.Messages(ctx, a.Viewer, a.Query, a.Fresh)
+	})
+
+type chatThreadArgs struct {
+	Viewer string
+	Query  chat.ThreadQuery
+	Fresh  statelog.Freshness
+}
+
+var opChatThread = define("chat.thread", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatThreadArgs) (chat.Thread, error) {
+		if b.Chat == nil {
+			return chat.Thread{}, errNoHalf
+		}
+		return b.Chat.Thread(ctx, a.Viewer, a.Query, a.Fresh)
+	})
+
+type chatMentionsArgs struct {
+	Viewer string
+	Query  chat.MentionQuery
+	Fresh  statelog.Freshness
+}
+
+var opChatMentions = define("chat.mentions", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatMentionsArgs) (chat.MentionFeed, error) {
+		if b.Chat == nil {
+			return chat.MentionFeed{}, errNoHalf
+		}
+		return b.Chat.Mentions(ctx, a.Viewer, a.Query, a.Fresh)
+	})
+
+// ChatQuery is one ranked search of the company's chat, as it crosses: the
+// VIEWER whose rooms it searches, never the rooms.
+//
+// THE VISIBLE SET IS NOT A FIELD, which is the whole point of this type beside
+// [search.ChatQuery]: which rooms somebody may read is an authorization fact,
+// and a caller able to supply it is a caller able to supply the wrong one. The
+// serving node resolves it from the viewer, on the copy whose index it then
+// reads.
+type ChatQuery struct {
+	// Viewer is the seat the search is FOR. Required — the reader refuses a
+	// read for nobody.
+	Viewer string
+
+	// Text is what somebody typed.
+	Text string
+
+	// Channel narrows to one room, empty for every room the viewer may
+	// read. It is INTERSECTED with the visible set rather than trusted, so
+	// naming a room the viewer may not read answers nothing rather than
+	// refusing: a refusal confirms the room exists, and "there is no such
+	// room" and "you may not see it" must read identically from outside.
+	Channel string
+
+	// Author narrows to one speaker, empty for anybody.
+	Author string
+
+	// Limit bounds the hits; zero takes the index's own default.
+	Limit int
+
+	// Fresh is the level the VISIBLE SET is read at. The index itself has
+	// none — each node maintains it behind its applier — so this is the
+	// level of the only half that can be behind and that also decides what
+	// may be seen.
+	Fresh statelog.Freshness
+}
+
+// ChatSearchAnswer is one search's hits, and what they were drawn from.
+type ChatSearchAnswer struct {
+	// Hits is what matched, best first. Never nil.
+	Hits []search.ChatHit
+
+	// Searched is how many rooms the search covered — zero for a viewer
+	// who may read none, which is an answer rather than a refusal.
+	Searched int
+
+	// Position is the answering copy's applied position on the chat log,
+	// read BEFORE the visible set was resolved, so it is at or below the
+	// read's own and never overstates what the answer saw.
+	Position statelog.Position
+}
+
+// THE VISIBLE SET AND THE HITS ARE ONE NODE'S, which is why this is one
+// operation rather than a read of the set followed by a search: two hops could
+// be answered by two copies, and a set resolved on one and handed to another
+// node's index would be an authorization fact crossing the wire — the very
+// thing [ChatQuery] has no field for.
+//
+// A VIEWER WHO MAY READ NOTHING IS ANSWERED, NOT REFUSED. The index's own
+// [search.ErrNoViewer] is for a caller that lost its viewer; handed an empty
+// set here, it would turn an ordinary state into an error a seat reports as a
+// broken tool.
+var opChatSearch = define("chat.search", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q ChatQuery) (ChatSearchAnswer, error) {
+		if b.Chat == nil || b.ChatSearch == nil {
+			return ChatSearchAnswer{}, errNoHalf
+		}
+		at := b.Chat.At()
+		visible, err := b.Chat.Readable(ctx, q.Viewer, q.Fresh)
+		if err != nil {
+			return ChatSearchAnswer{}, err
+		}
+		if q.Channel != "" {
+			if slices.Contains(visible, q.Channel) {
+				visible = []string{q.Channel}
+			} else {
+				visible = nil
+			}
+		}
+		out := ChatSearchAnswer{Hits: []search.ChatHit{}, Searched: len(visible), Position: at}
+		if len(visible) == 0 {
+			return out, nil
+		}
+		hits, err := b.ChatSearch.SearchMessages(ctx, search.ChatQuery{
+			Text: q.Text, Channels: visible, Author: q.Author, Limit: q.Limit,
+		})
+		if err != nil {
+			return ChatSearchAnswer{}, err
+		}
+		if hits != nil {
+			out.Hits = hits
+		}
+		return out, nil
+	})
+
+type chatCreateChannelArgs struct {
+	Actor   chat.Actor
+	Channel chat.NewChannel
+}
+
+var opChatCreateChannel = define("chat.create_channel", opOnceWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatCreateChannelArgs) (chat.Written, error) {
+		if b.ChatWriter == nil {
+			return chat.Written{}, errNoHalf
+		}
+		return b.ChatWriter.CreateChannel(ctx, a.Actor, a.Channel)
+	}).repeatableWhen(func(a chatCreateChannelArgs) bool { return a.Channel.CallKey.String() != "" })
+
+type chatOpenDirectArgs struct {
+	Actor        chat.Actor
+	Participants []string
+	Key          statelog.CallKey
+}
+
+// openedDirect is [ChatWriter.OpenDirect]'s two answers, named.
+type openedDirect struct {
+	Written chat.Written
+	Created bool
+}
+
+var opChatOpenDirect = define("chat.open_direct", opOnceWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatOpenDirectArgs) (openedDirect, error) {
+		if b.ChatWriter == nil {
+			return openedDirect{}, errNoHalf
+		}
+		w, created, err := b.ChatWriter.OpenDirect(ctx, a.Actor, a.Participants, a.Key)
+		return openedDirect{Written: w, Created: created}, err
+	}).repeatableWhen(func(a chatOpenDirectArgs) bool { return a.Key.String() != "" })
+
+type chatPatchChannelArgs struct {
+	Actor     chat.Actor
+	ChannelID string
+	Patch     chat.ChannelPatch
+	Key       statelog.CallKey
+}
+
+var opChatPatchChannel = define("chat.patch_channel", opOnceWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatPatchChannelArgs) (chat.Written, error) {
+		if b.ChatWriter == nil {
+			return chat.Written{}, errNoHalf
+		}
+		return b.ChatWriter.PatchChannel(ctx, a.Actor, a.ChannelID, a.Patch, a.Key)
+	}).repeatableWhen(func(a chatPatchChannelArgs) bool { return a.Key.String() != "" })
+
+type chatSetMembersArgs struct {
+	Actor     chat.Actor
+	ChannelID string
+	Members   []chat.Member
+	Key       statelog.CallKey
+}
+
+var opChatSetMembers = define("chat.set_members", opOnceWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatSetMembersArgs) (chat.Written, error) {
+		if b.ChatWriter == nil {
+			return chat.Written{}, errNoHalf
+		}
+		return b.ChatWriter.SetMembers(ctx, a.Actor, a.ChannelID, a.Members, a.Key)
+	}).repeatableWhen(func(a chatSetMembersArgs) bool { return a.Key.String() != "" })
+
+type chatMembershipArgs struct {
+	Actor     chat.Actor
+	ChannelID string
+	Key       statelog.CallKey
+}
+
+var opChatJoin = define("chat.join", opOnceWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatMembershipArgs) (chat.Written, error) {
+		if b.ChatWriter == nil {
+			return chat.Written{}, errNoHalf
+		}
+		return b.ChatWriter.Join(ctx, a.Actor, a.ChannelID, a.Key)
+	}).repeatableWhen(func(a chatMembershipArgs) bool { return a.Key.String() != "" })
+
+var opChatLeave = define("chat.leave", opOnceWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatMembershipArgs) (chat.Written, error) {
+		if b.ChatWriter == nil {
+			return chat.Written{}, errNoHalf
+		}
+		return b.ChatWriter.Leave(ctx, a.Actor, a.ChannelID, a.Key)
+	}).repeatableWhen(func(a chatMembershipArgs) bool { return a.Key.String() != "" })
+
+type chatPostArgs struct {
+	Actor     chat.Actor
+	ChannelID string
+	Message   chat.NewMessage
+}
+
+var opChatPost = define("chat.post", opOnceWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatPostArgs) (chat.Written, error) {
+		if b.ChatWriter == nil {
+			return chat.Written{}, errNoHalf
+		}
+		return b.ChatWriter.Post(ctx, a.Actor, a.ChannelID, a.Message)
+	}).repeatableWhen(func(a chatPostArgs) bool { return a.Message.CallKey.String() != "" })
+
+type chatReplyArgs struct {
+	Actor     chat.Actor
+	ChannelID string
+	ReplyTo   string
+	Message   chat.NewMessage
+}
+
+// A REPLY IS ITS OWN OPERATION rather than a post with an optional parent: the
+// store refuses a reply that names no message, and one operation for both would
+// turn that refusal into a post to the room.
+var opChatReply = define("chat.reply", opOnceWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatReplyArgs) (chat.Written, error) {
+		if b.ChatWriter == nil {
+			return chat.Written{}, errNoHalf
+		}
+		return b.ChatWriter.Reply(ctx, a.Actor, a.ChannelID, a.ReplyTo, a.Message)
+	}).repeatableWhen(func(a chatReplyArgs) bool { return a.Message.CallKey.String() != "" })
+
+type chatEditArgs struct {
+	Actor     chat.Actor
+	ChannelID string
+	MessageID string
+	Edit      chat.EditMessage
+}
+
+var opChatEdit = define("chat.edit", opOnceWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatEditArgs) (chat.Written, error) {
+		if b.ChatWriter == nil {
+			return chat.Written{}, errNoHalf
+		}
+		return b.ChatWriter.Edit(ctx, a.Actor, a.ChannelID, a.MessageID, a.Edit)
+	}).repeatableWhen(func(a chatEditArgs) bool { return a.Edit.CallKey.String() != "" })
+
+type chatDeleteArgs struct {
+	Actor     chat.Actor
+	ChannelID string
+	MessageID string
+	Key       statelog.CallKey
+}
+
+var opChatDelete = define("chat.delete", opOnceWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatDeleteArgs) (chat.Written, error) {
+		if b.ChatWriter == nil {
+			return chat.Written{}, errNoHalf
+		}
+		return b.ChatWriter.Delete(ctx, a.Actor, a.ChannelID, a.MessageID, a.Key)
+	}).repeatableWhen(func(a chatDeleteArgs) bool { return a.Key.String() != "" })
+
+type chatReactArgs struct {
+	Actor     chat.Actor
+	ChannelID string
+	MessageID string
+	Emoji     string
+
+	// Remove takes the reaction back rather than adding it — one operation
+	// for both, because the store's two gestures are one decision with
+	// opposite intents.
+	Remove bool
+	Key    statelog.CallKey
+}
+
+var opChatReact = define("chat.react", opOnceWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatReactArgs) (chat.Written, error) {
+		if b.ChatWriter == nil {
+			return chat.Written{}, errNoHalf
+		}
+		if a.Remove {
+			return b.ChatWriter.Unreact(ctx, a.Actor, a.ChannelID, a.MessageID, a.Emoji, a.Key)
+		}
+		return b.ChatWriter.React(ctx, a.Actor, a.ChannelID, a.MessageID, a.Emoji, a.Key)
+	}).repeatableWhen(func(a chatReactArgs) bool { return a.Key.String() != "" })
+
+type chatEraseArgs struct {
+	Actor      chat.Actor
+	OpID       string
+	ChannelID  string
+	MessageIDs []string
+	Reason     string
+}
+
+// AN ERASE crosses as a purge does: its operation id is the caller's, so a
+// repeat after an unanswered one collapses on it, and the ledger answers that
+// repeat with the first outcome.
+var opChatErase = define("chat.erase", opIdempotentWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatEraseArgs) (chat.Written, error) {
+		if b.ChatWriter == nil {
+			return chat.Written{}, errNoHalf
+		}
+		return b.ChatWriter.Erase(ctx, a.Actor, a.OpID, a.ChannelID, a.MessageIDs, a.Reason)
+	})
+
+type chatPruneArgs struct {
+	Actor     chat.Actor
+	OpID      string
+	ChannelID string
+	Cutoff    time.Time
+}
+
+var opChatPrune = define("chat.prune", opIdempotentWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatPruneArgs) (chat.Written, error) {
+		if b.ChatWriter == nil {
+			return chat.Written{}, errNoHalf
+		}
+		return b.ChatWriter.Prune(ctx, a.Actor, a.OpID, a.ChannelID, a.Cutoff)
+	})
+
+// Served is which halves a data node runs natively, as a seat's admission
+// asks it ([Router.Serves]).
+type Served struct {
 	Tracker bool
 	Pages   bool
+
+	// Chat is the engine's own chat. FALSE FROM A DATA NODE OF AN OLDER
+	// BUILD, whose answer has no such field — and rightly so: that node
+	// serves no chat operation either, so a seat whose company runs native
+	// chat waits for a copy that does rather than attaching to one whose
+	// every chat call would be answered "not here".
+	Chat bool
 }
 
 // opPing is ADMISSION's question, asked of a data node: whether its copy
@@ -1287,9 +1801,15 @@ type served struct {
 // reached this node's writes. And NO ARGUMENTS: the one estate is the only
 // thing it can be about.
 var opPing = define("estate.ping", opRead, "", false,
-	func(ctx context.Context, b Backend, _ *Actor, _ struct{}) (served, error) {
+	func(ctx context.Context, b Backend, _ *Actor, _ struct{}) (Served, error) {
 		if b.Admits != nil && !b.Admits(ctx) {
-			return served{}, errNotAdmitting
+			return Served{}, errNotAdmitting
 		}
-		return served{Tracker: b.Tracker != nil, Pages: b.Pages != nil}, nil
+		return b.served(), nil
 	}).ungated()
+
+// served is which halves this backend runs — one answer for a local
+// admission and a remote one, so the two cannot disagree about a half.
+func (b Backend) served() Served {
+	return Served{Tracker: b.Tracker != nil, Pages: b.Pages != nil, Chat: b.Chat != nil}
+}

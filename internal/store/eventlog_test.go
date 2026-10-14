@@ -12,11 +12,11 @@ import (
 // EVERY READ IS FLOORED AT THE INSTANT IT IS ASKED AT, never at a fresh read of
 // the log's own clock.
 //
-// A fleet asks every node one question at the ASKER'S instant, and an answer
-// assembled from several reads — a turn's rows beside its count, its ending
-// and its traces — is one answer only if every read is floored at the same
-// one. So every read takes the instant: a query type as `At`, every other read
-// as its last argument. The row here sits a minute above the floor under a
+// A fleet asks every data node one question at the ASKER'S instant, and an
+// answer assembled from several reads — a turn's rows beside its count, its
+// ending and its traces — is one answer only if every read is floored at the
+// same one. So every read takes the instant: a query type as `At`, every other
+// read as its last argument. The row here sits a minute above the floor under a
 // pinned instant an hour back — below the floor under now, and still on disk,
 // since retention keeps a day past it — so each read finds it when asked at the
 // pinned instant and does not when asked at now (the zero instant).
@@ -31,7 +31,7 @@ func TestEveryEventReadIsFlooredAtTheInstantItIsAskedAt(t *testing.T) {
 	edge := at.Add(-store.EventHistory).Add(time.Minute)
 	if err := log.Append(t.Context(), store.EventRecord{
 		ID: "edge", Type: "agent_phase_completed", Category: "agent", Time: edge,
-		TraceID: "tr-edge", Actor: "PM",
+		TraceID: "tr-edge", Actor: "PM", Node: "node-a",
 		Tags:    map[string]string{"turn_id": "tn-edge", "agent_id": "id-pm", "agent_role": "PM"},
 		Payload: []byte(`{}`),
 	}); err != nil {
@@ -94,6 +94,10 @@ func TestEveryEventReadIsFlooredAtTheInstantItIsAskedAt(t *testing.T) {
 		{"TurnTraces", func(at time.Time) (int, error) {
 			traces, err := log.TurnTraces(ctx, "tn-edge", at)
 			return len(traces), err
+		}},
+		{"TurnNodes", func(at time.Time) (int, error) {
+			nodes, err := log.TurnNodes(ctx, "tn-edge", at)
+			return len(nodes), err
 		}},
 		{"ByID", func(at time.Time) (int, error) {
 			_, err := log.ByID(ctx, "edge", at)

@@ -53,6 +53,8 @@ const JANE: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  chatBackend: "",
+  chatVendors: [],
 };
 
 let sent: { tool: string; body: { request_id: string; args: Record<string, unknown> } }[];

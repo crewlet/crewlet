@@ -137,20 +137,25 @@ live-editable, so the first version does not need to be the last.
    sentence of backstory each. This is 90% of the config.
 3. **Where does the founder sit?** They should be *in* the chart — see
    the founder seat under invariants.
-4. **What surfaces does the work live on?** Chat and the code host are
-   the ones to ask about; the tracker and the knowledge base **ship with
-   the engine and are on by default**, so a founder needs a positive
-   reason to bring Jira and Confluence rather than a reason not to. The
-   reason is usually about their people — a team already living in Jira
-   should not be asked to watch a second board — and never about the
-   agents, who cannot tell the difference. Say so, then point them at
+4. **What surfaces does the work live on?** The code host is the one to
+   ask about; the tracker, the knowledge base and chat **ship with the
+   engine and are on by default**, so a founder needs a positive reason
+   to bring Jira, Confluence, Slack or Mattermost rather than a reason
+   not to. The reason is usually about their people — a team already
+   living in Jira should not be asked to watch a second board, nor one
+   already living in Slack to answer agents in a second chat — and never
+   about the agents, who cannot tell the difference. Chat carries the one
+   trade that is not about habit, so name it: the engine's own chat sends
+   nothing to a person who is away — no email, no push — and a vendor's
+   does. Say so, then point them at
    [Choosing your stack](https://docs.crewlet.ai/engine/latest/getting-started/choosing-your-stack/)
    rather than re-deriving the trade-offs. **Do not wire integrations in
    the first pass** — see the sequencing rule below.
 
-   Give each unit a `project` and a `space` in the first pass regardless:
-   on the default backends that is the whole setup, and it is what gives
-   a team somewhere to file work and write things down.
+   Give each unit a `project` and a `space` in the first pass regardless,
+   and a `channel` to each unit that should have a room of its own: on
+   the default backends that is the whole setup, and it is what gives a
+   team somewhere to file work, write things down and talk.
 5. **What model, and what budget?** One `providers.llm` entry is enough
    to start. Ask whether they want a cost ceiling, and on which window:
    `token_budget` is a mapping of `day`, `week` and `month` ceilings on the
@@ -168,15 +173,18 @@ A company with no integrations only reacts to schedules. That is the
 right first milestone, because it proves the engine, the model, and the
 config all work before any external credential is in play.
 
-It is not a hollow one: the tracker and the knowledge base are on by
-default, so that first turn can already file work and write pages, and
-the founder can watch it happen on the Tracker and Pages screens. The
-integrations that come later are about where their PEOPLE are, not about
-what the company can do.
+It is not a hollow one: the tracker, the knowledge base and chat are on
+by default, so that first turn can already file work, write pages and
+post in its team's room, and the founder can watch it happen in the
+dashboard's Work, Knowledge and Chat workspaces — and answer in Chat
+once their seat is bound to their API token (`crewlet_operator_id`,
+below). The integrations that come later are about where their PEOPLE
+are, not about what the company can do.
 
 **First pass** — no `integrations`, no `mcp_servers`, one LLM provider,
-the org chart with a `project` and `space` per unit, and one schedule on
-the top seat so a turn actually fires:
+the org chart with a `project` and `space` per unit and a `channel` per
+team that should have a room, and one schedule on the top seat so a turn
+actually fires:
 
 ```yaml
 roles:
@@ -264,6 +272,36 @@ the org-wide read scope in `knowledge.scope`, and note a scope on a
 backend switched off is refused, because it reads as a working narrowing
 and narrows nothing.
 
+**Chat is a third axis on the same terms, and it is `chat.backend`.**
+`native` (the engine is the chat system), `vendor` (Slack or Mattermost),
+or `none`. Unset derives `vendor` when the company declares a vendor chat
+surface and `native` otherwise — and for chat that includes **any seat's
+own `integrations.slack` app**, because Slack's credentials are per seat
+and a company using it heavily may never write the org-level block.
+Naming `native` beside one is refused: a person would reply in one place
+while the agents read the other, and no rule could say which thread was
+real. The value is `vendor` rather than a product name because a company
+may legitimately run Mattermost *and* Slack. On `native`, the founder's
+own policy lives in `chat.native` — and `message_retention_days` is
+three-valued: leave it out for a year, write `0` to keep messages **for
+ever**, or 30..3650 for a horizon. (`tracker.native.inbox_retention_days`
+reads `0` the other way, as "take the default"; do not carry one across
+to the other.)
+
+**A unit's `channel` is an address, and it has a grammar.** Lowercase
+letters, digits, `-` and `_`, up to 64 characters — `backend`, never
+`#backend`, `C_BACKEND` or `Backend Team`. It is inherited by children
+that name none, which is the way to give a whole branch one room. On
+native chat the engine OPENS the room this names for the unit that
+declares it, and a room belongs to that one unit, so two units declaring
+the same channel are **refused** there — `crewlet validate` and every
+config write refuse the document; give each its own channel, or leave a
+child's empty so it inherits. On a vendor surface the same pair is only
+warned about (everything scoped to one lands in the other's room). A
+native-chat company where no unit declares a channel at all is warned
+about too — no team has a room of its own until somebody opens one by
+hand and adds its seats.
+
 **`project` / `space` on a unit or root role is identity, not read scope,
 and not a credential.** It means "this team's home": where inbound
 activity with no better recipient routes, and where the team files work
@@ -298,13 +336,22 @@ roles:
   - name: Jane Founder
     kind: human
     manages: [CEO]
-    contact: { mattermost_user_id: "${MATTERMOST_FOUNDER_USERNAME}" }
+    contact: { crewlet_operator_id: founder }   # an api.auth.tokens[] id
 ```
 
 `kind: human` seats are addressable but never spawned: no runtime, no
 inbox, no LLM. They require at least one `contact` identity and reject
 the runtime-only fields. Scope their `manages` to the top roles — a
-founder managing every seat floods them. See
+founder managing every seat floods them.
+
+`crewlet_operator_id` names one of the Tier A `api.auth.tokens[]` ids,
+and it is the identity that matters on the default stack: it is who the
+founder IS in the dashboard and through their own assistant, and on the
+engine's own chat it is what puts them in a room at all — a token bound
+to no seat reads nothing there, not even a public room. Add a vendor
+identity (`mattermost_user_id`, `slack_user_id`, `atlassian_account_id`, …)
+beside it for each surface the company connects, so agents recognise
+the founder there too. See
 [Humans in the org chart](https://docs.crewlet.ai/engine/latest/concepts/humans-in-the-org/).
 
 **Agents do not get code-authoring tools by default.** Reading and

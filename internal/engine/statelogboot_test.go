@@ -313,31 +313,29 @@ func TestEveryDomainReportsItsOwnReplicationRow(t *testing.T) {
 		}
 		byName[row.Name] = row
 	}
-	// THE TRACKER'S, whose health DOES gate admission.
+	// OVER THE REGISTER, never over a list written here. The list was
+	// four names — the tracker's, the vectors', the wiki's and the usage
+	// domain's — and a fifth domain added to the register would have left
+	// this case passing while covering four of five: an operator cannot
+	// watch a domain fall behind that nothing reports, and a missing row
+	// looks exactly like a healthy one.
+	//
+	// [engine.Domains] rather than a second copy of the register,
+	// for the reason it is exported at all.
+	for _, domain := range engine.Domains() {
+		if _, held := byName[domain.Name()]; !held {
+			t.Errorf("no row for %s, so an operator cannot see this node's "+
+				"copy of it fall behind; rows = %+v", domain.Name(), rows)
+		}
+	}
+	// AND THE TRACKER'S BY NAME, because its health is the one that gates
+	// seat admission: a walk of the register would go on passing if the
+	// register itself lost it.
 	if _, held := byName[tracker.Domain{}.Name()]; !held {
 		t.Errorf("no row for the tracker's own log; rows = %+v", rows)
 	}
-	// AND THE VECTOR DOMAIN'S, whose health does not.
-	if _, held := byName["vectors"]; !held {
-		t.Errorf("no row for the vector domain, so an operator cannot see the "+
-			"company's embeddings fall behind; rows = %+v", rows)
-	}
-	// AND THE WIKI'S, which is still a projector rather than a domain —
-	// the count is over REPLICATION LOOPS, not over one mechanism.
-	if _, held := byName["pages"]; !held {
-		t.Errorf("no row for the wiki's projection; rows = %+v", rows)
-	}
-	// AND THE USAGE DOMAIN'S, whose gap is a coverage number too — a node
-	// whose spend history stopped replicating is one the fleet view has to
-	// be able to name.
-	if _, held := byName["usage"]; !held {
-		t.Errorf("no row for the usage domain, so an operator cannot see a "+
-			"node's spend history fall behind; rows = %+v", rows)
-	}
 	for _, row := range rows {
 		switch {
-		case row.Kind != "projection" && row.Kind != "domain":
-			t.Errorf("%s reports kind %q, which is neither", row.Name, row.Kind)
 		case !row.Ready && strings.TrimSpace(row.Detail) == "":
 			t.Errorf("%s is not ready and says nothing about why — an operator "+
 				"reading the fleet view has no next step", row.Name)

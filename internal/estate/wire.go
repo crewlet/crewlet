@@ -63,7 +63,8 @@ const (
 	// is one a node answered `unvouched` ([statelog.Result.Unvouched]):
 	// that node's ledger cannot say whether the operation landed, and
 	// another node's may, so the answer is not final until every node has
-	// been asked.
+	// been asked. One that NO node answered is [ErrOutcomeUnknown], never
+	// [ErrUnserved]: a node that did not answer may have run it.
 	opIdempotentWrite
 
 	// opOnceWrite has no id a caller holds, so a repeat is a second write.
@@ -269,7 +270,7 @@ func (o op[A, R]) ungated() op[A, R] {
 
 // repeatableWhen declares a once-write that is IDEMPOTENT for the calls whose
 // arguments say so: a page write that carries the caller's own key
-// ([pages.CallKey]) derives its operation id — and a create its page's id —
+// ([statelog.CallKey]) derives its operation id — and a create its page's id —
 // from that key rather than minting one per call, so a repeat under it is the
 // same operation and the ledger answers it with the first copy's outcome. Such
 // a call fails over as an [opIdempotentWrite] does; one without a key is still

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -145,6 +146,55 @@ func TestAStructuredRefusalKeepsItsValue(t *testing.T) {
 	}
 }
 
+// A REFUSAL A PERSON IS SHOWN CROSSES AS THE SENTENCE THEY ARE SHOWN.
+//
+// Each package's Sentence gives a person the writer's own words without the
+// Go prefix — and it finds them by unwrapping the package's refusal TYPE. A
+// refusal decided on the data node that answered and printed on the node whose
+// caller asked has crossed the wire, so the type has to cross with its fields
+// or Sentence finds nothing and prints "tracker: …", "pages: invalid: …" or
+// "chat: invalid: …" to the person. The class must survive beside it, since a
+// surface picks the refusal's class by it.
+func TestARefusalsSentenceSurvivesTheWire(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name     string
+		refusal  error
+		mark     error
+		sentence func(error) string
+	}{
+		{"tracker invalid", &tracker.Refusal{Mark: tracker.ErrInvalid,
+			Err: errors.New("a title is required — give the item one")},
+			tracker.ErrInvalid, tracker.Sentence},
+		{"tracker forbidden", &tracker.Refusal{Mark: tracker.ErrForbidden,
+			Err: errors.New("only ana may close this — ask her")},
+			tracker.ErrForbidden, tracker.Sentence},
+		{"pages", &pages.InvalidError{Field: "title",
+			Why: "is empty — give the page one"}, pages.ErrInvalid, pages.Sentence},
+		{"chat", &chat.InvalidError{Field: "name",
+			Why: "is longer than 80 bytes — shorten it"}, chat.ErrInvalid, chat.Sentence},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			want := c.sentence(c.refusal)
+			if want == c.refusal.Error() {
+				t.Fatalf("the original %q has no sentence apart from its message, so "+
+					"this case would pass whatever the wire did", want)
+			}
+			got := throughWire(t, c.refusal)
+			if said := c.sentence(got); said != want {
+				t.Errorf("a person is shown %q across the wire, want %q", said, want)
+			}
+			if !errors.Is(got, c.mark) {
+				t.Errorf("the refusal lost its class across the wire: %v", got)
+			}
+			if got.Error() != c.refusal.Error() {
+				t.Errorf("the message became %q, want %q", got, c.refusal)
+			}
+		})
+	}
+}
+
 // AN IDENTITY THIS BUILD DOES NOT KNOW IS DROPPED AND THE WORDS KEPT — a
 // newer peer's sentinel mid-upgrade must not turn an answer into a failure to
 // decode one.
@@ -176,7 +226,7 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	var found int
 	// THIS PACKAGE'S OWN TOO: a router refuses with them, and a node that
 	// answers on another's behalf carries them back across a second hop.
-	for _, pkg := range []string{"tracker", "pages", "statelog", "estate"} {
+	for _, pkg := range []string{"tracker", "pages", "chat", "statelog", "estate"} {
 		vars, types := declaredErrors(t, filepath.Join(root, "internal", pkg))
 		for _, name := range vars {
 			found++
@@ -187,6 +237,25 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 		}
 		for _, name := range types {
 			found++
+			if pkg == "estate" && name == "remoteError" {
+				// THE WIRE'S OWN REBUILT ERROR, which is what every
+				// other value here crosses AS — it never crosses itself.
+				continue
+			}
+			if !ast.IsExported(name) {
+				// AN UNEXPORTED ERROR TYPE CANNOT CROSS: the wire
+				// rebuilds a type from its exported fields, so one of
+				// these arrives as its message alone. That is how a
+				// refusal's sentence was lost on every routed write —
+				// the tracker's, the pages log's and chat's refusal
+				// types were all unexported, so each package's Sentence
+				// on the asking node found no refusal and handed a
+				// person the Go error's prefix.
+				t.Errorf("%s.%s is an unexported error type, which the wire "+
+					"rebuilds as its message alone: export it with its fields "+
+					"and register it in estate's typedKinds", pkg, name)
+				continue
+			}
 			if !registeredTypes[pkg+"."+name] {
 				t.Errorf("%s.%s is an error type that does not cross the wire: "+
 					"register it in estate's typedKinds", pkg, name)
@@ -200,7 +269,8 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 }
 
 // declaredErrors is every exported Err* package variable and every type with
-// an `Error() string` method in one package directory, tests excluded.
+// an `Error() string` method — exported or not — in one package directory,
+// tests excluded.
 func declaredErrors(t *testing.T, dir string) (vars, types []string) {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -237,7 +307,7 @@ func declaredErrors(t *testing.T, dir string) (vars, types []string) {
 				if star, ok := recv.(*ast.StarExpr); ok {
 					recv = star.X
 				}
-				if ident, ok := recv.(*ast.Ident); ok && ident.IsExported() {
+				if ident, ok := recv.(*ast.Ident); ok {
 					types = append(types, ident.Name)
 				}
 			}

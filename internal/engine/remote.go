@@ -20,8 +20,8 @@ import (
 //
 // A node without the `data` role runs no state log, keeps no replicated
 // estate and has no lexical index. Its seats still read and write the
-// company's tracker and knowledge base through exactly the tools a data node's
-// seats have — the same [estate.Router] facades every node's tools are handed,
+// company's tracker, knowledge base and chat through exactly the tools a data
+// node's seats have — the same [estate.Router] facades every node's tools are handed,
 // which on this node answer nothing in-process and ask a data node for
 // everything. The tool layer cannot tell, and must not: a tool that behaved
 // differently on a stateless node would be two tools, and only one of them
@@ -39,10 +39,11 @@ import (
 // runs natively, reached through the router. Written once, like [native],
 // before it is published.
 type remoteNative struct {
-	// tracker and wiki are the halves this company runs natively. A half
-	// the company runs on a vendor is not served from here at all.
+	// tracker, wiki and chat are the halves this company runs natively. A
+	// half the company runs on a vendor is not served from here at all.
 	tracker bool
 	wiki    bool
+	chat    bool
 }
 
 // startRemote brings up a stateless node's native runtime, over the router
@@ -52,15 +53,16 @@ func (e *Engine) startRemote(c *Company) error {
 		return errors.New("engine: this node holds no data and has no router " +
 			"to reach a node that does")
 	}
-	e.remote.Store(&remoteNative{
+	runs := remoteNative{
 		tracker: c.Config.TrackerBackendFor() == config.TrackerNative,
 		wiki:    c.Config.KnowledgeBackendFor() == config.KnowledgeNative,
-	})
+		chat:    c.Config.ChatBackendFor() == config.ChatNative,
+	}
+	e.remote.Store(&runs)
 	log.Info("native_backends_remote", "node", e.id,
-		"tracker", c.Config.TrackerBackendFor() == config.TrackerNative,
-		"knowledge", c.Config.KnowledgeBackendFor() == config.KnowledgeNative,
+		"tracker", runs.tracker, "knowledge", runs.wiki, "chat", runs.chat,
 		"detail", "this node holds no data: its seats read and write the "+
-			"company's tracker and knowledge base through a data node")
+			"company's tracker, knowledge base and chat through a data node")
 	return nil
 }
 

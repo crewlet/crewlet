@@ -12,9 +12,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -31,9 +35,9 @@ import (
 //
 // What these assert is the whole premise of the `data` role: a node with a
 // scratch store and a leaf broker — no JetStream, no replicated estate, no
-// index — runs a seat whose tools read and write the company's tracker and
-// knowledge base, and every one of those reads and writes lands in, and is
-// answered from, a node that DOES hold them. The unit suites cover the wire
+// index — runs a seat whose tools read and write the company's tracker,
+// knowledge base and chat, and every one of those reads and writes lands in,
+// and is answered from, a node that DOES hold them. The unit suites cover the wire
 // against fakes; this is the real engine on both sides of a real leaf link.
 
 // statelessPair is one data member with a leaf listener and one stateless
@@ -55,12 +59,31 @@ func startStatelessPair(t *testing.T) statelessPair {
 func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	env map[string]string) statelessPair {
 	t.Helper()
+	return startStatelessPairSpec(t, pairSpec{company: amend, env: env})
+}
+
+// pairSpec is what a case may vary about the pair it stands up. The zero value
+// is [startStatelessPair]'s.
+type pairSpec struct {
+	// company amends the golden company document; env is added to both
+	// nodes' environment.
+	company func(doc string) string
+	env     map[string]string
+
+	// boot amends both nodes' Tier A — the tokens a person writes with.
+	boot func(*config.Bootstrap)
+}
+
+// startStatelessPairSpec is [startStatelessPair] as spec describes.
+func startStatelessPairSpec(t *testing.T, spec pairSpec) statelessPair {
+	t.Helper()
 	logs.attribute(t)
 	model := newScriptedModel(t)
 	doc := fmt.Sprintf(companyDoc, model.url)
-	if amend != nil {
-		doc = amend(doc)
+	if spec.company != nil {
+		doc = spec.company(doc)
 	}
+	env := spec.env
 	// PINNED, so the one agent seat runs where the data is not: a turn that
 	// happened to land on the data node would test nothing here.
 	doc = strings.Replace(doc, "    handle: ceo\n    llm: scripted\n",
@@ -69,8 +92,8 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}
-	data, dataBoot := bootDataMember(t, cfg, model, env)
-	data.app, data.server = serveAPI(t, data.engine, dataBoot, nil)
+	data, dataBoot := bootDataMember(t, cfg, model, env, spec.boot)
+	data.app, data.server = serveAPI(t, data.engine, dataBoot, data.chat.Hub(), nil)
 	port := dataBoot.Stream.Leaf.Port
 
 	agentDir := t.TempDir()
@@ -81,6 +104,9 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	agentBoot.Store.Scratch = true
 	agentBoot.Stream.Leaf.URLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}
 	agentBoot.Coordination.Type = config.CoordinationEmbeddedKV
+	if spec.boot != nil {
+		spec.boot(&agentBoot)
+	}
 	agent := bootNode(t, &agentBoot, cfg, model, env)
 	return statelessPair{data: data, agent: agent, agentStore: agentDir, agentBoot: &agentBoot}
 }
@@ -114,10 +140,13 @@ func dataMemberBootstrap(t *testing.T, port int) *config.Bootstrap {
 // route listener's [jetstream.ErrRoutePortTaken] among them, since this member
 // is no cluster's and opens no route listener to lose.
 func bootDataMember(t *testing.T, cfg *config.Company, model *scriptedModel,
-	env map[string]string) (*node, *config.Bootstrap) {
+	env map[string]string, amend func(*config.Bootstrap)) (*node, *config.Bootstrap) {
 	t.Helper()
 	for attempt := 1; ; attempt++ {
 		boot := dataMemberBootstrap(t, leafPort(t))
+		if amend != nil {
+			amend(boot)
+		}
 		n, err := newNode(t, nodeOptions(boot, cfg, env), model)
 		switch {
 		case err == nil:
@@ -171,15 +200,20 @@ func newNode(t *testing.T, opts engine.Options, model *scriptedModel) (*node, er
 	logs.attribute(t)
 	seedStore(t, opts.Bootstrap)
 	id := opts.Bootstrap.Node.ID
-	e, err := engine.New(t.Context(), opts)
+	// AS `crewlet run` BOOTS IT ([api.NewEngineWithChat]), its chat hub
+	// running whether or not the node serves an API: the pair's stateless
+	// member serves none, and it is exactly the node whose seats raise the
+	// working indicators a room on the data member shows.
+	e, chatLive, err := api.NewEngineWithChat(t.Context(), opts)
 	if err != nil {
-		return nil, fmt.Errorf("engine.New(%s): %w", id, err)
+		return nil, fmt.Errorf("api.NewEngineWithChat(%s): %w", id, err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
+	t.Cleanup(chatLive.Stop)
 	if err := e.Start(t.Context()); err != nil {
 		return nil, fmt.Errorf("engine.Start(%s): %w", id, err)
 	}
-	return &node{engine: e, model: model, id: id}, nil
+	return &node{engine: e, model: model, id: id, chat: chatLive}, nil
 }
 
 // A DATA MEMBER REFUSES A LEAF PORT SOMEBODY HOLDS, BY NAME — the premise
@@ -267,6 +301,172 @@ func TestASeatOnAStatelessNodeWritesThroughADataNode(t *testing.T) {
 	}
 	if p.agent.engine.Tracker() != nil || p.agent.engine.TrackerWriter() != nil {
 		t.Error("the stateless node runs a local tracker")
+	}
+}
+
+// A SEAT ON A NODE THAT HOLDS NOTHING ANSWERS IN A ROOM THE FLEET HOLDS, AND
+// THE ROOM SHOWS IT AT WORK WHILE IT DOES.
+//
+// The chat half of [TestASeatOnAStatelessNodeWritesThroughADataNode], and not
+// the same claim twice: a chat turn is WOKEN by the room as well as writing to
+// it. A person says something on the data member, from her own tab; the wake
+// is derived from that committed record by the change feed and reaches the
+// seat's mailbox on the stateless member, whose turn reads the trigger with
+// the chat parser a node without data still registers; and its answer goes
+// back through a data node's router into the room it was asked in — which is
+// where the assertion reads it, on the node that holds the room.
+//
+// AND THE INDICATOR IS THE TURN'S OWN. The node running a seat's turn is rarely
+// the node a browser is attached to, and here it is a node with no API: what
+// raises the indicator is that node's engine, from the turn ([notify.StatusDriver]
+// over its own hub), and what shows it is the presence probe of the data
+// member Alice's tab is attached to, answered over the broker. So the seat is
+// HELD on the round that answers until her socket has shown it working —
+// [TestAnIndicatorRaisedOnANodeWithNoAPIShowsInARoomOnAnother] raises one by
+// hand and certifies the scatter alone.
+func TestASeatOnAStatelessNodeAnswersInARoomTheFleetHolds(t *testing.T) {
+	t.Parallel()
+	p := startStatelessPairSpec(t, pairSpec{company: peopleDoc, boot: peopleTokens})
+	waitFor(t, "the stateless node to be admitted by a data node", hydrated(t, p.agent.engine))
+	waitForSeat(t, p.agent, "ceo")
+
+	made := openRoomAs(t, p.data, "alice-token", map[string]any{
+		"name": "deploys", "kind": string(chat.KindPublic), "members": []any{"ceo"},
+	})
+	// ALICE IS LOOKING AT THE ROOM, from a tab on the data member, before
+	// anything is said in it.
+	conn := dialAs(t, p.data, "alice-token")
+	focusOn(t, conn, made.Channel)
+
+	hold := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(hold) }) }
+	t.Cleanup(release)
+	const answer = "It finished at 14:20; the node drained cleanly."
+	p.agent.model.script(&chatScript{channel: made.Channel, answer: answer, hold: hold})
+	t.Cleanup(func() { p.agent.model.script(nil) })
+	const asked = "@ceo did the afternoon deploy finish?"
+	sayAs(t, p.data, "alice-token", made.Channel, asked)
+
+	// THE SEAT AT WORK, as her tab is shown it, while its turn is held.
+	awaitFrame(t, conn, stream.KindChatPresence, "ceo working in #"+made.Name,
+		func(data json.RawMessage) bool {
+			var frame stream.ChatPresenceFrame
+			if json.Unmarshal(data, &frame) != nil {
+				return false
+			}
+			return slices.ContainsFunc(frame.Rooms[made.Channel].Working,
+				func(w stream.ChatWorking) bool { return w.Handle == "ceo" })
+		})
+	release()
+
+	var page chat.Transcript
+	waitFor(t, "the seat's answer in the room, as the data node holds it", func() bool {
+		page = transcript(t, p.data, "alice", made.Channel)
+		return slices.ContainsFunc(page.Messages, func(v chat.MessageView) bool {
+			return v.Message.Author == "ceo"
+		})
+	}, func() string {
+		return fmt.Sprintf("room holds %v; the model saw %v", bodies(page), p.agent.model.seen())
+	})
+	said := page.Messages[0]
+	if said.Message.Body != answer || said.Message.AuthorKind != chat.AuthorAgent {
+		t.Errorf("the room's newest message is %q by a %s, want the seat's answer",
+			said.Message.Body, said.Message.AuthorKind)
+	}
+	// WOKEN BY WHAT WAS ASKED: the turn that answered was shown the message
+	// — the trigger crossed the leaf link whole — rather than answering a
+	// wake that carried nothing.
+	if !p.agent.model.sawText(asked) {
+		t.Errorf("the seat answered without ever being shown %q", asked)
+	}
+	// AND DELIVERED, on its own submission: its record is on the data
+	// member, where a node with no data writes its audit trail.
+	waitFor(t, "the seat to submit citing its answer", p.agent.model.chatSubmitted)
+	deliveredThrough(t, p.data, chat.PostMessageTool)
+	// AND THE STATELESS NODE KEPT NO COPY of the room it answered in.
+	if p.agent.engine.Chat() != nil || p.agent.engine.ChatStore() != nil {
+		t.Error("the stateless node runs a local chat")
+	}
+}
+
+// A SEAT WOKEN BY A REPLY IN A THREAD IS HANDED THE THREAD, ON A NODE THAT
+// HOLDS NONE OF IT, AND ANSWERS IN IT.
+//
+// A thread reply is usually thin — "can you take this one?" — and the thread
+// is the context, so the turn-start prefetch hands the thread over rather than
+// leaving the seat to go and read it ([notify.ThreadReader]). For the engine's
+// own chat that read is [chat.ThreadReader] over the estate router, as the
+// woken seat: on a node that holds no data it is a data node's copy that
+// answers, and a router that could not reach one renders the unreadable hint
+// instead — which tells the seat it has only the triggering message. So the
+// prompt is the assertion: the thread block, with the message that opened the
+// thread in it, and not the hint.
+//
+// The reply goes where a thread reply belongs: in the thread, through
+// [chat.ReplyInThreadTool], read back on the node that holds the room.
+func TestASeatWokenInAThreadOnAStatelessNodeIsHandedTheThread(t *testing.T) {
+	t.Parallel()
+	p := startStatelessPairSpec(t, pairSpec{company: peopleDoc, boot: peopleTokens})
+	waitFor(t, "the stateless node to be admitted by a data node", hydrated(t, p.agent.engine))
+	waitForSeat(t, p.agent, "ceo")
+
+	made := openRoomAs(t, p.data, "alice-token", map[string]any{
+		"name": "releases", "kind": string(chat.KindPublic), "members": []any{"ceo"},
+	})
+	// THE THREAD'S OPENING, addressed to nobody: nothing wakes for it, and
+	// the only way the seat can be shown it is the thread block.
+	const opened = "The 2.4 release notes are drafted; the migration section still " +
+		"needs a reviewer."
+	root := sayAs(t, p.data, "alice-token", made.Channel, opened).MessageID
+
+	const answer = "Taking the migration section; review by end of day."
+	p.agent.model.script(&chatScript{channel: made.Channel, thread: root, answer: answer})
+	t.Cleanup(func() { p.agent.model.script(nil) })
+	const asked = "@ceo can you take the migration section?"
+	reply := receiptOf[chatPostReceipt](t, p.data.acted(t, "alice-token", chat.ReplyInThreadTool,
+		map[string]any{"channel": made.Channel, "reply_to": root, "body": asked}))
+	if reply.ThreadRoot != root {
+		t.Fatalf("Alice's reply was filed under %q, not the thread of %s", reply.ThreadRoot, root)
+	}
+
+	var page chat.Transcript
+	var answered chat.MessageView
+	waitFor(t, "the seat's answer, as the data node holds it", func() bool {
+		page = transcript(t, p.data, "alice", made.Channel)
+		i := slices.IndexFunc(page.Messages, func(v chat.MessageView) bool {
+			return v.Message.Author == "ceo"
+		})
+		if i < 0 {
+			return false
+		}
+		answered = page.Messages[i]
+		return true
+	}, func() string {
+		return fmt.Sprintf("room holds %v; the model saw %v", bodies(page), p.agent.model.seen())
+	})
+	if answered.Message.Body != answer || answered.Message.ThreadRoot != root {
+		t.Errorf("the seat said %q under %q, want its answer in the thread of %s",
+			answered.Message.Body, answered.Message.ThreadRoot, root)
+	}
+	waitFor(t, "the seat to submit citing its answer", p.agent.model.chatSubmitted)
+	deliveredThrough(t, p.data, chat.ReplyInThreadTool)
+
+	// AND THE EXECUTOR WAS HANDED THE THREAD, opening and all — in its own
+	// block of the system prompt, where the trigger's text is not.
+	system := executorPrompt(t, p.agent)
+	const heading = "## The thread so far"
+	at := strings.Index(system, heading)
+	switch {
+	case at < 0:
+		t.Fatalf("the executor of a turn woken in a thread was shown no %q block:\n%s",
+			heading, tail(system))
+	case strings.Contains(system, prefetch.UnreadableThreadHint):
+		t.Errorf("the executor was told its thread could not be read from this node — "+
+			"the native reader through the router answered nothing:\n%s", tail(system[at:]))
+	case !strings.Contains(system[at:], opened):
+		t.Errorf("the thread block does not hold the message that opened the thread "+
+			"(%q):\n%s", opened, tail(system[at:]))
 	}
 }
 

@@ -520,3 +520,37 @@ func TestTheMaximalFileFitsItsRecord(t *testing.T) {
 			len(encoded), tracker.MaxCommitBytes)
 	}
 }
+
+// A FILE WRITE'S OPERATION IS NAMED AFTER WHAT IT WRITES, and the name is one
+// an operation id can carry.
+//
+// The path is the subject, so only the CONTENT tells two writes to one path
+// apart — and an id carried from one to the other would be answered from the
+// first's record. Each of the three facts moves the name; a path full of dots
+// and slashes still yields one segment the id grammar reads back exactly,
+// since a `.` in a name would read as a step separator.
+func TestAFileWritesOperationNameFollowsWhatItWrites(t *testing.T) {
+	t.Parallel()
+	base := tracker.FileWriteOpName("ENG", "reports/q3.v2.csv", "text/csv", "aa")
+	for what, other := range map[string]string{
+		"another path":    tracker.FileWriteOpName("ENG", "reports/q4.v2.csv", "text/csv", "aa"),
+		"another type":    tracker.FileWriteOpName("ENG", "reports/q3.v2.csv", "text/plain", "aa"),
+		"another content": tracker.FileWriteOpName("ENG", "reports/q3.v2.csv", "text/csv", "bb"),
+		"another project": tracker.FileWriteOpName("OPS", "reports/q3.v2.csv", "text/csv", "aa"),
+	} {
+		if other == base {
+			t.Errorf("%s names the same operation %q — an id minted for one would "+
+				"be taken as the other's retry", what, base)
+		}
+	}
+	if again := tracker.FileWriteOpName("eng", "reports/q3.v2.csv", "text/csv", "aa"); again != base {
+		t.Errorf("one project spelled two ways names two operations: %q and %q", base, again)
+	}
+	opID := statelog.NewOpID(time.Now(), base)
+	if err := statelog.CheckCallerOpID(opID); err != nil {
+		t.Fatalf("an id named %q is not one a caller may bring back: %v", base, err)
+	}
+	if !statelog.OpNamed(opID, base) {
+		t.Fatalf("%q does not read back as named %q", opID, base)
+	}
+}

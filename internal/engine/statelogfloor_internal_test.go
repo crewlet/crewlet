@@ -5,10 +5,12 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -559,8 +561,8 @@ func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T
 
 // A NODE BELOW THE TRIM FLOOR IS NOT READMITTED — through the node gate the
 // readmission route calls, judged against the register, the published floors
-// and the logs as the engine wires them, with nothing written to either log on
-// a refusal.
+// and the logs as the engine wires them, with nothing written to any log on a
+// refusal.
 //
 // The documentation promised this refusal; the writer wrote the inverse record
 // for any node, so an operator readmitting a machine that was still offline
@@ -579,9 +581,19 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 		t.Fatal("the node runs no node gate")
 	}
 	wiki := s.Domain(pages.Domain{}.Name())
+	rooms := s.Domain(chat.Domain{}.Name())
 	vectors := s.Domain(search.Domain{}.Name())
-	if wiki == nil || vectors == nil {
-		t.Fatal("the pages or the vector domain is not running")
+	if wiki == nil || rooms == nil || vectors == nil {
+		t.Fatal("the pages, chat or vector domain is not running")
+	}
+	// EVERY LOG THAT CLAIMS IDENTITY, off the running set: a readmission is
+	// judged and written on each of them, so each is one a refusal must leave
+	// untouched and one the readmission must land on.
+	var identity []*runningLog
+	for _, r := range s.running() {
+		if r.domain.ClaimsIdentity() {
+			identity = append(identity, r)
+		}
 	}
 
 	const away = "node-away"
@@ -602,7 +614,8 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 			Domains: map[string]coord.DomainPosition{
 				running.domain.Name(): {Generation: at.Generation, Seq: trackerSeq,
 					AppliedThrough: trackerSeq},
-				wiki.domain.Name(): {Generation: wiki.runner.Committed().Generation},
+				wiki.domain.Name():  {Generation: wiki.runner.Committed().Generation},
+				rooms.domain.Name(): {Generation: rooms.runner.Committed().Generation},
 				vectors.domain.Name(): {
 					Generation: vectors.runner.Committed().Generation},
 			},
@@ -619,16 +632,16 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 			t.Fatalf("publish %s's floor: %v", r.domain.Name(), err)
 		}
 	}
-	// BOTH LOGS' ENDS, because a refusal writes nothing to EITHER.
-	end := func() [2]uint64 {
+	// EVERY IDENTITY LOG'S END, because a refusal writes nothing to ANY.
+	end := func() []uint64 {
 		t.Helper()
-		var out [2]uint64
-		for i, r := range []*runningLog{running, wiki} {
+		var out []uint64
+		for _, r := range identity {
 			_, last, err := r.log.Bounds(t.Context())
 			if err != nil {
 				t.Fatalf("read %s's end: %v", r.domain.Name(), err)
 			}
-			out[i] = last
+			out = append(out, last)
 		}
 		return out
 	}
@@ -648,7 +661,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 				"against %d / %d", refusal.Domain, refusal.Seq, refusal.Bound.Floor,
 				refusal.Bound.First, domain, seq, floorWant, firstWant)
 		}
-		if last := end(); last != before {
+		if last := end(); !slices.Equal(last, before) {
 			t.Fatalf("the logs moved from %v to %v on a refused readmission", before, last)
 		}
 	}
@@ -676,24 +689,39 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	floor(wiki, 5)
 	refusedIn(wiki.domain.Name(), 0, 5, logFirstOf(t, wiki))
 
-	// AND ONCE IT HOLDS EVERYTHING THAT MAY BE GONE, IT IS TAKEN BACK.
+	// CAUGHT UP ON THE TRACKER AND THE PAGES, BEHIND ON CHAT.
 	floor(wiki, 0)
+	floor(rooms, 5)
+	refusedIn(rooms.domain.Name(), 0, 5, logFirstOf(t, rooms))
+
+	// AND ONCE IT HOLDS EVERYTHING THAT MAY BE GONE, IT IS TAKEN BACK.
+	floor(rooms, 0)
 	res, err := gate.Readmit(t.Context(), readmit)
 	if err != nil {
 		t.Fatalf("a node one record short of every floor was refused: %v", err)
+	}
+	if len(res.Domains) != len(identity) {
+		t.Fatalf("the readmission answered on %d logs, want every one of the %d that "+
+			"claim identity: %+v", len(res.Domains), len(identity), res.Domains)
 	}
 	for _, d := range res.Domains {
 		if d.Err != nil || d.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("the readmission answered %+v on %s, want applied", d, d.Domain)
 		}
 	}
-	for _, lister := range []evictionLister{tracker.Domain{}, pages.Domain{}} {
+	for _, r := range identity {
+		waitApplied(t, r)
+		lister, lists := r.domain.(evictionLister)
+		if !lists {
+			t.Fatalf("%s claims identity and lists no evictions", r.domain.Name())
+		}
 		rows, err := lister.Evictions(t.Context(), back.Store.Replicated().Reader())
 		if err != nil {
-			t.Fatalf("read the evictions: %v", err)
+			t.Fatalf("read %s's evictions: %v", r.domain.Name(), err)
 		}
 		if len(rows) != 1 || rows[0].NodeID != away || !rows[0].Back {
-			t.Fatalf("evictions = %+v, want %s readmitted on every log", rows, away)
+			t.Fatalf("%s's evictions = %+v, want %s readmitted on every log",
+				r.domain.Name(), rows, away)
 		}
 	}
 }
@@ -751,7 +779,7 @@ func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 }
 
 // THE WRITE FENCES AS THE ENGINE WIRES THEM REFUSE ON THE PUBLISHED FLOOR
-// ALONE, in both identity-claiming domains, while the log still holds
+// ALONE, in every identity-claiming domain, while the log still holds
 // everything.
 //
 // The fence takes the higher of two witnesses, and every other case here that
@@ -763,12 +791,20 @@ func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 // asked here with a floor one past its next record and a log that has lost
 // nothing, which the floor alone refuses, and then with the floor AT its next
 // record, which clears — the boundary [statelog.Replayable] draws.
+//
+// EVERY IDENTITY-CLAIMING LOG THE NODE RUNS, read off the running set: a
+// domain whose fence is wired and has no zero write here fails the case, so a
+// log added to the register is held to its own floor the day it is added —
+// a fence bound to ANOTHER log's floor reads a number in the wrong sequence
+// space, refuses nothing this log needs refused, and is caught by nothing but
+// this case.
 func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.Load().log
-	if e.native.Load().writer == nil || e.native.Load().pages == nil {
-		t.Fatal("the node runs no tracker writer or no page store")
+	n := e.native.Load()
+	s := n.log
+	if n.writer == nil || n.pages == nil || n.chat == nil {
+		t.Fatal("the node runs no tracker writer, page store or chat store")
 	}
 	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a node below a
 	// published floor may ask the fleet for a snapshot, and an adoption
@@ -777,66 +813,86 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	s.rejoin = func(context.Context) error { return nil }
 	s.rejoinMu.Unlock()
 
-	for _, tc := range []struct {
-		domain string
-		// zero is a write on a subject nobody has written, which is a
-		// write at an expectation of zero.
-		zero func(ctx context.Context, key string) error
-	}{
-		{domain: tracker.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
-			_, err := e.native.Load().writer.EvictNode(ctx, "op-"+key, "node-"+key)
+	// zero is, per domain, a write on a subject nobody has written, which
+	// is a write at an expectation of zero.
+	zero := map[string]func(ctx context.Context, key string) error{
+		tracker.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := n.writer.EvictNode(ctx, "op-"+key, "node-"+key)
 			return err
-		}},
-		{domain: pages.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
-			_, _, err := e.native.Load().pages.EnsureContainer(ctx, testActivation, key, key, "")
+		},
+		pages.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, _, err := n.pages.EnsureContainer(ctx, testActivation, key, key, "")
 			return err
-		}},
-	} {
-		running := s.Domain(tc.domain)
+		},
+		// A ROOM'S NAME IS ITS ADDRESS, so a create on a name nobody holds
+		// arbitrates on a subject nobody has written.
+		chat.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := n.chat.CreateChannel(ctx,
+				chat.Actor{Handle: "ceo", Kind: chat.AuthorAgent},
+				chat.NewChannel{Name: "floor-" + strings.ToLower(key), Kind: chat.KindPublic})
+			return err
+		},
+	}
+	var cases []string
+	for _, running := range s.running() {
+		if !running.domain.ClaimsIdentity() {
+			continue
+		}
+		name := running.domain.Name()
+		if zero[name] == nil {
+			t.Fatalf("%s claims identity and this case holds no zero write for it, "+
+				"so the floor its write fence reads is certified by nothing: add "+
+				"its row", name)
+		}
+		cases = append(cases, name)
+	}
+	for _, domain := range cases {
+		write := zero[domain]
+		running := s.Domain(domain)
 		if running == nil {
-			t.Fatalf("the %s domain is not running", tc.domain)
+			t.Fatalf("the %s domain is not running", domain)
 		}
 		// CAUGHT UP, so the checkpoint a write's snapshot reads is the
 		// log's end, and a floor one past it is one record ahead.
 		first, last, err := running.log.Bounds(t.Context())
 		if err != nil {
-			t.Fatalf("read %s's bounds: %v", tc.domain, err)
+			t.Fatalf("read %s's bounds: %v", domain, err)
 		}
-		waitUntil(t, 20*time.Second, tc.domain+" to apply its whole log", func() bool {
+		waitUntil(t, 20*time.Second, domain+" to apply its whole log", func() bool {
 			return running.runner.Committed().Seq >= last
 		})
 		at := running.runner.Committed()
 		if !statelog.Replayable(at.Seq, first) {
 			t.Fatalf("%s's log starts at %d past this node's %d, so the stream "+
 				"would refuse on its own and this case would not show the floor",
-				tc.domain, first, at.Seq)
+				domain, first, at.Seq)
 		}
 		publish := func(floor uint64) {
 			t.Helper()
 			if err := back.Fleet.PutFloor(t.Context(), coord.TrimFloor{
-				Domain: tc.domain, Generation: at.Generation,
+				Domain: domain, Generation: at.Generation,
 				TrimTo: floor, Floor: floor, At: time.Now().UTC(), By: "peer",
 			}); err != nil {
-				t.Fatalf("publish %s's floor: %v", tc.domain, err)
+				t.Fatalf("publish %s's floor: %v", domain, err)
 			}
 		}
 
 		publish(at.Seq + 2)
-		if err := tc.zero(t.Context(), "REFUSED"); !errors.Is(err, statelog.ErrUnavailable) {
+		if err := write(t.Context(), "REFUSED"); !errors.Is(err, statelog.ErrUnavailable) {
 			t.Fatalf("%s: a write at zero from a node one record short of the "+
 				"published floor answered %v, want %v — the log still holds that "+
-				"record, so the floor is the only witness", tc.domain, err,
+				"record, so the floor is the only witness", domain, err,
 				statelog.ErrUnavailable)
 		}
 		if _, after, err := running.log.Bounds(t.Context()); err != nil || after != last {
 			t.Fatalf("%s's log ends at %d (err %v), want %d — the refused write "+
-				"was appended", tc.domain, after, err, last)
+				"was appended", domain, after, err, last)
 		}
 
 		publish(at.Seq + 1)
-		if err := tc.zero(t.Context(), "CLEARED"); err != nil {
+		if err := write(t.Context(), "CLEARED"); err != nil {
 			t.Fatalf("%s: a write at zero from a node holding everything the "+
-				"published floor licenses removing was refused: %v", tc.domain, err)
+				"published floor licenses removing was refused: %v", domain, err)
 		}
 	}
 }

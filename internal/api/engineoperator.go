@@ -7,6 +7,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -61,13 +63,51 @@ func engineOperatorWriter(as func(estate.Actor) estate.WorkWriter, actor builtin
 // tools are ([engine.OperatorWork]) — so an operator's assistant on a node
 // whose copy is out of service is answered from a peer's, not from the copy
 // this node stopped serving.
-func NewEngineOperator(e *engine.Engine) (*operator.Server, error) {
-	return operator.New(EngineOperatorOptions(e))
+//
+// THE LIVE CHANNEL is the one thing here that is not the engine's: a person's
+// read state is on no log, so no applier announces a flush, and `mark_chat_read`
+// tells that person's other sockets itself, through the hub the process built
+// before the engine ([NewChatLive]). Nil tells nobody, which is honest on a
+// node serving no socket.
+func NewEngineOperator(e *engine.Engine, live PersonPush) (*operator.Server, error) {
+	return operator.New(EngineOperatorOptions(e, live))
+}
+
+// PersonPush is the live channel's one push addressed to a PERSON rather than
+// to a room — the frame only that person's own sockets are sent
+// ([stream.ChatHub.PushTo]). Declared here, by the surface that pushes, and
+// kept to that one method.
+//
+// IT TAKES NO CONTEXT, because the only one it could be handed is the flush's
+// own request, carrying the seat that request's caller was pinned to, and the
+// push decides whose every other socket is.
+type PersonPush interface {
+	PushTo(handle string, kind stream.Kind, data any)
+}
+
+// chatReadsOver is a person's read state over store, every flush that may have
+// moved it told to that person's own sockets through live — nil telling
+// nobody, which is a node serving no live channel.
+//
+// ONE FUNCTION, so the suite that holds what a flush does to OTHER people's
+// sockets runs the wiring a node runs rather than a copy of it.
+func chatReadsOver(store operator.ChatReadStore, live PersonPush) operator.ChatReads {
+	reads := operator.ChatReads{Store: store}
+	if live != nil {
+		reads.Moved = func(handle string, state coord.ChatReadState) {
+			// NAMED BY ITS PERSON, so a tab can tell this state from the one
+			// it held for whoever its credential named before
+			// ([coord.PersonChatRead]).
+			live.PushTo(handle, stream.KindChatCursorMoved,
+				coord.PersonChatRead{Handle: handle, ChatReadState: state})
+		}
+	}
+	return reads
 }
 
 // EngineOperatorOptions is what [NewEngineOperator] builds the surface from —
 // separate so a test can see which seams the operator's transports are handed.
-func EngineOperatorOptions(e *engine.Engine) operator.Options {
+func EngineOperatorOptions(e *engine.Engine, live PersonPush) operator.Options {
 	// EVERY CALL THAT MAY WRITE is audited onto this node's own queue, so
 	// the event store here holds who did what through either transport.
 	opts := operator.Options{Audit: e.Backends().Queue}
@@ -280,9 +320,55 @@ func EngineOperatorOptions(e *engine.Engine) operator.Options {
 			Await:            e.AwaitEstate,
 		}
 	}
+	// THE COMPANY'S OWN ROOMS, where its chat is the engine's own.
+	if rooms, roomsReadable := engine.OperatorChat(e); roomsReadable {
+		// THE PERSON'S OWN READ STATE FIRST, which only this surface has
+		// — its caller is a person, and a cursor is a person's attention —
+		// and which is served WHENEVER THE ROOMS ARE THE ENGINE'S, a
+		// maintenance mode included. It is the fleet's coordination store
+		// rather than a record on a log, so the mode, which forbids a node
+		// to publish, has nothing to say about it; and every chat gesture
+		// the dashboard makes is a tool here (ADR-0024), so withholding it
+		// would leave a person's screen on such a node with no way to
+		// clear a badge at all. A flush that landed is told to that
+		// person's screens, on every node, because nothing else ever will.
+		reads := chatReadsOver(e.Backends().Fleet, live)
+		opts.Chat = builtin.ChatDeps{
+			// THE TOKEN'S OWN SEAT, never the token's name: a room
+			// where a credential can appear as a speaker is one
+			// where "who said this" has two vocabularies. See
+			// [operator.ChatActor], which also refuses an unbound
+			// token its READS, because a caller the engine cannot
+			// resolve to a seat has no membership to serve.
+			Actor:     operator.ChatActor(opts.Org, opts.Env),
+			Cursors:   reads,
+			ReadState: reads.ReadState,
+		}
+		// AND THE LOG ITSELF, through the router for the tracker's reason,
+		// on the wiki's terms — both halves present or neither, so a node
+		// in a maintenance mode, which hands out no chat writer, serves
+		// none of the tools that read or write the rooms. Wired from this
+		// node's own copy, a half would be a chat screen answered from
+		// rows the node had stopped serving, its writes waiting on an
+		// applier that is not the one its next read reaches.
+		roomsWriter, roomsWritable := engine.OperatorChatWriter(e)
+		searcher, searchable := engine.OperatorChatSearch(e)
+		if roomsWritable && searchable {
+			opts.Chat.Reader, opts.Chat.Writer = rooms, roomsWriter
+			opts.Chat.Mentions = engine.LiveMentions(e)
+			// THE SEAT SURFACE'S OWN SEARCHER over the router's search:
+			// the serving data node resolves the visible rooms from the
+			// viewer it is handed, so the operator's bound seat is
+			// scoped exactly as that person's own seat is.
+			opts.Chat.Search = engine.ChatSearcher{Search: searcher}
+			// THE ROUTER'S SESSION FLOOR, for the tracker's reason.
+			opts.Chat.Await = e.AwaitEstate
+		}
+	}
 	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
-	// unlike the ten write tools, ranked search over the company's own
-	// wiki is exactly as useful to an operator's assistant on Confluence.
+	// unlike the tracker's, the pages' and chat's writes, ranked search over
+	// the company's own wiki is exactly as useful to an operator's
+	// assistant on Confluence.
 	if e.Knowledge() != nil {
 		// THE CHART THE SEARCH IS SCOPED AGAINST is already wired
 		// above, for every company rather than only this one.

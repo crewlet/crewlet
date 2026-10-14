@@ -1,6 +1,6 @@
-// Package operator serves the company's own tracker and knowledge base to the
-// people who run it: ONE catalogue of tools, built once, and every transport
-// that reaches it drawing from that one value.
+// Package operator serves the company's own tracker, knowledge base and chat to
+// the people who run it: ONE catalogue of tools, built once, and every
+// transport that reaches it drawing from that one value.
 //
 // # Why this exists
 //
@@ -39,21 +39,30 @@
 // separate facts on the record and an audit can tell an operator's edit from
 // an agent's. See [WorkActor] in actor.go.
 //
+// CHAT DIFFERS IN ONE FIELD, THE AUTHOR. A room renders a speaker by SEAT, so
+// a chat write's author is the handle of the `kind: human` seat the token is
+// bound to — the name the room shows — where a tracker or page write's author
+// is the token's own name; the kind is the same [chat.AuthorOperator], and the
+// token's id is recorded beside it as on every write here (ADR-0024). A token
+// bound to no seat has no handle to speak under, so it writes nothing there
+// and reads nothing either. See [ChatActor].
+//
 // # A retry is the same operations
 //
 // A person has no turn and nothing redelivers their call, but they RETRY: a
 // write whose answer never arrived is sent again. So every call here IS an
 // operation, and every write it makes — each record's step, a created item's,
-// view's or page's own id, a comment's — is derived from it, so the call made
-// again is the first attempt's writes rather than new ones, exactly as a
-// redelivered turn's are. The transports differ in who names it:
+// view's or page's own id, a comment's, a chat message's — is derived from it,
+// so the call made again is the first attempt's writes rather than new ones,
+// exactly as a redelivered turn's are. The transports differ in who names it:
 //
 //   - the act transport's client names its REQUEST: the dashboard mints a
 //     `request_id` (a UUIDv7, whose instant is when the gesture began) once
 //     per gesture and sends it again on a retry, and the transport derives the
 //     call's operation from it and the token that sent it
 //     ([builtin.RequestOperation]) and puts it on the context
-//     ([WithOperation]), where the actor and the page seam read it;
+//     ([WithOperation]), where the actor and the page and chat seams read
+//     it;
 //   - an MCP client names none, so each of its calls is a new operation — two
 //     calls from an assistant are two writes — and a tracker write answers
 //     with the `op_id` that operation was, which the assistant sends back with
@@ -112,12 +121,13 @@ var log = logging.Get("api.operator")
 
 // Options configure the surface.
 type Options struct {
-	// Work and Pages are the native backends. Both nil serves none of
-	// their tools — the honest shape for a company on Jira and Confluence.
-	// A surface left with no tool at all (no Runs or Pauses either) is ABSENT, with
-	// nothing on it to manage.
+	// Work, Pages and Chat are the native backends. All nil serves none
+	// of their tools — the honest shape for a company on Jira, Confluence
+	// and Slack. A surface left with no tool at all (no Runs or Pauses
+	// either) is ABSENT, with nothing on it to manage.
 	Work  builtin.WorkDeps
 	Pages builtin.PageDeps
+	Chat  builtin.ChatDeps
 
 	// Knowledge is the company's ranked search, or nil.
 	Knowledge builtin.KnowledgeSearcher
@@ -253,15 +263,18 @@ var ErrNoAudit = errors.New("operator: Options.Audit is required: every call " +
 // that is not there matches what their config says. A surface with tools to
 // serve and no [Options.Audit] is refused with [ErrNoAudit].
 func New(opts Options) (*Server, error) {
-	// THE PAGE TOOLS READ THE CALL'S OPERATION THROUGH THEIR OWN SEAM, and
-	// it is this package's to wire because this package is the one that
-	// puts it on the context: an operation whose writer and reader were
-	// wired in two places is one somebody wires on only one side. The work
-	// tools carry it on the actor instead — see [WorkActor].
+	// THE PAGE AND CHAT TOOLS READ THE CALL'S OPERATION THROUGH THEIR OWN
+	// SEAMS, and it is this package's to wire because this package is the
+	// one that puts it on the context: an operation whose writer and reader
+	// were wired in two places is one somebody wires on only one side — and
+	// a chat seam left unwired is a person's every retried message said
+	// twice. The work tools carry it on the actor instead — see [WorkActor].
 	opts.Pages.Operation = operationFrom
+	opts.Chat.Operation = operationFrom
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
-		Work: opts.Work, Pages: opts.Pages, Knowledge: opts.Knowledge,
-		Org: opts.Org, Leads: opts.Leads, LeadsProject: opts.LeadsProject,
+		Work: opts.Work, Pages: opts.Pages, Chat: opts.Chat,
+		Knowledge: opts.Knowledge,
+		Org:       opts.Org, Leads: opts.Leads, LeadsProject: opts.LeadsProject,
 		Runs: opts.Runs, Pauses: opts.Pauses, Steer: opts.Steer,
 		Answer: opts.Answer,
 	})

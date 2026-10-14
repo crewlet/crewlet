@@ -12,12 +12,14 @@ import (
 // The usage domain's writer, armed — the loop that turns this node's own event
 // log into the replicated record of what its seats and schedules did each day.
 //
-// # Every node runs one, and no node runs anybody else's
+// # Every data node runs one, and no node runs anybody else's
 //
-// Unlike the embedding duty beside it this is not a fleet singleton: a node's
-// event log holds only what ITS seats did, so the node is the only thing that
-// can derive its own day, and the node in every subject it writes is what
-// keeps N writers from ever meeting on one. Without it the domain is
+// Unlike the embedding duty beside it this is not a fleet singleton: a data
+// node's event log holds only what ITS seats did and the events it keeps in
+// custody for a node without `data` (which runs no state log and so publishes
+// no day of its own), so the node is the only thing that can derive its own
+// day, and the node in every subject it writes is what keeps N writers from
+// ever meeting on one. Without it the domain is
 // registered, applied and replicated over an empty stream — and every spend
 // answer is exactly as partial as it was before the domain existed, while
 // every surface reports a healthy log.

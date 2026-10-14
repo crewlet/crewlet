@@ -79,8 +79,9 @@ choice names an option of the ask it answers):
   holding the asker's turn, and a person asking from the dashboard or through
   an assistant has no turn to hold.
 - **The channel is the chart's.** The surface must be one the company runs and
-  the asking seat holds a bot on, and the channel one a unit declares with
-  `channel`.
+  the asking seat can post on — a bot on Slack or Mattermost, or the engine's
+  own chat (`chat`), where every agent seat posts as itself — and the channel
+  one a unit declares with `channel`.
 - **The answer owes the post.** The asker is woken by the answer owing that
   chat surface, and its turn is not finished until a tool there has posted — a
   comment on the work item does not discharge it.
@@ -93,7 +94,7 @@ with your answer and posts it to #&lt;channel&gt;"*, or, with no inform,
 
 ## What the engine enforces, and what it does not
 
-A structured ask is a comment on a work item, so it lives where every other comment does — in the tracker, identical on every node — and the engine holds it to exactly three rules:
+A structured ask is a comment on a work item, so it lives where every other comment does — in the tracker, identical on every data node — and the engine holds it to exactly three rules:
 
 - **Its shape.** Two to six options, each with an id typed back in `choice`; a recommendation that is one of them; evidence that resolves (a cited task is stored by id, a cited page must exist); a role. The decision rides only the comment that asks and is never edited afterwards, because an answer names an option by id and options changed under it would change what that answer meant.
 - **Its answer.** A `choice` must name an option **of the ask it answers**, checked against that ask's own record, and an ask is answered once — a second answer is refused naming who answered first, and when.

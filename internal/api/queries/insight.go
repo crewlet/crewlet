@@ -60,9 +60,10 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	//
 	// So a cut view gets its ENDING BACK and reports the gap in the MIDDLE,
 	// which is the part nothing can stand in for — assembled by
-	// internal/eventfan from every node that ran part of the turn, since a
-	// turn resumed on another node after a restart has an opening on one and
-	// an ending on the other.
+	// internal/eventfan from every data node holding part of the turn, since
+	// a turn resumed on another node after a restart has an opening on one
+	// and an ending on the other, and a turn run on a node without `data` is
+	// held by the data node keeping its events in custody.
 	//
 	// ASKED, NOT INFERRED: each node counts what it holds when its read
 	// filled, because `len(records) == cap` is not "the read stopped early"
@@ -108,10 +109,11 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		// WHICH NODES THE TURN WAS ASSEMBLED FROM. A node that did not
 		// answer may hold the part of the turn this page is missing.
 		"coverage": coverage,
-		// AND WHICH OF THEM RAN IT: the nodes whose own store held any of
-		// its events, since each node's store holds only what it
-		// published. Never null, so "ran nowhere this read could see" is
-		// an empty list rather than a missing key.
+		// AND WHERE IT RAN: the nodes that PUBLISHED its events, read off
+		// the rows — never the nodes that answered, since a data node
+		// keeps the events of a node without `data` in custody and holds
+		// turns it never ran. Never null, so "ran nowhere this read could
+		// see" is an empty list rather than a missing key.
 		"nodes": nonNilStrings(detail.Nodes),
 	}, nil
 }
@@ -477,8 +479,8 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 }
 
 // searchTextRefusal is the `bad_params` refusal of a phrase past
-// [knowledge.MaxQueryBytes], the bound both ranked searches share on every
-// surface, or nil.
+// [knowledge.MaxQueryBytes], the bound every ranked search shares on every
+// surface — `knowledge`, `work_search` and `chat_search` — or nil.
 //
 // REFUSED, NOT CUT, and refused HERE rather than left to the search: the
 // fan-out refuses it too, but the knowledge search is best effort and would

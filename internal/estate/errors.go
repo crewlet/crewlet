@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -14,11 +15,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// ErrOutcomeUnknown is a write that was sent and never answered, of a kind a
-// repeat is not safe for — see [opOnceWrite]. It may have landed.
+// ErrOutcomeUnknown is a write that was sent and never answered. It may have
+// landed.
+//
+// TWO CLASSES REACH IT, and they differ in what makes the retry safe, which is
+// why the sentence names neither. A write a repeat is not safe for
+// ([opOnceWrite]) is reported at the first node that did not answer, and is
+// read back before it is written again. A write carrying its caller's
+// operation id ([opIdempotentWrite]) is asked of every other data node first,
+// and reported only when none of them answered either — where repeating it
+// under that SAME id is the safe retry, and a fresh one is a second write.
 var ErrOutcomeUnknown = errors.New("estate: the write was sent to a data node " +
-	"that did not answer, so whether it landed is unknown — read it back " +
-	"before writing again")
+	"that did not answer, so whether it landed is unknown")
 
 // sentinel is one error value whose identity crosses the wire.
 type sentinel struct {
@@ -73,6 +81,16 @@ var sentinels = []sentinel{
 	{"pages.ErrStaleVersion", pages.ErrStaleVersion},
 	{"pages.ErrTitleTaken", pages.ErrTitleTaken},
 
+	{"chat.ErrArchived", chat.ErrArchived},
+	{"chat.ErrConflict", chat.ErrConflict},
+	{"chat.ErrForbidden", chat.ErrForbidden},
+	{"chat.ErrInvalid", chat.ErrInvalid},
+	{"chat.ErrNameTaken", chat.ErrNameTaken},
+	{"chat.ErrNoActivation", chat.ErrNoActivation},
+	{"chat.ErrNotFound", chat.ErrNotFound},
+	{"chat.ErrRoomExists", chat.ErrRoomExists},
+	{"chat.ErrUnknownKind", chat.ErrUnknownKind},
+
 	{"statelog.ErrAheadOfLog", statelog.ErrAheadOfLog},
 	{"statelog.ErrConflict", statelog.ErrConflict},
 	{"statelog.ErrEstateNotRestored", statelog.ErrEstateNotRestored},
@@ -105,20 +123,33 @@ type typedKind struct {
 // Each is carried field by field: a plain field as JSON, and a field of type
 // error — the cause a refusal was concluded from — as a nested wire error, so
 // the cause still answers errors.Is on the far side.
+//
+// THE REFUSALS A PERSON IS SHOWN ARE HERE TOO ([tracker.Refusal],
+// [pages.InvalidError], [chat.InvalidError]), and not for a caller's
+// errors.As: each package's Sentence finds the writer's own words by unwrapping
+// its refusal type, so a refusal that crossed as its message alone was shown
+// to a person with the Go prefix in front of it.
 var typedKinds = []typedKind{
 	{"tracker.AlreadyAnsweredError", reflect.TypeFor[*tracker.AlreadyAnsweredError]()},
 	{"tracker.ErrAmbiguous", reflect.TypeFor[*tracker.ErrAmbiguous]()},
 	{"tracker.ErrAmbiguousAnswer", reflect.TypeFor[*tracker.ErrAmbiguousAnswer]()},
 	{"tracker.ErrFutureVersion", reflect.TypeFor[*tracker.ErrFutureVersion]()},
+	{"tracker.Refusal", reflect.TypeFor[*tracker.Refusal]()},
 	{"tracker.SubtreeStopped", reflect.TypeFor[*tracker.SubtreeStopped]()},
 	{"tracker.TagClash", reflect.TypeFor[*tracker.TagClash]()},
 	{"tracker.TagsFull", reflect.TypeFor[*tracker.TagsFull]()},
 	{"tracker.TextCapError", reflect.TypeFor[*tracker.TextCapError]()},
 
 	{"pages.ErrFutureVersion", reflect.TypeFor[*pages.ErrFutureVersion]()},
+	{"pages.InvalidError", reflect.TypeFor[*pages.InvalidError]()},
 	{"pages.ErrUnknownVersion", reflect.TypeFor[pages.ErrUnknownVersion]()},
 
+	{"chat.ErrFutureVersion", reflect.TypeFor[*chat.ErrFutureVersion]()},
+	{"chat.InvalidError", reflect.TypeFor[*chat.InvalidError]()},
+	{"chat.ErrUnknownVersion", reflect.TypeFor[chat.ErrUnknownVersion]()},
+
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},
+	{"statelog.FreshnessError", reflect.TypeFor[*statelog.FreshnessError]()},
 	{"statelog.EvictionRefusal", reflect.TypeFor[*statelog.EvictionRefusal]()},
 	{"statelog.ReadmissionRefusal", reflect.TypeFor[*statelog.ReadmissionRefusal]()},
 	{"statelog.Refused", reflect.TypeFor[*statelog.Refused]()},

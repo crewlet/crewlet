@@ -14,21 +14,27 @@ subcommand below is served by it.
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
 | `crewlet budgets show [config]` | Print each scope's day, ISO week and month on the company clock — spend, ceiling (`unlimited` where none), the engine's `STATE` (`ok`, `near`, `refusing`), when the window turns over and `LAST REFUSED` — read from a running node, because the counters are the fleet's and not this file's. There is no reset: a window's allowance comes back when the window turns over |
 | `crewlet backup -dir PATH [config]` | Copy a running node's store files **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
-| `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
+| `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every data node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
-| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's and the pages log — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
-| `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of the tracker's or the pages log, and the refusal prints the numbers. Nothing is written to either log on a refusal; a partial readmission is finished like an eviction |
+| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the pages log and chat's — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
+| `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of the tracker's, the pages or chat's log, and the refusal prints the numbers. Nothing is written to any log on a refusal; a partial readmission is finished like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with. A raise the broker has no room for is refused **before** the window opens, and one it refuses at the apply is reported as a refusal rather than as an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void. A restored log holding records written after the restore that this node's rows do not hold is refused unless `-discard` accepts that they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
-| `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
+| `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every data node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. As the person the token is bound to |
 | `crewlet seats resume <handle>` | Lift the pause; what waited is delivered first, in order |
+| `crewlet chat channels` | The rooms this credential's seat is in, most recently active first, each with the id every other chat verb takes. `-archived` includes the rooms that take no new messages and stay readable |
+| `crewlet chat read <id>` | One room's transcript, oldest first, with `-limit N` and the `-before` cursor each page prints to walk back to the one before it. A reply is shown against the root it hangs under |
+| `crewlet chat post <room> -body TEXT` | Say something in a room — by its id or its name — as the person your token is bound to, through the same `post_message` the dashboard's composer calls. `-link URL` repeats for what the message points at — a message links to a file rather than carrying one — and `-request-id` retries an `unknown` outcome without saying it twice |
+| `crewlet chat search <text>` | Rank every room this seat may read, narrowed with `-channel`, `-author` and `-limit` |
+| `crewlet chat erase <id> -message ID... -reason TEXT -confirm N` | Destroy the messages named, on every data node — what a credential pasted into one message needs, without taking the conversation around it. It has no inverse, so `-confirm` repeats the count and `-reason` is required; `-op-id` retries an `unknown` outcome without a second erase |
+| `crewlet chat prune <id> -cutoff RFC3339 -confirm RFC3339` | Destroy everything a room said before an instant, on every data node, now rather than at the [retention](../concepts/chat.md#retention) horizon. It has no inverse, so the cutoff is typed twice; `-op-id` retries an `unknown` outcome without a second prune |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -714,13 +720,20 @@ second record. A retry whose first purge did land answers `applied`, at the
 position that purge landed at, rather than finding the task already gone. The
 command mints that id **before** it asks and waits thirty seconds — past the
 three five-second waits a write can make — so a purge the node never answered,
-which may well have landed, still prints the `-op-id` to run it again with.
+which may well have landed, still prints the `-op-id` to run it again with. So
+does a purge the node **refused**: the route names the operation beside its
+refusal, and a retry under it is safe whatever happened, where one under a
+fresh id is a second purge if anything landed. A purge the node sent to data
+nodes that none answered is not a refusal at all — it comes back `unknown`.
 Pass the id exactly as printed: it carries the instant it was minted, and a
 node whose operation ledger may have lost the first purge's row since — to the
 ledger's thirty-day sweep — judges the retry by it, answering `unknown` again rather than purging
 twice. An id the engine did not print is refused (`op_id_invalid`), and so is
 one altered on the way back — trimmed, spaced or over 128 bytes — since the
-broker would carry it as a different id.
+broker would carry it as a different id. One printed for another task is
+refused `op_reused`, and that is the one refusal the command does **not** offer
+a retry for: the id already names a record on something else, so it says to
+run the purge again without `-op-id`.
 
 What it does **not** reach: a node that is offline or evicted keeps its copy
 until it replays, adopts a snapshot, is replaced or is destroyed. There is no
@@ -878,10 +891,195 @@ that is not paused changes nothing. See
 The outcome is `applied` — the pause is the fleet's record, and the node
 holding the seat carries it out from its own copy within about a second — or
 `unknown`, when the node could not confirm the write. `unknown` prints the
-request id to send again with `-request-id`, so the retry is the same request.
+request id to send again with `-request-id`, so the retry is the same request;
+so does a request the node never answered (a dropped connection, a timeout),
+since the pause may have landed all the same.
 The id is a UUIDv7 — the node reads the instant it carries to decide whether it
 can still vouch for a retry — and the command mints one when `-request-id` is
 not given; an id of another version is refused `invalid_request_id`.
+
+## `crewlet chat`
+
+```
+crewlet chat channels|read|post|search|erase|prune
+    [<config.yaml>] [-url URL] [-token TOKEN]
+```
+
+The operator's half of the company's own chat — the [`chat.backend: native`](../concepts/chat.md)
+axis. On a `vendor` or `none` company chat's questions, routes and tools are
+never registered at all, so every verb here is refused and says that
+`chat.backend` is why — an honest "this company has no such surface" rather
+than an empty room that reads like a company with nothing in it. A node started
+in a maintenance mode serves the reads and refuses the writes the same way,
+because it may publish nothing.
+
+**Every verb talks to a running node**, for the reason `crewlet budgets` and
+`crewlet work purge` do and one more of chat's own: the rooms and the messages
+are the state log's, so a write is a record the broker arbitrates and every
+node applies — and on the default topology that broker is inside the engine's
+own process with no listener at all. A command that opened the store instead
+would find a database locked to a live engine, or write rows the log never
+carried.
+
+**No verb here names an author.** The node resolves the bearer token to the
+`kind: human` seat whose `contact.crewlet_operator_id` matches it, on every
+call, and there is nowhere in this CLI to write a handle: `chat post` says
+something as the person the token is bound to. A token bound to no seat is
+refused every room, reads included — a transcript is the most sensitive thing
+a deployment holds and a pipeline's credential is not a person. `chat erase`
+and `chat prune` are the exception, on the terms of
+[`crewlet work purge`](#crewlet-work-purge): they are said in nobody's voice,
+so any operator token may make them, recorded as an **operator** — as the
+person the token is bound to, or under the token's own id where it is bound to
+nobody. See [Chat § People](../concepts/chat.md#people).
+
+Every read prints the [level it was served at](../guides/consistency.md), the
+position it answered at and how far behind the log the copy that answered is —
+this node's while it serves, a data node's otherwise; a copy that could not
+present every row says `incomplete` rather than silently answering short.
+Every write is three-valued: `applied` is on the answering node's rows,
+`pending` is durable on the log and not yet applied there — **do not run it
+again** — and `unknown` is the one to retry, under the id it printed so the
+retry cannot write a second record: `-request-id` for a post, `-op-id` for an
+erase or a prune. A write the node never answered (a dropped connection, a
+timeout) prints the same id, since it may have landed all the same, and so does
+an erase or a prune the node refused — the route names the operation beside
+every refusal it writes.
+
+### `crewlet chat channels`
+
+```
+crewlet chat channels [-archived]
+```
+
+The rooms this seat is in, most recently active first, as `ID  NAME  KIND
+UNREAD  LAST`. The **id** is the value `read`, `post`, `search`, `erase` and
+`prune` all take. A direct conversation has no name — its identity is its participants —
+so its row carries the handles instead. An unread count that hit its ceiling
+prints as `N+`. When the node could not read where this person has read to —
+their read state lives in the coordination store, not on the log — every count
+prints as `?` and a line beneath the table says the counts are **unknown**: the
+node zeroes them rather than counting each room's whole tail, and printed as
+`0` they would read as being caught up everywhere.
+
+`-archived` adds the rooms that take no new messages and stay readable. A seat
+in more rooms than one rail carries says `truncated`, and a room this build
+cannot present is **counted rather than dropped**.
+
+### `crewlet chat read`
+
+```
+crewlet chat read <channel-id> [-limit N] [-before CURSOR]
+```
+
+One room's transcript. `-limit` sets how many messages a page carries; unset,
+the command sends none and the node's own page size applies — chat's default of
+50, at most 500 — so the terminal and the screen page alike. `-before` takes
+the cursor the previous page printed, which is how you walk backwards through a
+long room.
+
+**A page prints oldest first**, although the route answers newest first — that
+ordering is what a screen renders and pages back from, and a terminal
+transcript is *read*. A deleted message keeps its line as `(deleted)`, because
+its thread still hangs off it.
+Replies are shown against the root they hang under — [threads are one level
+deep](../concepts/chat.md#what-a-company-gets), so "this thread" is a range
+rather than a walk.
+
+### `crewlet chat post`
+
+```
+crewlet chat post <room> -body TEXT [-link URL]... [-request-id ID]
+```
+
+Say something in a room — by its id, or by its name (`#eng` and `eng` are the
+same room) — as the **person** your token is bound to. It is the dashboard's
+own gesture: the `post_message` tool over
+[`POST /operator/act/{tool}`](api-endpoints.md#operatoract--the-dashboards-write-surface),
+so a line said from a terminal and one said from a screen are one gesture with
+one record and one `operator_acted` audit row. `@handle` in the body reaches one
+colleague and `@channel` wakes the room. `-link` repeats for the URLs a message
+points at: a message links to a file rather than carrying one — the company's
+files live in the [object store](../concepts/object-store.md) — and a message
+names no object.
+
+A post carries no expectation at the broker — two people talking in one room
+are not racing for anything — so there is nothing for a retry to fail against.
+What makes a retry one message is the operation the node derives from the
+request id: a UUIDv7 minted per invocation, printed whenever the outcome is
+`unknown` or the node did not answer, and handed back with `-request-id`. An id
+of another version is refused `invalid_request_id`.
+
+### `crewlet chat search`
+
+```
+crewlet chat search <text> [-channel ID] [-author HANDLE] [-limit N]
+```
+
+Rank every room this seat may read, over chat's [own keyword
+index](../concepts/chat.md#search) — which is separate from the knowledge
+base's, and has no semantic half. `-channel` narrows to one room, `-author` to
+one handle.
+
+### `crewlet chat erase`
+
+```
+crewlet chat erase <channel-id> -message ID... -reason TEXT -confirm N [-op-id ID]
+```
+
+Destroys exactly the messages named — `-message` repeats, one id each, at most
+250 in one gesture — on **every** node, and leaves the conversation around them
+standing. It is what a credential pasted into one message needs: a prune would
+take everything the room said before that instant with it.
+
+The confirmation is the **count**: `-confirm` repeats how many messages
+`-message` names, because the room id is already on the command line and
+repeating it confirms nothing, while the count is a value you had to establish.
+`-reason` is required — the rows are destroyed with no inverse, and the reason
+is what the erase's runtime audit record (`chat_erased`, on Settings › Audit)
+says about them: the one account of them that is left. The command refuses a
+mismatched count or a missing reason before it sends anything.
+
+It answers as [`crewlet chat prune`](#crewlet-chat-prune) does — the operation
+id minted before the request, `-op-id` to finish an `unknown` or a request the
+node never answered, no position on `unknown` — and says what it does not
+reach: a node that is offline or evicted keeps its copy until it rejoins. Its
+id is named for **these messages in this room**, taken as a set, so the same
+`-message` flags in another order finish it and an id brought back with other
+messages is refused `op_id_invalid` rather than answered from the first erase.
+
+### `crewlet chat prune`
+
+```
+crewlet chat prune <channel-id> -cutoff RFC3339 -confirm RFC3339 [-op-id ID]
+```
+
+Destroys everything the room said before that instant, on **every** node, now
+rather than at the [message horizon](../concepts/chat.md#retention). Like
+`retention set-capacity`, the value that decides how much disappears is typed
+twice and the route refuses the pair if they differ: it is not a number to
+inherit from a shell history, and there is no inverse.
+
+It answers as [`crewlet work purge`](#crewlet-work-purge) does. The operation
+id is minted here, before the request, so a prune whose answer was lost is
+finished by running the same command with the `-op-id` it printed — the retry
+answers from the record if it landed, rather than appending a second prune. An
+`unknown` outcome prints no position, since none is known.
+
+The id is **named for this prune** — the room and the cutoff — and the node
+refuses one brought back with a different cutoff or room (`op_id_invalid`). A
+prune arbitrates on the room, and a retry is answered from whatever record its
+id already holds there, so an id carried to a later cutoff would have been
+answered `applied` with nothing after the first cutoff gone. An id that already
+names a record on something else is refused `op_reused`, and the command says
+to run it again **without** `-op-id`: that is the one refusal no retry under
+the same id can finish.
+
+The sweep the retention duty runs is the same gesture on a schedule. This verb
+is what an erasure request covering a room's history needs, where waiting out
+`message_retention_days` is not an answer; a credential pasted into one message
+is [`crewlet chat erase`](#crewlet-chat-erase)'s, which takes that message and
+leaves the rest of the room.
 
 ## `crewlet retention`
 
@@ -930,9 +1128,9 @@ read; the watermark block says which instead of listing terms. Each node row
 carries its position's generation (`GEN`), and a position from a generation
 the log has left prints `left gen N` (or `ahead gen N`) in place of a lag,
 since its sequence compares with nothing the log holds now; a node that
-reported its log diverged at its checkpoint is marked `LOG DIVERGED`. `RESERVE` is the top of the ceiling the tracker and pages logs keep for
+reported its log diverged at its checkpoint is marked `LOG DIVERGED`. `RESERVE` is the top of the ceiling the tracker's, the pages and chat's logs keep for
 gate records ([the gate reserve](../guides/retention.md#the-gate-reserve)),
-`-` on the vector changelog, which keeps none; `HEADROOM` is what is left of
+`-` on the compacted logs — the vector changelog and the usage log — which keep none; `HEADROOM` is what is left of
 the rest, the ceiling ordinary writes are refused at — so a log at `0%` still
 takes an eviction.
 
@@ -975,6 +1173,11 @@ backup until it leaves the host and the engine cannot see that it has. Both
 flags are required: an acknowledgement moves the floor the trim deletes
 against, so there is no value to guess.
 
+One acknowledgement covers the one log it names, and is kept per log:
+acknowledging the next log leaves this one standing, and each log's trim reads
+its own. Under `operator`, acknowledge every log once its copy is off the host
+— a log never acknowledged is never trimmed, and `backup_age` names it.
+
 ### `crewlet retention evict` / `readmit`
 
 ```
@@ -987,8 +1190,8 @@ coming back; eviction is the gesture for one that is not.
 
 `-confirm` repeats the node id, the same shape the other destructive gestures
 use. The trim counts nodes per log, so the eviction is a record on every log it
-counts nodes on — the tracker's log and the pages log — and each answers on its
-own line with its [three-valued outcome](../guides/replication.md#a-write-has-three-outcomes),
+counts nodes on — the tracker's log, the pages log and chat's log — and each
+answers on its own line with its [three-valued outcome](../guides/replication.md#a-write-has-three-outcomes),
 or `not written` and the reason that stopped it:
 
 ```
@@ -996,9 +1199,11 @@ $ crewlet retention evict node-4 -confirm node-4
 evict node-4 (operation 01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4)
   tracker: applied at CREWLET_TRACKER_LOG 918280002
   pages: applied at CREWLET_PAGES_LOG 4410
+  chat: applied at CREWLET_CHAT_LOG 27155
   node-4 stays COUNTED for about a minute, so a live node is certain to have read its own tombstone before the trim passes it.
   tracker trim floor 918100000 → 918100000
   pages trim floor 4100 → 4100
+  chat trim floor 26900 → 26900
 ```
 
 The command prints the watermark before and after and the instant the
@@ -1008,7 +1213,7 @@ one is certain to have read its own tombstone before the trim passes it.
 The node you ran it on writes every log itself: every data node holds the
 whole estate, so one command reaches every log.
 
-The gesture is **judged once, before either log is written**. A node that still
+The gesture is **judged once, before any log is written**. A node that still
 holds a live presence lease is refused with `409 eviction_refused` — it is
 still reaching the fleet and almost certainly running, and an eviction would
 drop everything it writes and take its copy out of service. Stop it and wait
@@ -1092,15 +1297,15 @@ crewlet: the node answered 409: readmission_refused
 ```
 
 The comparison is the one the node's own write fence makes: its **last
-published position** in each log that claims identity — the tracker's and the
-pages log — against the **higher of the published floor and the log's first
+published position** in each log that claims identity — the tracker's, the
+pages log and chat's — against the **higher of the published floor and the log's first
 surviving sequence**, and the node must have applied every record up to the
 one just before it. A node that has never published a position is judged as
 holding nothing; one whose position is from a generation the log has since
 left is refused, since nothing it holds compares with anything the log still
-has. The judgement is made once, for both logs, before either is written, and
-nothing is written to either on a refusal. A readmission that reaches one log
-and not the other is finished with `-op-id`, exactly as an eviction is.
+has. The judgement is made once, for every log, before any is written, and
+nothing is written to any on a refusal. A readmission that reaches one log
+and not another is finished with `-op-id`, exactly as an eviction is.
 
 What to do is let the node catch up, which it does on its own: start it if it
 is not running, and it replays what the log still holds or adopts a peer's
@@ -1141,8 +1346,8 @@ crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 858993459
 
 Changes a log's byte ceiling, raising or lowering it. A log's Tier A ceiling
 (`stream.tracker_log_max_bytes`, `stream.tracker_vectors_max_bytes`,
-`stream.pages_log_max_bytes`, `stream.usage_log_max_bytes`) is not a live
-setting, only the value its stream
+`stream.pages_log_max_bytes`, `stream.usage_log_max_bytes`,
+`stream.chat_log_max_bytes`) is not a live setting, only the value its stream
 is created with. A resize is decided against the usage the log is at, and a
 publisher makes that a moving quantity, so this runs with the whole fleet in a
 maintenance mode and costs **three fleet-wide restarts**, two more per retry. The
@@ -1172,9 +1377,11 @@ check that quietly proves nothing.
 A target whose ordinary ceiling is at or below what the log already holds is
 refused before the window opens, naming both numbers and the least target that
 would do: that ceiling would refuse every ordinary append the moment it
-applied. On the tracker and pages logs the ordinary ceiling is the target less
-its [gate reserve](../guides/retention.md#the-gate-reserve), a sixteenth; on
-the vector changelog it is the whole target. A target under a gibibyte is
+applied. On the logs that claim identity — the tracker's, the pages log and
+chat's — the ordinary ceiling is the target less its
+[gate reserve](../guides/retention.md#the-gate-reserve), a sixteenth; on the
+compacted logs — the vector changelog and the usage log — it is the whole
+target. A target under a gibibyte is
 refused too — Tier A's floor for every log, and the one the reserve is sized
 against. A target under the current ceiling and above the usage is accepted,
 and is how a log gives a reservation back. A raise the broker cannot
@@ -1265,7 +1472,7 @@ generation on the live stream — the one after every generation the domain has
 used, an evicted peer's included — every other domain's stays where it is, and
 the domain's applier resumes on the node with no restart.
 
-For the tracker and the knowledge base it refuses while any peer has already
+For the tracker, the knowledge base and chat it refuses while any peer has already
 re-anchored the stream, **naming the peer** — that peer's rows are the fleet's
 history in the new generation, and this node adopts its snapshot instead. A
 peer that is gone for good is released by evicting it first

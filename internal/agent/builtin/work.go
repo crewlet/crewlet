@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -327,12 +328,14 @@ type WorkDeps struct {
 	// see its own write files it again. It is applied after every write
 	// here for that reason, never before a read.
 	//
-	// WHERE THE WAIT HAPPENS is the surface's. A seat's tools hand the
+	// WHERE THE WAIT HAPPENS is the copy that answers next, never here.
+	// Every surface — a seat's tools and the operator's alike — hands the
 	// position to the node's session floor (the estate router's), which
-	// every later read carries to whichever copy answers it — this node's
-	// or a peer's — and that copy waits; nothing waits here. A surface
-	// that reads this node's own rows directly, as the operator's does,
-	// waits here for this node's applier instead.
+	// every later read carries to whichever copy answers it, this node's or
+	// a peer's, and that copy waits. Waiting here for this node's own
+	// applier would be waiting on a copy the router may not ask: the
+	// operator's surface did exactly that while it read this node's rows
+	// directly, and through the router it raises the floor like a seat's.
 	//
 	// It takes a POSITION rather than a revision, because that is what a
 	// log write answers with: a place on a stream, comparable only against
@@ -3574,6 +3577,27 @@ func writeFailure(actor Actor, name string, err error) tools.Result {
 		// and is what empties the lists this refusal is about.
 		return refused(tools.RefusalInboxFull, fmt.Sprintf("%s was refused: "+
 			"%v.", name, err))
+	case errors.Is(err, estate.ErrOutcomeUnknown):
+		// SENT, AND NO DATA NODE ANSWERED. The router asked every one under
+		// this call's operation and each that stayed silent may have run
+		// it — so the remainder below ("the change was NOT made") is the
+		// one sentence nobody can say. The same OPERATION again is what
+		// settles it, since the ledger answers a repeat with what landed;
+		// what that is depends on the caller ([sameCall]), and a caller
+		// with none reads the item before writing again.
+		again := sameCall(actor, name)
+		if again == "" {
+			return unknownOutcome(fmt.Sprintf("%s: whether this landed is unknown "+
+				"(%v). It may have landed and it may not — do not report it as "+
+				"done, and do not report it as failed. Calling %s again is a new "+
+				"operation here: read the item with get_work_item before writing "+
+				"it again.", name, err, name))
+		}
+		return unknownOutcome(fmt.Sprintf("%s: whether this landed is unknown (%v). "+
+			"It may have landed and it may not — do not report it as done, and "+
+			"do not report it as failed. %s — if the first one landed, the retry "+
+			"answers what it wrote rather than writing it again.", name, err,
+			capitalize(again)))
 	case errors.Is(err, tracker.ErrStepUnvouched):
 		// NEITHER DONE NOR NOT MADE, AND NOT FINISHED BY ASKING AGAIN
 		// HERE. It is an ErrStepUnresolved, so this arm goes first: the
@@ -3809,7 +3833,7 @@ func (d WorkDeps) bindOperation(actor Actor, tool string,
 	if err := statelog.CheckCallerOpID(op); err != nil {
 		return actor, fmt.Sprintf("%s refused that `op_id`: %v", tool, err)
 	}
-	if !answeredFor(op, call) {
+	if !statelog.OpNamed(op, call) {
 		return actor, fmt.Sprintf("%s refused that `op_id`, and nothing was "+
 			"written: it was answered for another call — another tool, or "+
 			"this one with other arguments — and an op_id finishes only the "+
@@ -3836,7 +3860,7 @@ func bindRequest(actor Actor, tool string, args map[string]any) (Actor, string) 
 	if actor.Operation == "" {
 		return actor, ""
 	}
-	if !answeredFor(actor.Operation, callName(tool, args)) {
+	if !statelog.OpNamed(actor.Operation, callName(tool, args)) {
 		return actor, foreignRequest(tool)
 	}
 	actor.requested = true
@@ -3845,7 +3869,7 @@ func bindRequest(actor Actor, tool string, args map[string]any) (Actor, string) 
 
 // foreignRequest refuses a call whose transport named an operation derived
 // for another call. One sentence for the work tools and the page tools alike
-// ([WorkDeps.bindOperation], [PageDeps.foreignOperation]): it is one rule.
+// ([WorkDeps.bindOperation], [foreignOperation]): it is one rule.
 func foreignRequest(tool string) string {
 	return fmt.Sprintf("%s refused this request, and nothing was written: the "+
 		"operation it was sent under was derived for another call — another "+
@@ -3939,15 +3963,6 @@ func callName(tool string, args map[string]any) string {
 // (comment_on_work_item, write_work_catalogue: 36 + 1 + 20 + 1 + 16) — well
 // inside [statelog.MaxCallerOpIDBytes].
 const callDigestLen = 16
-
-// answeredFor reports whether op was minted for call: a uuid and exactly that
-// name ([statelog.NewOpID]'s grammar), with no step after it — a step's id
-// handed back would be a NEW call's operation deriving new objects.
-func answeredFor(op, call string) bool {
-	uuidLen := len(uuid.Nil.String())
-	return len(op) == uuidLen+1+len(call) && op[uuidLen] == '.' &&
-		op[uuidLen+1:] == call
-}
 
 // withOperation puts the call's operation on its answer, where it has one:
 // the `op_id` a caller brings back to make this call again as the same

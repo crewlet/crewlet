@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/chat"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sourcetree"
@@ -107,7 +108,7 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 	work.Placer = func(builtin.Actor) builtin.WorkPlacer { return nil }
 	work.Inbox = newFakeTracker()
 	seat, err := builtin.Register(tools.NewRegistry(), builtin.Deps{Work: work,
-		Pages: full.Pages, Knowledge: full.Knowledge})
+		Pages: full.Pages, Knowledge: full.Knowledge, Chat: full.Chat})
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -116,9 +117,13 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 	}
 	company := &org.Organization{Name: "Acme"}
 	answers := newAnswerRig()
+	// THE CHAT WITH ITS READ-STATE STORE TOO, which only the operator
+	// surface is given.
+	chatDeps := full.Chat
+	chatDeps.Cursors = fakeCursors{}
 	var only []string
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
-		Work: work, Pages: full.Pages, Knowledge: full.Knowledge,
+		Work: work, Pages: full.Pages, Knowledge: full.Knowledge, Chat: chatDeps,
 		Org:  func() *org.Organization { return company },
 		Runs: builtin.RunDeps{Desk: &deskFake{}, Actor: actor},
 		Pauses: builtin.SeatPauseDeps{Pauses: coordmem.NewFleet(), Announce: &announced{},
@@ -130,14 +135,49 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 			only = append(only, tool.Name())
 		}
 	}
-	for _, name := range []string{builtin.AnswerRunTool, builtin.PauseSeatTool,
-		builtin.ResumeSeatTool, builtin.SteerTurnTool, builtin.AnswerKnowledgeTool} {
+	for _, name := range append([]string{builtin.AnswerRunTool, builtin.PauseSeatTool,
+		builtin.ResumeSeatTool, builtin.SteerTurnTool, builtin.AnswerKnowledgeTool},
+		chat.OperatorOnlyTools()...) {
 		if !slices.Contains(only, name) {
 			t.Fatalf("the operator surface with every seam wired does not serve %s "+
 				"(it adds %v), so this count is not the one the page lists", name, only)
 		}
 	}
 	return only
+}
+
+// chatTools is what registering the native chat ADDS to a seat's catalogue,
+// and what the operator surface adds beyond that — counted from both
+// registries for the guide's own chat section, which is a third axis the
+// tracker-and-pages counts above deliberately leave out.
+func chatTools(t *testing.T) (seat, operatorOnly []string) {
+	t.Helper()
+	full := fullDeps(t)
+	base, err := builtin.Register(tools.NewRegistry(), builtin.Deps{})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	withChat, err := builtin.Register(tools.NewRegistry(), builtin.Deps{Chat: full.Chat})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	for _, name := range withChat {
+		if !slices.Contains(base, name) {
+			seat = append(seat, name)
+		}
+	}
+	operatorDeps := full.Chat
+	operatorDeps.Cursors = fakeCursors{}
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{Chat: operatorDeps}) {
+		if !slices.Contains(seat, tool.Name()) {
+			operatorOnly = append(operatorOnly, tool.Name())
+		}
+	}
+	if len(seat) == 0 || len(operatorOnly) == 0 {
+		t.Fatalf("the native chat added %d seat and %d operator tools — the "+
+			"fixture wired neither, so this asserts nothing", len(seat), len(operatorOnly))
+	}
+	return seat, operatorOnly
 }
 
 // numberWords spells the counts these pages state. Past twenty-nine a page
@@ -176,7 +216,21 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 	t.Parallel()
 	tracker, pages := nativeTools(t)
 	total := len(tracker) + len(pages)
-	operatorOnly := operatorOnlyTools(t)
+	chatSeat, chatOperatorOnly := chatTools(t)
+	// WHAT NO SEAT IS GIVEN, OUTSIDE CHAT: the tracker's operator-only tools
+	// and the fleet-record ones (a parked run, a paused seat, a running turn,
+	// a question answered from the knowledge base). Chat's own are counted
+	// by its own section of the guide, below.
+	everyOnly := everyOperatorOnlyTool(t)
+	operatorOnly := slices.DeleteFunc(slices.Clone(everyOnly), func(name string) bool {
+		return slices.Contains(chatOperatorOnly, name)
+	})
+	for _, name := range operatorOnlyTools(t) {
+		if !slices.Contains(operatorOnly, name) {
+			t.Errorf("the tracker's operator-only %s is missing from the set these "+
+				"pages count as given to no seat", name)
+		}
+	}
 	title := func(word string) string { return strings.ToUpper(word[:1]) + word[1:] }
 
 	guide := readPage(t, "docs/guides/tools-and-mcp.md")
@@ -208,7 +262,13 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 		// THE REFERENCE LISTS EVERY ONE, the tracker's and the rest.
 		{"docs/reference/api-endpoints.md",
 			readPage(t, "docs/reference/api-endpoints.md"),
-			"Plus **" + spelled(t, len(everyOperatorOnlyTool(t))) + " no seat is given**"},
+			"Plus **" + spelled(t, len(everyOnly)) + " no seat is given**"},
+		// AND THE CHAT SECTION COUNTS ITS OWN: what a seat holds, and what
+		// a person's surface adds.
+		{"docs/guides/tools-and-mcp.md", guide, title(spelled(t, len(chatSeat))) +
+			" more, on the same terms and on the third axis"},
+		{"docs/guides/tools-and-mcp.md", guide, "and " +
+			spelled(t, len(chatOperatorOnly)) + " more that no seat is given"},
 	} {
 		if !strings.Contains(c.text, c.want) {
 			t.Errorf("%s does not say %q — the registry adds %d tracker and %d "+

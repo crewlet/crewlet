@@ -223,8 +223,8 @@ func Catalogue() []Instrument {
 			Name: StatelogBarriersApplied, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "stream"},
 			Shows: "Barrier records applied from each log — every node's " +
-				"linearizable reads on it, since every node applies every " +
-				"record. It is the rate `census_drift` holds against the " +
+				"linearizable reads on it, since every data node applies " +
+				"every record. It is the rate `census_drift` holds against the " +
 				"census, per log: a node's own appends are only its share of " +
 				"the fleet's reads, and on a fleet of several serving nodes " +
 				"they describe a company that many times quieter than it is. " +
@@ -403,8 +403,9 @@ func Catalogue() []Instrument {
 			Name: StatelogLogHeadroomFraction, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "How much of the ceiling ordinary writes are held to is " +
-				"left — on the tracker and pages logs, the ceiling less the " +
-				"gate reserve kept above it for evictions. At zero the log " +
+				"left — on the logs that claim identity (the tracker's, the " +
+				"pages log and chat's), the ceiling less the gate reserve kept " +
+				"above it for evictions. At zero the log " +
 				"refuses every write AND every linearizable read, and the " +
 				"remedy is a fleet-wide maintenance cycle, so this is the one " +
 				"number worth alarming on long before it is small.",
@@ -456,11 +457,12 @@ func Catalogue() []Instrument {
 			Name: HistoryAnswers, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"question", "coverage"},
 			Shows: "What each fleet history read covered: `complete` when " +
-				"every live node answered inside the fleet read budget, " +
-				"`partial` when one did not. Turn-level detail lives only " +
-				"on the node that published it, so a partial answer is " +
-				"missing that node's rows — and the history_partial alarm " +
-				"is a fraction of this counter.",
+				"every live data node answered inside the fleet read " +
+				"budget, `partial` when one did not. Turn-level detail " +
+				"lives only on the data node that published it or keeps " +
+				"it in custody, so a partial answer is missing that " +
+				"node's rows — and the history_partial alarm is a " +
+				"fraction of this counter.",
 		},
 
 		// ---- the store ------------------------------------------------
@@ -530,7 +532,7 @@ func Catalogue() []Instrument {
 			Name: TrackerFeedUnreadable, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"source"},
 			Shows: "Change records this build could not translate into a " +
-				"wake. Both domain consumers are deliberately uncapped, so " +
+				"wake. Every domain feed's consumer is deliberately uncapped, so " +
 				"such a record is never dropped — it redelivers for ever at " +
 				"the head of the consumer with every wake behind it " +
 				"waiting, which has no other symptom at all.",

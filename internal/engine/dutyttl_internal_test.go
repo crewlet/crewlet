@@ -41,6 +41,7 @@ var dutyTTLs = map[string]struct {
 	"retentionDutyTTL":        {retentionDutyTTL, true},
 	"embedDutyTTL":            {embedDutyTTL, true},
 	"collectorDutyTTL":        {collectorDutyTTL, true},
+	"chatPruneDutyTTL":        {chatPruneDutyTTL, true},
 	"integrationDutyTTL":      {integrationDutyTTL, true},
 	"learningDutyTTL":         {learningDutyTTL, true},
 	"setup.LeaseTTL":          {setup.LeaseTTL, true},
@@ -128,9 +129,13 @@ var (
 var dutyHelperFiles = []string{"internal/engine/duty.go", "internal/schedule/duty.go"}
 
 // dutySite is one call the duty gate judges: where it is, and what it names —
-// a helper's TTL expression, or the claim function called directly.
+// a helper's TTL expression, or the claim function called directly. A helper's
+// call also carries which helper it is and its duty-name expression, which the
+// duty-table gate (dutydocs_internal_test.go) resolves through dutyNames.
 type dutySite struct {
 	where, expr string
+	helper      string
+	name        string
 }
 
 // dutyCalls is what the duty gate found.
@@ -171,12 +176,16 @@ func dutyClaims(t *testing.T, root string) dutyCalls {
 			switch {
 			case slices.Contains(claimFunctions, name):
 				if !slices.Contains(dutyHelperFiles, f.rel) {
-					out.direct = append(out.direct, dutySite{fset.Position(call.Pos()).String(), name})
+					out.direct = append(out.direct, dutySite{where: fset.Position(call.Pos()).String(), expr: name})
 				}
 			case slices.Contains(dutyHelpers, name):
 				if len(call.Args) == 2 {
-					out.sites = append(out.sites,
-						dutySite{fset.Position(call.Pos()).String(), exprText(fset, call.Args[1])})
+					out.sites = append(out.sites, dutySite{
+						where:  fset.Position(call.Pos()).String(),
+						expr:   exprText(fset, call.Args[1]),
+						helper: name,
+						name:   exprText(fset, call.Args[0]),
+					})
 				}
 			}
 			return true
@@ -210,8 +219,10 @@ func TestTheDutyGateFindsEveryClaimInAPlantedTree(t *testing.T) {
 		}
 	}
 	claims := dutyClaims(t, root)
-	if len(claims.sites) != 1 || claims.sites[0].expr != "plantedTTL" {
-		t.Errorf("helper calls = %+v, want the one passing plantedTTL", claims.sites)
+	if len(claims.sites) != 1 || claims.sites[0].expr != "plantedTTL" ||
+		claims.sites[0].helper != "workerDuty" || claims.sites[0].name != `"thing"` {
+		t.Errorf("helper calls = %+v, want workerDuty's one, naming \"thing\" and "+
+			"passing plantedTTL", claims.sites)
 	}
 	if len(claims.direct) != 1 || claims.direct[0].expr != "ClaimDuty" ||
 		!strings.Contains(claims.direct[0].where, "claim.go") {

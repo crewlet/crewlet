@@ -68,19 +68,27 @@ type NodeStatus struct {
 	// instant on its own health body.
 	StartedAt time.Time
 
-	// Projections is how many of this node's document projections have
-	// caught up, out of how many it runs. Zero of zero is a node running
-	// no native backend, which is every company on the vendor ones.
+	// ProjectionsReady and ProjectionsTotal are how many of this node's
+	// state-log appliers — one per domain it runs, chat's included — are
+	// ready, out of how many it runs. Zero of zero is a node running no
+	// state log: a company on the vendor backends, or a node without
+	// `data`.
+	//
+	// THE NAME IS HISTORICAL, and so are the wire keys
+	// (`projections_ready` / `projections_total`): they counted the
+	// document projections the state log replaced, and peers share them in
+	// heartbeat metadata, so a rename would be a change two builds on one
+	// fleet read differently rather than a word.
 	//
 	// # Why it is here and not on /ready
 	//
-	// A node mid-hydration is HEALTHY. It serves its dashboard, answers
-	// its probes and runs the duties it holds; what it does not do is
-	// take on NEW seats, because a seat whose tools read an incomplete
-	// projection answers "there is no such item" — and a seat acts on
-	// that. So the fact belongs where an operator asking "why is the new
-	// node holding nothing" can see it, which is the fleet view, and NOT
-	// where it would take the node out of rotation.
+	// A node still catching up is HEALTHY. It serves its dashboard,
+	// answers its probes and runs the duties it holds; what it does not do
+	// is take on NEW seats, because a seat whose tools read a copy that is
+	// behind answers "there is no such item" — and a seat acts on that. So
+	// the fact belongs where an operator asking "why is the new node
+	// holding nothing" can see it, which is the fleet view, and NOT where
+	// it would take the node out of rotation.
 	//
 	// Two integers rather than a bool: "3 of 5" and "0 of 2" are the two
 	// readings an operator needs to tell apart, and a bool collapses

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -118,7 +119,7 @@ func RunGates(t *testing.T, new GateFactory) {
 		}
 	})
 	t.Run("the cases catch a reader that breaks the rule", func(t *testing.T) {
-		for name, bend := range gateLiars {
+		for name, bend := range gateLiars() {
 			t.Run(name, func(t *testing.T) {
 				err := GateAgreement(t, func(t *testing.T) GateCandidate {
 					c := new(t)
@@ -530,13 +531,24 @@ func applyGateHistory(t *testing.T, c GateCandidate, db store.ReplicatedHandle,
 	return problems
 }
 
-// gateLiars are the readers the gate cases must catch, each built from an
-// honest one so every domain gets the same controls for free.
+// gateLiars are the readers the gate cases must catch: the ones that bend the
+// deletion marker, and the ones that bend the eviction window, which
+// [RunEvictionGates] holds a reader with no marker to as well.
+func gateLiars() map[string]func(statelog.Gates) statelog.Gates {
+	out := make(map[string]func(statelog.Gates) statelog.Gates,
+		len(deletionLiars)+len(windowLiars))
+	maps.Copy(out, deletionLiars)
+	maps.Copy(out, windowLiars)
+	return out
+}
+
+// deletionLiars are the readers that bend the deletion marker, each built from
+// an honest one so every domain gets the same controls for free.
 //
 // Each asks the honest reader a question that isolates one gate: under a
 // subject kind no deletion marker covers, it answers from the eviction
 // window alone, and with no writer, from the marker alone.
-var gateLiars = map[string]func(statelog.Gates) statelog.Gates{
+var deletionLiars = map[string]func(statelog.Gates) statelog.Gates{
 	"answers the eviction before the deletion": func(g statelog.Gates) statelog.Gates {
 		return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
 			p statelog.Position) (statelog.Reason, bool, error) {
@@ -572,6 +584,11 @@ var gateLiars = map[string]func(statelog.Gates) statelog.Gates{
 			return evictionOnly(ctx, g, subj, writer, opID, p)
 		}}
 	},
+}
+
+// windowLiars are the readers that bend the eviction window — the half of the
+// rule every reader keeps, whether or not its domain has a deletion marker.
+var windowLiars = map[string]func(statelog.Gates) statelog.Gates{
 	"never reads the eviction gate": func(g statelog.Gates) statelog.Gates {
 		return liar{g, func(ctx context.Context, subj statelog.Subject, _, opID string,
 			p statelog.Position) (statelog.Reason, bool, error) {
@@ -600,6 +617,19 @@ var gateLiars = map[string]func(statelog.Gates) statelog.Gates{
 			prev := p
 			prev.Seq--
 			return evictionOnly(ctx, g, subj, writer, opID, prev)
+		}}
+	},
+	// A WRITER'S FACT REPORTED AS AN OBJECT'S. A caller told `deleted`
+	// gives up on the object for good, when a readmission would have let
+	// its next write through.
+	"reports the eviction as a deletion": func(g statelog.Gates) statelog.Gates {
+		return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
+			p statelog.Position) (statelog.Reason, bool, error) {
+			r, ok, err := g.GatedAt(ctx, subj, writer, opID, p)
+			if err == nil && r == statelog.ReasonEvicted {
+				r = statelog.ReasonDeleted
+			}
+			return r, ok, err
 		}}
 	},
 }

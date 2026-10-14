@@ -55,6 +55,8 @@ const JANE: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  chatBackend: "",
+  chatVendors: [],
 };
 
 const ANONYMOUS: ViewerState = {

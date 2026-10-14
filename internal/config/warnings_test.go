@@ -65,7 +65,7 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 			func(b *config.Bootstrap) {
 				b.Stream.TrackerRetention.BackupFloor = config.BackupFloorOperator
 			},
-			"stream.tracker_retention.backup_floor", "never trimmed",
+			"stream.tracker_retention.backup_floor", "a backup of that log has been acknowledged",
 		},
 		"nobody owns the backup": {
 			func(b *config.Bootstrap) {},
@@ -235,11 +235,16 @@ func TestAVerboseBrokerIsQuietOnceSomethingRecordsIt(t *testing.T) {
 // because giving it an id fixes one of them and not the other.
 func TestAUnitWithNoIDIsWarnedAboutInBothHalves(t *testing.T) {
 	t.Parallel()
+	// THE CHANNEL IS HERE SO THIS CASE STAYS ABOUT THE ID. A native-chat
+	// company whose units declare no channel raises an advisory of its own,
+	// and a fixture that collected it would assert two warnings while
+	// naming one rule.
 	c := &config.Company{
 		Name: "Acme",
 		Units: []config.Unit{{
-			Name:  "Platform",
-			Roles: []config.Role{{Name: "SWE", Handle: "swe"}},
+			Name:    "Platform",
+			Channel: "platform",
+			Roles:   []config.Role{{Name: "SWE", Handle: "swe"}},
 		}},
 	}
 	warnings := c.Warnings()
@@ -275,9 +280,14 @@ func TestANestedUnitWithNoIDIsWarnedAboutWhereItWasWritten(t *testing.T) {
 	t.Parallel()
 	c := &config.Company{
 		Name: "Acme",
+		// The channels keep this case about the id, as above — and the
+		// child deliberately declares none, which is inheritance working
+		// rather than an omission: a unit that takes its parent's channel
+		// raises nothing.
 		Units: []config.Unit{
-			{Name: "Product", ID: "product", Roles: []config.Role{{Name: "PM", Handle: "pm"}}},
-			{Name: "Engineering", ID: "engineering", Children: []config.Unit{
+			{Name: "Product", ID: "product", Channel: "product",
+				Roles: []config.Role{{Name: "PM", Handle: "pm"}}},
+			{Name: "Engineering", ID: "engineering", Channel: "engineering", Children: []config.Unit{
 				{Name: "Platform", Roles: []config.Role{{Name: "SWE", Handle: "swe"}}},
 			}},
 		},
@@ -340,19 +350,86 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 	}
 }
 
+// AN OPERATOR FLOOR NAMES EVERY CEILING THAT WILL REFUSE, not the mutation
+// log's alone.
+//
+// Until somebody acknowledges a backup of it nothing trims any of the three
+// ordered logs, and none of them carries an age bound, so each grows until its
+// own ceiling refuses an append. Which one fills first depends on the volume
+// and the company rather than on the configuration this advisory reads, so a
+// message naming one field sends the operator to the wrong ceiling whenever
+// another log won — and when that is the chat log the refusal is a message a
+// person could not send.
+//
+// AND THE ACKNOWLEDGEMENT IS PER LOG — every log. It names one stream, and the
+// backup term blocks every log the counted point does not cover, so a message
+// saying the first acknowledgement unblocks the trim told an operator who
+// acknowledged the mutation log that the other two would trim as well; and the
+// two compacted logs, which never refuse a write, raise their `backup_age`
+// alarm without one, so a message naming only the ordered three left two
+// alarms firing for ever.
+func TestAnOperatorFloorNamesEveryCeilingThatWillRefuse(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Stream.TrackerRetention.BackupFloor = config.BackupFloorOperator
+	if err := b.Validate(); err != nil {
+		t.Fatalf("the fixture does not validate: %v", err)
+	}
+	var message string
+	for _, w := range b.Warnings() {
+		if w.Path == "stream.tracker_retention.backup_floor" {
+			message = w.Message
+		}
+	}
+	if message == "" {
+		t.Fatalf("no warning about the operator floor: %v", b.Warnings())
+	}
+	for _, ceiling := range []string{
+		"`stream.tracker_log_max_bytes`",
+		"`stream.pages_log_max_bytes`",
+		"`stream.chat_log_max_bytes`",
+		// AND THE TWO COMPACTED LOGS, which never refuse a write but
+		// wait on an acknowledgement all the same: their backup_age
+		// alarm fires without one.
+		"`stream.tracker_vectors_max_bytes`",
+		"`stream.usage_log_max_bytes`",
+		"`backup_age`",
+	} {
+		if !strings.Contains(message, ceiling) {
+			t.Errorf("warning = %q, want it to name %s", message, ceiling)
+		}
+	}
+	if strings.Contains(message, "each ordered log is trimmed") {
+		t.Errorf("warning = %q says only the ordered logs wait on an "+
+			"acknowledgement; every log does", message)
+	}
+	for _, perLog := range []string{"once per log", "-stream <log>"} {
+		if !strings.Contains(message, perLog) {
+			t.Errorf("warning = %q, want it to say the acknowledgement is per "+
+				"log (%q)", message, perLog)
+		}
+	}
+	if strings.Contains(message, "first acknowledgement") {
+		t.Errorf("warning = %q reads as though one acknowledgement unblocks "+
+			"every log", message)
+	}
+}
+
 // A NATIVE BACKEND ON AN IN-MEMORY STREAM IS REFUSED, and it takes both
 // documents to see it.
 //
-// The engine's own tracker and its own knowledge base keep their write-ahead
+// The engine's own tracker, knowledge base and chat keep their write-ahead
 // logs on the stream, and an embedded stream with no store directory keeps its
 // streams in memory, so a restart recreates them empty and a node whose
 // durable tables are ahead of a stream that restarted from nothing refuses to
 // serve PERMANENTLY: every snapshot it could adopt is above the recreated
 // stream too.
 //
-// EITHER BACKEND. The rule once asked only about the tracker, and the
-// knowledge base is native by default, so a company on Jira with no Confluence
-// ran its pages on an in-memory log and was accepted.
+// ANY BACKEND. The rule once asked only about the tracker, and the knowledge
+// base is native by default, so a company on Jira with no Confluence ran its
+// pages on an in-memory log and was accepted. Chat is native by default too,
+// and a company that declares no chat block at all is the commonest one there
+// is, so it has a row of its own beside the one that names native outright.
 //
 // Each tier validates alone and neither can see the other, which is why this
 // is a rule of its own rather than a field's.
@@ -363,19 +440,29 @@ func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 		streamType config.StreamType
 		tracker    config.TrackerBackend
 		knowledge  config.KnowledgeBackend
-		accept     bool
-		leaf       bool
+		// chat is EVERY ROW'S, so each row stays about the backend it
+		// names; empty is the derivation, and only the row that is about
+		// the derivation leaves it so.
+		chat   config.ChatBackend
+		accept bool
+		leaf   bool
 	}{
 		// A LEAF KEEPS NO STREAM: every log it reaches is a member's, and
 		// the member holds the store directory.
-		"native on a leaf with no store directory": {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true, true},
-		"both native on an in-memory stream":       {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, false, false},
-		"a native tracker on an in-memory stream":  {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNone, false, false},
-		"native pages on an in-memory stream":      {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false, false},
-		"a blank store directory is none":          {"  ", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false, false},
-		"native with a store directory":            {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true, false},
-		"native on an external cluster":            {"", config.StreamNATS, config.TrackerNative, config.KnowledgeNative, true, false},
-		"vendors for both on the same stream":      {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, true, false},
+		"native on a leaf with no store directory": {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, config.ChatNative, true, true},
+		"native chat on a leaf":                    {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, config.ChatNative, true, true},
+		"all three native on an in-memory stream":  {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, config.ChatNative, false, false},
+		"a native tracker on an in-memory stream":  {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNone, config.ChatNone, false, false},
+		"native pages on an in-memory stream":      {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, config.ChatNone, false, false},
+		"native chat alone on an in-memory stream": {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, config.ChatNative, false, false},
+		// THE ROW THE RULE MISSED: nothing native named anywhere, and no
+		// vendor chat declared, so chat derives native and its rooms are
+		// on the stream.
+		"chat derived native on an in-memory stream": {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, "", false, false},
+		"a blank store directory is none":            {"  ", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, config.ChatNone, false, false},
+		"native with a store directory":              {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, config.ChatNative, true, false},
+		"native on an external cluster":              {"", config.StreamNATS, config.TrackerNative, config.KnowledgeNative, config.ChatNative, true, false},
+		"nothing native on the same stream":          {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, config.ChatNone, true, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()
@@ -391,6 +478,7 @@ func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 			c.Name = "Acme"
 			c.Tracker.Backend = tc.tracker
 			c.Knowledge.Backend = tc.knowledge
+			c.Chat.Backend = tc.chat
 
 			err := config.CheckTiers(&b, &c)
 			if tc.accept {
@@ -406,6 +494,9 @@ func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 				"stream.store_dir", "refuses to serve",
 				"tracker.backend: " + string(tc.tracker),
 				"knowledge.backend: " + string(tc.knowledge),
+				// The RESOLVED value, which is what the row about the
+				// derivation needs the refusal to tell its author.
+				"chat.backend: " + string(c.ChatBackendFor()),
 			} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("refusal = %q, want it to say %q", err, want)

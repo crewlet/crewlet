@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chat"
+	"github.com/crewlet/crewlet/internal/config"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -404,7 +405,8 @@ func censusLogs(domains ...statelog.Domain) *stateLog {
 // smaller it was.
 func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 	t.Parallel()
-	var trackerLog, vectorLog statelog.Domain = tracker.Domain{}, search.Domain{}
+	var trackerLog, vectorLog, chatLog statelog.Domain = tracker.Domain{}, search.Domain{},
+		chat.Domain{}
 
 	for _, tc := range []struct {
 		name       string
@@ -461,6 +463,25 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 			applied: map[statelog.Domain]int{trackerLog: 30_000}, appended: 10_000,
 			fires: true, log: "tracker", expected: 12_500,
 		},
+		// THE CHAT LOG IS HELD TO THE SAME PER-SEAT FIGURE, which at the
+		// reference company's 3 000 turns a day is about four chat reads a
+		// turn ([statelog.LinearizableReadsPerSeatDay] states the
+		// arithmetic). Four a turn is inside it; nine a turn — seats
+		// re-reading rooms in a loop — is past twice it, and the alarm
+		// names the chat log rather than the tracker's, which is at its
+		// census beside it.
+		{
+			name: "the chat log at four reads a turn",
+			logs: []statelog.Domain{trackerLog, chatLog}, seats: 100,
+			applied: map[statelog.Domain]int{trackerLog: 12_500, chatLog: 3_000 * 4},
+			fires:   false, log: "tracker", expected: 12_500,
+		},
+		{
+			name: "the chat log at nine reads a turn",
+			logs: []statelog.Domain{trackerLog, chatLog}, seats: 100,
+			applied: map[statelog.Domain]int{trackerLog: 12_500, chatLog: 3_000 * 9},
+			fires:   true, log: "chat", expected: 12_500,
+		},
 		{
 			name: "the vector log, which no read appends to",
 			logs: []statelog.Domain{vectorLog, trackerLog}, seats: 1,
@@ -500,6 +521,84 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 					fired, reading.LinearizableReads, reading.LinearizableReadsExpected, tc.fires)
 			}
 		})
+	}
+}
+
+// THE CENSUS REMEDY SPEAKS TO EVERY LOG THE ALARM CAN NAME — AND SENDS THE
+// CHAT LOG'S OPERATOR AWAY FROM ITS CEILING.
+//
+// census_drift names whichever log is furthest past its census, and what an
+// operator does about it is not the same on every log. On the tracker's and
+// the knowledge base's the barriers are a term in the ceiling, so the drift is
+// a reason to resize it; on the chat log the ceiling is sized from the log's
+// messages ([statelog.LinearizableReadsPerSeatDay] records that decision), so
+// the drift is about the reads a chat turn makes and a resize spends a
+// maintenance window on a ceiling nothing has outgrown. The remedy this
+// replaced named one log's knob and sent every operator to it, whichever log
+// had fired. So the remedy each log is handed has to name THAT log's own
+// ceiling — and the chat log's only in the clause leaving it alone.
+//
+// The logs are the registered domains whose reads append a barrier, read off
+// the same switch the census is, so a sixth such domain fails here until the
+// remedy says what its operator does.
+func TestTheCensusRemedyNamesTheCeilingOfTheLogItFiresOn(t *testing.T) {
+	t.Parallel()
+	const free = 200 << 30
+	fired := 0
+	for _, d := range registeredDomains() {
+		encode, err := barrierEncoderFor(d)
+		if err != nil {
+			t.Fatalf("barrierEncoderFor(%s): %v", d.Name(), err)
+		}
+		if encode == nil {
+			// No read appends to this log, so the census never names it.
+			continue
+		}
+		ceiling, err := tierACeiling(config.Stream{}, d, free)
+		if err != nil {
+			t.Fatalf("tierACeiling(%s): %v", d.Name(), err)
+		}
+		recorder, err := metrics.New()
+		if err != nil {
+			t.Fatalf("recorder: %v", err)
+		}
+		recorder.Add(metrics.StatelogBarriersApplied, 3*statelog.LinearizableReadsPerSeatDay,
+			metrics.Attrs{"domain": d.Name(), "stream": d.Stream().Name})
+		r := &retention{metrics: recorder, state: censusLogs(d), seats: func() int { return 1 }}
+		var reading statelog.Reading
+		r.observed(&reading)
+		var remedy string
+		for _, alarm := range statelog.Evaluate(reading) {
+			if alarm.Kind == statelog.KindCensusDrift {
+				remedy = alarm.Remedy
+			}
+		}
+		if remedy == "" || reading.CensusLog != d.Name() {
+			t.Errorf("%s at three times its census: census_drift named %q with "+
+				"remedy %q — want it firing on this log", d.Name(), reading.CensusLog, remedy)
+			continue
+		}
+		fired++
+		knob := "`" + ceiling.Field + "`"
+		if !strings.Contains(remedy, knob) {
+			t.Errorf("census_drift fired on the %s log and its remedy never names "+
+				"that log's ceiling, %s — the operator is sent to another log's "+
+				"knob: %q", d.Name(), knob, remedy)
+		}
+		// THE CHAT LOG'S CEILING IS SIZED FROM ITS MESSAGES, and only
+		// its: every other log the census can name carries its barriers
+		// as a term in its ceiling.
+		leaveAlone := "leave " + knob + " alone"
+		if sizedFromMessages := d.Name() == (chat.Domain{}).Name(); sizedFromMessages !=
+			strings.Contains(remedy, leaveAlone) {
+			t.Errorf("census_drift on the %s log: remedy tells the operator to %q "+
+				"is %v, want %v — the chat log's ceiling is not what its read "+
+				"census sizes, and every other one's is: %q", d.Name(), leaveAlone,
+				!sizedFromMessages, sizedFromMessages, remedy)
+		}
+	}
+	if fired == 0 {
+		t.Fatal("no registered log takes a read, so nothing here held the remedy to anything")
 	}
 }
 
@@ -571,7 +670,13 @@ func TestTheEnginesOwnReadsAreTheCollectorsPins(t *testing.T) {
 	if got := e.backgroundBarriers(tracker.Domain{}.Name()); got != collect.PinsPerDay {
 		t.Errorf("the collector puts %d a day on the tracker's log, want %d", got, collect.PinsPerDay)
 	}
-	for _, other := range []statelog.Domain{pages.Domain{}, search.Domain{}} {
+	// EVERY OTHER REGISTERED LOG, not a list of the ones that existed when
+	// this was written: a log added later that the collector started pinning
+	// by accident is exactly what this is here to see.
+	for _, other := range registeredDomains() {
+		if other.Name() == (tracker.Domain{}).Name() {
+			continue
+		}
 		if got := e.backgroundBarriers(other.Name()); got != 0 {
 			t.Errorf("the collector puts %d a day on the %s log, which no declared "+
 				"table names", got, other.Name())

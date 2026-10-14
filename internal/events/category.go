@@ -33,7 +33,8 @@ var categories = map[string]string{
 	// operator is most likely to go looking for after the fact — and the
 	// runtime audit, which is the same question asked of everything else
 	// a person did to the company through a running node: every operator
-	// tool call that is not a proven read, and every backup. A seat
+	// tool call that is not a proven read, every backup, and every chat
+	// erase and prune an operator made. A seat
 	// coming and going is not here: agent_spawned and agent_terminated are
 	// live-only, and [excluded] says why.
 	"org_started":               "lifecycle",
@@ -42,6 +43,8 @@ var categories = map[string]string{
 	"config_revision_applied":   "lifecycle",
 	"operator_acted":            "lifecycle",
 	"backup_requested":          "lifecycle",
+	"chat_erased":               "lifecycle",
+	"chat_pruned":               "lifecycle",
 	// A person pausing and resuming a seat — the change itself, published
 	// once by the writer whose compare-and-set won. Beside the runtime
 	// audit rather than folded into it: operator_acted records that a call

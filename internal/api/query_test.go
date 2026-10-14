@@ -18,7 +18,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
@@ -296,6 +298,55 @@ func TestARefusalsSentenceReachesTheCallerOnBothTransports(t *testing.T) {
 	}
 	if rest != sock {
 		t.Errorf("the transports disagree about the sentence:\n REST   %q\n socket %q", rest, sock)
+	}
+}
+
+// A QUESTION REFUSED BECAUSE OF WHO ASKED IS ANSWERED UNDER THE REFUSAL'S OWN
+// CODE, WITH ITS SENTENCE, ON BOTH TRANSPORTS — a `403` over REST.
+//
+// It is how every chat read refuses a token bound to no person, and the code
+// is the act transport's own for the same caller, so a client that handles
+// `unbound` there handles it here. Answered as `bad_params` it was a `400` no
+// client recognised, and the CLI's dedicated sentence never printed.
+func TestACallerRefusalKeepsItsCodeAndSentenceOnBothTransports(t *testing.T) {
+	t.Parallel()
+	a := seededApp(t, nil)
+	const sentence = "bind it with contact.crewlet_operator_id on your seat"
+	for _, code := range []string{stream.CodeUnbound, stream.CodeAgentSeat} {
+		what := "refuses_" + code
+		a.Queries().Register(what, func(context.Context, queries.Params) (any, error) {
+			return nil, &queries.CallerRefusal{Code: code, Detail: sentence}
+		})
+
+		status, body := overREST(t, a, what, nil)
+		if status != http.StatusForbidden {
+			t.Errorf("%s over REST: status = %d, want 403", what, status)
+		}
+		rest, _ := body.(map[string]any)
+		if rest["error"] != code || rest["detail"] != sentence {
+			t.Errorf("%s over REST answered %v, want %q with its sentence", what, rest, code)
+		}
+		frame := overSocket(t, a, what, nil)
+		if frame["kind"] != "error" || frame["error"] != code || frame["detail"] != sentence {
+			t.Errorf("%s over the socket answered %v, want %q with its sentence",
+				what, frame, code)
+		}
+	}
+}
+
+// THE SOCKET SPELLS A CALLER REFUSAL AS THE ACT TRANSPORT DOES. Two packages
+// declare the words, since neither may import the other's transport, and a
+// client that recognises `unbound` on one surface must meet the same word on
+// every other.
+func TestTheSocketSpellsTheCallerRefusalsAsTheActTransportDoes(t *testing.T) {
+	t.Parallel()
+	for socket, act := range map[string]string{
+		stream.CodeUnbound:   string(operator.CodeUnbound),
+		stream.CodeAgentSeat: string(operator.ChatAgentSeat.Code()),
+	} {
+		if socket != act {
+			t.Errorf("the socket answers %q where the act transport answers %q", socket, act)
+		}
 	}
 }
 

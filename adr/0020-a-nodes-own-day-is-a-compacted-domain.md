@@ -58,3 +58,16 @@ It does not decide which answers are served from these rows or what shapes they
 take — those are the API's, over the rows this domain writes. It does not carry
 turn-level detail: which turn spent what is answered from each node's own
 event log, which is a different mechanism with a different retention.
+
+## Amendment — a node without `data` publishes no day
+
+ADR-0025 left a node without `data` no event log and no state log, so every
+"every node" above now reads "every data node", on both sides: each data node
+publishes its own days and applies every data node's. A stateless node's
+events are written into exactly one data node's event log by custody, and the
+day that data node derives counts them — which is what custody's create-only
+claim is for, since a batch two data nodes kept would be billed in both their
+days. The node in a subject is therefore the node that KEPT the events, not
+necessarily the node whose seat spent them. Nothing else here moves: one
+writer per object, nothing arbitrated, and a reader summing across the nodes
+that have days.

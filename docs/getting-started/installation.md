@@ -134,9 +134,11 @@ working company:
   points the same config slot at an external NATS server — the client code is
   identical, so it is a connection choice rather than a second backend. See
   [Fleet](../guides/fleet.md).
-- the **store** is one local file this process owns *exclusively*. Not a
-  shared database, and no DSN: two engines pointed at one file corrupt it.
-  Coordination between nodes goes through a separate KV slot, never the file.
+- the **store** is two local files this process owns *exclusively* — the
+  node's own, and the replicated estate beside it (`store.replicated_path`).
+  Not a shared database, and no DSN: two engines pointed at one file corrupt
+  it. Coordination between nodes goes through a separate KV slot, never a
+  file.
 
 ### The compose file is for the integrations
 

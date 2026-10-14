@@ -109,7 +109,7 @@ type Voids interface {
 //     violation — is false either way.
 //
 // And whatever lands is not a local mistake: the recovery that follows a
-// rebuild follows the new log from its head, so every node applies it as
+// rebuild follows the new log from its head, so every data node applies it as
 // though it continued a history it was never arbitrated in. So every pattern
 // refuses, not only the retry at zero the floor theorem names.
 //
@@ -228,7 +228,9 @@ type Fence interface {
 // Each domain spells its own two queries, and every one of them answers by
 // ONE rule — certified for all of them by the same family,
 // statelogtest.RunGates, because two readers that agree only by looking alike
-// have already drifted apart once:
+// have already drifted apart once. A domain that keeps no deletion marker
+// keeps the window half alone, and statelogtest.RunEvictionGates holds it to
+// that half on the same terms:
 //
 //   - THE DELETION GATE IS REPORTED FIRST. A marker is a fact about the
 //     OBJECT, holding for every writer on every node for ever; an eviction is

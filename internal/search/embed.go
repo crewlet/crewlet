@@ -27,7 +27,7 @@ import (
 // a third-party HTTP round trip inside the transaction that saves somebody's
 // page. It would also charge the company once per NODE, for a value every node
 // needs and nobody can compute differently. So it is a fleet singleton that
-// publishes a record, and the record is what every node applies.
+// publishes a record, and the record is what every data node applies.
 //
 // # What it costs, from the constants below
 //

@@ -9,7 +9,15 @@
  */
 
 import type { ReactNode } from "react";
-import { Button, Callout, EmptyState, Section as UiSection, Tag, cx } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  EmptyState,
+  InlineCode,
+  Section as UiSection,
+  Tag,
+  cx,
+} from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PlugGlyph, KeyGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS: an attention row's mark is named by `lib/attention.ts` as a
@@ -364,6 +372,23 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
     </Callout>
   ),
   not_found: <Callout variant="neutral">Not found. It may have been removed.</Callout>,
+  // WHO IS ASKING, refused, and never fixed by asking again. The engine's own
+  // sentence (`detail`) names the line to change and is shown instead where
+  // it came with one; these are what is said when it did not.
+  unbound: (
+    <Callout variant="warning" icon={<KeyGlyph size="md" />}>
+      This token is not bound to a person, so there is nobody to answer this as. Bind it with{" "}
+      <InlineCode tone="inherit">contact.crewlet_operator_id</InlineCode> on your{" "}
+      <InlineCode tone="inherit">kind: human</InlineCode> seat.
+    </Callout>
+  ),
+  agent_seat: (
+    <Callout variant="warning" icon={<KeyGlyph size="md" />}>
+      This token is bound to an agent seat, and would read as that agent. Move its{" "}
+      <InlineCode tone="inherit">contact.crewlet_operator_id</InlineCode> onto your own{" "}
+      <InlineCode tone="inherit">kind: human</InlineCode> seat.
+    </Callout>
+  ),
   timeout: (
     <Callout variant="warning" icon={<ClockGlyph size="md" />}>
       The engine didn’t answer in time.
@@ -423,6 +448,13 @@ export function QueryState({
 }) {
   if (error === "bad_params" && detail) {
     return <Callout variant="warning">The engine refused this request: {detail}</Callout>;
+  }
+  if ((error === "unbound" || error === "agent_seat") && detail) {
+    return (
+      <Callout variant="warning" icon={<KeyGlyph size="md" />}>
+        {detail}
+      </Callout>
+    );
   }
   const refusal = error ? REFUSALS[error as QueryErrorCode] : undefined;
   if (refusal) return <>{refusal}</>;

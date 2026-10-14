@@ -183,6 +183,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runFleet(rest, stdout, stderr)
 	case "seats":
 		return runSeats(rest, stdout, stderr)
+	case "chat":
+		return runChat(rest, stdout, stderr)
 	case "llm":
 		return runLLM(rest, stdout, stderr)
 	case "search":
@@ -220,6 +222,9 @@ Usage:
                               remove a member that is gone for good
   crewlet seats <cmd>         Pause a seat (-stop also ends the turn it is on)
                               or resume it, as the person your token is bound to
+  crewlet chat <cmd>          The company's own chat, as the person your token
+                              is bound to: list and read rooms, say something,
+                              search, and erase messages or prune a room now
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends;
@@ -1096,9 +1101,20 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 
 	log.InfoContext(ctx, "engine_starting", "version", version.String(),
 		"company", companyName(opts.Company))
-	e, err := engine.New(ctx, opts)
+
+	// THE ENGINE, WITH ITS CHAT HUB ALREADY RUNNING: see
+	// [api.NewEngineWithChat], which the end-to-end suite boots through too.
+	e, chatLive, err := api.NewEngineWithChat(ctx, opts)
 	if err != nil {
 		return err
+	}
+	// A BOOT THAT FAILS FROM HERE ON takes down what it brought up, in
+	// [shutdown]'s order without the drain: nothing has been claimed yet,
+	// so there is nothing to finish. The hub before the engine, whose
+	// teardown closes the broker the hub's answerers are subscribed on.
+	abandon := func() {
+		chatLive.Stop()
+		e.Stop(context.WithoutCancel(ctx))
 	}
 
 	// ONE keyring for the process. The reconciler opens revisions with it
@@ -1107,7 +1123,7 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// read back.
 	cipher, err := boot.Secrets.Cipher()
 	if err != nil {
-		e.Stop(context.WithoutCancel(ctx))
+		abandon()
 		return fmt.Errorf("secrets keyring: %w", err)
 	}
 
@@ -1120,15 +1136,18 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// node will actually serve rather than under the file's and then moved.
 	reconciler, err := startReconciler(ctx, e, boot, seed, cipher, log)
 	if err != nil {
-		e.Stop(context.WithoutCancel(ctx))
+		abandon()
 		return err
 	}
 
 	// THE POSTURE REACHES PEERS from here, because the reconciler owns it
 	// and is only built once the engine exists. Set before Start, so the
 	// first heartbeat already carries it.
-	e.SetPosture(func(ctx context.Context) string {
-		return string(reconciler.Posture(ctx))
+	e.SetPosture(func(ctx context.Context) (string, error) {
+		// ReadPosture, not Posture: the fail-open serve is the probe's
+		// answer, never one to broadcast to the fleet.
+		posture, readErr := reconciler.ReadPosture(ctx)
+		return string(posture), readErr
 	})
 
 	// AND THE GATE THAT ACTS ON IT. Reporting the posture is not applying
@@ -1175,7 +1194,7 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		Bootstrap: boot,
 	})
 	if err != nil {
-		e.Stop(context.WithoutCancel(ctx))
+		abandon()
 		return err
 	}
 	// The surface a DISCONNECT removes a block through. Until it is set
@@ -1203,9 +1222,10 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// /ready report honestly that it holds no seats yet, and a webhook that
 	// arrives in the window is retained rather than dropped because the
 	// mailboxes are created before any claiming (see Node.Start).
-	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, log)
+	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface,
+		chatLive.Hub(), log)
 	if err != nil {
-		e.Stop(context.WithoutCancel(ctx))
+		abandon()
 		return err
 	}
 
@@ -1219,7 +1239,7 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		// a boot that failed: the listener is already accepting, and it
 		// is the drain, not a closed port, that refuses new work on it.
 		// See [shutdown].
-		shutdown(context.WithoutCancel(ctx), e, surface, log)
+		shutdown(context.WithoutCancel(ctx), e, surface, chatLive, log)
 		return err
 	}
 
@@ -1272,7 +1292,7 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// runtime's kill grace, or the operator's second interrupt, which the
 	// first one re-armed. Both already have one and can see things this
 	// process cannot.
-	shutdown(context.WithoutCancel(ctx), e, surface, log)
+	shutdown(context.WithoutCancel(ctx), e, surface, chatLive, log)
 	return nil
 }
 
@@ -1308,23 +1328,52 @@ func interruptContext() (context.Context, context.CancelFunc) {
 //     from its first moment the HTTP surface refuses every route that would
 //     start new work (see internal/api's drain gate), so a listener still
 //     accepting is no longer a listener still minting turns.
-//  2. CLOSE THE LISTENER, once the drain has completed or its context has
-//     ended, and not before: a node that closed it first answered neither
+//  2. CLOSE THE LISTENERS, once the drain has completed or its context has
+//     ended, and not before: a node that closed them first answered neither
 //     probe for the whole drain, so its liveness probe failed while it was
-//     doing exactly what it should.
-//  3. TEAR THE ENGINE DOWN, after the listener, because both probes read the
-//     broker and the coordination store the teardown closes.
+//     doing exactly what it should. The public one goes before api.port,
+//     which carries the probes ([httpSurface.stop]).
+//  3. STOP THE CHAT HUB, once the turns it was showing have finished and the
+//     sockets it pushed to have closed. Not before the drain: the turns that
+//     finish during it post their replies and lower their working
+//     indicators, and a peer's room learns of both through this hub — which
+//     is why its lifetime is this process's rather than the listener's
+//     ([api.EngineChatLive]), on a node with no listener too.
+//  4. TEAR THE ENGINE DOWN, last, because both probes read the broker and the
+//     coordination store the teardown closes, and the hub's answerers are
+//     subscribed on that broker.
 //
-// A nil surface is a node that bound no listener — api.port 0, or a node
-// without the ingress role and with no tool bridge to serve — and it drains
-// and stops the same way with nothing to close between the two.
-func shutdown(ctx context.Context, e *engine.Engine, surface *httpSurface, log *slog.Logger) {
+// A nil surface is a node that bound no listener — api.port 0, whatever its
+// roles, since a node without the ingress role still binds api.port for its
+// probes ([serveProbes]) — and it drains and stops the same way with nothing
+// to close between the two ([httpSurface.stop] is nil-safe).
+//
+// ITS PARTS ARE INTERFACES, declared here, so the order is a test's to pin
+// ([TestShutdownTakesANodeDownInOneOrder]): every step's reason is a step
+// that came before it, and an order nothing asserts is one a later edit
+// reverses without a symptom until a rolling restart.
+func shutdown(ctx context.Context, e drainingEngine, surface listeners,
+	chat stoppingHub, log *slog.Logger) {
+
 	e.Drain(ctx)
-	if surface != nil {
-		surface.stop(ctx, log)
-	}
+	surface.stop(ctx, log)
+	chat.Stop()
 	e.Stop(ctx)
 }
+
+// drainingEngine is the engine as [shutdown] takes it down.
+type drainingEngine interface {
+	Drain(ctx context.Context)
+	Stop(ctx context.Context)
+}
+
+// listeners is the HTTP surface as [shutdown] closes it.
+type listeners interface {
+	stop(ctx context.Context, log *slog.Logger)
+}
+
+// stoppingHub is the chat hub as [shutdown] stops it.
+type stoppingHub interface{ Stop() }
 
 // httpSurface is the HTTP listeners a node binds: the whole API on a node with
 // the ingress role — on api.port, with the routes outside parties call on a
@@ -1364,6 +1413,10 @@ type apiListener struct {
 // that is doing exactly what it should. Each gets its own grace, so a bridge
 // session holding the public listener open never cuts a dashboard request.
 func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
+	if s == nil {
+		// NO LISTENER TO CLOSE: a node that bound none (api.port 0).
+		return
+	}
 	if s.public != nil {
 		shutdownListener(ctx, s.public, "public", log)
 	}
@@ -1477,9 +1530,15 @@ func companyConfig(e *engine.Engine) *config.Company {
 func companySecrets(e *engine.Engine) webhooks.Secrets { return e.WebhookSecrets() }
 
 // serveAPI binds the HTTP surface, or reports that this node serves none.
+// chatLive is the hub runEngine built and started BEFORE the engine, passed
+// down rather than made here: the same object is already the chat applier's
+// observer, and a second one built at this point would be a hub the applier
+// never tells. The surface attaches its sockets to it and never runs it — see
+// [api.EngineChatLive].
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
-	configSurface *configapi.Service, log *slog.Logger,
+	configSurface *configapi.Service, chatLive *stream.ChatHub,
+	log *slog.Logger,
 ) (*httpSurface, error) {
 	if boot.API.Port == 0 {
 		// A real posture: a node with no listener at all. Saying so is the
@@ -1656,20 +1715,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, err
 	}
 	// ONE operator surface, handed to the routes that serve it and to the
-	// viewer that says what it serves.
-	operators, err := api.NewEngineOperator(e)
+	// viewer that says what it serves — and the hub, so a person's read
+	// state flushed through it reaches their other sockets.
+	operators, err := api.NewEngineOperator(e, chatLive)
 	if err != nil {
 		return nil, err
 	}
-	// The contextcheck exemption is for the two PUSH TICKS this constructor
-	// registers — the roster re-send and the health frame. Both manufacture
-	// a bounded context of their own instead of inheriting one, which is
-	// what [api.tickReadBudget] and [api.App.streamHealth] both state is
-	// correct: a tick is a timer, not a request, so there is nothing to
-	// inherit, and a read that outlived the interval firing the next tick
-	// would cost a goroutine per tick for the life of the process. Nothing
-	// else reached from here creates a context.
-	app, err := api.New(api.Options{ //nolint:contextcheck // see the paragraph above
+	opts := api.Options{
 		Bootstrap: boot,
 		Runtime:   runtime,
 		// THE ENGINE'S OWN RECEIVER, not a second one built here. The API
@@ -1692,13 +1744,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// "this node has no event log" and "the company has done
 		// nothing".
 		Sources: queries.Sources{
-			// THE FLEET'S turn-level history: every live node's own
+			// THE FLEET'S turn-level history: every live data node's own
 			// store, asked at query time, with the nodes that did not
 			// answer named on every answer (ADR-0021). The ENGINE's,
 			// because the roster is its lease view and the answerer it
 			// registered is the other half of the same protocol.
 			Events: e.History(),
-			// EVERY NODE'S company days, for every named spend window
+			// EVERY DATA NODE'S company days, for every named spend window
 			// and its series — the replicated usage domain (ADR-0020),
 			// resolved per read so an adoption's reopened estate is the
 			// one answered from.
@@ -1905,7 +1957,23 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			AppFlow:   setupSurface.AppFlow(),
 			Recheck:   e,
 		},
-	})
+	}
+	// THE COMPANY'S OWN CHAT — its reads, the ranking over them, each
+	// person's read state, the two destructions and the live arm — through
+	// the one constructor the end-to-end suite wires too, so the seams a
+	// deployment serves are the ones its cases exercise. Every ordinary chat
+	// write is an act tool of the operator surface above; the hub is the one
+	// the engine announces to, built before it.
+	api.EngineChat(&opts, e, chatLive)
+	// The contextcheck exemption is for the two PUSH TICKS this constructor
+	// registers — the roster re-send and the health frame. Both manufacture
+	// a bounded context of their own instead of inheriting one, which is
+	// what [api.tickReadBudget] and [api.App.streamHealth] both state is
+	// correct: a tick is a timer, not a request, so there is nothing to
+	// inherit, and a read that outlived the interval firing the next tick
+	// would cost a goroutine per tick for the life of the process. Nothing
+	// else reached from here creates a context.
+	app, err := api.New(opts) //nolint:contextcheck // see the paragraph above
 	if err != nil {
 		return nil, err
 	}
@@ -1949,10 +2017,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// open sees the seeded snapshot rather than an empty one it will never
 	// be sent a correction for.
 	//
-	// THE FLEET'S HISTORY, read from every live node's store through the
-	// engine's history reader: each node's store holds what that node
-	// published, so a seed read from this one alone showed a restarted node
-	// only its own share of the company.
+	// THE FLEET'S HISTORY, read from every live data node's store through
+	// the engine's history reader: each one holds what that node published
+	// and the custody batches it keeps, so a seed read from this one alone
+	// showed a restarted node only its own share of the company.
 	seedCtx, cancelSeed := context.WithTimeout(ctx, projectionSeedBudget)
 	err = observe.Seed(seedCtx, e.History(), companyConfig(e).AgentRoles(), app.Stream().State())
 	if err != nil {

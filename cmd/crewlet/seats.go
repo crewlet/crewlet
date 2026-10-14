@@ -2,14 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
 	"strings"
-
-	"github.com/google/uuid"
 )
 
 // `crewlet seats` — pausing and resuming a seat from a shell.
@@ -25,11 +23,12 @@ import (
 //
 // # A retry is the same request
 //
-// Every invocation mints a request id and prints it when the answer is
-// `unknown`; `-request-id` sends it again, so a retry is the first attempt's
-// operation rather than a second one. Both gestures are also idempotent on the
-// record itself — pausing a paused seat changes nothing — so the id is what
-// keeps the runtime audit to one row per gesture.
+// Every invocation mints a request id and prints it whenever the outcome is not
+// known — answered `unknown`, or not answered at all; `-request-id` sends it
+// again, so a retry is the first attempt's operation rather than a second one
+// (see act.go). Both gestures are also idempotent on the record itself —
+// pausing a paused seat changes nothing — so the id is what keeps the runtime
+// audit to one row per gesture.
 
 // runSeats dispatches `crewlet seats`.
 func runSeats(args []string, stdout, stderr io.Writer) error {
@@ -78,11 +77,7 @@ func seatsAct(args []string, tool string, pausing bool, stdout, stderr io.Writer
 	}
 	id := strings.TrimSpace(*requestID)
 	if id == "" {
-		// A UUIDv7, which the act transport requires: the gesture's
-		// operation is derived from it, and its first 48 bits are the
-		// instant the gesture began — so a retry sends this same id and
-		// lands on the same operation (see builtin.RequestOperation).
-		id = uuid.Must(uuid.NewV7()).String()
+		id = newRequestID()
 	}
 	body := map[string]any{"handle": handle}
 	if pausing {
@@ -94,38 +89,42 @@ func seatsAct(args []string, tool string, pausing bool, stdout, stderr io.Writer
 		}
 	}
 
-	var answer struct {
-		Outcome string `json:"outcome"`
-		Receipt struct {
-			Changed      bool   `json:"changed"`
-			PausedBy     string `json:"paused_by"`
-			PausedBySeat string `json:"paused_by_seat"`
-			PausedAt     string `json:"paused_at"`
-			StopRunning  bool   `json:"stop_running"`
-		} `json:"receipt"`
-	}
-	if err := client.postJSON(context.Background(), "/operator/act/"+url.PathEscape(tool),
-		map[string]any{"request_id": id, "args": body}, &answer); err != nil {
+	verb := strings.TrimSuffix(tool, "_seat")
+	answer, err := client.act(context.Background(), tool, id, body)
+	if err != nil {
+		actUnanswered(stderr, err, verb, id)
 		return err
+	}
+	if answer.unknown() {
+		actUnknown(stdout, verb+" "+handle, id, answer)
+		return nil
+	}
+	var receipt struct {
+		Changed      bool   `json:"changed"`
+		PausedBy     string `json:"paused_by"`
+		PausedBySeat string `json:"paused_by_seat"`
+		PausedAt     string `json:"paused_at"`
+		StopRunning  bool   `json:"stop_running"`
+	}
+	if err := json.Unmarshal(answer.Receipt, &receipt); err != nil {
+		return fmt.Errorf("the node's receipt for %s is not the JSON it writes: %w",
+			tool, err)
 	}
 
 	switch {
-	case answer.Outcome == "unknown":
-		fmt.Fprintf(stdout, "%s %s: unknown — the node could not confirm the write. "+
-			"Retry with -request-id %s\n", strings.TrimSuffix(tool, "_seat"), handle, id)
-	case pausing && answer.Receipt.Changed:
-		by := firstNonEmpty(answer.Receipt.PausedBySeat, answer.Receipt.PausedBy)
-		fmt.Fprintf(stdout, "paused %s (by %s at %s)\n", handle, by, answer.Receipt.PausedAt)
-		if answer.Receipt.StopRunning {
+	case pausing && receipt.Changed:
+		by := firstNonEmpty(receipt.PausedBySeat, receipt.PausedBy)
+		fmt.Fprintf(stdout, "paused %s (by %s at %s)\n", handle, by, receipt.PausedAt)
+		if receipt.StopRunning {
 			fmt.Fprintln(stdout, "  The turn it is on ends at its next round and is not run again.")
 		} else {
 			fmt.Fprintln(stdout, "  The turn it is on, if any, finishes first; nothing new starts.")
 		}
 	case pausing:
-		by := firstNonEmpty(answer.Receipt.PausedBySeat, answer.Receipt.PausedBy)
+		by := firstNonEmpty(receipt.PausedBySeat, receipt.PausedBy)
 		fmt.Fprintf(stdout, "%s was already paused (by %s at %s); nothing changed\n",
-			handle, by, answer.Receipt.PausedAt)
-	case answer.Receipt.Changed:
+			handle, by, receipt.PausedAt)
+	case receipt.Changed:
 		fmt.Fprintf(stdout, "resumed %s\n  What waited on its inbox is delivered first, in order.\n",
 			handle)
 	default:

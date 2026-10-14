@@ -16,8 +16,9 @@ import (
 // question the vector domain answers, the same way and for the same reasons —
 // a keyed table rather than a log, no arbitration, no operation ledger, no
 // identity claim, no seat gating — and differs from it in the one respect that
-// matters to a reader: there is no singleton duty behind it. EVERY node is a
-// writer, of its own days only, which is what the node in the subject buys.
+// matters to a reader: there is no singleton duty behind it. EVERY data node
+// is a writer, of its own days only, which is what the node in the subject
+// buys.
 type Domain struct{}
 
 // Name is the register key, the manifest key and the operator's own column.
@@ -25,7 +26,7 @@ func (Domain) Name() string { return "usage" }
 
 const (
 	// History is how far back a node's day is kept: on the stream (its age
-	// bound) and in every node's rows (the apply's own horizon).
+	// bound) and in every data node's rows (the apply's own horizon).
 	//
 	// A HUNDRED AND EIGHTY-ONE DAYS, and the arithmetic is the offered
 	// range rather than a round number: a spend window reaches back ninety
@@ -38,7 +39,7 @@ const (
 	// FlushInterval is how often a node re-derives the days that moved and
 	// publishes what changed.
 	//
-	// FIFTEEN SECONDS, the staleness of "today" on every node, and it is
+	// FIFTEEN SECONDS, the staleness of "today" on every data node, and it is
 	// the cadence the live budget meters are pushed on: a spend figure that
 	// trailed the meter above it by more than one of the meter's own
 	// refreshes would read as two different numbers. A tick that finds

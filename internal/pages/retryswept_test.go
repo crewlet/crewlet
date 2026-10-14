@@ -15,14 +15,13 @@ import (
 //
 // A re-run turn derives the SAME operation for the same comment — that is what
 // its turn key is for — and the row that would say the first run's copy landed
-// is gone: here because this node's retention sweep removed it, which the
-// sweep records exactly as staged below (the ledger empty, its cutoff as the
-// watermark). Decided again on rows that already hold the
-// comment, it is a second record every node applies: a second history entry
-// and a second wake for one remark. What stops it is the instant the
-// operation id carries, which is the one the turn's work BEGAN at and so the
-// same on every re-run — never the re-run's own clock, which is after the loss
-// by construction.
+// is gone: here because this node's retention sweep removed it, which the sweep
+// records exactly as staged below (the ledger empty, its cutoff as the
+// watermark). Decided again on rows that already hold the comment, it is a
+// second record every data node applies: a second history entry and a second
+// wake for one remark. What stops it is the instant the operation id carries,
+// which is the one the turn's work BEGAN at and so the same on every re-run —
+// never the re-run's own clock, which is after the loss by construction.
 func TestATurnsCommentRepostedAfterTheLedgerLostItsRowIsNotPostedTwice(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -30,7 +29,7 @@ func TestATurnsCommentRepostedAfterTheLedgerLostItsRowIsNotPostedTwice(t *testin
 
 	in := pages.NewComment{
 		Body:    "does this still hold?",
-		CallKey: pages.CallKey{Seed: "wk-1", Since: time.Now().Add(-time.Hour)},
+		CallKey: statelog.CallKey{Seed: "wk-1", Since: time.Now().Add(-time.Hour)},
 	}
 	if _, _, err := r.store.Comment(t.Context(), agent("bob"), page.Page.ID, in); err != nil {
 		t.Fatalf("the first run's comment: %v", err)

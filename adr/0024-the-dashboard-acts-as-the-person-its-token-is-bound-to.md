@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/operator`
-- **Enforced-by:** `internal/api/operator.TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat`, `internal/api/operator.TestAnUnboundOrAnonymousCallerCannotAct`, `internal/api/operator.TestACallIsMadeAndAuditedAsTheSeatItWasAdmittedAs`
+- **Enforced-by:** `internal/api/operator.TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat`, `internal/api/operator.TestAnUnboundOrAnonymousCallerCannotAct`, `internal/api/operator.TestACallIsMadeAndAuditedAsTheSeatItWasAdmittedAs`, `internal/api/operator.TestAnUnboundTokenReachesNoRoomOverEitherTransport`
 - **Measured:** the largest legal page is 512 KiB of text, and a page of nothing but quotes, backslashes and newlines is 1 MiB once `JSON.stringify` has escaped it — so the act body is capped at twice the page plus 64 KiB for the envelope (`operator.MaxActBody`, 1 114 112 bytes), and a cap at the page's own size refused a page the store accepts.
 - **Cost-when-tried:** the dashboard wrote nothing, on the argument that a browser form would write as "the dashboard", an actor no audit can ask why. Every change was a pre-filled tool call a person copied into an assistant connected to `/operator/mcp` — a gesture of four steps for "mark this read", checked by a test that each call named a real tool and never by anybody pressing it; the Inbox, the priorities list and the board each showed state no control on screen could change.
 - **Tag-status:** unreleased
@@ -17,15 +17,21 @@ binds are refused `unbound` (403); they keep `/operator/mcp`, where a
 credential acting as itself is ordinary. The attribution is the one every
 operator write already carries — the token as author, kind `operator`, the
 bound seat as the actor's seat — so a dashboard write and the same person's
-assistant's read identically in an audit. The seat a call is ADMITTED as is
-the seat it is made as and audited as: it is resolved once and carried through
-the call, so a config apply that rebinds the token mid-call cannot hand the
-write to somebody the admission never checked. The request names its own
-`request_id`, a UUID the client mints per gesture and repeats on a retry, and
-every id the write derives — each record's operation, a created object's own
-id, a comment's — is derived from it and from what the call sent, scoped to
-the token so an id names only that credential's own writes. A retry after an
-`unknown` is therefore the first attempt's operations, never new ones.
+assistant's read identically in an audit. A chat message differs in the author
+alone: a room renders a speaker by seat, so its author is the bound seat's
+handle, with the kind and the token recorded as on every other write — which
+is also why a token no seat binds is refused chat on `/operator/mcp` too,
+reads included: it has no seat to speak as and no membership to read a room
+by. The seat
+a call is ADMITTED as is the seat it is made as and audited as: it is resolved
+once and carried through the call, so a config apply that rebinds the token
+mid-call cannot hand the write to somebody the admission never checked. The
+request names its own `request_id`, a UUID the client mints per gesture and
+repeats on a retry, and every id the write derives — each record's operation,
+a created object's own id, a comment's — is derived from it and from what the
+call sent, scoped to the token so an id names only that credential's own
+writes. A retry after an `unknown` is therefore the first attempt's
+operations, never new ones.
 
 The socket stays read-only. `viewer.acts` names the tools the transport would
 serve this caller — empty unless bound — so a screen enables exactly the

@@ -254,7 +254,7 @@ type seatActivityFold struct {
 	chart         []chartSeat
 }
 
-// foldSeatActivity sums every node's days into one row per seat.
+// foldSeatActivity sums every data node's days into one row per seat.
 //
 // PURE over its inputs, so the arithmetic — the sums across nodes, the
 // reviewed-only denominator, the merged quantiles — is testable without a

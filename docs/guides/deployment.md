@@ -57,31 +57,40 @@ has to finish it to see what it did.
 
 ### The room the stream's volume needs
 
-The engine's own tracker, knowledge base, vector index and usage history each
-keep a log on the stream, and each log's byte ceiling is **reserved** on the volume
-holding `stream.store_dir` when its stream is created: the embedded broker
-grants a ceiling in full, up front, or refuses to create the stream at all.
-Its limit is three quarters of that volume's free space.
+The engine's own tracker, knowledge base, vector index, usage history and chat
+each keep a log on the stream, and each log's byte ceiling is **reserved** on
+the volume holding `stream.store_dir` when its stream is created: the embedded
+broker grants a ceiling in full, up front, or refuses to create the stream at
+all. Its limit is three quarters of that volume's free space.
 
-The node sizes the four ceilings together to fit half of that limit, and
+The node sizes the five ceilings together to fit half of that limit, and
 never below 1 GiB each, so:
 
-- **A first boot needs at least 5⅓ GiB free on that volume.** Three quarters
-  of 5⅓ GiB is the four 1 GiB floors. Below it the node refuses to boot with an
+- **A first boot needs at least 6⅔ GiB free on that volume.** Three quarters
+  of 6⅔ GiB is the five 1 GiB floors. Below it the node refuses to boot with an
   error naming the log it could not reserve, the bytes it needed, the bytes
   the broker had left, and the Tier A field that sets the ceiling.
 - **More room buys longer logs, up to a point.** Unset, the mutation log and
   the vector changelog each ask for a quarter of the free space (4..64 GiB),
-  the knowledge base's log for a quarter of the mutation log's, and the usage
-  log for a fixed 1 GiB — its size is a count of node-days rather than a rate,
-  so more disk buys it nothing. They are scaled down together whenever they
-  ask for more than half the free space, which on a first boot is every volume
-  with less than about 290 GiB free (at their 64 GiB clamps the four ask for
-  145 GiB); from there up each log gets what it asked for.
+  the knowledge base's log for a quarter of the mutation log's, the usage log
+  for a fixed 1 GiB — its size is a count of node-days rather than a rate, so
+  more disk buys it nothing — and the chat log for 8 GiB capped at a quarter
+  of the mutation log's share (a sixteenth of the free space, so the full
+  8 GiB from 128 GiB free), which on a small volume keeps the vector
+  changelog's room for a model change clear of the headroom alarm. Chat's does
+  not follow the mutation log's as the knowledge base's does, so if you set
+  `stream.tracker_log_max_bytes` for a long blocked trim, set
+  `stream.chat_log_max_bytes` for the same horizon (about 30 MB a day at the
+  declared census) or the chat log fills first. They are scaled down
+  together whenever they ask for more than that half — half of three
+  quarters, so three eighths of the free space — which on a first boot is
+  every volume with less than about 408 GiB free (at their clamps the five
+  ask for 153 GiB, three eighths of 408); from there up each log gets what it
+  asked for.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
-  `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes` or
-  `stream.usage_log_max_bytes` later,
+  `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
+  `stream.usage_log_max_bytes` or `stream.chat_log_max_bytes` later,
   changes nothing about streams that already exist; `crewlet retention
   set-capacity` is what changes a running log's ceiling. A log created later —
   one a new version adds — is sized from what the existing logs' ceilings leave
@@ -281,20 +290,24 @@ whatever else it does, because an in-memory member creates every stream it
 provisions in memory. A leaf and a client of an external cluster hold no
 streams of their own, so both are refused a `store_dir`; see
 [Satellite nodes](satellite-nodes.md). For a member, an in-memory stream is
-tolerable only for a company whose tracker and knowledge base are both a
-vendor's; on either native backend the engine refuses it outright, as the next
-paragraph describes.
+tolerable only for a company whose tracker, knowledge base and chat are all a
+vendor's (or `none`); on any native backend the engine refuses it outright, as
+the next paragraph describes.
 
 **On the native backends it is the company's own record, and it is
-refused.** With `tracker.backend: native` or `knowledge.backend: native` (the
-defaults), every work item and every page lives in a log on that stream. An
-unset `store_dir` would mean the first restart recreates those logs empty, and
-a node whose rows are ahead of a log that restarted from nothing stops serving
+refused.** With `tracker.backend: native`, `knowledge.backend: native` or a
+chat that resolves to `native` (all three are the defaults), every work item,
+every page and every message lives in a log on that stream. An unset
+`store_dir` would mean the first restart recreates those logs empty, and a
+node whose rows are ahead of a log that restarted from nothing stops serving
 for good. So the engine refuses to boot that pairing, and `crewlet validate`
-refuses it when given both documents, naming `stream.store_dir`. Either
-backend is enough: a company on Jira whose knowledge base is the engine's own,
-which is the default without Confluence, is refused the same way. Only a
-company on vendors for both can run an in-memory member.
+refuses it when given both documents, naming `stream.store_dir`. Any one of
+the three is enough: a company on Jira whose knowledge base is the engine's
+own, which is the default without Confluence, is refused the same way — and
+so is a company on Jira and Confluence that declares no Mattermost or Slack,
+because its chat is then the engine's own by default. Only a company whose
+tracker, knowledge base and chat are all a vendor's (or `none`) can run an
+in-memory member.
 
 **Divide `store_max_bytes` when several engines share a filesystem.** Every
 stream ceiling on the embedded broker is a *reservation*: the broker refuses to
@@ -417,13 +430,13 @@ than something a reconnect policy should paper over.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the seven engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the four state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`), the five state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
-`CREWLET_PAGES_LOG`, `CREWLET_USAGE_LOG`), a stream per extra subject namespace a company
+`CREWLET_PAGES_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_CHAT_LOG`), a stream per extra subject namespace a company
 publishes under, one durable consumer per seat mailbox (an ordinary API
-call, measured at 1.7 ms), the twenty-one `crewlet_*` KV buckets:
+call, measured at 1.7 ms), the twenty-two `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
-leases and the fencing epochs, and eighteen in the fleet store holding the
+leases and the fencing epochs, and nineteen in the fleet store holding the
 shared records — the object store's backend record and its collector's report
 among them — and, on the default `nats` object store, the `crewlet_files`
 object store bucket (its stream is `OBJ_crewlet_files`). A credential
@@ -548,7 +561,7 @@ indistinguishable, which is the one question a reader has about a fleet that
 did not form. Lines carry `server=` from `stream.cluster.name`'s member
 identity; a solo broker has no name to carry and the attribute is empty.
 
-**And it needs room for the state logs.** The three logs reserve their byte
+**And it needs room for the state logs.** The five logs reserve their byte
 ceilings against the account's JetStream storage limit when their streams are
 created, and the node sizes them to half of what that limit has left. An
 untiered limit counts every replica, so a `replicas: 3` fleet needs three
@@ -994,7 +1007,7 @@ What a fleet gets right, each of which was a real defect before:
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* Shared counters in the coordination slot, one slot per calendar window, so an org cap of 500 k a day is 500 k a day across the fleet — and they cover **every** completion the engine makes on a seat's behalf, the turn loop (the round-cap extension judge included), the coding sandbox, the turn-start context assembly and the auxiliary learning passes alike.
 - *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering, skill curation and episode compaction are [singleton duties](../concepts/seat-ownership.md#singleton-duties) (they share one `worker:` lease, so a fleet runs each of them on exactly one node), along with the scheduler tick, the sandbox waiter, the seat-subscription walk and the retention sweeps. Each lease is claimed per tick: a node that stops gracefully gives its duties back as it exits, and one that dies mid-duty hands them back by lapsing, which for the longer duties takes up to their TTL (45 minutes for the retention sweep, three hours for the learning passes).
-- *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one — and so are the removal markers every bucket with no age keeps, which the duty sweeps after three hours so a listing never re-reads every record the company has ever removed. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
+- *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one — and so is the chat read state of a person who has left the org chart, which no age could tell from a person who simply has not opened chat for a while, forgotten 24 hours after a sweep first finds them gone; and so are the removal markers every bucket with no age keeps, which the duty sweeps after three hours so a listing never re-reads every record the company has ever removed. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
 The one thing that is still per-process: `max_concurrent`. Tier A's
 `node.max_concurrent` (default 32) is the gate every agent turn takes a slot
@@ -1053,7 +1066,7 @@ The load-bearing tables:
 - **`synthesized_skills`** + **`synthesized_skill_versions`** — auto-drafted skills the agent can load, plus their refinement history.
 - **`counterparty_profiles`** — per-`(observer, subject, platform)` profiles built from observed interactions.
 - **`agent_onboarding_markers`** — onboarding bookkeeping, one row per agent.
-- **`crewlet_events`** — the observability event store. A phase completion's token counts are promoted out of its payload into columns, so the spend rollup reads nine narrow values a row instead of hauling every prompt and response across the driver — which is what lets it fold the whole window rather than a capped prefix of it.
+- **`crewlet_events`** — the observability event store. A phase completion's token counts are promoted out of its payload into columns, so the spend rollup reads nine narrow values a row instead of hauling every prompt and response across the driver — which is what lets it fold the whole window rather than a capped prefix of it. Every row names the node that published it (`node`), which on a data node keeping a stateless node's events in [custody](#custody-the-rows-of-a-node-without-data) is not the node holding it.
 - **`crewlet_event_parties`** — which agents each event involves, one row per pair. It is an *index* of the table above rather than state of its own: the dashboard's per-seat activity filter matches on it, and it exists because the engine's planner does no OR-optimization, so the same predicate spread across five columns would scan the log instead of seeking. Swept on the same horizon as the events it points at.
 - **`conversation_sessions`** — the [conversation ledger](../concepts/conversation-sessions.md): what this seat already said in one thread, rendered back into that conversation's next turn.
 - **`company_config`** — the revision payloads. Which one is *current* is the fleet's business, and lives in coordination; see the [control plane](../concepts/control-plane.md).
@@ -1090,11 +1103,13 @@ dimensions (`event_type`, `source`, `category`, `agent_id`, `agent_role`,
 `task_id`, `channel_id`, `sender`, `trace_id`) plus a JSON column for
 everything else.
 
-That inline write is also why a fleet's event store is *per node*: each holds
-what it published. A history read is therefore asked of **every live node**
-at query time — the node serving the dashboard reads its own store and
-scatters the same question to its peers, merges what comes back, and names
-any node that did not answer in the answer's `coverage` (see
+That inline write is also why a fleet's event store is *per node*: each data
+node holds what it published, and what it keeps for a node without `data`
+([custody](#custody-the-rows-of-a-node-without-data), below). A history read is
+therefore asked of **every live data node** at query time — the node serving
+the dashboard reads its own store and scatters the same question to its peers,
+merges what comes back, and names any node that did not answer in the answer's
+`coverage` (see
 [Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history)).
 A node that has LEFT the fleet takes its turn-level detail with it; the
 aggregates — spend, turn counts, page reads — survive it in the replicated
@@ -1131,8 +1146,15 @@ one** of them keeps each one:
    its copy the same way at its next boot.
 
 That last step is what keeps every figure derived from a node's own log
-honest: the `usage` domain sums each node's day, so a batch two data nodes
+honest: the `usage` domain sums each data node's day, so a batch two data nodes
 kept would bill a stateless node's spend twice.
+
+**A kept row still says where it happened.** Every row of the event log names
+the node that *published* it, in its `node` column and as `node` on every
+event the API returns — the envelope's own origin, not the data node holding
+the row. So a turn's page names the agent host it ran on rather than the data
+node that happens to keep its events, and an operator reading that host's logs
+finds the turn there.
 
 Until the node that lost the claim has settled its copy — at once when its
 claim is answered, and otherwise at its next pass, a minute later or as soon
@@ -1162,7 +1184,7 @@ from that map — a guard test fails if the two drift.
 | `a2a` | `a2a_channel_closed`, `a2a_channel_opened`, `a2a_message_sent` |
 | `decision` | `contribution_received`, `contribution_requested`, `decision_requested`, `decision_resolved` |
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `knowledge_read`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
-| `lifecycle` | `backup_requested`, `config_revision_activated`, `config_revision_applied`, `operator_acted`, `org_started`, `org_stopped`, `seat_paused`, `seat_resumed` |
+| `lifecycle` | `backup_requested`, `chat_erased`, `chat_pruned`, `config_revision_activated`, `config_revision_applied`, `operator_acted`, `org_started`, `org_stopped`, `seat_paused`, `seat_resumed` |
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped` |
 | `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
 | `task` | `sandbox_clarification_requested`, `sandbox_run_answered`, `sandbox_run_completed`, `sandbox_run_failed`, `sandbox_run_started`, `scheduled_task_fired`, `task_assigned` |

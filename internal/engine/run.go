@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -81,6 +82,11 @@ type Engine struct {
 	// metrics is the process's one recorder, from [Options.Metrics].
 	metrics *metrics.Recorder
 
+	// chatLive is [Options.ChatLive], held so startStateLog can hand it to
+	// the chat applier and the native working indicator can be raised on
+	// it ([Engine.applyChatStatus]). Nil is a documented no-op.
+	chatLive ChatLive
+
 	// searching is how many knowledge scans this node is running right
 	// now — the gauge behind `crewlet.tracker.search.concurrency`. On the
 	// ENGINE rather than on the searcher because the searcher is rebuilt
@@ -111,7 +117,7 @@ type Engine struct {
 
 	// posture reports this node's config lag, from whoever owns the
 	// control plane. Nil publishes none — see [Engine.SetPosture].
-	posture atomic.Pointer[func(context.Context) string]
+	posture atomic.Pointer[func(context.Context) (string, error)]
 
 	// onApplied is run after each apply publishes its epoch, for the
 	// surfaces derived from configuration. Nil runs nothing — see
@@ -572,6 +578,15 @@ type Engine struct {
 	// chart per tick instead.
 	usage *usageLoop
 
+	// chatPrune is the chat domain's retention duty: the fleet singleton
+	// that publishes the cutoff every node deletes below. On the ENGINE
+	// for the reason the trim and the embedding pass are — it is a loop
+	// this process runs, and rebuilding it on an apply would leave two
+	// loops publishing one company's ladder of cutoffs. It reads the
+	// current epoch's horizon per tick instead, so a retention change
+	// lands without a restart.
+	chatPrune *chatPrune
+
 	// usageEvery is Options.usageEvery.
 	usageEvery time.Duration
 
@@ -731,6 +746,30 @@ type Options struct {
 	// rather than waiting out a real tick.
 	SandboxPollInterval time.Duration
 
+	// ChatLive is the engine's own chat's live half: where a committed
+	// chat record is announced, and the poster a native seat's working
+	// indicator is raised on. It is an OPTION rather than a setter because
+	// of WHEN the applier is built.
+	//
+	// Whichever of [New] and [Engine.startNativeFor] — a node handed its
+	// first company by an apply — first starts the native runtime brings
+	// the state log up (startNative -> startStateLog), and the applier
+	// takes its observer at construction — so by the time a caller holds an
+	// *Engine to call a setter on, the thing that would have to be told may
+	// already exist and be running. Every other late seam here
+	// (SetPosture, the config writer) is installed after New precisely
+	// because nothing reads it during one.
+	//
+	// The process builds and starts the hub FIRST and hands it here, which
+	// is what [api.EngineChatLive] documents and why every seam that hub
+	// reads through is a function: none of them has to exist yet, this one
+	// included.
+	//
+	// Nil is legal and is what a company off native chat has: the applier
+	// still writes every row, and the push and the indicator are what is
+	// absent.
+	ChatLive ChatLive
+
 	// Environment is what a company's `${VAR}` references fall back to
 	// behind the secret store, and what the per-run endpoints' settings are
 	// read from ([sandbox.BuildOtelReceiver], [mcpbridge.Build]). Nil is
@@ -770,6 +809,21 @@ type Options struct {
 	seatRetryBase time.Duration
 }
 
+// ChatLive is what the process hands the engine for its own chat's live half.
+//
+// ONE VALUE FOR BOTH HALVES, because both are one hub: the room a person is
+// watching is where a committed message is pushed AND where "is thinking…"
+// appears. Two options could be handed two objects, and then one of them is a
+// poster no socket is attached to — an indicator raised where nobody can see
+// it, with nothing anywhere to say so.
+//
+// DECLARED HERE, by the consumer, and kept to what the engine calls: the
+// applier's observer and the indicator's poster. The api's hub implements both.
+type ChatLive interface {
+	chat.Observer
+	notify.StatusPoster
+}
+
 // New assembles an engine.
 //
 // Config errors surface HERE, before anything is dialled or claimed. A node
@@ -802,9 +856,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 	// THE CROSS-TIER RULES, before anything is opened. Each tier validated
 	// alone on its way in; what neither could see is the other, and the one
-	// rule that needs both (a native tracker or knowledge base whose log
-	// would live on an in-memory stream) produces a node that refuses to
-	// serve permanently rather than one that fails on the way up.
+	// rule that needs both (a native tracker, knowledge base or chat whose
+	// log would live on an in-memory stream) produces a node that refuses
+	// to serve permanently rather than one that fails on the way up.
 	if err := config.CheckTiers(opts.Bootstrap, opts.Company); err != nil {
 		return nil, fmt.Errorf("engine: %w", err)
 	}
@@ -937,6 +991,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
 		metrics:             opts.Metrics,
+		chatLive:            opts.ChatLive,
 		mode:                mode,
 		incarnation:         incarnation,
 		id:                  nodeID,
@@ -1026,8 +1081,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// is what stops it if the boot goes no further.
 	e.startDataView(ctx)
 
-	// THE SKILL SYNC IS BUILT BEFORE THE NATIVE BACKENDS, whose page
-	// projection nudges it from a post-commit hook: a nudge with nothing to
+	// THE SKILL SYNC IS BUILT BEFORE THE NATIVE BACKENDS, whose pages
+	// applier nudges it from its post-commit half: a nudge with nothing to
 	// land on would be lost. Building it starts nothing.
 	if err = e.newSkillSync(nodeID); err != nil {
 		return nil, fmt.Errorf("engine: tool skills: %w", err)
@@ -1146,8 +1201,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		if err := e.startSandboxFor(ctx, company); err != nil {
 			return nil, fmt.Errorf("engine: sandbox: %w", err)
 		}
-		// BEFORE equip too, and for exactly the same reason: the ten
-		// native tracker and knowledge tools are registered only where
+		// BEFORE equip too, and for exactly the same reason: the native
+		// tracker, knowledge-base and chat tools are registered only where
 		// their halves exist, so a node that equipped first would run a
 		// company on the native backends whose seats have no way to read
 		// or write them.
@@ -1171,6 +1226,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// AND THE CONTAINERS, for the same reason and on the same terms —
 		// see [Engine.applyContainers], and the bug it fixes.
 		e.applyContainers(ctx, company, opts.ActivatedAt)
+		// AND THE UNIT ROOMS, which are the same projection into chat: a
+		// unit that declares a `channel` gets it, with its subtree in it.
+		// Same terms again — stamped with the activation, best effort, per
+		// unit, retried by the next apply.
+		e.applyUnitRooms(ctx, company, opts.ActivatedAt)
 		// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the
 		// epoch is current, and one that found an empty registry would run
 		// a seat with no tools at all — a company that boots cleanly and
@@ -1219,7 +1279,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// host's own doc asks for exactly this and the binding did the
 		// opposite.
 		Seats: func() []placement.Seat { return e.Company().Seats() },
-		// A seat whose mailbox attached before this node's projection had
+		// A seat whose mailbox attached before this node's copy had
 		// caught up would answer "there is no such item" to its own
 		// tools — and that is an answer a seat ACTS on: it files the
 		// duplicate, it tells a person their link is dead. So a node
@@ -1227,7 +1287,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// until its copy of the company's records is current.
 		//
 		// Trivially true on a company running the vendor backends, which
-		// have no projection to wait for.
+		// have no copy here to wait for.
 		//
 		// AND NEVER IN A MAINTENANCE MODE, where this same host still
 		// runs for the presence it renews — see [Engine.seatsAdmitted].
@@ -1935,6 +1995,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopSeatPauses()
 	e.stopEmbedding()
 	e.stopUsage()
+	e.stopChatRetention()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing
 	// it while a seat was still finishing a turn would tell a coordinator
@@ -1975,13 +2036,13 @@ func (e *Engine) teardown(ctx context.Context) {
 	// this node can claim one again once it is given back.
 	e.releaseDuties(ctx)
 	e.stopCooldownRefresh()
-	// BEFORE the native backends, whose page projection its walk reads, and
+	// BEFORE the native backends, whose applied pages its walk reads, and
 	// before backends.Close, which closes the broker its nudge listens on.
 	e.stopSkillSync(ctx)
 	e.stopServingEstate(ctx)
 	e.stopServingFleetBroker(ctx)
 	// BEFORE backends.Close, for the same reason and with more at stake:
-	// the projectors and the indexer both write, and an apply landing
+	// the apply loops and the indexers both write, and an apply landing
 	// after the close would fail its transaction mid-batch and leave the
 	// cursor ahead of the rows it claims to describe.
 	e.stopNative(ctx)
@@ -2478,7 +2539,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 // node reporting work it finished a minute ago, and the whole value of
 // carrying this fleet-wide is that an operator can see where the work
 // actually is right now.
-func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
+//
+// AN ERROR MEANS IT DID NOT ANSWER, and the beat then publishes nothing —
+// see [seat.Config].Status. The decision is made here, where the reads are,
+// rather than by the beat's clock after this returns: only this frame knows
+// which of its reads a dead context could have cut short.
+func (e *Engine) nodeStatus(ctx context.Context) (coord.NodeStatus, error) {
 	// The MCP rows are this process's own record of what it started, read
 	// under a lock and never from a child.
 	status := coord.NodeStatus{
@@ -2493,30 +2559,44 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 			status.Draining = host.Draining()
 		}
 	}
-	// The native replication loops — the wiki's projector and every
-	// state-log domain's applier — so an operator asking why a fresh node
-	// holds no seats can see the answer in the fleet view rather than
-	// inferring it from an empty claim list. See
-	// [coord.NodeStatus.ProjectionsReady] for why this is not a readiness
-	// signal.
+	// The native replication loops — every state-log domain's applier —
+	// so an operator asking why a fresh node holds no seats can see the
+	// answer in the fleet view rather than inferring it from an empty
+	// claim list. See [coord.NodeStatus.ProjectionsReady] for why this is
+	// not a readiness signal.
 	for _, loop := range e.NativeStatus(ctx) {
 		status.ProjectionsTotal++
 		if loop.Ready {
 			status.ProjectionsReady++
 		}
 	}
+	// A DOMAIN READ THE BUDGET CUT SHORT counts its domain as not ready, so
+	// a count taken past the deadline understates a healthy node — and the
+	// count cannot say which of its rows the deadline reached. Checked once
+	// the reads are done, which may refuse a count that finished right at
+	// the deadline and never publishes one that did not.
+	if err := ctx.Err(); err != nil {
+		return coord.NodeStatus{}, fmt.Errorf("node status: the beat's budget ended "+
+			"while the replication positions were being read: %w", err)
+	}
 	if fn := e.posture.Load(); fn != nil {
-		posture := (*fn)(ctx)
-		// A posture read that ran out of the beat's budget did not
-		// answer — what came back is the reporter's fail-open default,
-		// which is "serve". Publishing that would put a confident
-		// healthy posture on a node whose control plane is unreadable,
-		// so an unanswered read says nothing at all.
-		if ctx.Err() == nil {
+		// A POSTURE READ THAT DID NOT ANSWER SAYS NOTHING, however it
+		// failed. The reporter's fail-open answer is serve, and
+		// publishing it would put a confident healthy posture on a node
+		// whose control plane is unreadable — so only an answered read is
+		// carried, and the rest of the status still is: this node's own
+		// in-flight count and drain state do not stop being true because
+		// the control plane cannot be read.
+		//
+		// The reporter's error, not this frame's clock, says which it
+		// was. Checking the beat's context caught only the read that
+		// overran the budget; a plane that refused at once came back
+		// fast, before the deadline, with serve.
+		if posture, err := (*fn)(ctx); err == nil {
 			status.Posture = posture
 		}
 	}
-	return status
+	return status, nil
 }
 
 // StartedAt is when this engine was built, which is when the node started.
@@ -2541,8 +2621,11 @@ func (e *Engine) StartedAt() time.Time { return e.startedAt }
 // so a posture supplied late starts appearing within one interval rather
 // than at the next restart.
 //
-// The context is the beat's, already bounded — see [seat.Config].Status.
-func (e *Engine) SetPosture(fn func(context.Context) string) { e.posture.Store(&fn) }
+// The context is the beat's, already bounded — see [seat.Config].Status. An
+// error means the posture was not read, and the heartbeat then publishes
+// none rather than whatever answer came back with it: hand it
+// [Reconciler.ReadPosture], never the fail-open [Reconciler.Posture].
+func (e *Engine) SetPosture(fn func(context.Context) (string, error)) { e.posture.Store(&fn) }
 
 // SetAdmits supplies the gate that decides whether this node takes new
 // inbound work.

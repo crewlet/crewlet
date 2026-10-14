@@ -28,7 +28,18 @@ Organization
     │                                       that key. See "A unit's id" below)
     ├── KnowledgeRefs []string
     ├── Channel string                     (team channel on the company's chat
-    │                                       surface, inherited by children)
+    │                                       surface, inherited by children. An
+    │                                       ADDRESS: lowercase letters, digits, `-`
+    │                                       and `_`, up to 64 — `backend`, never
+    │                                       `#backend` or `C_BACKEND`. On native
+    │                                       chat the engine opens this room for
+    │                                       the unit that DECLARES it — a child
+    │                                       that only inherits it gets no room of
+    │                                       its own; its seats are in the
+    │                                       parent's, as its subtree. A room
+    │                                       belongs to ONE unit there, so two
+    │                                       units declaring one channel is
+    │                                       refused — an admission rule)
     ├── Project string                     (tracker identity: lead-fallback routing,
     │                                       the project the team files under, and the
     │                                       unit an item filed into that project with
@@ -315,7 +326,7 @@ roles:
     handle: sr-eng        # Override auto-derived "senior-engineer"
 ```
 
-**Removing a seat, and adding one back.** Because identity is the handle, what a removed agent seat leaves behind is keyed by it too. Its **mailbox**, and the mail still addressed to it, is kept for 24 hours after the seat leaves the active revision and then retired, so a seat restored within a day finds its backlog and a seat added under the same handle later starts with an empty mailbox. Its **coding runs** are kept for the same 24 hours and ended when the mailbox is retired, each one announced as lost. Its **memory** (diary, episodes, counterparty profiles, onboarding markers) is kept, and because it is keyed by the handle or by the agent id derived from it, a seat added again under the same handle reattaches to it. Renaming a seat's handle is a removal of the old handle and an addition of the new one. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
+**Removing a seat, and adding one back.** Because identity is the handle, what a removed agent seat leaves behind is keyed by it too. Its **mailbox**, and the mail still addressed to it, is kept for 24 hours after the seat leaves the active revision and then retired, so a seat restored within a day finds its backlog and a seat added under the same handle later starts with an empty mailbox. Its **coding runs** are kept for the same 24 hours and ended when the mailbox is retired, each one announced as lost. Its **memory** (diary, episodes, counterparty profiles, onboarding markers) is kept, and because it is keyed by the handle or by the agent id derived from it, a seat added again under the same handle reattaches to it. A removed **human** seat's chat read state — how far the person had read in each room, what they had muted, their do-not-disturb — is kept for the same 24 hours and then forgotten, so a person restored within a day finds every room as they left it. Renaming a seat's handle is a removal of the old handle and an addition of the new one. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
 
 ### Names and handles are unique
 

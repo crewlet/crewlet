@@ -26,12 +26,13 @@ import (
 //
 // Every other writer of a derived domain in this engine is a fleet singleton,
 // because every node could compute the same value and paying for it N times
-// is waste. That is false here: each node's event log holds only what ITS
-// seats did, so each node is the only one that can derive its own day. The
-// node in the subject is what makes N writers safe — no two nodes ever
-// publish on one subject — and it is why a node that leaves the fleet takes
-// nothing with it: what it published stays on the stream and in every peer's
-// rows for [History].
+// is waste. That is false here: each data node's event log holds only what it
+// published and what it keeps in custody for a node without `data`, so each
+// data node is the only one that can derive its own day. The node in the
+// subject is what makes N writers safe — no two nodes ever publish on one
+// subject — and it is why a node that leaves the fleet takes nothing with it:
+// what it published stays on the stream and in every data node's rows for
+// [History].
 //
 // # What a tick does
 //

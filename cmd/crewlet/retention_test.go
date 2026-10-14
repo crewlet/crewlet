@@ -127,17 +127,21 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 					_ = json.NewEncoder(w).Encode(refusal.Body)
 					return
 				}
-				result := engine.GateResult{Node: r.PathValue("node"), OpID: opID,
-					Domains: []engine.DomainGate{
-						{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG",
-							OpID: opID + ".evict.tracker", Outcome: statelog.OutcomeApplied,
-							Position: statelog.Position{
-								Stream: "CREWLET_TRACKER_LOG", Seq: 918280002}},
-						{Domain: "pages", Stream: "CREWLET_PAGES_LOG",
-							OpID: opID + ".evict.pages", Outcome: statelog.OutcomeApplied,
-							Position: statelog.Position{
-								Stream: "CREWLET_PAGES_LOG", Seq: 4410}},
-					}}
+				// EVERY LOG A REAL NODE WRITES A GATE RECORD TO, from the
+				// engine's own register: a list written here described a
+				// node with two identity logs after chat made it three.
+				result := engine.GateResult{Node: r.PathValue("node"), OpID: opID}
+				for i, d := range engine.Domains() {
+					if !d.ClaimsIdentity() {
+						continue
+					}
+					stream := d.Stream().Name
+					result.Domains = append(result.Domains, engine.DomainGate{
+						Domain: d.Name(), Stream: stream,
+						OpID: opID + ".evict." + d.Name(), Outcome: statelog.OutcomeApplied,
+						Position: statelog.Position{Stream: stream,
+							Seq: 918280002 + uint64(i)}})
+				}
 				if n.gateResult != nil {
 					result.Domains = n.gateResult.Domains
 				}
@@ -397,11 +401,11 @@ func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
 	report.Alarms = []statelog.Alarm{
 		{
 			Kind:   statelog.KindBackupAge,
-			Detail: "no verified backup has been recorded, and the policy asks for one every 24h",
+			Detail: "no verified backup of this log has been recorded, and the policy asks for one every 24h",
 			Remedy: "Run `crewlet backup` against any node.",
 			Domains: []statelog.AlarmDomain{
-				{Domain: "tracker", Detail: "the trim has not advanced for 46h", Term: statelog.TermBackupFloor},
-				{Domain: "pages", Detail: "the trim has not advanced for 46h", Term: statelog.TermBackupFloor},
+				{Domain: "tracker", Detail: "no verified backup of this log has been recorded, and the policy asks for one every 24h", Term: statelog.TermBackupFloor},
+				{Domain: "pages", Detail: "the newest verified backup of this log is 46h old, and the policy asks for 24h", Term: statelog.TermBackupFloor},
 			},
 		},
 		{
@@ -418,9 +422,9 @@ func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
 		t.Fatal("two active alarms exited zero")
 	}
 	for _, want := range []string{
-		"backup_age: no verified backup has been recorded",
-		"  tracker (backup_floor): the trim has not advanced for 46h",
-		"  pages (backup_floor): the trim has not advanced for 46h",
+		"backup_age: no verified backup of this log has been recorded",
+		"  tracker (backup_floor): no verified backup of this log has been recorded",
+		"  pages (backup_floor): the newest verified backup of this log is 46h old",
 		"log_headroom on vectors: 3% of the log's byte ceiling for ordinary writes is left",
 	} {
 		if !strings.Contains(stderr, want) {
@@ -1079,9 +1083,17 @@ func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a node one record short of the floor was refused: %v", err)
 	}
-	if !strings.Contains(stdout, "tracker: applied at CREWLET_TRACKER_LOG") ||
-		!strings.Contains(stdout, "pages: applied at CREWLET_PAGES_LOG") {
-		t.Errorf("the readmission did not report landing on both logs:\n%s", stdout)
+	// EVERY IDENTITY-CLAIMING LOG, read from the engine that answered: a
+	// readmission that stopped landing on one of them — chat's, the third —
+	// would otherwise pass a check that named the first two.
+	for _, d := range engine.Domains() {
+		if !d.ClaimsIdentity() {
+			continue
+		}
+		if want := d.Name() + ": applied at " + d.Stream().Name; !strings.Contains(stdout, want) {
+			t.Errorf("the readmission did not report landing on every log, "+
+				"missing %q:\n%s", want, stdout)
+		}
 	}
 	// AND THE WATERMARK IS READ FROM A REAL NODE'S ANSWER, which is the
 	// one encoding every fixture here can drift from.

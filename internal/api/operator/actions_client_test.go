@@ -4,15 +4,18 @@ import (
 	"context"
 	"slices"
 	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // companyTools are the catalogue tools whose change rewrites what EVERY seat's
@@ -43,7 +46,11 @@ var companyTools = []string{"write_project", "write_work_catalogue"}
 //   - every argument is a property of that tool's schema, and every property
 //     the schema requires is one the row lets a screen send;
 //   - every row declares its scope, and `company` is exactly the tools that
-//     rewrite what every seat's tracker means.
+//     rewrite what every seat's tracker means;
+//   - every row's `domain` is the log its tool's write lands on ([actionLog]),
+//     or null for one that lands on none. A wrong one is silent and costs
+//     read-your-writes: a post filed under `null` raises no chat floor, so the
+//     room's next read may come from before the post.
 func TestEveryActionTheDashboardTakesIsOneTheActTransportServes(t *testing.T) {
 	t.Parallel()
 	s := fullSurface(t)
@@ -120,7 +127,61 @@ func TestEveryActionTheDashboardTakesIsOneTheActTransportServes(t *testing.T) {
 		if len(scope) != 1 || scope[0] != want {
 			t.Errorf("%s declares scope %q, want %q", tool, scope, want)
 		}
+		// A `null` domain carries no string, so it reads as no value at all.
+		domain := ""
+		if named := clientsource.Field(row, "domain"); len(named) == 1 {
+			domain = named[0]
+		}
+		if log := actionLog(tool); domain != log {
+			t.Errorf("%s declares domain %s and its write lands on %s — the "+
+				"floor a press raises is the wrong log's, so the next read can "+
+				"come from before it", tool, orNull(domain), orNull(log))
+		}
 	}
+}
+
+// orNull spells a row's domain as the table writes it.
+func orNull(domain string) string {
+	if domain == "" {
+		return "null"
+	}
+	return strconv.Quote(domain)
+}
+
+// attentionTools are the chat tools whose write is NOT a record on the chat
+// log: a person's read cursors, mutes and do-not-disturb are a coordination
+// record ([chat.MarkChatReadTool]), answered `applied` at no position, so
+// there is no floor for a read to wait on.
+var attentionTools = []string{chat.MarkChatReadTool}
+
+// actionLog is the state log a tool's write lands on, by the family the tool
+// is registered under — the work tools on the tracker's, the page tools on
+// the knowledge base's, the chat tools on chat's — or "" for a write that
+// lands on none: a pause, a steer, a run's answer, a person's attention.
+//
+// BY FAMILY RATHER THAN A TABLE OF TOOLS, so a tool added to a family is held
+// to that family's log without anybody writing its name here; the one carve-
+// out is declared above with its reason.
+func actionLog(tool string) string {
+	in := func(family ...[]string) bool {
+		for _, names := range family {
+			if slices.Contains(names, tool) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case slices.Contains(attentionTools, tool):
+		return ""
+	case in(tracker.Tools(), tracker.OperatorOnlyTools()):
+		return "tracker"
+	case in(builtin.PageTools()):
+		return "pages"
+	case in(chat.Tools(), chat.OperatorOnlyTools()):
+		return "chat"
+	}
+	return ""
 }
 
 // THE DASHBOARD KNOWS EXACTLY THE REFUSALS THE ACT TRANSPORT ANSWERS.
@@ -227,6 +288,13 @@ func fullSurface(t *testing.T) *operator.Server {
 				return pages.Actor{}, nil
 			},
 		},
+		Chat: builtin.ChatDeps{
+			Reader:  struct{ builtin.ChatReader }{},
+			Writer:  struct{ builtin.ChatWriter }{},
+			Search:  struct{ builtin.ChatSearcher }{},
+			Cursors: struct{ builtin.ChatCursors }{},
+			Actor:   operator.ChatActor(nil, nil),
+		},
 		Knowledge: struct{ builtin.KnowledgeSearcher }{},
 		Org:       func() *org.Organization { return nil },
 		Runs:      builtin.RunDeps{Desk: struct{ builtin.RunDesk }{}, Actor: actor},
@@ -240,6 +308,16 @@ func fullSurface(t *testing.T) *operator.Server {
 	})
 	if s == nil {
 		t.Fatal("a surface with every seam wired serves nothing")
+	}
+	// EVERY CHAT GESTURE A PERSON MAKES IS AMONG THEM, the read-state flush
+	// included: the chat screen writes through nothing else (ADR-0024), so a
+	// fixture that dropped them would refuse every chat row ACTIONS gains as
+	// "serves no such tool" while a real company serves it.
+	for _, name := range append(chat.Tools(), chat.OperatorOnlyTools()...) {
+		if !slices.Contains(s.Tools(), name) {
+			t.Fatalf("the full surface serves %v, without the chat tool %s",
+				s.Tools(), name)
+		}
 	}
 	return s
 }

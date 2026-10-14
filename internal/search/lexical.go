@@ -364,7 +364,7 @@ func (x *Indexer) Remove(ctx context.Context, source, id string) error {
 	return x.db.Tx(ctx, func(tx *sql.Tx) error {
 		// The postings cascade on kb_docs, so one delete is the whole
 		// removal — and it is the reason kb_docs has no foreign key back
-		// to the source tables: the projector deletes a source row and the
+		// to the source tables: the applier deletes a source row and the
 		// indexer deletes the index row, in that order, and a cascade from
 		// the source would delete a posting list mid-write.
 		_, err := tx.ExecContext(ctx,

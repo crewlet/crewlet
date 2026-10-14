@@ -83,10 +83,10 @@ const (
 // decodes, is applied and is dropped by no gate exactly as the small one is.
 func paddedBarrierOn(t *testing.T, running *runningLog, pad int) {
 	t.Helper()
-	encode := barrierEncoder(running.domain)
-	if encode == nil {
-		t.Fatalf("%s has no barrier encoding to put a record on its log with",
-			running.domain.Name())
+	encode, err := barrierEncoderFor(running.domain)
+	if err != nil || encode == nil {
+		t.Fatalf("%s has no barrier encoding to put a record on its log with (%v)",
+			running.domain.Name(), err)
 	}
 	body, err := encode(statelog.Envelope{
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
@@ -135,9 +135,12 @@ func refusedFull(err error) bool {
 func requireOrdinaryRefused(t *testing.T, running *runningLog) {
 	t.Helper()
 	name := running.domain.Name()
+	encode, err := barrierEncoderFor(running.domain)
+	if err != nil {
+		t.Fatalf("%s's barrier encoder: %v", name, err)
+	}
 	index, err := statelog.NewReadIndex(running.domain, running.spec, running.log, running.reserve,
-		barrierEncoder(running.domain),
-		func() uint32 { return running.runner.Committed().Generation }, nil)
+		encode, func() uint32 { return running.runner.Committed().Generation }, nil)
 	if err != nil {
 		t.Fatalf("build %s's read index: %v", name, err)
 	}
@@ -254,10 +257,11 @@ func TestAnEvictionPastTheReserveIsSentToSetCapacity(t *testing.T) {
 // THE REPORT AND THE GAUGE MEASURE A RESERVED LOG AGAINST ITS ORDINARY CEILING.
 //
 // Both read the running logs the engine built, so this is what an operator's
-// `crewlet retention status` and a collector's graph show: on the tracker and
-// pages logs the reserve beside the ceiling and a headroom that reaches zero
-// where ordinary writes start being refused, and on the vector changelog —
-// which keeps no reserve — neither. Either surface measuring against the
+// `crewlet retention status` and a collector's graph show: on every log that
+// claims identity — the tracker's, the pages log and chat's — the reserve
+// beside the ceiling and a headroom that reaches zero where ordinary writes
+// start being refused, and on the compacted logs — which keep no reserve —
+// neither. Either surface measuring against the
 // broker's ceiling would show room on a log refusing every write.
 func TestTheReportAndTheGaugeMeasureHeadroomAgainstTheOrdinaryCeiling(t *testing.T) {
 	t.Parallel()
@@ -305,9 +309,20 @@ func TestTheReportAndTheGaugeMeasureHeadroomAgainstTheOrdinaryCeiling(t *testing
 			t.Errorf("%s's headroom gauge reads %v, want %v", name, gauged, want)
 		}
 	}
-	for _, name := range []string{"tracker", "pages"} {
-		if rows[name].ReserveBytes == 0 {
+	// EVERY LOG THAT CLAIMS IDENTITY, read off the running set rather than
+	// named: a list of the logs that came first goes on passing while the
+	// one added after them reports no reserve at all.
+	claims := 0
+	for _, running := range s.running() {
+		if !running.domain.ClaimsIdentity() {
+			continue
+		}
+		claims++
+		if name := running.domain.Name(); rows[name].ReserveBytes == 0 {
 			t.Errorf("%s claims identity and reports no reserve", name)
 		}
+	}
+	if claims == 0 {
+		t.Fatal("the node runs no log that claims identity, so no reserve was checked")
 	}
 }

@@ -1,0 +1,554 @@
+/**
+ * Chat — the company's own conversation, for a person.
+ *
+ * # Who is asking is the server's answer, always
+ *
+ * Every question this screen asks resolves the reader from their own
+ * credential: there is no handle parameter anywhere in the chat family and no
+ * operator arm that reads somebody else's rooms. A token bound to no seat gets
+ * NOTHING here, reads included, which is stricter than every other personal
+ * surface in this dashboard and deliberately so — a transcript is the most
+ * sensitive thing a deployment holds, and a pipeline's credential is not a
+ * person.
+ *
+ * So a reader arrives in one of three shapes before there are any rooms: no
+ * credential at all, a credential no seat names, and a person. The FIRST IS
+ * THE FRAME'S: the chat row and every one of its sections are guarded
+ * (`app/nav.ts`), so a reader the engine says holds no credential is drawn the
+ * one refusal every guarded section draws (`OperatorRequired`), with its
+ * button to set a token and its word for a token the engine did not accept —
+ * never a second, weaker one here. The SECOND is this screen's, because no
+ * other surface has it: a credential that is an operator's and is nobody's
+ * seat. It is an ordinary state, not a fault, and the remedy is one line of
+ * company configuration, so the screen says that from the one fact it holds
+ * independently — the viewer answer with an operator id and no handle.
+ *
+ * A VIEWER READ THAT FAILED IS NO ANSWER and holds nothing: the screen asks,
+ * and the engine's own answer or refusal says what is true. Waiting on it
+ * would hold the screen until the viewer's next poll, minutes away, while
+ * every other screen worked — which is the failure `lib/viewer.ts` names.
+ *
+ * # The rail is the whole navigation
+ *
+ * A room is a destination with its own address (`#/chat/{id}`), and the two
+ * lists beside the rooms — the mention feed and search — are the same. The
+ * thread pane is NOT: it is a `thread=` on the room you are already in, which
+ * is what the information architecture calls a tab, because a thread is one
+ * level deep and has no life away from its room.
+ *
+ * THE RAIL IS THE CHAT ROW'S ONE SECTION RENDERER (`app/nav.ts`), drawn from
+ * that row rather than beside it: the page header draws section tabs on a
+ * section's own page and never on an object's, and a room is an object page —
+ * the one a reader spends their time on — so a strip there would leave the
+ * mention feed two presses from every room. The row says `renderer: "rail"`,
+ * which the frame draws nothing for, and this rail draws every section the
+ * row declares, under the names it declares and with the key mark a guarded
+ * one carries, so the trail, the palette and the rail cannot come to disagree
+ * about what chat's lists are called.
+ *
+ * # Nothing here decides who may see what
+ *
+ * Every room in the rail, every message in a transcript and every live frame
+ * on the socket has already been through the engine's own visibility rule. A
+ * client-side filter would be a second rule that could disagree with it, and
+ * the disagreement would be silent in whichever direction it went.
+ */
+
+import { useEffect, useMemo, useState } from "react";
+
+import { href, samePath, useIsCurrent } from "~/app/router.tsx";
+import { workspaceRow, type Section } from "~/app/nav.ts";
+import { PageNote } from "~/app/frame/PageNote.tsx";
+import { useFillScreen } from "~/app/fill.tsx";
+import { usePageCoverage } from "~/app/Shell.tsx";
+import { QueryState } from "~/components/common.tsx";
+import { Button, Callout, Count, EmptyState, InlineCode, Skeleton } from "@crewlethq/ui";
+import {
+  PlusGlyph,
+  MessageSquareGlyph,
+  CompassGlyph,
+  KeyGlyph,
+  UserPlusGlyph,
+  UserGlyph,
+} from "@crewlethq/icons/glyphs";
+import { Mark } from "~/ui/glyph.tsx";
+import { useClient, useOrg } from "~/lib/store-hooks.ts";
+import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { indexOrg } from "~/lib/seats.ts";
+import { relTime } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
+import type { ChatChannelSummary, ChatChannelsAnswer } from "~/protocol/index.ts";
+
+import { Browse } from "./Browse.tsx";
+import { useReadCursors, type ReadCursors } from "./cursor.ts";
+import { useChatActivity, useChatRead, useCoalesced } from "./live.ts";
+import { Mentions } from "./Mentions.tsx";
+import { coverageOf } from "./page.ts";
+import { useOutbox } from "./outbox.ts";
+import { peopleOptions } from "./people.ts";
+import { Room } from "./Room.tsx";
+import { Search } from "./Search.tsx";
+import { StartDirect } from "./StartDirect.tsx";
+import { StartRoom } from "./StartRoom.tsx";
+import { badgesAreMeasured, isDirect, roomMark, roomTitle, unreadLabel } from "./rooms.ts";
+
+/** Which of the three lists the main column is showing. */
+export type ChatView = "room" | "mentions" | "search";
+
+const CHAT = workspaceRow("chat");
+
+/**
+ * The chat row's LANDING section, whose label heads the room list: the rooms
+ * are what `#/chat` lists, so they sit under that section's name.
+ */
+const ROOMS = CHAT?.sections.find((s) => samePath(s.path, CHAT.path));
+
+/** Every other section of the chat row — the lists that are not a room. */
+const LISTS = CHAT?.sections.filter((s) => !samePath(s.path, CHAT.path)) ?? [];
+
+/**
+ * The gesture a person is in the middle of, if any.
+ *
+ * A DIALOG RATHER THAN AN ADDRESS, unlike every list on this screen. A room,
+ * the mention feed and search are places somebody can be — each has a URL and
+ * each is worth handing to a colleague — while making a room is a gesture that
+ * is either finished or abandoned. `#/chat/new-room` would also collide with
+ * the one segment under `chat` that carries an id: a room is addressed by the
+ * uuid the engine minted for it, and a reserved word there is a room somebody
+ * can never reach.
+ */
+type StartGesture = "" | "room" | "direct" | "browse";
+
+/** Where the screen is: a room's id, or one of the two lists. */
+interface ChatPlace {
+  channel?: string;
+  view?: ChatView;
+}
+
+/**
+ * The chat screen, for whoever this tab's credential names now.
+ *
+ * ONE CURSOR WRITER FOR THE TAB, above the room, so switching rooms is a flush
+ * rather than a new writer that has forgotten what the last one had already
+ * written — and one per PERSON, which the writer's own hook decides
+ * ([useReadCursors]).
+ *
+ * EVERYTHING BELOW IT IS ONE PERSON'S, and it is MOUNTED UNDER THAT PERSON so
+ * a new credential remounts it rather than handing it on: what a room has
+ * paged in, the messages still being sent from every room with their Retry
+ * (the outbox, held here so it outlives the room it was said in), a
+ * half-typed message, an open thread, a dialog half filled in, a refusal
+ * drawn beside a control. Kept, each is the last person's on the next one's
+ * screen, and the ones that write would write as the next person — the act
+ * transport reads the credential when a press goes out, so a Retry would post
+ * the last person's words under the next person's name. Nothing else remounts
+ * this on a new credential: the viewer read keeps its last answer on screen
+ * while it asks again, so the screen is never between readers.
+ */
+export function Chat(place: ChatPlace) {
+  const { cursors, reader } = useReadCursors();
+  return <ChatAs key={reader} {...place} cursors={cursors} />;
+}
+
+function ChatAs({ channel = "", view = "room", cursors }: ChatPlace & { cursors: ReadCursors }) {
+  const viewer = useViewer();
+  // THE SCREEN TAKES THE WINDOW'S HEIGHT rather than growing the page. A
+  // transcript inside a page that also scrolls is two scrollers under one
+  // wheel, and which one moves is whichever the pointer happens to be over —
+  // so the reader loses their place in a conversation by looking at it.
+  useFillScreen(true);
+  const org = useOrg();
+  const now = useNow();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const nameOf = useMemo(
+    () => (handle: string) => index.byHandle.get(handle)?.name ?? handle,
+    [index],
+  );
+  // EVERYBODY THE COMPANY HAS, for the two gestures that name people. Built
+  // once here rather than inside each dialog: the roster is the same roster,
+  // and two derivations of it would order the same colleague two ways.
+  const people = useMemo(() => peopleOptions(index.seats, viewer.handle), [index, viewer.handle]);
+  const [gesture, setGesture] = useState<StartGesture>("");
+  const create = useWriteAccess("create_channel");
+  const direct = useWriteAccess("open_dm");
+  // WHAT THIS PERSON IS STILL TRYING TO SAY, in every room — held here rather
+  // than in the room, which is remounted for each room opened: an `unknown`
+  // row's same-id Retry has to survive a look at another room, or the person
+  // who comes back and types it again says it twice (`outbox.ts`).
+  const outbox = useOutbox();
+
+  // THE RAIL IS THE VIEWER'S OWN ROOMS, which is narrower than what they may
+  // read: a public room they have not joined is searchable and openable and
+  // does not sit in their list. `enabled` keeps the question off the wire
+  // while the FIRST viewer read is out — the frame waits that out for every
+  // guarded section, and the screen states the same precondition rather than
+  // inheriting it — and for a credential the engine has SAID is nobody's
+  // seat, which it would only refuse. `unbound` is an answer by construction:
+  // an operator id with no handle exists only in a viewer that came back.
+  //
+  // AND NOT AT ALL on a company whose chat is somebody else's, or nobody's:
+  // the engine serves no chat question there, and the screen says which
+  // instead ([ChatElsewhere]).
+  const elsewhere = viewer.chatBackend === "vendor" || viewer.chatBackend === "none";
+  const rail = useQuery(
+    "chat_channels",
+    {},
+    { enabled: !viewer.asking && !viewer.unbound && !elsewhere },
+  );
+
+  // THE RAIL SEEDS THIS TAB'S READ STATE, which nothing else would until a
+  // flush landed somewhere: the live channel pushes it only when it moves.
+  // Through the store's own ordering, so a push that arrived while this answer
+  // was in flight — newer by its revision — is kept over it.
+  const { store } = useClient();
+  useEffect(() => store.applyChatRead(rail.data?.read), [store, rail.data]);
+
+  // A LIVE FRAME IN ANY ROOM MOVES THIS LIST — a preview, an unread count, the
+  // order itself — so the rail re-reads on what the socket has seen rather
+  // than on a timer. Coalesced, because a burst in one room is one change to
+  // this list.
+  useCoalesced(useChatActivity(), rail.refetch);
+
+  // AND SO DOES THIS PERSON'S OWN READ STATE: every unread count and every
+  // mute in the rail is answered from it. This tab's own flush or mute moves
+  // it through the write's answer (`markRead`), and every tab's — this one's
+  // included — through the `chat_cursor_moved` push; the revision makes those
+  // one move, so the rail re-reads once for it. KEYED ON THE RECORD'S
+  // REVISION, never on the slice: `applyChatRead` re-emits a state of the
+  // revision it holds, and the effect above re-applies the rail's own answer,
+  // so a key on the slice would re-read the rail on every answer of its own.
+  // A revision the rail's answer already carries is one it has drawn — which
+  // is what keeps the seed above from costing every mount a second read.
+  const readRevision = useChatRead()?.revision ?? 0;
+  const drawnRevision = rail.data?.read?.revision ?? 0;
+  useCoalesced(readRevision, () => {
+    if (readRevision > drawnRevision) rail.refetch();
+  });
+
+  if (viewer.asking) {
+    return <Skeleton variant="text" rows={6} label="Working out who you are" />;
+  }
+  // BEFORE THE BINDING: on a company whose chat is not the engine's own there
+  // is nothing a binding would open, and the remedy is a different line.
+  const backend = viewer.chatBackend;
+  if (backend === "vendor" || backend === "none") {
+    return <ChatElsewhere backend={backend} vendors={viewer.chatVendors} />;
+  }
+  if (viewer.unbound) {
+    return (
+      <EmptyState
+        icon={<UserGlyph size="xl" />}
+        title="This credential is not bound to a seat"
+        description="Chat is read as a person: the server resolves your token to a `kind: human` seat on every call, and a token no seat names reads nothing here — a pipeline's credential is not a person. Give a human seat a contact.crewlet_operator_id matching this token's id in the company configuration, and this screen becomes their rooms."
+      />
+    );
+  }
+
+  const channels = rail.data?.channels ?? [];
+  const measured = badgesAreMeasured(rail.data);
+
+  return (
+    <>
+      <PageNote>
+        The company's own chat: every message is a record on the shared log, and every data node
+        derives the same rooms from it.
+        {/* ONLY A READER THE VIEWER NAMED: after a viewer read that failed
+            nobody has said who this is, and the rooms below are the engine's
+            answer about the credential rather than a name this screen
+            knows. */}
+        {viewer.handle && (
+          <>
+            {" "}
+            You are reading as <strong>{viewer.name || viewer.handle}</strong>.
+          </>
+        )}
+      </PageNote>
+
+      {rail.data?.truncated && (
+        <Callout variant="warning">
+          You are in more rooms than this list holds ({channels.length}). The rest are still
+          readable by address and still searchable — the list is bounded because it is sorted by
+          activity, which cannot be paged without re-sorting each page against itself.
+        </Callout>
+      )}
+      {rail.data && !measured && (
+        <Callout variant="warning">
+          The unread counts could not be read. Where you have got to in each room lives in the
+          coordination store rather than on the chat log, and this node could not reach it — so the
+          badges below are absent rather than zero, which is not the same as being caught up.
+        </Callout>
+      )}
+
+      <div className="chat-frame">
+        <nav className="chat-rail" aria-label="Your rooms">
+          {/* THE HALF A PERSON DOES FIRST. Everything else on this screen
+              reads a conversation that already exists; these three start one,
+              and they sit above the lists because a reader with an empty rail
+              has nothing below them to look at. The two that open a CHANGE
+              are held as the change would be — by the browser's reason for
+              the tool their dialog presses — and drawn for everybody, as
+              every screen draws the button that opens a change. Finding a
+              room is a read, and opens for anybody. */}
+          <div className="row wrap gap-1">
+            <Button
+              variant="ghost"
+              size="small"
+              leadingIcon={<PlusGlyph size="sm" />}
+              disabledReason={create.can ? undefined : create.reason}
+              title={create.can ? undefined : create.reason}
+              onClick={() => setGesture("room")}
+            >
+              New room
+            </Button>
+            <Button
+              variant="ghost"
+              size="small"
+              leadingIcon={<UserPlusGlyph size="sm" />}
+              disabledReason={direct.can ? undefined : direct.reason}
+              title={direct.can ? undefined : direct.reason}
+              onClick={() => setGesture("direct")}
+            >
+              Message
+            </Button>
+            <Button
+              variant="ghost"
+              size="small"
+              leadingIcon={<CompassGlyph size="sm" />}
+              onClick={() => setGesture("browse")}
+            >
+              Find a room
+            </Button>
+          </div>
+          {LISTS.map((section) => (
+            <ChatRailLink key={section.key} section={section} operator={viewer.operator} />
+          ))}
+          <div className="chat-rail-label t-label">{ROOMS?.label}</div>
+          <QueryState
+            error={rail.error}
+            detail={rail.detail}
+            loading={rail.loading}
+            empty={
+              channels.length
+                ? undefined
+                : {
+                    title: "You are in no rooms yet",
+                    hint: "A unit that names a channel in the org chart gets that room created for it, with the unit's seats as members. Somebody can also open a direct conversation with you — which needs no invitation, because its identity is derived from who is in it.",
+                  }
+            }
+          >
+            {channels.map((room) => (
+              <RailRoom
+                key={room.channel.id}
+                room={room}
+                current={view === "room" && room.channel.id === channel}
+                measured={measured}
+                viewer={viewer.handle}
+                nameOf={nameOf}
+                now={now}
+              />
+            ))}
+          </QueryState>
+        </nav>
+
+        <div className="chat-main">
+          {view === "mentions" ? (
+            <Mentions nameOf={nameOf} />
+          ) : view === "search" ? (
+            <Search channels={channels} viewer={viewer.handle} nameOf={nameOf} />
+          ) : channel ? (
+            <Room
+              key={channel}
+              channelID={channel}
+              viewer={viewer.handle}
+              nameOf={nameOf}
+              summary={channels.find((room) => room.channel.id === channel)}
+              cursors={cursors}
+              outbox={outbox}
+            />
+          ) : (
+            <Landing rail={rail.data} />
+          )}
+        </div>
+      </div>
+
+      {/* THE RAIL IS ASKED AGAIN WHEN ONE OF THESE WRITES, at the write's own
+          floor (`protocol/session.ts`) rather than whenever the frame the
+          record's applier raises arrives: a person who has just made a room is
+          looking at the rail now, and a read at the floor is one that already
+          has it. */}
+      {gesture === "room" && (
+        <StartRoom
+          people={people}
+          defaultPrivate={rail.data?.default_private ?? false}
+          onClose={() => setGesture("")}
+        />
+      )}
+      {gesture === "direct" && <StartDirect people={people} onClose={() => setGesture("")} />}
+      {gesture === "browse" && <Browse onClose={() => setGesture("")} />}
+    </>
+  );
+}
+
+/**
+ * The bare `#/chat`: the rail, and nothing picked.
+ *
+ * THE ONE VIEW DRAWN FROM THE RAIL'S ANSWER, so it is the one that publishes
+ * the rail's coverage. Every other view publishes its own — a room its
+ * transcript's, the mention feed its feed's, search none (it reads this
+ * node's own index, as the work search does) — because the state bar
+ * describes the answer the reader is looking at, and a frame holds one.
+ * Published from a child for the same reason: a parent's effect runs after
+ * its child's, so the screen publishing the rail's would overwrite the room's.
+ */
+function Landing({ rail }: { rail: ChatChannelsAnswer | null }) {
+  usePageCoverage(coverageOf(rail));
+  return (
+    <EmptyState
+      size="compact"
+      icon={<MessageSquareGlyph size="xl" />}
+      title="Pick a room"
+      description="Rooms are on the left, newest activity first. Your mentions are the one list that spans all of them."
+    />
+  );
+}
+
+/** A vendor surface's name as a person reads it. */
+const VENDOR_NAMES: Record<string, string> = { mattermost: "Mattermost", slack: "Slack" };
+
+/**
+ * A company whose chat is not the engine's own: on a vendor's, or none.
+ *
+ * NOT CONFIGURED IS NOT EMPTY, and neither is it a fault. Every chat question
+ * is served only where `chat.backend` is `native`, so asked here each one
+ * came back `unknown_query` — "the subsystem behind it is not running on this
+ * node", which sends an operator to debug a node over a company's own choice.
+ * The row stays, as Knowledge's does with no backend: a workspace that
+ * vanished would read as a product with no chat at all. And nothing here
+ * offers to start a conversation, because nothing here could hold one.
+ */
+function ChatElsewhere({
+  backend,
+  vendors,
+}: {
+  backend: "vendor" | "none";
+  vendors: readonly string[];
+}) {
+  if (backend === "none") {
+    return (
+      <EmptyState
+        icon={<MessageSquareGlyph size="xl" />}
+        title="This company runs no chat"
+        description={
+          <>
+            <InlineCode>chat.backend</InlineCode> is <InlineCode>none</InlineCode>: its seats are
+            woken by the tracker, the code host and their schedules, and talk to nobody in chat. Set
+            it to <InlineCode>native</InlineCode> to give the company the engine&rsquo;s own rooms.
+          </>
+        }
+      />
+    );
+  }
+  const names = vendors.map((vendor) => VENDOR_NAMES[vendor] ?? vendor);
+  const where = names.length ? names.join(" and ") : "a vendor's chat";
+  return (
+    <EmptyState
+      icon={<MessageSquareGlyph size="xl" />}
+      title={`This company's chat is on ${where}`}
+      description={
+        <>
+          <InlineCode>chat.backend</InlineCode> is <InlineCode>vendor</InlineCode>: people and
+          agents talk there, and the engine reads and writes it through its integrations, so there
+          are no rooms here to read. To use the engine&rsquo;s own chat instead, set it to{" "}
+          <InlineCode>native</InlineCode> and retire the vendor&rsquo;s chat integration — the
+          engine refuses the two at once, because a person would reply where the agents are not
+          reading.
+        </>
+      }
+    />
+  );
+}
+
+/**
+ * One section of the chat row that is not a room, drawn as the row declares
+ * it. CURRENT BY THE ADDRESS, the rule the header's tabs use, rather than by
+ * which list the screen happens to be showing.
+ */
+function ChatRailLink({ section, operator }: { section: Section; operator: boolean }) {
+  const current = useIsCurrent(section.path);
+  // THE KEY MARK SETTINGS' COLUMN DRAWS for a guarded section the reader holds
+  // no credential for, and for the same reason: the row stays, and says what
+  // it needs before a press rather than as the page a press lands on.
+  const locked = section.guarded && !operator;
+  return (
+    <a
+      className={`chat-rail-row${current ? " selected" : ""}`}
+      href={href(section.path)}
+      aria-current={current ? "page" : undefined}
+    >
+      <Mark name={section.icon} size="sm" />
+      <span className="chat-rail-title truncate">{section.label}</span>
+      {locked && (
+        <>
+          <KeyGlyph size="xs" aria-hidden="true" />
+          <span className="sr-only">, needs an operator credential</span>
+        </>
+      )}
+    </a>
+  );
+}
+
+/** One room in the rail. */
+function RailRoom({
+  room,
+  current,
+  measured,
+  viewer,
+  nameOf,
+  now,
+}: {
+  room: ChatChannelSummary;
+  current: boolean;
+  measured: boolean;
+  viewer: string;
+  nameOf: (handle: string) => string;
+  now: number;
+}) {
+  const { channel } = room;
+  const title = roomTitle(channel, { participants: room.participants, viewer, nameOf });
+  // THE BADGE IS ONLY DRAWN WHERE IT MEANS SOMETHING. With no read state the
+  // engine zeroes every count and says so; drawing that as a silent row is
+  // right, and drawing it as "nothing unread" in words would not be.
+  const badge = measured ? unreadLabel(room.unread, room.unread_capped) : "";
+  return (
+    <a
+      className={`chat-rail-row${current ? " selected" : ""}`}
+      href={href(["chat", channel.id])}
+      aria-current={current ? "page" : undefined}
+    >
+      <Mark name={roomMark(channel.kind)} size="sm" />
+      <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
+        <span className="chat-rail-title truncate">
+          {isDirect(channel.kind) ? title : `#${title}`}
+        </span>
+        {room.last && (
+          <span className="chat-rail-preview truncate t-caption">
+            {room.last.author ? `${nameOf(room.last.author)}: ` : ""}
+            {room.last.deleted ? "(deleted)" : room.last.excerpt || "…"}
+          </span>
+        )}
+        <span className="row gap-2 t-caption muted">
+          {room.last && <span>{relTime(room.last.at, now)}</span>}
+          {room.muted && <span>muted</span>}
+          {room.follow_all && <span>following</span>}
+        </span>
+      </span>
+      {badge && (
+        <span className={room.muted ? "muted" : undefined}>
+          <Count value={badge} label={`unread in ${title}`} />
+        </span>
+      )}
+    </a>
+  );
+}

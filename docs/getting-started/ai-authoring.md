@@ -80,7 +80,6 @@ empty string and fails later, deep in a turn.
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."                    # embeddings
-export MATTERMOST_FOUNDER_USERNAME="you"          # your chat username
 ```
 
 ### 6. Run it

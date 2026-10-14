@@ -9,15 +9,17 @@
  * polling at `stale` would pass every smaller test here.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { useState } from "react";
 import { ToastProvider } from "@crewlethq/ui";
 
-import { useAct } from "./useAct.ts";
+import { NOT_RETRIED_SENTENCE, NOT_RETRIED_TITLE, useAct } from "./useAct.ts";
 import { useQuery } from "./useQuery.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import { WriteButton } from "~/components/WriteButton.tsx";
+import { clearToken, storeToken } from "~/protocol/authToken.ts";
 import { session } from "~/protocol/session.ts";
 
 vi.mock("./store-hooks.ts", () => ({ useClient: vi.fn(), useConnection: vi.fn() }));
@@ -37,6 +39,8 @@ const BOUND: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  chatBackend: "",
+  chatVendors: [],
 };
 
 interface Sent {
@@ -64,6 +68,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  clearToken();
 });
 
 /** The engine's act route, answering every press with `answer`. */
@@ -310,4 +315,131 @@ test("an abandoned press resolves with null and reports nothing", async () => {
   controller.abort();
   await waitFor(() => expect(got).toHaveBeenCalledWith(null));
   expect(screen.queryByText(/Could not confirm/)).toBeNull();
+});
+
+/** Two presses through `run`, the second naming the first's request id. */
+function Repeat({ onResult }: { onResult: (r: unknown) => void }) {
+  const pin = useAct("set_pins");
+  const [first, setFirst] = useState("");
+  return (
+    <>
+      <button
+        onClick={() =>
+          void pin
+            .run({ views: { add: ["v1"] } }, { done: "Pinned", quiet: true })
+            .then((r) => setFirst(r?.requestId ?? ""))
+        }
+      >
+        First
+      </button>
+      <button
+        onClick={() =>
+          void pin
+            .run({ views: { add: ["v1"] } }, { done: "Pinned", quiet: true }, { requestId: first })
+            .then(onResult)
+        }
+      >
+        Again
+      </button>
+    </>
+  );
+}
+
+// A CALLER THAT KEEPS ITS OWN PRESSES REPEATS ONE UNDER ITS ID. The chat
+// outbox holds a row per message nobody answered for, each with a Retry of its
+// own, so the hook's one held refusal cannot be what a retry reads — and a
+// retry sent under a fresh id is a second message rather than the first again.
+test("a press naming an earlier press's request id is that press again", async () => {
+  const posts = engine(() => json({ tool: "set_pins", outcome: "unknown" }, 504));
+  const got = vi.fn();
+  render(
+    <ToastProvider>
+      <Repeat onResult={got} />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "First" }));
+  await waitFor(() => expect(posts).toHaveLength(1));
+  await new Promise((r) => setTimeout(r, 20));
+  fireEvent.click(screen.getByRole("button", { name: "Again" }));
+  await waitFor(() => expect(got).toHaveBeenCalled());
+  expect(posts).toHaveLength(2);
+  expect(posts[1]!.request_id).toBe(posts[0]!.request_id);
+  expect(got.mock.calls[0]![0]).toMatchObject({ requestId: posts[0]!.request_id });
+});
+
+// A PRESS IS ITS PERSON'S. The act route derives a press's writes from its
+// request id AND the operator who sent it, so the same id with another token
+// is a second change made as somebody else — the opposite of what a Retry
+// promises. The credential changes when any tab of the dashboard saves a
+// different one, and the tab may have changed hands with it.
+describe("a press made under another credential", () => {
+  /** The screen that pinned, and a way to leave it while its toast stays up. */
+  function Leaving() {
+    const [here, setHere] = useState(true);
+    return (
+      <>
+        {here && <Screen />}
+        <button onClick={() => setHere(false)}>Leave</button>
+      </>
+    );
+  }
+
+  test("is not retried under the new one, and the person is told why", async () => {
+    storeToken("token-jane");
+    const posts = engine(() => new Response("bad gateway", { status: 502 }));
+    render(
+      <ToastProvider>
+        <Leaving />
+      </ToastProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+    await screen.findAllByText(/Could not confirm\. It may have landed/);
+    // THE SCREEN THAT PRESSED IS GONE, so nothing of its own takes its
+    // notice down: the toast's Retry is all that is left to refuse.
+    fireEvent.click(screen.getByRole("button", { name: "Leave" }));
+    storeToken("token-ross");
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    // UNDER A TITLE OF ITS OWN: the press's `done` label is past tense, and
+    // as the title above a message saying it was not sent it said the change
+    // was made.
+    expect((await screen.findAllByText(NOT_RETRIED_TITLE)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(`Pinned Triage? ${NOT_RETRIED_SENTENCE}`).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Pinned Triage")).toBeNull();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(posts).toHaveLength(1);
+  });
+
+  test("takes its notices down with it while the screen is still there", async () => {
+    storeToken("token-jane");
+    engine(() => new Response("bad gateway", { status: 502 }));
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+    await screen.findAllByText(/Could not confirm\. It may have landed/);
+
+    act(() => {
+      storeToken("token-ross");
+    });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).toBeNull());
+  });
+
+  test("takes its refusal down too, and the same token saved again keeps it", async () => {
+    storeToken("token-jane");
+    engine(() =>
+      json({ error: "invalid", tool: "set_pins", detail: "views: v9 is not a view" }, 422),
+    );
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+    const refusal = () => document.querySelector(".write-refusal");
+    await waitFor(() => expect(refusal()?.textContent).toContain("v9 is not a view"));
+
+    act(() => {
+      storeToken("token-jane");
+    });
+    expect(refusal()?.textContent).toContain("v9 is not a view");
+    act(() => {
+      storeToken("token-ross");
+    });
+    await waitFor(() => expect(refusal()).toBeNull());
+  });
 });

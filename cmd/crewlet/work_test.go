@@ -31,6 +31,8 @@ type fakePurgeNode struct {
 	// hangUp drops the connection without an answer, after recording the
 	// request — a node that did the work and whose answer never arrived.
 	hangUp bool
+	// refused answers the route's own 500, naming the op_id it was sent.
+	refused bool
 }
 
 func newFakePurgeNode(t *testing.T) *fakePurgeNode {
@@ -40,13 +42,22 @@ func newFakePurgeNode(t *testing.T) *fakePurgeNode {
 	mux.HandleFunc("POST /work/{id}/purge", func(w http.ResponseWriter, r *http.Request) {
 		n.mu.Lock()
 		n.task, n.query = r.PathValue("id"), r.URL.Query()
-		outcome, hangUp := n.outcome, n.hangUp
+		outcome, hangUp, refused := n.outcome, n.hangUp, n.refused
 		n.mu.Unlock()
 		if hangUp {
 			conn, _, err := http.NewResponseController(w).Hijack()
 			if err == nil {
 				_ = conn.Close()
 			}
+			return
+		}
+		if refused {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "purge_failed", "detail": "tracker: database is locked",
+				"op_id": r.URL.Query().Get("op_id"),
+			})
 			return
 		}
 		answer := map[string]any{
@@ -191,7 +202,7 @@ func TestAnUnknownPurgeNamesTheIdToRetryWith(t *testing.T) {
 }
 
 // `pending` IS NOT A FAILURE AND MUST NOT BE RETRIED: the record is on the log
-// and every node applies it as it reaches it.
+// and every data node applies it as it reaches it.
 func TestAPendingPurgeSaysNotToRunItAgain(t *testing.T) {
 	t.Parallel()
 	node := newFakePurgeNode(t)
@@ -236,6 +247,30 @@ func TestAPurgeTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 		t.Errorf("work purge waits %s, not past the three %s waits a purge can "+
 			"make and the %s a round trip gets", purgeRequestTimeout,
 			statelog.DefaultResolveBudget, nodeRequestTimeout)
+	}
+}
+
+// A PURGE THE ROUTE REFUSED NAMES THE OPERATION IT RAN UNDER, as an
+// unanswered one does.
+//
+// The route carries the op_id beside every refusal it writes, because a retry
+// under it is safe whatever happened and one under a fresh id is a second
+// purge if anything landed. The command dropped it with the rest of the body:
+// an operator re-running the command minted a fresh id.
+func TestAPurgeTheRouteRefusedNamesItsOperation(t *testing.T) {
+	t.Parallel()
+	node := newFakePurgeNode(t)
+	node.refused = true
+	_, stderr, err := cli(t, "work", "purge", "t-1", "-project", "ENG",
+		"-reason", "why", "-confirm", "ENG-42",
+		bootstrapForURL(t, node.server.URL))
+	if err == nil || !strings.Contains(err.Error(), "purge_failed") {
+		t.Fatalf("a refused purge gave %v, want the node's refusal", err)
+	}
+	_, query := node.asked()
+	if sent := query.Get("op_id"); sent == "" || !strings.Contains(stderr, "-op-id "+sent) {
+		t.Errorf("a refused purge sent op_id %q and printed:\n%s\nwant the retry "+
+			"that names it", sent, stderr)
 	}
 }
 

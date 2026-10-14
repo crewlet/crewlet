@@ -27,6 +27,17 @@
             "generation": 1,
             "seq": 4410
           }
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 2203117
+          }
         }
       ]
     },
@@ -57,6 +68,17 @@
             "set_capacity"
           ],
           "hint": "CREWLET_PAGES_LOG is full to its broker ceiling, past even the reserve kept there for gate records: raise its ceiling, which is the only thing that makes room for it — then the same gesture under the same operation id finishes it, where a fresh one would write every log that already holds the record again"
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 2203117
+          }
         }
       ]
     },
@@ -86,6 +108,17 @@
             "stream": "CREWLET_PAGES_LOG",
             "generation": 1,
             "seq": 4410
+          }
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 2203117
           }
         }
       ]
@@ -117,6 +150,17 @@
             "new_gesture"
           ],
           "hint": "a later gate record has undone this operation's since: start a new gesture, under a fresh operation id, if the node should change again"
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 2203117
+          }
         }
       ]
     },
@@ -146,6 +190,17 @@
             "retry_same_op"
           ],
           "hint": "its outcome is unknown: the same gesture under the same operation id answers from this log's own ledger if the record landed, and writes it if it did not"
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 2203117
+          }
         }
       ]
     },
@@ -176,6 +231,17 @@
             "other_node"
           ],
           "hint": "this node cannot tell whether the record landed: its operation ledger may have lost the record of this operation, which was minted before the cutoff of the ledger's thirty-day sweep, so the same gesture here answers the same way every time. Run it through a node whose ledger reaches back that far, under the same operation id"
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 2203117
+          }
         }
       ]
     }

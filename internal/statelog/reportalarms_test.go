@@ -46,31 +46,35 @@ func kinds(alarms []statelog.Alarm) []statelog.Kind {
 //
 // Every log's trim waits for the backup the policy asks for, and the backup
 // alarm already says the trim does not advance until there is one. Raised as
-// a `trim_blocked` per log beside it, the one cause read as five alarms on the
-// health count while the gauge and the log line said two.
+// a `trim_blocked` per log beside it, the one cause read as several alarms on
+// the health count while the gauge and the log line said two. Each log's
+// entry under the backup alarm is its OWN backup's measurement, since the
+// policy ages every log's backup on its own, and carries the term holding its
+// trim and the instant it stopped.
 func TestAHoldTheMissingBackupExplainsIsListedUnderTheBackupAlarm(t *testing.T) {
 	t.Parallel()
 	since := reportAt.Add(-46 * time.Hour)
+	logs := []string{"tracker", "vectors", "pages", "usage", "chat"}
 	var domains []statelog.DomainInputs
-	for _, name := range []string{"tracker", "vectors", "pages", "usage"} {
+	for _, name := range logs {
 		domains = append(domains, heldDomain(name, noBackup(), since))
 	}
 	rep := statelog.NewReport(statelog.ReportInputs{
 		NodeID:           "node-1",
 		At:               reportAt,
 		RegisterReadable: true,
-		Reading:          statelog.Reading{BackupMaxAge: 24 * time.Hour},
+		BackupMaxAge:     24 * time.Hour,
 		Domains:          domains,
 	})
 	if got := kinds(rep.Alarms); len(got) != 1 || got[0] != statelog.KindBackupAge {
 		t.Fatalf("the alarms are %v, want backup_age alone", got)
 	}
 	backup := rep.Alarms[0]
-	if len(backup.Domains) != 4 {
-		t.Fatalf("backup_age names %d logs, want the 4 whose trim it holds: %+v",
-			len(backup.Domains), backup.Domains)
+	if len(backup.Domains) != len(logs) {
+		t.Fatalf("backup_age names %d logs, want the %d whose trim it holds: %+v",
+			len(backup.Domains), len(logs), backup.Domains)
 	}
-	for i, want := range []string{"tracker", "vectors", "pages", "usage"} {
+	for i, want := range logs {
 		d := backup.Domains[i]
 		if d.Domain != want {
 			t.Errorf("log %d is %q, want %q in the report's own order", i, d.Domain, want)
@@ -81,13 +85,45 @@ func TestAHoldTheMissingBackupExplainsIsListedUnderTheBackupAlarm(t *testing.T) 
 		if !d.Since.Equal(since) {
 			t.Errorf("%s has been held since %v, want %v", d.Domain, d.Since, since)
 		}
-		if !strings.Contains(d.Detail, "46h") {
-			t.Errorf("%s reads %q, which does not say how long it has been held", d.Domain, d.Detail)
+		if !strings.HasPrefix(d.Detail, "no verified backup of this log") {
+			t.Errorf("%s reads %q, which is not its own backup's measurement", d.Domain, d.Detail)
 		}
 	}
-	if !strings.HasPrefix(backup.Detail, "no verified backup has been recorded") {
+	if !strings.HasPrefix(backup.Detail, "no verified backup of this log has been recorded") {
 		t.Errorf("the backup alarm's own measurement became %q; the logs it holds "+
 			"are listed beside it, never in place of it", backup.Detail)
+	}
+}
+
+// ONLY THE LOG WHOSE OWN BACKUP IS MISSING HAS ITS HOLD FOLDED.
+//
+// The backup is aged per log, so `backup_age` firing on one log says nothing
+// about another log the backup term holds while its own backup is inside the
+// policy (a copy taken on an earlier generation of that log). Folded into an
+// alarm that does not name it, that hold would be named nowhere.
+func TestABackupHoldIsFoldedOnlyUnderItsOwnLogsBackupAlarm(t *testing.T) {
+	t.Parallel()
+	uncovered := heldDomain("tracker", noBackup(), reportAt.Add(-2*time.Hour))
+	earlier := heldDomain("pages", noBackup(), reportAt.Add(-time.Hour))
+	earlier.BackupAt = reportAt.Add(-time.Hour)
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID:           "node-1",
+		At:               reportAt,
+		RegisterReadable: true,
+		BackupMaxAge:     24 * time.Hour,
+		Domains:          []statelog.DomainInputs{uncovered, earlier},
+	})
+	got := kinds(rep.Alarms)
+	if len(got) != 2 || got[0] != statelog.KindBackupAge || got[1] != statelog.KindTrimBlocked {
+		t.Fatalf("the alarms are %v, want backup_age then trim_blocked", got)
+	}
+	if d := rep.Alarms[0].Domains; len(d) != 1 || d[0].Domain != "tracker" ||
+		d[0].Term != statelog.TermBackupFloor {
+		t.Errorf("backup_age names %+v, want tracker alone, held by the backup term", d)
+	}
+	if d := rep.Alarms[1].Domains; len(d) != 1 || d[0].Domain != "pages" ||
+		d[0].Term != statelog.TermBackupFloor {
+		t.Errorf("trim_blocked names %+v, want pages held by the backup term", d)
 	}
 }
 

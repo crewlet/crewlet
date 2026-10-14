@@ -19,9 +19,11 @@
  *  - `domain` — the log the write lands in, whose position raises this tab's
  *    read floor for that domain (`protocol/session.ts`), or `null` for a
  *    write that lands in no log a question reads;
- *  - `refreshes` — questions OUTSIDE that domain's session set
- *    (`contract/domains.ts`) that the write also moves, asked again without a
- *    floor because they cannot take one;
+ *  - `refreshes` — questions the write moves that its `domain` does not
+ *    already cover (`contract/domains.ts`), asked again on its answer: one
+ *    outside that domain's session set, which takes no floor, or — for a
+ *    write that lands in no log — one that reads what it changed, asked at
+ *    whatever floor this tab already holds for it;
  *  - `scope` — `person` for a change any bound person makes to the company's
  *    work in their own name, `company` for one that rewrites what every seat's
  *    tracker means (a project's settings, the catalogue), which a screen
@@ -30,9 +32,11 @@
  * HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
  * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is
  * served by the act transport and is not a read, every argument is one its
- * schema takes, every required one is present, and every scope is the
- * engine's. A renamed argument in Go is a red build here rather than a button
- * that is refused `invalid` the first time somebody presses it.
+ * schema takes, every required one is present, every scope is the engine's,
+ * and every `domain` is the log the tool's write lands on — by the family it
+ * is registered under, a person's chat attention landing on none. A renamed
+ * argument in Go is a red build here rather than a button that is refused
+ * `invalid` the first time somebody presses it.
  */
 export const ACTIONS = {
   create_work_item: {
@@ -246,6 +250,114 @@ export const ACTIONS = {
   mark_inbox: {
     args: ["read", "unread", "snooze", "unsnooze", "read_through"],
     domain: "tracker",
+    refreshes: [],
+    scope: "person",
+  },
+  // ---- THE COMPANY'S OWN CHAT (`routes/chat`) -------------------------- //
+  //
+  // Every gesture the chat screen makes, each the tool a person's own
+  // assistant calls for it. The handles a message names and whether it
+  // addressed the whole room are the ENGINE's reading of the body — the tool
+  // takes no `mentions` and no flag — so a message is sent as what was typed.
+  post_message: {
+    // THE COMPOSER'S SEND. A message is additive and arbitrates nothing at
+    // the broker, so the request id is what tells a retry from a second
+    // remark: the outbox repeats an unanswered message under the id it was
+    // first sent with (`routes/chat/outbox.ts`).
+    args: ["channel", "body"],
+    domain: "chat",
+    refreshes: [],
+    scope: "person",
+  },
+  reply_in_thread: {
+    // THE THREAD PANE'S SEND: `reply_to` is the thread's root, and the engine
+    // files a reply to a reply under the same one.
+    args: ["channel", "reply_to", "body"],
+    domain: "chat",
+    refreshes: [],
+    scope: "person",
+  },
+  edit_message: {
+    // A ROW'S "EDIT", offered on the reader's own messages only: the engine
+    // refuses an edit from anybody but the author, operator included.
+    args: ["channel", "message", "body"],
+    domain: "chat",
+    refreshes: [],
+    scope: "person",
+  },
+  delete_message: {
+    // A ROW'S "DELETE": a tombstone the thread keeps its root through. A
+    // person acts as an operator here (ADR-0024), so it is offered on any
+    // message the room shows — moderation is the credential's.
+    args: ["channel", "message"],
+    domain: "chat",
+    refreshes: [],
+    scope: "person",
+  },
+  react_to_message: {
+    // AN EMOJI ON A MESSAGE, or taken back (`remove`).
+    args: ["channel", "message", "emoji", "remove"],
+    domain: "chat",
+    refreshes: [],
+    scope: "person",
+  },
+  join_channel: {
+    // "JOIN" on a room the reader may read and is not in — the room's own
+    // header, and the browse dialog's rows.
+    args: ["channel"],
+    domain: "chat",
+    refreshes: [],
+    scope: "person",
+  },
+  leave_channel: {
+    args: ["channel"],
+    domain: "chat",
+    refreshes: [],
+    scope: "person",
+  },
+  create_channel: {
+    // "NEW ROOM": the name it claims, who may read it, its topic, and the
+    // people in it from the start. A unit's room is the org chart's and is
+    // never made here.
+    args: ["name", "kind", "topic", "members"],
+    domain: "chat",
+    refreshes: [],
+    scope: "person",
+  },
+  open_dm: {
+    // "NEW DIRECT MESSAGE": the others in it. The author is added by the
+    // engine, and opening one that exists is that room.
+    args: ["to"],
+    domain: "chat",
+    refreshes: [],
+    scope: "person",
+  },
+  update_channel: {
+    // A ROOM'S "TOPIC" DIALOG: the topic and the purpose, and only what moved.
+    // Archiving and retention are not offered there — each decides what
+    // survives on every data node.
+    args: ["channel", "topic", "purpose"],
+    domain: "chat",
+    refreshes: [],
+    scope: "person",
+  },
+  mark_chat_read: {
+    // HOW FAR THE READER HAS READ, flushed on a timer and on the way out
+    // (`routes/chat/cursor.ts`), and a room's MUTE. A person's attention is a
+    // coordination record rather than a record on the chat log, so it lands
+    // in no log a question reads and raises no floor.
+    //
+    // IT MOVES THE RAIL, and asks it nothing here. `chat_channels` answers
+    // each room's unread count and mute from this very record, and the
+    // write's answer IS the record as it left it, named by its person — the
+    // form the `chat_cursor_moved` push takes, which reaches every tab of the
+    // person's, this one included. The press applies that answer to the
+    // tab's read state (`markRead`), and the rail asks again once the
+    // revision moves, whichever of the two arrives first. A `refreshes` here
+    // asked a second time whenever the push won the race, and the second ask
+    // discarded the first after the engine had counted every room's unread.
+    args: ["cursors", "mute", "unmute"],
+    domain: null,
     refreshes: [],
     scope: "person",
   },

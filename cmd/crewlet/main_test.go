@@ -274,7 +274,8 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, nil, log)
+	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, nil,
+		nil, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -696,7 +697,20 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		t.Fatalf("reconciler: %v", err)
 	}
-	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, log)
+	// THE HUB runEngine RUNS, from the same hub constructor, so a surface
+	// served here is the one production serves: its sockets attach to a hub
+	// that reads the rooms through the router and answers the fleet's
+	// presence probes. It is not this engine's applier observer — the engine
+	// was built before it, where runEngine builds both through
+	// [api.NewEngineWithChat] — so no committed record reaches it; what it
+	// carries here is the surface's wiring, which is all these cases assert.
+	// Stopped as runEngine stops it, by its owner rather than by the surface.
+	chatLive := api.NewEngineChatLive(nodeID)
+	chatLive.Start(t.Context())
+	chatLive.Attach(t.Context(), e)
+	t.Cleanup(chatLive.Stop)
+	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface,
+		chatLive.Hub(), log)
 	return surface, reconciler, err
 }
 
@@ -1323,7 +1337,7 @@ func TestTheJSONOutputLocatesAnOrgRuleAtEachSeat(t *testing.T) {
 func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 	t.Parallel()
 	doc := strings.Replace(companyYAML, "  - name: CTO\n", "  - name: CEO\n", 1) +
-		"units:\n  - name: Platform\n    lead: Ghost\n"
+		"units:\n  - name: Platform\n    channel: platform\n    lead: Ghost\n"
 	path := writeYAML(t, "company.yaml", doc)
 	var out, errOut bytes.Buffer
 	err := run([]string{"validate", path}, &out, &errOut)
@@ -1353,7 +1367,11 @@ func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 // could be better after it.
 func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	// THE CHANNEL KEEPS THIS CASE ABOUT THE TWO KINDS. A native-chat
+	// company whose units declare none raises a third advisory of its own,
+	// and a fixture collecting it would assert a warning set rather than
+	// the pair this case names.
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: Ghost\n"
 	got, raw, _ := validateJSON(t, doc)
 	if !got.Valid {
 		t.Fatalf("a dangling lead failed validation: %s", raw)
@@ -1398,7 +1416,7 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 // edit.
 func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: Ghost\n"
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate", "-json"}, configPair(t, "", doc)...)
 	if err := run(args, &out, &errOut); err != nil {
@@ -1442,7 +1460,7 @@ func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 // by a CI step.
 func TestTheProseOutputNamesEachWarningsKind(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    channel: platform\n    lead: Ghost\n"
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate"}, configPair(t, "", doc)...)
 	if err := run(args, &out, &errOut); err != nil {

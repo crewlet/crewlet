@@ -197,6 +197,85 @@ func TestTheHeadroomAlarmNamesItsDomain(t *testing.T) {
 	}
 }
 
+// THE BACKUP-AGE ALARM AGES EACH LOG'S OWN BACKUP, AND NAMES THE LOG.
+//
+// Under `backup_floor: operator` every log is acknowledged on its own, so the
+// logs' backups have one age each. The reading used to carry ONE age, the
+// newest point's, and an operator who had just acknowledged chat's log read a
+// green alarm beside a tracker log whose acknowledgement was days old and a
+// pages log that had none — both trims blocked, neither said.
+func TestTheBackupAlarmAgesEachLogsOwnBackup(t *testing.T) {
+	t.Parallel()
+	fresh := healthyDomain("tracker", true)
+	fresh.BackupAt = reportAt.Add(-time.Hour)
+	stale := healthyDomain("pages", true)
+	stale.BackupAt = reportAt.Add(-30 * time.Hour)
+	uncovered := healthyDomain("chat", true)
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID:       "node-1",
+		At:           reportAt,
+		BackupMaxAge: 24 * time.Hour,
+		Domains:      []statelog.DomainInputs{fresh, stale, uncovered},
+	})
+	fired := map[string]string{}
+	for _, a := range rep.Alarms {
+		if a.Kind != statelog.KindBackupAge {
+			continue
+		}
+		if len(a.Domains) == 0 {
+			t.Fatalf("the backup alarm reads %q and names no log", a.Detail)
+		}
+		for _, d := range a.Domains {
+			fired[d.Domain] = d.Detail
+		}
+		// THE LOG NOTHING COVERS LEADS, ahead of one whose copy is merely
+		// old: it is the one whose trim cannot advance at all.
+		if !strings.Contains(a.Detail, "no verified backup of this log") {
+			t.Errorf("the backup alarm leads with %q, want chat's missing backup", a.Detail)
+		}
+	}
+	if _, wrong := fired["tracker"]; wrong {
+		t.Errorf("the tracker's own backup is an hour old and it fired: %q", fired["tracker"])
+	}
+	if got := fired["pages"]; !strings.Contains(got, "30h old") {
+		t.Errorf("pages fired %q, want its own backup's 30h age — not the "+
+			"tracker's hour", got)
+	}
+	if got := fired["chat"]; !strings.Contains(got, "no verified backup of this log") {
+		t.Errorf("chat fired %q, want the absence of a backup covering it", got)
+	}
+
+	// AND THE INSTANT IS ON THE ROW, absent where nothing covers the log —
+	// the one place the report says which acknowledgement each log waits on.
+	body, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Domains []map[string]any `json:"domains"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range wire.Domains {
+		_, has := d["backup_at"]
+		if want := d["domain"] != "chat"; has != want {
+			t.Errorf("%v carries backup_at = %v, want present %v", d["domain"], has, want)
+		}
+	}
+
+	// AND A DEPLOYMENT WITH NO POLICY IS NOT ALARMED AT, per log either.
+	quiet := statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt,
+		Domains: []statelog.DomainInputs{stale, uncovered},
+	})
+	for _, a := range quiet.Alarms {
+		if a.Kind == statelog.KindBackupAge {
+			t.Errorf("no backup policy, and %s fired: %s", a.Kind, a.Detail)
+		}
+	}
+}
+
 // A RESERVED LOG'S HEADROOM IS OF THE CEILING ITS ORDINARY WRITES MEET.
 //
 // On a log that keeps a gate reserve ordinary writes are refused at the ceiling

@@ -36,6 +36,218 @@ var LIVE_CALL_DETAIL = {
 * that gave up first would report a slow answer as a failed one.
 */
 var QUERY_TIMEOUT_MS = 1e4;
+//#endregion
+//#region src/contract/domains.ts
+/**
+* Which questions a write can be read back through.
+*
+* A write through `/operator/act` answers with the POSITION its record landed
+* at in its domain's log, and a read that names that position as its floor
+* (`read_level=session&min_position=…`) waits until this node has applied it —
+* so the screen that pressed the button never shows the state from before the
+* press. That is only true of a question that READS a floor: one that ignores
+* the key answers from whatever this node holds, and a refetch of it after a
+* write is the optimistic guess this dashboard refuses to make.
+*
+* So the list is the ENGINE'S, per domain, and held both ways by
+* `internal/api/queries`' `TestEverySessionQueryTakesAFreshnessFloor`: every
+* kind here is asked there with a bare `read_level=session` (refused — no
+* floor named) and with a floor (served at `session`), and every question the
+* engine serves at a floor is listed here under the domain whose log it
+* reads. A kind missing from here is a screen that stays stale after its own
+* write; a kind listed that takes no floor is a screen that believes it waited
+* and did not.
+*/
+var SESSION_QUERIES = {
+	tracker: [
+		"work_items",
+		"work_item",
+		"work_comments",
+		"work_item_turns",
+		"work_views",
+		"work_saved_views",
+		"work_catalogue",
+		"work_person",
+		"work_projects",
+		"work_project",
+		"work_workload",
+		"work_activity",
+		"work_my_work",
+		"work_inbox",
+		"work_routing",
+		"work_flow",
+		"company_feed",
+		"decisions"
+	],
+	pages: [
+		"pages",
+		"page",
+		"containers",
+		"page_activity",
+		"page_revision"
+	],
+	chat: [
+		"chat_channels",
+		"chat_channel",
+		"chat_messages",
+		"chat_thread",
+		"chat_mentions",
+		"chat_search"
+	]
+};
+//#endregion
+//#region src/protocol/session.ts
+/**
+* This tab's read floors: the newest position each domain has been written at
+* from here, which every later read of that domain waits for.
+*
+* WRITES ARE CONFIRMED, NEVER OPTIMISTIC. A change made through
+* `protocol/act.ts` answers with the position its record landed at in its
+* domain's log, and the node serving the next read may not have applied it
+* yet — a board redrawn from that node shows the card where it was before the
+* drag, which reads as "the change did not take". The engine's answer to that
+* is a SESSION read: `read_level=session&min_position=<p>` waits until the
+* node holds `p`, then answers. So a write raises this tab's floor for its
+* domain, and every read of a question that takes a floor
+* (`contract/domains.ts`) names it from then on — the refetch the write fires
+* included. Nothing is drawn ahead of the engine, and nothing drawn after the
+* write is older than it.
+*
+* PER TAB AND MONOTONIC. A floor only ever rises: a slow answer to an earlier
+* write arriving after a later one must not lower what the tab has already
+* seen. And it is this tab's alone — another tab's writes are its own
+* business, reached by its own polls.
+*
+* `unknown` RAISES NOTHING. An outcome nobody can vouch for has no position
+* worth waiting on, and a floor at a position that never lands would make
+* every read of the domain wait for it.
+*/
+/**
+* A position off the wire, or null for one this client cannot read.
+*
+* THE ENGINE'S OWN GRAMMAR (`tracker.ParseLogPosition`), so the value handed
+* back as `min_position` is one the engine will accept: a stream name, then a
+* generation and a sequence that are both non-negative integers.
+*/
+function parsePosition(raw) {
+	const match = /^([^@\s]+)@(\d+):(\d+)$/.exec(raw ?? "");
+	if (!match) return null;
+	const generation = Number(match[2]);
+	const seq = Number(match[3]);
+	if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(seq)) return null;
+	return {
+		stream: match[1],
+		generation,
+		seq
+	};
+}
+/**
+* Whether `next` is later than `held` on one log.
+*
+* GENERATION FIRST, as the engine orders them (`statelog.Later`): a log
+* restored or re-anchored starts a new generation whose sequence may restart
+* below the old one, and a comparison by sequence alone would keep the old
+* floor for ever. A position on ANOTHER stream is taken as later — the only
+* way the stream behind a domain changes is the engine replacing its log, and
+* a floor on a log that no longer exists is one no read could ever meet.
+*/
+function isLater(next, held) {
+	if (next.stream !== held.stream) return true;
+	if (next.generation !== held.generation) return next.generation > held.generation;
+	return next.seq > held.seq;
+}
+/**
+* Two positions on ONE log in log order: negative when `a` is earlier, zero
+* when they are the same point, positive when `a` is later.
+*
+* GENERATION FIRST, for [isLater]'s reason, then the sequence — and nothing
+* else, because the log's own order is exact and clock-free where an instant
+* is neither: the broker's RFC 3339 instant trims trailing zeros, so as text
+* `…:05.12Z` sorts after `…:05.123456789Z` and `…:05Z` after every fraction
+* of its own second. For a list ordered by what happened most recently on a
+* log — a tab's live chat rooms, the rooms it has seen — this is the order.
+* Two positions on DIFFERENT streams have no order between them, and a caller
+* comparing across logs has a bug this cannot repair.
+*
+* NO POSITION IS EARLIEST OF ALL: a frame from a build that sent none is the
+* one nothing can say is recent, so it sorts before every position rather
+* than throwing or comparing as zero by accident.
+*/
+function comparePositions(a, b) {
+	if (!a || !b) return (a ? 1 : 0) - (b ? 1 : 0);
+	if (a.generation !== b.generation) return a.generation - b.generation;
+	return a.seq - b.seq;
+}
+/**
+* One tab's floors. A class rather than module state so a suite can hold its
+* own; the dashboard uses [session], the one per tab.
+*/
+var SessionFloors = class {
+	floors = /* @__PURE__ */ new Map();
+	listeners = /* @__PURE__ */ new Set();
+	/** The floor a read of `domain` names, or null before this tab wrote to it. */
+	floor(domain) {
+		return this.floors.get(domain)?.raw ?? null;
+	}
+	/**
+	* Record a write this tab made to `domain` (null for one that lands in no
+	* log a question reads), landed at `position`, and tell
+	* every listener the domain moved — whether or not the floor rose, because
+	* a write that appended nothing (`position` null) still answered, and the
+	* questions it named are worth asking again.
+	*
+	* Returns whether the floor rose.
+	*/
+	written(domain, position, refreshes) {
+		let rose = false;
+		const at = parsePosition(position);
+		if (domain !== null && at && position) {
+			const held = this.floors.get(domain);
+			if (!held || isLater(at, held.at)) {
+				this.floors.set(domain, {
+					raw: position,
+					at
+				});
+				rose = true;
+			}
+		}
+		for (const listener of this.listeners) listener(domain, refreshes);
+		return rose;
+	}
+	/** Subscribe to writes. Returns the unsubscribe. */
+	onWritten(listener) {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
+	/**
+	* Whether a write heard by a listener moves the answer to `kind`: a question
+	* that reads the written domain at a floor, or one the write names as
+	* moving beside it.
+	*/
+	static moves(kind, domain, refreshes) {
+		return domain !== null && domainOf(kind) === domain || refreshes.includes(kind);
+	}
+	/**
+	* The freshness a read of `kind` names, or null when it names none: the
+	* question takes no floor, or this tab has not written its domain.
+	*/
+	freshness(kind) {
+		const domain = domainOf(kind);
+		if (domain === null) return null;
+		const floor = this.floor(domain);
+		return floor === null ? null : {
+			read_level: "session",
+			min_position: floor
+		};
+	}
+};
+/** The domain whose log a question reads at a floor, or null for one that takes none. */
+function domainOf(kind) {
+	for (const domain of Object.keys(SESSION_QUERIES)) if (SESSION_QUERIES[domain].includes(kind)) return domain;
+	return null;
+}
+/** This tab's floors. */
+var session = new SessionFloors();
 /** What a heavy field reads as while nothing of it is held. */
 var NOTHING_HELD = {
 	prompt: "",
@@ -139,6 +351,13 @@ function emptyState() {
 		tokens: null,
 		budget: null,
 		schedules: null,
+		chat: {
+			rooms: {},
+			frames: 0,
+			dropped: 0
+		},
+		chatPresence: { rooms: {} },
+		chatRead: null,
 		connected: false,
 		lostAt: null,
 		everConnected: false,
@@ -397,6 +616,134 @@ var Store = class {
 		const name = typeof kind === "string" ? kind : JSON.stringify(kind ?? null);
 		this.unknownPushes.set(name, (this.unknownPushes.get(name) ?? 0) + 1);
 	}
+	/**
+	* One committed chat record, as the socket announced it.
+	*
+	* ONE METHOD FOR SIX PUSH KINDS, because the frame already says which it is:
+	* `op` is the record's own word (`post`, `edit`, `react`, …) and the kind is
+	* a routing label the server derived FROM it. Taking the kind as well would
+	* be a second vocabulary for one fact, and the two would disagree on exactly
+	* the op somebody adds next.
+	*
+	* IT DERIVES NOTHING ABOUT WHAT A ROOM CONTAINS. A frame carries no body, so
+	* a transcript rendered from these would be a second copy of the
+	* conversation — the failure this store's own doc opens with. What is kept
+	* is the high-water mark a screen compares against what it has rendered, the
+	* count a screen re-reads on ([ChatRoomLive.frame], [ChatLive.frames]), and
+	* the frames themselves, so a screen can tell a new message from a reaction
+	* without asking the engine which it was.
+	*/
+	applyChatChange(change) {
+		if (!change || !change.channel_id || !change.op_id) return;
+		const live = this.state.chat;
+		const rooms = live.rooms;
+		const room = rooms[change.channel_id] ?? {
+			seq: 0,
+			position: null,
+			frame: 0,
+			changes: []
+		};
+		if (room.changes.some((seen) => seen.op_id === change.op_id)) return;
+		const seq = typeof change.channel_seq === "number" ? change.channel_seq : 0;
+		live.frames += 1;
+		const changes = [{
+			...change,
+			frame: live.frames
+		}, ...room.changes];
+		for (const gone of changes.slice(200)) live.dropped = Math.max(live.dropped, gone.frame);
+		rooms[change.channel_id] = {
+			seq: seq > room.seq ? seq : room.seq,
+			position: comparePositions(change.position ?? null, room.position) > 0 ? change.position ?? null : room.position,
+			frame: live.frames,
+			changes: changes.slice(0, 200)
+		};
+		this.evictChatRooms();
+		this.emit("chat");
+	}
+	/**
+	* Keep the live state to [MAX_CHAT_ROOMS] rooms, dropping the one whose
+	* newest frame is oldest.
+	*
+	* By where the room's newest frame sits on the log rather than by insertion
+	* order: a room that has been quiet for a week is the one nobody is looking
+	* at, whatever order this tab happened to hear about it in. A room no frame
+	* gave a position goes first, being the one nothing can say is recent.
+	*/
+	evictChatRooms() {
+		const live = this.state.chat;
+		const rooms = live.rooms;
+		const ids = Object.keys(rooms);
+		if (ids.length <= 256) return;
+		const oldest = ids.reduce((worst, id) => comparePositions(rooms[id]?.position ?? null, rooms[worst]?.position ?? null) < 0 ? id : worst);
+		live.dropped = Math.max(live.dropped, rooms[oldest]?.frame ?? 0);
+		delete rooms[oldest];
+	}
+	/** Who is in the rooms this socket is watching, whole. */
+	applyChatPresence(frame) {
+		this.state.chatPresence = frame?.rooms ? frame : { rooms: {} };
+		this.emit("chatPresence");
+	}
+	/**
+	* This person's own read state, from their flush or from another tab's.
+	*
+	* IT IS NEVER MERGED WITH WHAT IS ON SCREEN. The record is authoritative and
+	* whole — the engine advances cursors and ignores a value below what it
+	* holds — so the answer to a flush and the push another tab caused are the
+	* same fact about different moments of one record.
+	*
+	* AND THE NEWER MOMENT WINS, BY THE RECORD'S REVISION, never by arrival:
+	* two flushes are taken in one order and their pushes can arrive in the
+	* other, so a frame below the revision held is late and is dropped — kept,
+	* it would put back a cursor or a mute the record has already moved past.
+	* `updated_at` cannot order them, being each flush's own instant from
+	* whichever node took it.
+	*
+	* BUT ONLY WITHIN ONE PERSON. The revision orders two states of one
+	* person's record — on the coordination KV it is the bucket's own
+	* sequence, shared by everybody's — so a state NAMING SOMEBODY ELSE is not
+	* older or newer than the one held: it is the person this tab now is,
+	* after a credential change or a seat its token is bound to moving.
+	* Compared, it was dropped whenever the last person's latest flush was
+	* newer than this person's record, and the rail answered as the new
+	* person was thrown away until they wrote again. It replaces the held
+	* state, and everything else this tab held about the last person goes
+	* with it ([forgetPerson]).
+	*/
+	applyChatRead(state) {
+		if (!state) return;
+		const held = this.state.chatRead;
+		if (held && held.handle !== state.handle) this.forgetPerson();
+		else if (held && (state.revision ?? 0) < (held.revision ?? 0)) return;
+		this.state.chatRead = state;
+		this.emit("chatRead");
+	}
+	/**
+	* Forget everything this tab holds about the PERSON it was reading as: the
+	* frames of the rooms they could read, who was in the rooms they had open,
+	* and their read state.
+	*
+	* ALL THREE ARE ONE PERSON'S. A frame reaches a socket only for a room its
+	* person may read and carries that room's name and an excerpt of what was
+	* said, presence is for the rooms they had open, and a read state is theirs
+	* by its key — so a tab whose credential now names somebody else, kept
+	* any of them, would hold the last person's private rooms under the next
+	* person's name, and offer the next person a Mute that undid the last
+	* one's. Called by the socket when its credential changes, and by
+	* [applyChatRead] when a state names somebody new.
+	*/
+	forgetPerson() {
+		const { frames } = this.state.chat;
+		this.state.chat = {
+			rooms: {},
+			frames,
+			dropped: frames
+		};
+		this.state.chatPresence = { rooms: {} };
+		this.state.chatRead = null;
+		this.emit("chat");
+		this.emit("chatPresence");
+		this.emit("chatRead");
+	}
 	agentById(id) {
 		return this.state.agents.find((a) => a.id === id || a.role === id) ?? null;
 	}
@@ -484,25 +831,55 @@ function onTokenRequested(listener) {
 	return () => listeners.delete(listener);
 }
 /**
-* The symmetric signal: the token CHANGED.
+* The symmetric signal: the token CHANGED — in this tab or in any other.
 *
-* The socket learns through `setToken` + `reconnect`, which the shell calls
-* from the dialog. Every REST-backed surface learned nothing at all: it had
-* fetched once on mount, so setting a token left `/setup` and `/secrets`
-* still showing the refusal that prompted the reader to set one. The screen
-* said "needs an operator token", the reader supplied it, and nothing moved.
+* Every REST-backed surface used to learn nothing at all: it had fetched once
+* on mount, so setting a token left `/setup` and `/secrets` still showing the
+* refusal that prompted the reader to set one. The screen said "needs an
+* operator token", the reader supplied it, and nothing moved. The socket
+* learns here too (the shell's subscription), so the socket, every REST
+* request and every piece of state a screen holds for a person change person
+* together.
 *
 * Fired from `storeToken` and `clearToken` themselves rather than from the
-* dialog, so a future writer cannot forget to announce it.
+* dialog, so a future writer cannot forget to announce it — AND FROM ANOTHER
+* TAB'S WRITE. The token lives in `localStorage`, which every tab of the
+* origin shares, and a request reads it when it is sent (`rest.ts`), so a
+* token saved in one window is the credential every other window's next write
+* goes out under. Announced only for this tab's own writes, a window still
+* drawing the last person's chat went on flushing their reading — as the next
+* person, whose shared rooms it then marked read for good — while its socket
+* stayed the last person's. `storage` fires in every OTHER document of the
+* origin, so it is followed while anybody is listening, as `lib/recents.ts`
+* follows its own key; `e.key === null` is a `localStorage.clear()`, which
+* names no key and takes the token with everything else.
 */
 var changed = /* @__PURE__ */ new Set();
 /** Subscribe to token changes. Returns the unsubscribe. */
 function onTokenChanged(listener) {
+	if (changed.size === 0) followOtherTabs(true);
 	changed.add(listener);
-	return () => changed.delete(listener);
+	return () => {
+		changed.delete(listener);
+		if (changed.size === 0) followOtherTabs(false);
+	};
 }
 function announce() {
-	for (const listener of changed) listener();
+	for (const listener of [...changed]) listener();
+}
+/**
+* Hear another tab's write, while anybody is listening. NOT IN A DOCUMENT —
+* `protocol.js` is also loaded by plain `node` to replay a capture, where there
+* is no window and no other tab to hear — there is nothing to follow.
+*/
+function followOtherTabs(on) {
+	if (typeof window === "undefined") return;
+	if (on) window.addEventListener("storage", fromAnotherTab);
+	else window.removeEventListener("storage", fromAnotherTab);
+}
+function fromAnotherTab(e) {
+	if (e.key !== null && e.key !== TOKEN_KEY) return;
+	announce();
 }
 /** Forget the stored token. Returns false if the browser refused the write. */
 function clearToken() {
@@ -609,6 +986,8 @@ var QUERY_ERROR_CODES = {
 	bad_params: true,
 	not_found: true,
 	unavailable: true,
+	unbound: true,
+	agent_seat: true,
 	timeout: true,
 	closed: true
 };
@@ -676,13 +1055,33 @@ var LiveSocket = class {
 	token = "";
 	/** Whether the shell has already been asked to collect a token. */
 	askedForToken = false;
+	/**
+	* Which room a tab has open, and whether somebody is typing in it.
+	*
+	* HELD RATHER THAN SENT AND FORGOTTEN, because it is state the SERVER keeps
+	* per socket: a reconnect gets a new socket that knows nothing, and a
+	* reader sitting in a room through a thirty-second backoff would come back
+	* invisible to everybody else in it and see nobody.
+	*/
+	focused = "";
+	typing = false;
 	authRejectedHandler = null;
 	constructor(store) {
 		this.store = store;
 	}
-	/** Operator bearer token, sent on the handshake and with every query frame. */
+	/**
+	* Operator bearer token, sent on the handshake and with every query frame.
+	*
+	* A DIFFERENT TOKEN IS POSSIBLY A DIFFERENT PERSON, so what the store holds
+	* about the last one goes first (`Store.forgetPerson`): the chat frames of
+	* the rooms they could read, the presence in the rooms they had open, and
+	* their read state. Before the reconnect the caller makes, so nothing the
+	* next socket says about the next person is laid over the last one's.
+	*/
 	setToken(token) {
-		this.token = token || "";
+		const next = token || "";
+		if (next !== this.token) this.store.forgetPerson();
+		this.token = next;
 		if (this.token) this.askedForToken = false;
 	}
 	start() {
@@ -739,6 +1138,34 @@ var LiveSocket = class {
 			this.sendQuery(entry);
 		});
 	}
+	/**
+	* Say which room this tab is looking at, and whether it is being typed in.
+	*
+	* THE ONE CLIENT-TO-SERVER FRAME THAT IS NOT A QUERY: it asks nothing and
+	* is answered by nothing. What it buys is that the fleet-wide presence
+	* probe is bounded to the rooms somebody actually has open — without it a
+	* node would have to ask its peers about every room in the company on every
+	* tick.
+	*
+	* It is not delivered while the socket is down and is not queued: presence
+	* is about now, and a probe from ten seconds ago is worse than none. The
+	* reconnect re-sends what this tab is looking at, which is the state above.
+	*/
+	focus(channelID, typing) {
+		this.focused = channelID;
+		this.typing = typing;
+		this.sendFocus();
+	}
+	sendFocus() {
+		if (!this.connected || !this.sock) return;
+		try {
+			this.sock.send(JSON.stringify({
+				kind: "chat_focus",
+				channel_id: this.focused,
+				typing: this.typing
+			}));
+		} catch {}
+	}
 	sendQuery(entry) {
 		if (!this.connected || !this.sock) return;
 		const frame = {
@@ -785,6 +1212,7 @@ var LiveSocket = class {
 			this.stopFallback();
 			this.startPing();
 			this.flushQueries();
+			if (this.focused) this.sendFocus();
 		};
 		sock.onmessage = (e) => this.onMessage(String(e.data));
 		sock.onclose = (e) => {
@@ -915,6 +1343,20 @@ var LiveSocket = class {
 				break;
 			case "health":
 				this.store.applyHealth(msg.data);
+				break;
+			case "chat_posted":
+			case "chat_edited":
+			case "chat_deleted":
+			case "chat_reacted":
+			case "chat_room_changed":
+			case "chat_membership_changed":
+				this.store.applyChatChange(msg.data);
+				break;
+			case "chat_presence":
+				this.store.applyChatPresence(msg.data);
+				break;
+			case "chat_cursor_moved":
+				this.store.applyChatRead(msg.data);
 				break;
 			case "result":
 				this.settle(msg.id, null, msg.data);
@@ -1534,9 +1976,11 @@ var BROKER_REMOVE_TIMEOUT_MS = 185e3;
 *  - `domain` — the log the write lands in, whose position raises this tab's
 *    read floor for that domain (`protocol/session.ts`), or `null` for a
 *    write that lands in no log a question reads;
-*  - `refreshes` — questions OUTSIDE that domain's session set
-*    (`contract/domains.ts`) that the write also moves, asked again without a
-*    floor because they cannot take one;
+*  - `refreshes` — questions the write moves that its `domain` does not
+*    already cover (`contract/domains.ts`), asked again on its answer: one
+*    outside that domain's session set, which takes no floor, or — for a
+*    write that lands in no log — one that reads what it changed, asked at
+*    whatever floor this tab already holds for it;
 *  - `scope` — `person` for a change any bound person makes to the company's
 *    work in their own name, `company` for one that rewrites what every seat's
 *    tracker means (a project's settings, the catalogue), which a screen
@@ -1545,9 +1989,11 @@ var BROKER_REMOVE_TIMEOUT_MS = 185e3;
 * HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
 * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is
 * served by the act transport and is not a read, every argument is one its
-* schema takes, every required one is present, and every scope is the
-* engine's. A renamed argument in Go is a red build here rather than a button
-* that is refused `invalid` the first time somebody presses it.
+* schema takes, every required one is present, every scope is the engine's,
+* and every `domain` is the log the tool's write lands on — by the family it
+* is registered under, a person's chat attention landing on none. A renamed
+* argument in Go is a red build here rather than a button that is refused
+* `invalid` the first time somebody presses it.
 */
 var ACTIONS = {
 	create_work_item: {
@@ -1739,6 +2185,98 @@ var ACTIONS = {
 		domain: "tracker",
 		refreshes: [],
 		scope: "person"
+	},
+	post_message: {
+		args: ["channel", "body"],
+		domain: "chat",
+		refreshes: [],
+		scope: "person"
+	},
+	reply_in_thread: {
+		args: [
+			"channel",
+			"reply_to",
+			"body"
+		],
+		domain: "chat",
+		refreshes: [],
+		scope: "person"
+	},
+	edit_message: {
+		args: [
+			"channel",
+			"message",
+			"body"
+		],
+		domain: "chat",
+		refreshes: [],
+		scope: "person"
+	},
+	delete_message: {
+		args: ["channel", "message"],
+		domain: "chat",
+		refreshes: [],
+		scope: "person"
+	},
+	react_to_message: {
+		args: [
+			"channel",
+			"message",
+			"emoji",
+			"remove"
+		],
+		domain: "chat",
+		refreshes: [],
+		scope: "person"
+	},
+	join_channel: {
+		args: ["channel"],
+		domain: "chat",
+		refreshes: [],
+		scope: "person"
+	},
+	leave_channel: {
+		args: ["channel"],
+		domain: "chat",
+		refreshes: [],
+		scope: "person"
+	},
+	create_channel: {
+		args: [
+			"name",
+			"kind",
+			"topic",
+			"members"
+		],
+		domain: "chat",
+		refreshes: [],
+		scope: "person"
+	},
+	open_dm: {
+		args: ["to"],
+		domain: "chat",
+		refreshes: [],
+		scope: "person"
+	},
+	update_channel: {
+		args: [
+			"channel",
+			"topic",
+			"purpose"
+		],
+		domain: "chat",
+		refreshes: [],
+		scope: "person"
+	},
+	mark_chat_read: {
+		args: [
+			"cursors",
+			"mute",
+			"unmute"
+		],
+		domain: null,
+		refreshes: [],
+		scope: "person"
 	}
 };
 //#endregion
@@ -1789,188 +2327,6 @@ var ACT_ERRORS = {
 	budget_exhausted: "The token budget for this window is spent. Raise it, or wait for the window to reset.",
 	unavailable: "This node could not make the change just now. Try again in a moment."
 };
-//#endregion
-//#region src/contract/domains.ts
-/**
-* Which questions a write can be read back through.
-*
-* A write through `/operator/act` answers with the POSITION its record landed
-* at in its domain's log, and a read that names that position as its floor
-* (`read_level=session&min_position=…`) waits until this node has applied it —
-* so the screen that pressed the button never shows the state from before the
-* press. That is only true of a question that READS a floor: one that ignores
-* the key answers from whatever this node holds, and a refetch of it after a
-* write is the optimistic guess this dashboard refuses to make.
-*
-* So the list is the ENGINE'S, per domain, and held both ways by
-* `internal/api/queries`' `TestEverySessionQueryTakesAFreshnessFloor`: every
-* kind here is asked there with a bare `read_level=session` (refused — no
-* floor named) and with a floor (served at `session`), and every question the
-* engine serves at a floor is listed here under the domain whose log it
-* reads. A kind missing from here is a screen that stays stale after its own
-* write; a kind listed that takes no floor is a screen that believes it waited
-* and did not.
-*/
-var SESSION_QUERIES = {
-	tracker: [
-		"work_items",
-		"work_item",
-		"work_comments",
-		"work_item_turns",
-		"work_views",
-		"work_saved_views",
-		"work_catalogue",
-		"work_person",
-		"work_projects",
-		"work_project",
-		"work_workload",
-		"work_activity",
-		"work_my_work",
-		"work_inbox",
-		"work_routing",
-		"work_flow",
-		"company_feed",
-		"decisions"
-	],
-	pages: [
-		"pages",
-		"page",
-		"containers",
-		"page_activity",
-		"page_revision"
-	]
-};
-//#endregion
-//#region src/protocol/session.ts
-/**
-* This tab's read floors: the newest position each domain has been written at
-* from here, which every later read of that domain waits for.
-*
-* WRITES ARE CONFIRMED, NEVER OPTIMISTIC. A change made through
-* `protocol/act.ts` answers with the position its record landed at in its
-* domain's log, and the node serving the next read may not have applied it
-* yet — a board redrawn from that node shows the card where it was before the
-* drag, which reads as "the change did not take". The engine's answer to that
-* is a SESSION read: `read_level=session&min_position=<p>` waits until the
-* node holds `p`, then answers. So a write raises this tab's floor for its
-* domain, and every read of a question that takes a floor
-* (`contract/domains.ts`) names it from then on — the refetch the write fires
-* included. Nothing is drawn ahead of the engine, and nothing drawn after the
-* write is older than it.
-*
-* PER TAB AND MONOTONIC. A floor only ever rises: a slow answer to an earlier
-* write arriving after a later one must not lower what the tab has already
-* seen. And it is this tab's alone — another tab's writes are its own
-* business, reached by its own polls.
-*
-* `unknown` RAISES NOTHING. An outcome nobody can vouch for has no position
-* worth waiting on, and a floor at a position that never lands would make
-* every read of the domain wait for it.
-*/
-/**
-* A position off the wire, or null for one this client cannot read.
-*
-* THE ENGINE'S OWN GRAMMAR (`tracker.ParseLogPosition`), so the value handed
-* back as `min_position` is one the engine will accept: a stream name, then a
-* generation and a sequence that are both non-negative integers.
-*/
-function parsePosition(raw) {
-	const match = /^([^@\s]+)@(\d+):(\d+)$/.exec(raw ?? "");
-	if (!match) return null;
-	const generation = Number(match[2]);
-	const seq = Number(match[3]);
-	if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(seq)) return null;
-	return {
-		stream: match[1],
-		generation,
-		seq
-	};
-}
-/**
-* Whether `next` is later than `held` on one log.
-*
-* GENERATION FIRST, as the engine orders them (`statelog.Later`): a log
-* restored or re-anchored starts a new generation whose sequence may restart
-* below the old one, and a comparison by sequence alone would keep the old
-* floor for ever. A position on ANOTHER stream is taken as later — the only
-* way the stream behind a domain changes is the engine replacing its log, and
-* a floor on a log that no longer exists is one no read could ever meet.
-*/
-function isLater(next, held) {
-	if (next.stream !== held.stream) return true;
-	if (next.generation !== held.generation) return next.generation > held.generation;
-	return next.seq > held.seq;
-}
-/**
-* One tab's floors. A class rather than module state so a suite can hold its
-* own; the dashboard uses [session], the one per tab.
-*/
-var SessionFloors = class {
-	floors = /* @__PURE__ */ new Map();
-	listeners = /* @__PURE__ */ new Set();
-	/** The floor a read of `domain` names, or null before this tab wrote to it. */
-	floor(domain) {
-		return this.floors.get(domain)?.raw ?? null;
-	}
-	/**
-	* Record a write this tab made to `domain` (null for one that lands in no
-	* log a question reads), landed at `position`, and tell
-	* every listener the domain moved — whether or not the floor rose, because
-	* a write that appended nothing (`position` null) still answered, and the
-	* questions it named are worth asking again.
-	*
-	* Returns whether the floor rose.
-	*/
-	written(domain, position, refreshes) {
-		let rose = false;
-		const at = parsePosition(position);
-		if (domain !== null && at && position) {
-			const held = this.floors.get(domain);
-			if (!held || isLater(at, held.at)) {
-				this.floors.set(domain, {
-					raw: position,
-					at
-				});
-				rose = true;
-			}
-		}
-		for (const listener of this.listeners) listener(domain, refreshes);
-		return rose;
-	}
-	/** Subscribe to writes. Returns the unsubscribe. */
-	onWritten(listener) {
-		this.listeners.add(listener);
-		return () => this.listeners.delete(listener);
-	}
-	/**
-	* Whether a write heard by a listener moves the answer to `kind`: a question
-	* that reads the written domain at a floor, or one the write names as
-	* moving beside it.
-	*/
-	static moves(kind, domain, refreshes) {
-		return domain !== null && domainOf(kind) === domain || refreshes.includes(kind);
-	}
-	/**
-	* The freshness a read of `kind` names, or null when it names none: the
-	* question takes no floor, or this tab has not written its domain.
-	*/
-	freshness(kind) {
-		const domain = domainOf(kind);
-		if (domain === null) return null;
-		const floor = this.floor(domain);
-		return floor === null ? null : {
-			read_level: "session",
-			min_position: floor
-		};
-	}
-};
-/** The domain whose log a question reads at a floor, or null for one that takes none. */
-function domainOf(kind) {
-	for (const domain of Object.keys(SESSION_QUERIES)) if (SESSION_QUERIES[domain].includes(kind)) return domain;
-	return null;
-}
-/** This tab's floors. */
-var session = new SessionFloors();
 //#endregion
 //#region src/protocol/act.ts
 /**

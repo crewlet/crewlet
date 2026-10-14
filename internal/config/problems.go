@@ -548,7 +548,125 @@ func (c *Company) AdvisoryWarnings() []Warning {
 		out = append(out, w)
 	}
 	out = append(out, c.budgetWarnings()...)
-	return append(out, c.Providers.llmWarnings()...)
+	out = append(out, c.Providers.llmWarnings()...)
+	return append(out, c.channelAdvisories(o, x)...)
+}
+
+// channelAdvisories is what this company's unit channels say about each
+// other: a room two units both claim on a vendor surface, and a native-chat
+// company that has asked for no rooms at all.
+//
+// Read from DECLARED channels rather than effective ones, because a child
+// unit inheriting its parent's channel is the feature rather than a
+// collision: [org.Organization.Normalize] cascades one down a whole branch,
+// so reading the effective value would warn about every team in a division
+// that named a channel once.
+func (c *Company) channelAdvisories(o *org.Organization, x *identityIndex) []Warning {
+	var declared []*org.Unit
+	holders := map[string][]*org.Unit{}
+	var first *org.Unit
+	for u := range o.AllUnits() {
+		if first == nil {
+			first = u
+		}
+		if u.DeclaredChannel == "" {
+			continue
+		}
+		declared = append(declared, u)
+		holders[u.DeclaredChannel] = append(holders[u.DeclaredChannel], u)
+	}
+
+	var out []Warning
+
+	// TWO UNITS IN ONE ROOM, warned about BESIDE EACH OF THEM, the same
+	// placement a duplicated name gets: fixing it means renaming one of the
+	// two, and an author who sees the warning on only one of them cannot
+	// tell which.
+	//
+	// Not a refusal ON A VENDOR SURFACE, because there it is a shape a real
+	// company writes on purpose: two teams that genuinely stand up together,
+	// or a unit split in the chart before the room it will move to exists.
+	// What it costs is worth saying once — every unit-scoped wake reaches
+	// both teams, and each team's prompt tells it that room is its own.
+	//
+	// ON NATIVE CHAT IT IS AN ADMISSION RULE INSTEAD
+	// ([Company.validateUnitRooms]), because there the engine builds the
+	// room and a room belongs to one unit — and an admission problem is
+	// already reported as a warning on an applied revision, so saying it
+	// here too would print one finding twice.
+	shared := declared
+	if c.ChatBackendFor() == ChatNative {
+		shared = nil
+	}
+	for _, u := range shared {
+		// KEYED ON THE UNIT rather than on its name, because two units
+		// sharing a name is itself a legal document to warn about (the
+		// admission rule that refuses one is not run here), and comparing
+		// names would have each of that pair hide the other.
+		others := make([]string, 0, len(holders[u.DeclaredChannel])-1)
+		for _, other := range holders[u.DeclaredChannel] {
+			if other != u {
+				others = append(others, other.Name)
+			}
+		}
+		if len(others) == 0 {
+			continue
+		}
+		w := advisory(at(x.units[u], "channel"), fmt.Sprintf(
+			"unit %q shares its channel %q with %s. Everything scoped to one "+
+				"of them lands in the other's room, and every seat in both is "+
+				"told that channel is its team's own. Give one of them a "+
+				"channel of its own, or leave the child's empty and let it "+
+				"inherit", u.Name, u.DeclaredChannel, quotedList(others)))
+		w.Unit = u.Name
+		out = append(out, w)
+	}
+
+	// A NATIVE-CHAT COMPANY WITH NO UNIT ROOMS AT ALL. The engine opens a
+	// channel for each one a unit declares, and that is the only kind of
+	// room whose members the org chart keeps — every other room is one a
+	// person opened from the dashboard and fills by hand. With none declared,
+	// no team has a room of its own until somebody makes one and adds its
+	// seats to it, and keeps adding them as the chart changes.
+	//
+	// IT DOES NOT SAY NOTHING ELSE OPENS A ROOM. It once did, and a person
+	// can open one; an advisory that overstates is one an author learns to
+	// skip.
+	//
+	// Only where there is a unit to write it on — a company with no units is
+	// a flat one whose seats have no teams to give rooms to, and a warning
+	// pointing at no line in the document is one nobody can act on. Located
+	// at the FIRST unit's `channel`, which is the line an author adds it to;
+	// the sentence says it is about all of them, because the path cannot.
+	if c.ChatBackendFor() == ChatNative && first != nil && len(declared) == 0 {
+		w := advisory(at(x.units[first], "channel"), fmt.Sprintf(
+			"no unit in this company declares a `channel`, and its chat is "+
+				"native — the engine opens a room for each channel a unit names "+
+				"and keeps its members to the org chart, so no team here has a "+
+				"room of its own until somebody opens one by hand and adds its "+
+				"seats. Give the units that work in the open a channel, starting "+
+				"with %q", first.Name))
+		w.Unit = first.Name
+		out = append(out, w)
+	}
+	return out
+}
+
+// quotedList renders names for a warning's prose: "A" and "B", or "A", "B"
+// and "C". A list a person reads, rather than a Go slice printed with %v.
+func quotedList(names []string) string {
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = strconv.Quote(name)
+	}
+	switch len(quoted) {
+	case 0:
+		return ""
+	case 1:
+		return quoted[0]
+	default:
+		return strings.Join(quoted[:len(quoted)-1], ", ") + " and " + quoted[len(quoted)-1]
+	}
 }
 
 // Warnings is everything valid about this bootstrap that its author should
@@ -573,9 +691,31 @@ func (b *Bootstrap) Warnings() []Warning {
 	}
 
 	// A FLEET THAT TRIMS ONLY WHAT IT HAS BEEN TOLD IS OFF-SITE does not
-	// trim until somebody tells it, and the log grows until its ceiling
+	// trim until somebody tells it, and each log grows until its ceiling
 	// refuses writes. That is the configuration working as asked; it is
 	// also a state nobody discovers until the refusal.
+	//
+	// AND IT IS TOLD PER LOG. An acknowledgement names one stream
+	// (`crewlet retention ack -stream`), and the backup term blocks any log
+	// the counted point does not cover, so an operator who acknowledged the
+	// mutation log and read "until the first acknowledgement" as the whole
+	// gate would expect the other two to trim, and they do not.
+	//
+	// EVERY CEILING THE TRIM IS ALL THAT HOLDS BACK, rather than the
+	// mutation log's alone: the backup term is evaluated per log, and the
+	// three ordered logs — the tracker's, the knowledge base's and chat's —
+	// carry no age bound, so nothing else ever removes a record from them.
+	// Naming one field sent an operator to the wrong ceiling whenever
+	// another log filled first, and the chat log's refusal is the one a
+	// person meets directly: a message they typed and could not send.
+	//
+	// AND EVERY LOG, the two compacted ones included. They age their
+	// records out on the broker whatever the trim decides, so they never
+	// refuse a write — but the backup term and the `backup_age` alarm are
+	// evaluated on every running log alike, so a log nobody acknowledged
+	// raises that alarm once `backup_max_age` passes. An advisory that
+	// named the ordered three sent an operator to acknowledge three logs
+	// and leave two alarms firing for ever.
 	//
 	// ONLY WHERE THE FLOOR IS READ, which is a node holding the estate. Two
 	// readers decide which backups count under it, and both are armed with
@@ -596,10 +736,20 @@ func (b *Bootstrap) Warnings() []Warning {
 	if b.Profile("").HoldsData() &&
 		b.Stream.TrackerRetention.Floor() == BackupFloorOperator {
 		out = append(out, advisory(field("stream.tracker_retention.backup_floor"),
-			"`operator` means the trim advances only as far as somebody "+
-				"has acknowledged a backup. Until the first acknowledgement the log "+
-				"is never trimmed, and it grows until `stream.tracker_log_max_bytes` "+
-				"starts refusing writes"))
+			"`operator` means every state log is trimmed only as far as a "+
+				"backup of that log has been acknowledged, once per log "+
+				"(`crewlet retention ack -stream <log> -position <n>`; "+
+				"`crewlet retention status` names all five). Until its own "+
+				"acknowledgement a log is never trimmed. The three ordered logs "+
+				"grow until their own ceiling starts refusing writes: "+
+				"`stream.tracker_log_max_bytes`, `stream.pages_log_max_bytes` and "+
+				"`stream.chat_log_max_bytes`, where the refusal is a message "+
+				"somebody typed and could not send. The two compacted logs "+
+				"(`stream.tracker_vectors_max_bytes`, "+
+				"`stream.usage_log_max_bytes`) age their records out on the "+
+				"broker regardless, but wait on an acknowledgement just the "+
+				"same: without one, each log's `backup_age` alarm fires once "+
+				"`backup_max_age` has passed"))
 	}
 
 	// NOBODY OWNS THE BACKUP. A company that never backs up never trims,
@@ -654,9 +804,9 @@ func (b *Bootstrap) Warnings() []Warning {
 	// A WARNING RATHER THAN A REFUSAL, because the pair is still valid: a
 	// company on external backends keeps nothing of its own on the stream,
 	// and a test runs this way on purpose. What is NOT valid is a native
-	// tracker or knowledge base on it, and that is refused already — see
-	// [CheckTiers] — so this never softens that rule, it covers the
-	// deployments the rule leaves standing.
+	// tracker, knowledge base or chat on it, and that is refused already —
+	// see [CheckTiers], the rule that needs both documents — so this never
+	// softens that rule, it covers the deployments the rule leaves standing.
 	if inMemory && b.Stream.StoreMaxBytes > 0 {
 		out = append(out, advisory(field("stream.store_max_bytes"),
 			"this node's broker has no `store_dir`, so the streams it holds are "+
@@ -843,9 +993,9 @@ func CheckTiers(boot *Bootstrap, company *Company) error {
 	// A NATIVE BACKEND ON AN IN-MEMORY STREAM IS UNRECOVERABLE, and that is
 	// why it is an error rather than the warning Tier A raises alone.
 	//
-	// The engine's own tracker and its own knowledge base keep their
-	// write-ahead logs on the stream, and either one starts the node's state
-	// log ([Company.RunsStateLog]). An embedded server with no store
+	// The engine's own tracker, knowledge base and chat keep their write-ahead
+	// logs on the stream, and any one of them starts the node's state log
+	// ([Company.RunsStateLog]). An embedded server with no store
 	// directory keeps its streams in MEMORY, so a restart recreates them
 	// empty, and a node whose durable tables are ahead of a stream that has
 	// restarted from nothing cannot tell "the log was trimmed" from "the log
@@ -855,12 +1005,15 @@ func CheckTiers(boot *Bootstrap, company *Company) error {
 	// THE KNOWLEDGE BASE AS MUCH AS THE TRACKER. This rule once asked only
 	// about the tracker, and the knowledge base is native by default: a
 	// company on Jira with no Confluence ran its pages on an in-memory log,
-	// passed, and lost the ability to serve on its first restart.
+	// passed, and lost the ability to serve on its first restart. CHAT AS
+	// MUCH AS EITHER, for the same reason: it is native by default too, so a
+	// company on Jira and Confluence that declares no Mattermost or Slack
+	// keeps its rooms on the stream.
 	//
 	// It is an error rather than a warning because there is no correct
-	// deployment it describes. A company whose tracker and knowledge base are
-	// both a vendor's starts no log at all and is unaffected, which is why
-	// the rule needs both documents.
+	// deployment it describes. A company whose tracker, knowledge base and
+	// chat are all a vendor's (or `none`) starts no log at all and is
+	// unaffected, which is why the rule needs both documents.
 	//
 	// A MEMBER ONLY: a leaf keeps no stream of its own — every log it
 	// reaches lives on the members it joined, which hold the store
@@ -871,11 +1024,12 @@ func CheckTiers(boot *Bootstrap, company *Company) error {
 		strings.TrimSpace(boot.Stream.StoreDir) == "" {
 		p.add(field("stream.store_dir"), ErrMissing,
 			"this company runs the engine's own backends (tracker.backend: %s, "+
-				"knowledge.backend: %s), whose logs live on the stream, and an "+
-				"embedded stream with no store directory keeps its streams in "+
-				"memory: a restart recreates them empty and this node refuses to "+
-				"serve them permanently. Name a directory",
-			company.TrackerBackendFor(), company.KnowledgeBackendFor())
+				"knowledge.backend: %s, chat.backend: %s), whose logs live on the "+
+				"stream, and an embedded stream with no store directory keeps its "+
+				"streams in memory: a restart recreates them empty and this node "+
+				"refuses to serve them permanently. Name a directory",
+			company.TrackerBackendFor(), company.KnowledgeBackendFor(),
+			company.ChatBackendFor())
 	}
 	return p.err()
 }

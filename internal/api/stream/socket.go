@@ -38,6 +38,10 @@ import (
 // after the first paint the five poll on independent 60 s to 5 min timers and
 // rarely coincide. That queue is the design working: a burst waits HERE, per
 // socket, rather than in the pool every reader on the node shares.
+//
+// The dashboard carries this number (`MAX_IN_FLIGHT_QUERIES`) and bounds a
+// burst of lookups of its own to one wave of it, so changing it changes that
+// too; `TestTheDashboardAsksNoMoreAtOnceThanTheSocketRuns` holds the two equal.
 const MaxInFlightQueries = 4
 
 // The error codes a query answer can carry. CODES, not prose: the client
@@ -82,6 +86,21 @@ const (
 	// boot reconcile is still running has to be able to say "ask me in a
 	// moment" rather than "there is nothing".
 	CodeUnavailable = "unavailable"
+
+	// CodeUnbound and CodeAgentSeat are a question refused because of WHO
+	// is asking: a credential bound to no person this question may be
+	// answered as, and one bound to an agent seat, which would read as that
+	// agent. Neither is fixed by asking again or by a different request,
+	// and neither by another credential: the remedy is a line of the
+	// company document, which the frame's `detail` names.
+	//
+	// SPELLED AS THE ACT TRANSPORT SPELLS THEM (`operator.CodeUnbound`,
+	// `operator.ChatAgentSeat`), held there by a test, because a client that
+	// recognises one caller's refusal on one surface must recognise it on
+	// every other — the CLI's dedicated sentence and the dashboard's write
+	// block among them.
+	CodeUnbound   = "unbound"
+	CodeAgentSeat = "agent_seat"
 )
 
 // The failures a query surface reports precisely; everything else is a
@@ -92,7 +111,25 @@ var (
 	ErrNotFound     = errors.New("stream: no such record")
 	ErrBadParams    = errors.New("stream: query refused")
 	ErrUnavailable  = errors.New("stream: not available on this node yet")
+	ErrForbidden    = errors.New("stream: query refused to this caller")
 )
+
+// ForbiddenError is [ErrForbidden] carrying the code its refusal named —
+// [CodeUnbound] or [CodeAgentSeat] — and the sentence that names the fix,
+// which travels on the frame's `detail` as a `bad_params` sentence does: it is
+// written for the caller, and the whole of its value is naming the field.
+type ForbiddenError struct {
+	What   string
+	Code   string
+	Detail string
+}
+
+func (e *ForbiddenError) Error() string {
+	return fmt.Sprintf("%v: %s: %s", ErrForbidden, e.What, e.Detail)
+}
+
+// Unwrap makes a ForbiddenError an [ErrForbidden] to errors.Is.
+func (e *ForbiddenError) Unwrap() error { return ErrForbidden }
 
 // UnavailableError is [ErrUnavailable] carrying the wait its refusal derived.
 //
@@ -181,6 +218,14 @@ type request struct {
 	// constructor, and a socket opened for anonymous reads still has to be
 	// able to carry one credentialled question.
 	Token string `json:"token"`
+
+	// ChannelID and Typing belong to the ONE frame kind that is not a
+	// query: [ChatFocusKind], which says which room this tab is looking
+	// at. Fields on the shared request rather than a second decoder,
+	// because a frame is decoded before its kind is known; every other
+	// kind leaves both at their zero value and nothing reads them there.
+	ChannelID string `json:"channel_id"`
+	Typing    bool   `json:"typing"`
 }
 
 // Handler serves the dashboard's live socket.
@@ -188,7 +233,13 @@ type request struct {
 // The credential is ?token= on the URL, because browsers cannot set headers on
 // a WebSocket constructor. Non-browser clients may send Authorization instead,
 // and should: a query string appears in proxy logs.
-func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
+//
+// chat is the arm that pushes the company's own conversation, and a NIL ONE IS
+// A NODE THAT SERVES NO NATIVE CHAT — every method on it is a no-op, so the
+// socket needs no branch. It is a parameter rather than a field of the service
+// for the reason [ChatHubOptions] gives: the hub has to exist before the state
+// log comes up, which is long before this service is built.
+func Handler(guard *auth.Guard, svc *Service, query Query, chat *ChatHub) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		operatorID, ok := authenticate(guard, r)
 		if !ok {
@@ -227,7 +278,7 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			log.Debug("stream_accept_failed", "error", err)
 			return
 		}
-		serveSocket(r.Context(), conn, guard, svc, query, operatorID)
+		serveSocket(r.Context(), conn, guard, svc, query, chat, operatorID)
 	})
 }
 
@@ -253,7 +304,7 @@ func authenticate(guard *auth.Guard, r *http.Request) (string, bool) {
 
 // serveSocket runs one connection until it closes.
 func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
-	svc *Service, query Query, operatorID string,
+	svc *Service, query Query, chat *ChatHub, operatorID string,
 ) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -264,6 +315,23 @@ func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 	svc.Hub().Register(client)
 	defer svc.Hub().Unregister(client)
 
+	// AND REGISTERED SEPARATELY FOR CHAT, under the seat this socket's
+	// credential resolves to. A chat frame is decided per recipient, so
+	// the chat arm keeps its own registry with an identity on every entry.
+	// The resolution is the SERVER'S, from the credential the guard
+	// admitted this socket with: made here at accept, and again on every
+	// pass the hub makes afterwards ([ChatHub.current]), because the seat a
+	// credential names is live configuration. A socket whose binding an
+	// apply moves is CLOSED rather than switched, and reconnects under the
+	// binding the company holds now. A credential bound to no seat watches
+	// nothing — this socket then sees the company's conversation not at
+	// all — and is held idle, so the apply that binds it later closes the
+	// tab to reconnect as that person. A frame-carried token never enters
+	// any of it: it may upgrade one query and may never move a push
+	// stream's identity.
+	chat.join(client, operatorID)
+	defer chat.leave(client)
+
 	var writer sync.WaitGroup
 	writer.Go(func() {
 		defer cancel()
@@ -271,7 +339,7 @@ func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 	})
 
 	client.send(Push(KindSnapshot, svc.Snapshot(), time.Now().UTC()))
-	readLoop(ctx, conn, guard, client, query, operatorID)
+	readLoop(ctx, conn, guard, client, query, chat, operatorID)
 
 	// Unregister closes the client's queue, which is what ends the writer.
 	svc.Hub().Unregister(client)
@@ -329,7 +397,7 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 
 // readLoop handles client frames until the socket closes.
 func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
-	client *Client, query Query, operatorID string,
+	client *Client, query Query, chat *ChatHub, operatorID string,
 ) {
 	// The concurrency bound, as a token pool. Queries run on their own
 	// goroutines so a store scan cannot stall the live feed, and a burst
@@ -354,6 +422,14 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 		switch req.Kind {
 		case "ping":
 			client.send(Envelope{Kind: KindPong})
+		case ChatFocusKind:
+			// WHERE THIS TAB IS LOOKING, which is what bounds the
+			// fleet-wide presence probe to the rooms somebody
+			// actually has open. Handled on the reader's own
+			// goroutine because it is a map write and nothing else:
+			// a goroutine per keystroke would be the cost this
+			// frame exists to avoid.
+			chat.focus(client, req.ChannelID, req.Typing)
 		case "query":
 			if query == nil {
 				client.send(queryError(req, CodeUnknownQuery))
@@ -413,6 +489,19 @@ func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Quer
 		if errors.As(err, &refused) {
 			refusal.Detail = refused.Detail
 		}
+		client.send(refusal)
+	case errors.Is(err, ErrForbidden):
+		// THE REFUSAL'S OWN CODE AND SENTENCE, for [RefusedError]'s
+		// reason. A refusal with no code of its own is this build's,
+		// and is answered as the failure it is.
+		var forbidden *ForbiddenError
+		if !errors.As(err, &forbidden) || forbidden.Code == "" {
+			log.WarnContext(ctx, "stream_query_failed", "what", req.What, "error", err)
+			client.send(queryError(req, CodeQueryFailed))
+			return
+		}
+		refusal := queryError(req, forbidden.Code)
+		refusal.Detail = forbidden.Detail
 		client.send(refusal)
 	case errors.Is(err, ErrUnavailable):
 		refusal := queryError(req, CodeUnavailable)

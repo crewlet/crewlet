@@ -161,7 +161,8 @@ type Blocks struct {
 	// that woke the turn included.
 	//
 	// Its own fact for the reason [Blocks.ThreadContextRead] is: the count
-	// says thirty messages either way, and a read that stopped short is
+	// cannot tell the two apart — a read that stopped short renders as
+	// full a block as one that did not — and a read that stopped short is
 	// exactly the turn an operator is looking at when a seat answers
 	// something nobody asked it. See [notify.Transcript.StoppedShort].
 	ThreadContextStoppedShort bool

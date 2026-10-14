@@ -36,3 +36,6 @@ var (
 	Interrupted = interrupted
 	Refuse      = refuse
 )
+
+// WithSeat pins the seat one call was admitted as, as the dispatch does.
+var WithSeat = withSeat

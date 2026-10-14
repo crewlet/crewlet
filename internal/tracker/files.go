@@ -2,7 +2,9 @@ package tracker
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -255,6 +257,26 @@ func checkUploadAge(put FilePut, now time.Time) error {
 			ErrUploadStale, put.Path, age.Truncate(time.Second), objstore.RecordWithin)
 	}
 	return nil
+}
+
+// FileWriteOpName is the name a file write's operation id is minted under: the
+// project, and a digest of the path, the content type and the content's hash.
+//
+// THE ADDRESS IS THE SUBJECT ([PutFile]), so an id carried to ANOTHER path
+// meets another subject and the log refuses it `op_reused`. What a subject
+// cannot tell apart is a second write to the SAME path: a retry is collapsed
+// onto the record its operation already holds there, whatever that record
+// wrote, so an id one upload minted, sent again with other bytes, was answered
+// `applied` at the first upload's position while the new content was never
+// recorded. Named after what is written, an id brought back with anything else
+// is refused before the write is decided.
+//
+// A DIGEST rather than the path itself, for [FileToken]'s reason: a path
+// carries `.`, which an operation id's grammar reads as a step separator, and
+// is unbounded where an id is not.
+func FileWriteOpName(project, path, contentType, hash string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{path, contentType, hash}, "\x00")))
+	return "file-" + ProjectKey(project) + "-" + hex.EncodeToString(sum[:8])
 }
 
 // PutFile writes a file at its path, creating it or replacing its content.

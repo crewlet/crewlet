@@ -74,8 +74,9 @@ func TestAValveUnderContentionAlwaysAnswers(t *testing.T) {
 //
 // Each lost race is a store that answered, so none of these is an outage
 // until the store's patience says it is: a credential's cooldown behind a
-// burst of refusals, a channel's count and an unfollow, each made to lose
-// twenty in a row. The custody claim and the object backend's record lose a
+// burst of refusals, a channel's count, an unfollow, and a person's chat read
+// record flushed and forgotten behind every other tab of theirs, each made to
+// lose twenty in a row. The custody claim and the object backend's record lose a
 // race only to a key removed between a refused create and the leader's read
 // of it, which no bucket in front of the leader can stage; they take the same
 // [FleetStore.retryRaces].
@@ -139,6 +140,48 @@ func TestTheFleetStoresOtherRacesOutlastMoreLossesThanSixteen(t *testing.T) {
 			removed, err := f.Unfollow(t.Context(), "slack", "ceo", "C1", "T1")
 			if err != nil || !removed {
 				t.Fatalf("Unfollow = (%v, %v), want the follow removed", removed, err)
+			}
+		},
+	}, {
+		// The record exists, so the flush is an update over it.
+		name:   "a chat read flush",
+		bucket: func(f *FleetStore) *jetstream.KeyValue { return &f.chatReads },
+		key:    chatReadKey("designer"),
+		setup: func(t *testing.T, f *FleetStore) {
+			if _, err := f.AdvanceChatRead(t.Context(), "designer", coord.ChatReadDelta{
+				Cursors: map[string]int64{"room-a": 1}, At: time.Now().UTC(),
+			}); err != nil {
+				t.Fatalf("AdvanceChatRead: %v", err)
+			}
+		},
+		run: func(t *testing.T, f *FleetStore) {
+			state, err := f.AdvanceChatRead(t.Context(), "designer", coord.ChatReadDelta{
+				Cursors: map[string]int64{"room-b": 7}, At: time.Now().UTC(),
+			})
+			if err != nil || state.Cursors["room-a"] != 1 || state.Cursors["room-b"] != 7 {
+				t.Fatalf("AdvanceChatRead = (%v, %v), want both rooms' cursors", state.Cursors, err)
+			}
+		},
+	}, {
+		// Stamped absent long ago, so the forget is a purge at the
+		// revision it judged.
+		name:   "a chat read forget",
+		bucket: func(f *FleetStore) *jetstream.KeyValue { return &f.chatReads },
+		key:    chatReadKey("leaver"),
+		setup: func(t *testing.T, f *FleetStore) {
+			if _, err := f.AdvanceChatRead(t.Context(), "leaver", coord.ChatReadDelta{
+				Cursors: map[string]int64{"room-a": 1}, At: time.Now().UTC(),
+			}); err != nil {
+				t.Fatalf("AdvanceChatRead: %v", err)
+			}
+			if _, err := f.SetChatReadAbsence(t.Context(), "leaver", time.Now().Add(-48*time.Hour)); err != nil {
+				t.Fatalf("SetChatReadAbsence: %v", err)
+			}
+		},
+		run: func(t *testing.T, f *FleetStore) {
+			removed, err := f.ForgetChatRead(t.Context(), "leaver", time.Now().Add(-24*time.Hour))
+			if err != nil || !removed {
+				t.Fatalf("ForgetChatRead = (%v, %v), want the record removed", removed, err)
 			}
 		},
 	}} {
@@ -281,7 +324,8 @@ func (k *peerIncrements) Update(ctx context.Context, key string, value []byte, r
 }
 
 // loseWrites is a bucket on which writes to one key lose their race and write
-// nothing — an update or a delete refused at the revision it was made at. It
+// nothing — an update, a delete or a purge refused at the revision it was made
+// at. It
 // loses the next `remaining`, or every one when forever is set.
 type loseWrites struct {
 	jetstream.KeyValue
@@ -311,4 +355,11 @@ func (k *loseWrites) Delete(ctx context.Context, key string, opts ...jetstream.K
 		return jetstream.ErrKeyRevisionMismatch
 	}
 	return k.KeyValue.Delete(ctx, key, opts...)
+}
+
+func (k *loseWrites) Purge(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error {
+	if k.loses(key) {
+		return jetstream.ErrKeyRevisionMismatch
+	}
+	return k.KeyValue.Purge(ctx, key, opts...)
 }

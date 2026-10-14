@@ -17,7 +17,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/backup"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/observe"
@@ -93,9 +95,9 @@ func auditedCompany() func() *config.Company {
 	return func() *config.Company { return company }
 }
 
-// auditedApp is an app serving the act transport and the backup route, both
-// auditing into one record.
-func auditedApp(t *testing.T, taker *fakeBackup) (*api.App, *recordedAudit) {
+// auditedApp is an app serving the act transport, the backup route and the
+// two chat destructions, all auditing into one record.
+func auditedApp(t *testing.T, taker *fakeBackup, purger *recordingPurger) (*api.App, *recordedAudit) {
 	t.Helper()
 	audit := &recordedAudit{}
 	company := auditedCompany()
@@ -122,8 +124,9 @@ func auditedApp(t *testing.T, taker *fakeBackup) (*api.App, *recordedAudit) {
 			Org:   chart,
 			Audit: audit,
 		}),
-		Backup: taker,
-		Audit:  audit,
+		Backup:     taker,
+		ChatPurger: purger,
+		Audit:      audit,
 	})
 	return a, audit
 }
@@ -149,8 +152,8 @@ func actRequest(t *testing.T, a *api.App, token, tool, args string) int {
 // never reached a write leaves none.
 //
 // The table is the runtime writes this build serves over HTTP outside the
-// configuration and credential surfaces — every act tool call, whatever
-// became of it, and every backup, whatever became of it — each driven through
+// configuration and credential surfaces — every act tool call, every backup
+// and every chat erase and prune, whatever became of each — each driven through
 // the real app behind the real guard. Each record must be persisted (a
 // category, so the event store writes it), carry the operator source every
 // audit reader selects on, name the credential as the actor and the person it
@@ -169,6 +172,7 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 	cases := []struct {
 		name   string
 		taker  *fakeBackup
+		purger *recordingPurger
 		run    func(*testing.T, *api.App) int
 		status int
 		want   *want
@@ -243,6 +247,62 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 			return status
 		},
 		status: http.StatusBadRequest,
+	}, {
+		// A CHAT ERASE IS A ROUTE, NOT A TOOL, so it is no operator_acted —
+		// and what it removed is gone from every node, so its own record,
+		// reason and all, is the only account of it anybody can read.
+		name: "a chat erase that lands",
+		run: func(t *testing.T, a *api.App) int {
+			status, _ := chatPost(t, a, "founder-secret", confirmedErase, eraseBody)
+			return status
+		},
+		status: http.StatusOK,
+		want: &want{eventType: "chat_erased", outcome: types.AuditApplied, fields: map[string]any{
+			"channel_id": "room-1", "messages": float64(2), "reason": "a legal request",
+			"position": "CREWLET_CHAT_LOG@1:41",
+		}},
+	}, {
+		name:   "a chat erase the room refuses",
+		purger: &recordingPurger{err: fmt.Errorf("%w: room-1", chat.ErrArchived)},
+		run: func(t *testing.T, a *api.App) int {
+			status, _ := chatPost(t, a, "founder-secret", confirmedErase, eraseBody)
+			return status
+		},
+		status: http.StatusConflict,
+		want: &want{eventType: "chat_erased", outcome: types.AuditRefused, failed: true,
+			fields: map[string]any{"refusal": "archived", "reason": "a legal request"}},
+	}, {
+		name: "a chat prune that lands",
+		run: func(t *testing.T, a *api.App) int {
+			status, _ := chatPost(t, a, "founder-secret", confirmedPrune, "")
+			return status
+		},
+		status: http.StatusOK,
+		want: &want{eventType: "chat_pruned", outcome: types.AuditApplied, fields: map[string]any{
+			"channel_id": "room-1", "cutoff": "2025-01-01T00:00:00Z",
+		}},
+	}, {
+		// UNKNOWN IS NOT A FAILURE: the prune may have landed, which is
+		// exactly what a reader of the audit needs to know.
+		name: "a chat prune nobody answered",
+		purger: &recordingPurger{err: fmt.Errorf("%w (chat.prune, asked of node-b)",
+			estate.ErrOutcomeUnknown)},
+		run: func(t *testing.T, a *api.App) int {
+			status, _ := chatPost(t, a, "founder-secret", confirmedPrune, "")
+			return status
+		},
+		status: http.StatusOK,
+		want:   &want{eventType: "chat_pruned", outcome: types.AuditUnknown},
+	}, {
+		// REFUSED BEFORE THE WRITE PATH WAS ASKED: nothing was attempted,
+		// as a backup with no destination is not one.
+		name: "a chat erase that gives no reason",
+		run: func(t *testing.T, a *api.App) int {
+			status, _ := chatPost(t, a, "founder-secret", confirmedErase,
+				`{"message_ids":["m-1","m-2"]}`)
+			return status
+		},
+		status: http.StatusBadRequest,
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -251,7 +311,11 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 			if taker == nil {
 				taker = &fakeBackup{}
 			}
-			a, audit := auditedApp(t, taker)
+			purger := tc.purger
+			if purger == nil {
+				purger = &recordingPurger{}
+			}
+			a, audit := auditedApp(t, taker, purger)
 			if status := tc.run(t, a); status != tc.status {
 				t.Fatalf("answered %d, want %d", status, tc.status)
 			}

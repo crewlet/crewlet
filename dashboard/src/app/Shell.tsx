@@ -72,7 +72,7 @@ import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
 import { useMediaQuery } from "~/lib/media.ts";
 import { PEEK_WIDTH, columnWidth, densityScale, listReserve, peekColumnMin } from "./layout.ts";
-import { onTokenRequested } from "~/protocol/index.ts";
+import { apiToken, onTokenChanged, onTokenRequested } from "~/protocol/index.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
 import { useKeymap } from "./keymap.ts";
@@ -397,6 +397,21 @@ function Frame({ children }: { children: ReactNode }) {
   // auth-gated answer on a screen the socket was never refused for.
   useEffect(() => onTokenRequested(() => setTokenOpen(true)), []);
 
+  // THE SOCKET CHANGES PERSON WITH THE TOKEN, wherever the token changed: in
+  // this tab's dialog, or in another tab of this origin, which shares the
+  // stored token — and with it the credential every REST write here goes out
+  // under from that moment on. Learned only from this tab's dialog, a window
+  // whose token another one replaced kept drawing the last person's pushes
+  // while its writes were made as the next.
+  useEffect(
+    () =>
+      onTokenChanged(() => {
+        socket.setToken(apiToken());
+        socket.reconnect();
+      }),
+    [socket],
+  );
+
   // THE FRAME'S KEYS, by row — `keymap.ts` says which key each one is.
   const [legendOpen, setLegendOpen] = useState(false);
   useKeymap({
@@ -588,15 +603,7 @@ function Frame({ children }: { children: ReactNode }) {
           </LayerBoundary>
         )}
         {legendOpen && <KeyLegend onClose={() => setLegendOpen(false)} />}
-        {tokenOpen && (
-          <TokenDialog
-            onClose={() => setTokenOpen(false)}
-            onSaved={(token) => {
-              socket.setToken(token);
-              socket.reconnect();
-            }}
-          />
-        )}
+        {tokenOpen && <TokenDialog onClose={() => setTokenOpen(false)} />}
         {/* THE KIT'S ONE POLITE REGION, mounted once: what a control says
             without moving focus (the switcher's "3 projects"). */}
         <Announcer />

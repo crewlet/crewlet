@@ -16,10 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/jsprovision"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
-	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -538,8 +536,22 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 		}, current, unstatedRoom)
 		return err
 	}
-	for _, domain := range []statelog.Domain{tracker.Domain{}, pages.Domain{}} {
+	// EVERY REGISTERED LOG, each on its own terms: one that claims identity
+	// keeps the reserve and is held to the line under it, and one that does
+	// not is measured against its whole ceiling — so a log added to the
+	// register is held to the rule its declaration earns, rather than a list
+	// of the logs that came first deciding which are checked.
+	reserved := 0
+	for _, domain := range registeredDomains() {
 		stream := domain.Stream().Name
+		if !statelog.KeepsGateReserve(domain) {
+			if err := open(stream, target); err != nil {
+				t.Errorf("%s keeps no reserve, and a target above what it holds "+
+					"was refused: %v", stream, err)
+			}
+			continue
+		}
+		reserved++
 		err := open(stream, target)
 		if err == nil {
 			t.Fatalf("a %d-byte target on %s, holding %d bytes, was accepted — "+
@@ -566,9 +578,8 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 				"least that works", stream)
 		}
 	}
-	if err := open(search.Domain{}.Stream().Name, target); err != nil {
-		t.Errorf("the vector changelog keeps no reserve, and a target above what "+
-			"it holds was refused: %v", err)
+	if reserved == 0 {
+		t.Fatal("no registered log keeps a gate reserve, so the case above checked nothing")
 	}
 }
 

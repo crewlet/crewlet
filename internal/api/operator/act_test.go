@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -266,6 +267,12 @@ func TestAnUnboundOrAnonymousCallerCannotAct(t *testing.T) {
 // and the bound seat rides beside them as the person whose own state it is.
 // The answer carries the tool's own receipt with the outcome and the position
 // lifted beside it, which is the floor the caller's next read waits for.
+//
+// A MESSAGE DIFFERS IN ONE FIELD: its author is the bound seat's handle,
+// because a room renders a speaker by it, while the kind is still `operator`
+// and the token's id is still recorded — so a person speaks in a room under
+// the name everybody there knows them by, and an audit can still ask what one
+// token said.
 func TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat(t *testing.T) {
 	t.Parallel()
 	work := &recordingWork{}
@@ -302,6 +309,36 @@ func TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat(t *testing.T) {
 	if !ok || receipt["key"] != "ENG-9" {
 		t.Errorf("the receipt is %v, want the tool's own answer carrying the key it minted",
 			answer["receipt"])
+	}
+
+	talk := &recordingChat{}
+	raw, err := json.Marshal(map[string]any{"request_id": requestA, "args": postArgs()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, answer = act(t, guarded(newSurface(t, operator.Options{
+		Chat: builtin.ChatDeps{
+			Reader: stubChatReader{}, Writer: talk,
+			Actor: operator.ChatActor(boundChart, nil),
+		},
+		Org: boundChart,
+	}), false), "founder-secret", builtin.PostMessageTool, "application/json", string(raw))
+	if status != http.StatusOK {
+		t.Fatalf("the bound person's post answered %d %v", status, answer)
+	}
+	spoke := talk.actors()
+	if len(spoke) != 1 {
+		t.Fatalf("one act posted %d times", len(spoke))
+	}
+	if said := spoke[0]; said.Handle != "jane-founder" || said.Kind != chat.AuthorOperator ||
+		said.OperatorID != "founder" {
+
+		t.Errorf("the message is attributed as %+v — its author is the bound seat, "+
+			"its kind operator and the token recorded beside them", said)
+	}
+	at := statelog.Position{Stream: "CREWLET_CHAT_LOG", Seq: 1}
+	if answer["outcome"] != "applied" || answer["position"] != at.String() {
+		t.Errorf("the post answered %v, want applied at %s", answer, at)
 	}
 }
 

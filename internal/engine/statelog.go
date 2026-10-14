@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/backoff"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/jsprovision"
@@ -196,6 +197,12 @@ type stateLog struct {
 	// metrics is the process's one recorder, threaded down so the apply
 	// loop's instruments are observed rather than merely declared.
 	metrics *metrics.Recorder
+
+	// chatLive is the chat applier's observer, from [Options.ChatLive].
+	// Threaded down for the reason `metrics` is: the applier is built here
+	// and the thing it announces to belongs to the process. Nil is a
+	// documented no-op — see [stateLog.applierFor].
+	chatLive chat.Observer
 
 	// skills is this build's tool-skill parser and nudge, threaded down
 	// because the PAGES APPLIER is what notices a skill page arriving or
@@ -506,8 +513,9 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	s := &stateLog{
 		mode:   e.Mode(),
 		nodeID: nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
-		metrics: e.metrics,
-		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
+		metrics:  e.metrics,
+		chatLive: e.chatLive,
+		skills:   skillDetector{}, nudgeSkills: e.nudgeSkills,
 		ceilings: ceilings, volume: streamVolume(boot),
 		clustered: host.Clustered(),
 		run:       runCtx, stop: cancel,
@@ -848,7 +856,7 @@ func (s *stateLog) haltAppliers() {
 // because the order is load-bearing for the operator surfaces and an
 // init-order registration is exactly the thing nobody can read off the source.
 func registeredDomains() []statelog.Domain {
-	return []statelog.Domain{tracker.Domain{}, search.Domain{}, pages.Domain{}, usage.Domain{}}
+	return []statelog.Domain{tracker.Domain{}, search.Domain{}, pages.Domain{}, usage.Domain{}, chat.Domain{}}
 }
 
 // registeredNames is every registered domain's name, in the register's order.
@@ -953,9 +961,9 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	}
 	at := checkpoint.At
 	// THE SEQUENCE'S CONTEXT, not the caller's: this is a replicated create
-	// like the stream above it, and the four domains share one ceiling so
-	// a wedged metadata group cannot spend a full per-create budget four
-	// times over. Everything else here takes the ordinary boot context.
+	// like the stream above it, and every domain shares one ceiling so a
+	// wedged metadata group cannot spend a full per-create budget once per
+	// domain. Everything else here takes the ordinary boot context.
 	consumer, err := host.DomainConsumer(provisionCtx, spec.Name, s.nodeID, at.Seq)
 	if err != nil {
 		return nil, fmt.Errorf("engine: open %s's consumer: %w", domain.Name(), err)
@@ -1187,6 +1195,24 @@ func (s *stateLog) publisherOver(domain statelog.Domain, spec statelog.StreamSpe
 		// evicted node's usage is still what its seats did, and a fence
 		// here would erase that from every peer.
 		deps.Rows, deps.Fence, deps.Gates = rows, usage.NewFence(), usage.NewGates()
+	case chat.Domain{}.Name():
+		rows, err := chat.NewRows(s.estate().Reader(), spec)
+		if err != nil {
+			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
+		}
+		// THE WIKI'S SHAPE EXACTLY, and that is the point rather than a
+		// coincidence: chat is a STRICT domain whose records carry
+		// history nothing recomputes, so an evicted node must be stopped
+		// from appending to it by the same eviction row its readiness
+		// gate reads — the split where a node's writes are dropped by
+		// every peer while its reads answer normally is the one a second
+		// source for that fact creates.
+		fence := chat.NewFence(s.estate().Reader(), s.nodeID)
+		fence.Floor = s.floorOf(domain.Name())
+		fence.Ends = s.logEndsOf(domain.Name(), appendTo, runner)
+		fence.Committed = runner.Committed
+		deps.Rows, deps.Fence, deps.Gates = rows, fence, chat.NewGates(s.estate().Reader())
+		evicted = fence.Evicted
 	default:
 		return nil, nil, fmt.Errorf("engine: domain %q is registered and has no "+
 			"write authority, so nothing could ever append to its log",
@@ -1199,31 +1225,68 @@ func (s *stateLog) publisherOver(domain statelog.Domain, spec statelog.StreamSpe
 	return publisher, evicted, nil
 }
 
-// barrierEncoder is how a domain writes the framework's barrier as a record on
-// its own log, or nil for a domain that has none.
+// barrierEncoderFor is how a domain writes the framework's barrier as a record
+// on its own log, or nil for a domain that deliberately has none.
 //
 // # Why this is a switch and not a method on Domain
 //
 // A barrier is the framework's append and the DOMAIN's record — the read
 // index decides when one goes out and what its acknowledgement proves, and
-// the domain decides what a record on its log looks like. A domain that has
-// no barrier encoder gets no read index and therefore no `linearizable`,
-// which is the correct answer for one whose reads make no freshness claim
-// rather than a gap: the vectors are derived and compacted, so "as of a
-// position" is not a question about them.
-func barrierEncoder(domain statelog.Domain) func(statelog.Envelope) ([]byte, error) {
+// the domain decides what a record on its log looks like. Keeping it out of
+// the declaration is [stateLog.applierFor]'s rule: the declaration is what a
+// snapshot, a claim and a sweep read, and it must be answerable by a build
+// that cannot construct any of this.
+//
+// # Why it is TOTAL, and what the silence cost
+//
+// It used to have no default arm, and a `nil` encoder is a legitimate value
+// here — so a registered domain nobody added a case for did not fail, it got
+// no read index. Its reads then went back to exactly the state the read
+// authority was built to end: `linearizable` appending no barrier at all,
+// `session` answering from whatever this node happened to hold, and the
+// answer still REPORTING the level it was asked for. There is no error, no
+// log line and no metric for that anywhere — an operator's only evidence
+// would be two screens disagreeing — while the same omission at either
+// sibling site ([stateLog.publisherFor], [stateLog.applierFor]) fails the
+// boot naming the domain.
+//
+// So every registered domain is named here, the compacted ones included, and
+// the absence is written down rather than inferred from a missing case.
+func barrierEncoderFor(domain statelog.Domain) (func(statelog.Envelope) ([]byte, error), error) {
 	switch domain.Name() {
 	case tracker.Domain{}.Name():
-		return tracker.EncodeBarrier
+		return tracker.EncodeBarrier, nil
 	case pages.Domain{}.Name():
-		return pages.EncodeBarrier
+		return pages.EncodeBarrier, nil
+	case chat.Domain{}.Name():
+		return chat.EncodeBarrier, nil
+	case search.Domain{}.Name():
+		// NONE, DELIBERATELY. The vectors are DERIVED and compacted, so
+		// "as of a position" is not a question that has an answer about
+		// them: a barrier would certify a coverage number the next
+		// duty tick recomputes. A nil encoder gives that domain a
+		// reader with no read index and therefore no `linearizable`,
+		// which is the honest refusal rather than a gap.
+		return nil, nil
+	case usage.Domain{}.Name():
+		// NONE, for the vectors' reason: the usage log is compacted and
+		// claims no identity — each node's coverage differs by
+		// construction and every flush re-derives the days a barrier
+		// would certify — so "as of a position" has no answer about it
+		// either.
+		return nil, nil
 	}
-	return nil
+	return nil, fmt.Errorf("engine: domain %q is registered and declares no "+
+		"barrier encoder — a read index appends the DOMAIN's own record, so "+
+		"without one its reads silently stop making the freshness claim they "+
+		"report making: state whether this domain has a barrier or has none, "+
+		"in barrierEncoderFor", domain.Name())
 }
 
 // readerFor builds a domain's READ authority: the four levels, the refusal
 // ladder, the coverage probe and the quorum-committed barrier a linearizable
-// read waits through — the last only for a domain [barrierEncoder] knows.
+// read waits through — the last only for a domain [barrierEncoderFor] gives
+// one.
 //
 // Until this existed [statelog.NewReader] and [statelog.NewReadIndex] were
 // constructed only by their own tests. Every domain reader read its rows
@@ -1237,7 +1300,16 @@ func (s *stateLog) readerFor(domain statelog.Domain, spec statelog.StreamSpec,
 	appendTo *jetstream.DomainLog, runner *statelog.Runner,
 	running *runningLog) (*statelog.Reader, error) {
 
-	encode := barrierEncoder(domain)
+	// NAMED APART FROM `err`, which is not style: an `err` declared at
+	// this function's scope is shadowed by the health closure's own and
+	// by the read index's, and both of those shapes are ones the language
+	// requires — a closure cannot share the outer error, and `x, err :=`
+	// inside a block declares x too. Keeping the function scope free of
+	// `err` is what lets those two stay written the only way they can be.
+	encode, encoderErr := barrierEncoderFor(domain)
+	if encoderErr != nil {
+		return nil, encoderErr
+	}
 
 	deps := statelog.ReaderDeps{
 		Domain: domain,
@@ -1932,6 +2004,29 @@ func (s *stateLog) applierFor(domain statelog.Domain) (statelog.Applier, error) 
 		return pages.NewApplier(s.nodeID, s.skills, s.nudgeSkills), nil
 	case usage.Domain{}.Name():
 		return usage.NewApplier(), nil
+	case chat.Domain{}.Name():
+		// THE OBSERVER COMES FROM THE PROCESS, through
+		// [Options.ChatLive]. The applier's live seam is what pushes a
+		// committed message onto an open socket, and the sink for it is
+		// the API's socket hub — which this package can neither build nor
+		// reach, and which does not exist yet when the state log comes
+		// up. So the process builds the hub FIRST and hands it in; see
+		// [api.EngineChatLive], whose seams are all functions for exactly
+		// that reason.
+		//
+		// It used to be a hard nil here, on the reasoning that the rows
+		// are the durable answer and the push is a courtesy on top of
+		// them. The first half is true and the second is not: the
+		// dashboard polls a room only while its socket is DOWN, and
+		// relies on these frames to refetch while it is up — so a nil
+		// here is not a lost courtesy, it is every connected client
+		// frozen until somebody reloads.
+		//
+		// Nil remains legal and is still a documented no-op
+		// ([chat.NewApplier]): a company off native chat has no hub, and
+		// a node that serves no API has no socket to push onto. Both
+		// apply every record regardless.
+		return chat.NewApplier(s.nodeID, s.chatLive), nil
 	}
 	return nil, fmt.Errorf("engine: domain %q is registered and has no applier, "+
 		"so its records would be consumed and produce no rows on this node",
@@ -2903,7 +2998,7 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 	out := make([]ReplicationStatus, 0, len(held))
 	for _, running := range held {
 		name := running.domain.Name()
-		row := ReplicationStatus{Name: name, Kind: "domain"}
+		row := ReplicationStatus{Name: name}
 		health, err := s.health(ctx, running)
 		switch {
 		case err != nil:

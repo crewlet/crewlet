@@ -6,8 +6,8 @@
  *
  * Every figure here is a NAMED WINDOW of whole company days — 7, 30 or 90, or
  * two dates a reader chose — read from the replicated usage domain (ADR-0020):
- * every node's days, so the answer is the company's whichever node serves it,
- * and it reaches back the domain's 181 days rather than the event log's 30.
+ * every data node's days, so the answer is the company's whichever node serves
+ * it, and it reaches back the domain's 181 days rather than the event log's 30.
  * There is no live rolling window on this screen any more. It opened on one,
  * and a "24 hours" beside a chart of company days put two windows that cannot
  * be compared on one screen; the live window is the live push's, which Home

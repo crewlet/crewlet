@@ -244,6 +244,19 @@ type DomainReport struct {
 	// re-dating it. ABSENT WHEN READ, so only the case a reader must treat
 	// differently carries the key.
 	EvictionsUnreadable bool `json:"evictions_unreadable,omitempty"`
+
+	// BackupAt is when the backup this log's trim counts was taken: the
+	// newest verified point the backup policy takes the word of that
+	// covers this log's stream — a node's copy under `engine`, the
+	// operator's acknowledgement of this log under `operator`. ABSENT
+	// where none covers it, which is the state the backup term blocks on
+	// and the backup-age alarm names, per log.
+	//
+	// PER LOG because the answer differs per log: an acknowledgement
+	// names one stream, and a node's copy reaches the logs it ran. One
+	// instant for the node, which is what the alarm aged, was the newest
+	// point's whatever it covered.
+	BackupAt time.Time `json:"backup_at,omitzero"`
 }
 
 // TrimFloorState says what a domain's trim floor, conclusion and terms are.
@@ -655,6 +668,10 @@ type DomainInputs struct {
 	// evictions failed — see [DomainReport.EvictionsUnreadable].
 	EvictionsUnreadable bool
 
+	// BackupAt is when the backup this log's trim counts was taken — see
+	// [DomainReport.BackupAt] — and zero where none covers the log.
+	BackupAt time.Time
+
 	// SnapshotSkip is this node's snapshot loop's own reason for taking
 	// none, empty when it is taking them.
 	SnapshotSkip SkipReason
@@ -677,11 +694,22 @@ type ReportInputs struct {
 	At          time.Time
 	BackupOwner string
 
-	// Reading is this node's alarm reading, MINUS the two conditions that
-	// are per domain: log headroom and a blocked trim are evaluated per
-	// domain here, from the domain rows, so a two-domain fleet reports
-	// which domain is full rather than that something is.
+	// Reading is this node's alarm reading, MINUS the three conditions
+	// that are per domain: log headroom, a blocked trim and the age of the
+	// backup the trim counts are evaluated per domain here, from the
+	// domain rows, so a fleet reports which log is full, stuck or
+	// uncovered rather than that something is.
 	Reading Reading
+
+	// BackupMaxAge is the backup policy every log's backup is aged
+	// against (`backup_max_age`), and zero for a deployment with none.
+	//
+	// HERE AND NOT ON Reading, because the age it is compared with is a
+	// property of each LOG: under `backup_floor: operator` every log is
+	// acknowledged on its own, so the logs' backups have as many ages as
+	// there are logs, and the one age a node-wide reading could carry was
+	// the newest point's — green beside every log that point left out.
+	BackupMaxAge time.Duration
 
 	Domains []DomainInputs
 
@@ -802,6 +830,7 @@ func (in ReportInputs) domain(d DomainInputs) DomainReport {
 		NotReady:            d.NotReady,
 		WritesRefused:       d.WritesRefused,
 		EvictionsUnreadable: d.EvictionsUnreadable,
+		BackupAt:            d.BackupAt.UTC(),
 		// AN EMPTY LIST, NEVER NULL: a domain the trim has concluded
 		// nothing about has no terms, and `"terms": null` is what
 		// crashed both retention screens after every reanchor.
@@ -1086,12 +1115,14 @@ func (in ReportInputs) snapshots() []SnapshotReport {
 //
 // # Why the per-domain half is evaluated separately
 //
-// [Reading] describes ONE node, and two of its conditions, the log's headroom
-// and a blocked trim, are properties of a DOMAIN. Evaluating the node-wide
-// reading once and each domain's own fields once per domain is what lets a
-// two-domain fleet say WHICH log is filling. Folding them into one reading
-// would report the worst of the two with no name on it, which is the number an
-// operator then has to go and find by hand.
+// [Reading] describes ONE node, and three of its conditions, the log's
+// headroom, a blocked trim and the age of the backup the trim counts, are
+// properties of a DOMAIN. Evaluating the node-wide reading once and each
+// domain's own fields once per domain is what lets a fleet say WHICH log is
+// filling, stuck or uncovered. Folding them into one reading would report the
+// worst of them with no name on it, which is the number an operator then has
+// to go and find by hand, and for the backup it reported the BEST: the newest
+// point's age, for every log that point did not cover.
 //
 // # And why each kind is still ONE alarm
 //
@@ -1103,16 +1134,16 @@ func (in ReportInputs) snapshots() []SnapshotReport {
 //
 // # A trim the backup policy holds is the backup alarm's
 //
-// While [KindBackupAge] fires, a log held by the backup term is not a second
-// problem: the backup is the remedy, and the backup alarm already says that
-// the trim waits for one. Its log is listed under that alarm instead, so a
-// company with no backup reads as the one problem it has rather than as one
-// per log. A log the backup term holds while that alarm is quiet (a backup
-// taken on an earlier generation of the log) stays under [KindTrimBlocked],
-// because nothing else names it.
+// While [KindBackupAge] fires on a log, that log's trim held by the backup
+// term is not a second problem: the backup is the remedy, and the backup
+// alarm already says that the trim waits for one. The term and the instant the
+// trim stopped ride on the log's entry under that alarm instead, so a company
+// with no backup reads as the one problem it has rather than as two per log.
+// A log the backup term holds while its own backup is inside the policy (a
+// backup taken on an earlier generation of the log) stays under
+// [KindTrimBlocked], because nothing else names it.
 func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 	out := Evaluate(in.Reading)
-	backup := slices.IndexFunc(out, func(a Alarm) bool { return a.Kind == KindBackupAge })
 	// Where each per-domain kind sits in out, and the log its detail is from.
 	at := make(map[Kind]int)
 	lead := make(map[Kind]DomainReport)
@@ -1120,17 +1151,28 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 		perDomain := Reading{
 			HeadroomFraction: d.HeadroomFraction,
 			TrimBlockedBy:    string(d.BlockedBy),
+			BackupMaxAge:     in.BackupMaxAge,
 		}
 		if d.BlockedBy != "" && !d.BlockedSince.IsZero() {
 			perDomain.TrimBlockedFor = in.At.Sub(d.BlockedSince)
 		}
-		for _, a := range Evaluate(perDomain) {
+		if !d.BackupAt.IsZero() {
+			perDomain.BackupAge = Age(in.At.Sub(d.BackupAt))
+		}
+		fired := Evaluate(perDomain)
+		backupFires := slices.ContainsFunc(fired, func(a Alarm) bool { return a.Kind == KindBackupAge })
+		heldByBackup := d.BlockedBy == TermBackupFloor && backupFires
+		for _, a := range fired {
 			entry := AlarmDomain{Domain: d.Domain, Detail: a.Detail}
-			if a.Kind == KindTrimBlocked {
-				entry.Term, entry.Since = d.BlockedBy, d.BlockedSince
-				if d.BlockedBy == TermBackupFloor && backup >= 0 {
-					out[backup].Domains = append(out[backup].Domains, entry)
+			switch a.Kind {
+			case KindTrimBlocked:
+				if heldByBackup {
 					continue
+				}
+				entry.Term, entry.Since = d.BlockedBy, d.BlockedSince
+			case KindBackupAge:
+				if heldByBackup {
+					entry.Term, entry.Since = d.BlockedBy, d.BlockedSince
 				}
 			}
 			i, seen := at[a.Kind]
@@ -1156,7 +1198,8 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 
 // morePressing reports whether log d's reading of a per-domain alarm is more
 // urgent than current's, which decides whose measurement the alarm leads with:
-// the log with the least headroom left, and the trim held longest.
+// the log with the least headroom left, the trim held longest, and the log
+// with no backup at all, or else the oldest one.
 func morePressing(kind Kind, d, current DomainReport) bool {
 	switch kind {
 	case KindLogHeadroom:
@@ -1164,6 +1207,10 @@ func morePressing(kind Kind, d, current DomainReport) bool {
 			*d.HeadroomFraction < *current.HeadroomFraction
 	case KindTrimBlocked:
 		return d.BlockedSince.Before(current.BlockedSince)
+	case KindBackupAge:
+		// A ZERO BackupAt IS NO BACKUP, and it sorts before every instant,
+		// so a log nothing covers leads one whose copy is merely old.
+		return d.BackupAt.Before(current.BackupAt)
 	}
 	return false
 }

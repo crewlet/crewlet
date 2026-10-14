@@ -9,11 +9,13 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/coord"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -188,6 +190,67 @@ func TestAnAcknowledgementCarriesTheNamedStreamsOwnGeneration(t *testing.T) {
 	}
 }
 
+// EVERY LOG'S ACKNOWLEDGEMENT STANDS BESIDE THE OTHERS.
+//
+// Under `backup_floor: operator` the procedure is one acknowledgement per
+// ordered log, in turn. The route writes each one to the fleet's register, and
+// the register kept ONE operator row: each acknowledgement replaced the last,
+// so following the procedure left exactly one log covered — whichever was
+// acknowledged last — and the trim blocked on the others. Here the route writes
+// to the real register, and every log acknowledged must still be covered, at
+// its own reach, after the last.
+func TestEveryLogsAcknowledgementStandsBesideTheOthers(t *testing.T) {
+	t.Parallel()
+	fleet := coordmemory.NewFleet()
+	node := &fakeStateLog{generations: map[string]uint32{
+		"CREWLET_TRACKER_LOG": 3,
+		"CREWLET_PAGES_LOG":   7,
+		"CREWLET_CHAT_LOG":    1,
+	}}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: fleet, Capacity: node})
+	acks := []struct {
+		stream     string
+		seq        uint64
+		generation uint32
+	}{
+		{"CREWLET_TRACKER_LOG", 918100000, 3},
+		{"CREWLET_PAGES_LOG", 40400, 7},
+		{"CREWLET_CHAT_LOG", 77000, 1},
+	}
+	for _, ack := range acks {
+		code, body := postAck(t, a, fmt.Sprintf("/work/retention/ack?stream=%s&position=%d",
+			ack.stream, ack.seq))
+		if code != http.StatusOK {
+			t.Fatalf("acknowledging %s answered %d: %v", ack.stream, code, body)
+		}
+	}
+
+	points, err := fleet.BackupPoints(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	counted := coord.CountedBackups(points, true)
+	for _, ack := range acks {
+		newest, ok := coord.NewestBackupOf(counted, ack.stream)
+		if !ok {
+			t.Errorf("%s is covered by no acknowledgement after all three were "+
+				"given — a later one replaced it (register %+v)", ack.stream, points)
+			continue
+		}
+		at := newest.Streams[ack.stream]
+		if at.Seq != ack.seq || at.Generation != ack.generation {
+			t.Errorf("%s is acknowledged at %d (generation %d), want its own %d "+
+				"(generation %d)", ack.stream, at.Seq, at.Generation, ack.seq,
+				ack.generation)
+		}
+		if len(newest.Streams) != 1 {
+			t.Errorf("the acknowledgement covering %s reaches %v — each names the "+
+				"one log it was given for", ack.stream, newest.Streams)
+		}
+	}
+}
+
 // A STREAM THIS NODE DOES NOT RUN IS REFUSED, rather than acknowledged at some
 // other log's generation.
 //
@@ -239,14 +302,28 @@ func (f *fakeNodeGate) answer(req engine.GateRequest, refusal error) (engine.Gat
 		out.Node, out.OpID = req.Node, req.OpID
 		return out, nil
 	}
-	return engine.GateResult{Node: req.Node, OpID: req.OpID, Domains: []engine.DomainGate{
-		{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG", OpID: req.OpID + ".evict.tracker",
+	return engine.GateResult{Node: req.Node, OpID: req.OpID,
+		Domains: everyIdentityLogApplied(req.OpID)}, nil
+}
+
+// everyIdentityLogApplied is a gate answer landing on every log a real node
+// writes a gate record to — every registered domain that claims identity,
+// read from the engine's register rather than written here, so a log added
+// there is in this fake's answer without anybody remembering it.
+func everyIdentityLogApplied(opID string) []engine.DomainGate {
+	var out []engine.DomainGate
+	for i, d := range engine.Domains() {
+		if !d.ClaimsIdentity() {
+			continue
+		}
+		stream := d.Stream().Name
+		out = append(out, engine.DomainGate{
+			Domain: d.Name(), Stream: stream, OpID: opID + ".evict." + d.Name(),
 			Outcome:  statelog.OutcomeApplied,
-			Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 12}},
-		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: req.OpID + ".evict.pages",
-			Outcome:  statelog.OutcomeApplied,
-			Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Seq: 7}},
-	}}, nil
+			Position: statelog.Position{Stream: stream, Seq: uint64(7 + i)},
+		})
+	}
+	return out
 }
 
 func (f *fakeNodeGate) Evict(_ context.Context, req engine.GateRequest) (engine.GateResult, error) {
@@ -514,6 +591,14 @@ func TestAGateOnANodeWithNoStateLogSaysSo(t *testing.T) {
 		if code != http.StatusServiceUnavailable || body["error"] != "no_state_log" {
 			t.Errorf("%s on a node with no state log answered %d %v, want 503 "+
 				"no_state_log", verb, code, body)
+		}
+		// AND IT SENDS THE OPERATOR TO A NODE THAT RUNS ONE: native chat
+		// alone runs the state log (config.Company.RunsStateLog), so a
+		// detail naming the tracker and the knowledge base only sends the
+		// operator of a Jira and Confluence company nowhere.
+		if detail, _ := body["detail"].(string); !strings.Contains(detail, "chat") {
+			t.Errorf("%s: detail %q does not name native chat among what runs "+
+				"the state log", verb, detail)
 		}
 	}
 }

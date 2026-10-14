@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -93,6 +95,11 @@ type TaskPurger interface {
 // number space belongs to the stream it came from: `?stream=` names which. A
 // call naming neither is refused rather than guessed at, because guessing here
 // moves the floor the trim deletes against.
+//
+// ONE LOG PER ACKNOWLEDGEMENT, and the register files it under that log
+// ([coord.BackupPointKey]), so acknowledging another log leaves this one
+// standing: under `backup_floor: operator` the procedure is one of these per
+// ordered log, and each log's trim reads its own.
 func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	position, err := strconv.ParseUint(r.URL.Query().Get("position"), 10, 64)
@@ -156,13 +163,13 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 //
 // An acknowledgement is filed under a STREAM — [coord.BackupPoint.Streams] is
 // what the trim's backup term looks its reach up in — while the published
-// floors are keyed by DOMAIN and every node's positions heartbeat by domain
-// too, and neither record carries a stream name at all. So there was no lookup
-// to perform in them, and what the two sources here actually did was take the
-// FIRST row of whichever one answered. That is not "the fleet's generation":
-// a reanchor moves ONE domain's, so on an estate where the tracker has been
-// re-anchored and the pages log has not, the two numbers differ and which one
-// came back was whichever key the store happened to list first.
+// floors are keyed by DOMAIN and every data node's positions heartbeat by
+// domain too, and neither record carries a stream name at all. So there was no
+// lookup to perform in them, and what the two sources here actually did was
+// take the FIRST row of whichever one answered. That is not "the fleet's
+// generation": a reanchor moves ONE domain's, so on an estate where the tracker
+// has been re-anchored and the pages log has not, the two numbers differ and
+// which one came back was whichever key the store happened to list first.
 //
 // # And a generation that is too HIGH is not a refused acknowledgement
 //
@@ -289,29 +296,82 @@ func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	echo := map[string]any{"task": id, "key": key, "project": project}
 	result, err := a.purger.PurgeAs(r.Context(), operator, opID, id, project, reason)
-	if err != nil {
+	switch {
+	case destructionUnknown(err):
+		log.Warn("purge_outcome_unknown", "task", id, "operator", operator,
+			"op_id", opID, "error", err,
+			"hint", "retry under the same op_id; a fresh one is a second purge")
+		answerDestroyed(w, echo, statelog.OutcomeUnknown, opID, statelog.Position{})
+		return
+	case operationReused(err):
+		// THE ONE REFUSAL NO RETRY UNDER THIS ID CAN FINISH: the id the
+		// caller brought already names a record on another task. Answered
+		// as a failure carrying it, the command line told the operator to
+		// run the purge again with that same id, which is refused the same
+		// way every time.
+		answerReused(w, "purge", err)
+		return
+	case err != nil:
+		// THE OPERATION BESIDE THE REFUSAL, as every destruction's answer
+		// carries it: a retry under the same id is safe whatever happened,
+		// and the caller is never left holding only the id it sent.
 		log.Warn("api_purge_failed", "task", id, "operator", operator,
-			"error", err)
-		writeJSON(w, http.StatusInternalServerError,
-			map[string]string{"error": "purge_failed", "detail": err.Error()})
+			"op_id", opID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "purge_failed", "detail": err.Error(), "op_id": opID,
+		})
 		return
 	}
 	// LOGGED AT INFO WITH THE REASON, because this is the one gesture
 	// whose subject no longer exists to be inspected afterwards.
 	log.Info("task_purged", "task", id, "key", key, "project", project,
 		"operator", operator, "reason", reason, "outcome", result.Outcome)
-	answer := map[string]any{
-		"task": id, "key": key, "project": project,
-		"outcome": result.Outcome,
-		"op_id":   result.OpID,
+	answerDestroyed(w, echo, result.Outcome, result.OpID, result.Position)
+}
+
+// destructionUnknown reports whether a destruction's write path failed in a
+// way that leaves it unknown rather than refused: the write was sent to a
+// data node that never answered ([estate.ErrOutcomeUnknown]), or the request's
+// own deadline ended the wait for one.
+//
+// ONE PREDICATE FOR EVERY DESTRUCTIVE ROUTE, because what it decides is what a
+// caller does next: an unknown is answered as the write path's own `unknown`
+// ([answerDestroyed]) and finished by retrying under the same operation, while
+// a refusal is something to change. The purge answered both as a 500 with no
+// operation id, so a purge whose record may have landed was reported failed,
+// and the only way on was a second purge under a fresh id.
+func destructionUnknown(err error) bool {
+	return errors.Is(err, estate.ErrOutcomeUnknown) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
+// answerDestroyed is how every destructive operator route answers a gesture
+// whose write path gave an outcome — the purge here, and chat's erase and
+// prune beside it: 200 whatever the outcome, the gesture's own echo, the
+// three-valued `outcome`, the `op_id` a retry is sent under, and the
+// `position` the record landed at.
+//
+// 200 FOR ALL THREE, because each is an answer rather than a failure: `pending`
+// is durable and `unknown` is the one to retry, and a status per outcome would
+// make every client read the body anyway to learn which — so one convention,
+// written once, rather than a shape per domain.
+//
+// NO POSITION FOR UNKNOWN, which is the whole content of unknown — the gate
+// routes' rule, for the gate routes' reason: a zero position reads as a record
+// at the log's origin, and the gesture this answers may never have reached the
+// log at all.
+func answerDestroyed(w http.ResponseWriter, echo map[string]any,
+	outcome statelog.Outcome, opID string, position statelog.Position) {
+
+	answer := make(map[string]any, len(echo)+3)
+	for key, value := range echo {
+		answer[key] = value
 	}
-	// NO POSITION FOR UNKNOWN, which is the whole content of unknown — the
-	// gate routes' rule, for the gate routes' reason: a zero position reads
-	// as a record at the log's origin, and the purge this answers may never
-	// have reached the log at all.
-	if result.Outcome != statelog.OutcomeUnknown {
-		answer["position"] = result.Position
+	answer["outcome"], answer["op_id"] = outcome, opID
+	if outcome != statelog.OutcomeUnknown {
+		answer["position"] = position
 	}
 	writeJSON(w, http.StatusOK, answer)
 }
@@ -343,6 +403,97 @@ func callerOpID(w http.ResponseWriter, r *http.Request, name string) (string, bo
 		return "", false
 	}
 	return opID, true
+}
+
+// heldOpID is [callerOpID] for a gesture whose SUBJECT does not identify it:
+// an id the caller brings back must have been minted under exactly name
+// ([statelog.OpNamed]), or it is answered `400 op_id_invalid` naming the
+// gesture it would have to be — and false is returned with the response
+// written, nothing judged or sent.
+//
+// A chat erase and a prune are those gestures ([chat.EraseOpName]): both
+// arbitrate on the room, and a retry is collapsed onto the record its
+// operation already holds on its subject whatever that record says, so the
+// same id carried to other messages or a later cutoff in the same room was
+// answered `applied` from the first while nothing it named was destroyed. The
+// operator's tracker tools refuse the same mistake the same way. The purge and
+// the gate need none of this: a task, or a node, is the whole of what their
+// gesture is about, so an id carried elsewhere already meets another subject
+// and is refused there ([operationReused]).
+func heldOpID(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
+	opID, ok := callerOpID(w, r, name)
+	if !ok || r.URL.Query().Get("op_id") == "" {
+		return opID, ok
+	}
+	if !heldTo(w, opID, name, "other messages, a later cutoff or another room",
+		"nothing this one names destroyed") {
+		return "", false
+	}
+	return opID, true
+}
+
+// heldTo reports whether an operation id the caller BROUGHT was minted under
+// exactly name, answering `400 op_id_invalid` — nothing judged or sent — where
+// it was not. carriedTo says where an id from another gesture would have been
+// taken, and lost what this gesture asked for that the first one's record
+// would have been answered in place of.
+//
+// SEPARATE FROM [heldOpID] for the one gesture whose name is not known when
+// the request arrives: a file write is named after the content it stores
+// ([tracker.FileWriteOpName]), and the content's hash exists only once the
+// body has been read.
+func heldTo(w http.ResponseWriter, opID, name, carriedTo, lost string) bool {
+	if statelog.OpNamed(opID, name) {
+		return true
+	}
+	writeJSON(w, http.StatusBadRequest, map[string]string{
+		"error": "op_id_invalid",
+		"detail": fmt.Sprintf("op_id %q was minted for another gesture than this "+
+			"one, whose operation is named %q — an operation id finishes only the "+
+			"gesture it was minted for, and carried to %s it would be answered "+
+			"from that gesture's record with %s: send the op_id this gesture's "+
+			"own answer returned, or omit it to start afresh",
+			opID, name, carriedTo, lost),
+	})
+	return false
+}
+
+// broughtOpID is the operation id the caller brought, checked as [callerOpID]
+// checks one, or "" where it brought none — for a gesture that names its own
+// operation only once it has read its body ([heldTo]).
+func broughtOpID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	opID := r.URL.Query().Get("op_id")
+	if opID == "" {
+		return "", true
+	}
+	return callerOpID(w, r, "")
+}
+
+// operationReused reports a write the state log refused because its operation
+// id already names a record on ANOTHER subject ([statelog.ReasonOpReused]):
+// the caller brought back an id minted for another gesture.
+//
+// IT IS NOT A RETRY TO OFFER. Every other refusal a destruction meets is
+// finished by sending the same id again, which is why every answer names it;
+// this one is refused the same way every time under that id, because the id
+// is the problem. So its answer ([answerReused]) names no operation and says
+// to start afresh.
+func operationReused(err error) bool {
+	var refusal *statelog.Unavailable
+	return errors.As(err, &refusal) && refusal.Reason == statelog.ReasonOpReused
+}
+
+// answerReused answers a destruction [operationReused] refused: `409
+// op_reused`, the log's own sentence, and no `op_id` — the one refusal a retry
+// under the same id can never finish.
+func answerReused(w http.ResponseWriter, what string, err error) {
+	writeJSON(w, http.StatusConflict, map[string]string{
+		"error": string(statelog.ReasonOpReused),
+		"detail": fmt.Sprintf("nothing was written: the op_id sent with this %s "+
+			"already names a record on something else, and an operation id is "+
+			"one gesture — send it again with no op_id, so it runs under an "+
+			"operation of its own (%v)", what, err),
+	})
 }
 
 // gateVerb names a gate gesture in the fresh operation id it is minted under.
@@ -390,7 +541,7 @@ func (a *App) gate(evict bool) http.HandlerFunc {
 				"error": "no_state_log",
 				"detail": "this node runs no state log, so there is no log to " +
 					"write an eviction to — ask a node that runs the native " +
-					"tracker or knowledge base",
+					"tracker, knowledge base or chat",
 			})
 			return
 		}

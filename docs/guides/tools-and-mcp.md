@@ -66,7 +66,10 @@ Every write answers with its `outcome` — `applied`, `pending` or `unknown`, th
 the `position` it is durable at. A write whose outcome is **unknown** is never
 answered with the id, key, version or revision of something that may not
 exist, on any write tool on either surface: the call fails, saying that the
-write may have landed and may not, under which operation, and what to do. That
+write may have landed and may not, under which operation, and what to do. A
+write sent to the data nodes that **none of them answered** is one of these
+too, never a refusal: each node that stayed silent may have run it, so it is
+not "not made", and the same operation again is what settles it. That
 includes `create_work_item`, whose unknown answer names the key this attempt
 minted, if it minted one, as the key the item has *if* it was filed — never as
 a receipt — and a comment, whose id, mentions and ask are not reported beside
@@ -80,8 +83,8 @@ the item past, when a call changes both; its `position` is likewise the call's
 last write, so waiting for it waits for all of them.
 
 Where this node's operation ledger cannot vouch for the operation — it was
-minted before the ledger may have lost rows, a seat woken by a backlog trigger
-just after its node adopted a snapshot — the answer says this node cannot
+minted before the ledger may have lost rows, a seat re-running a turn whose
+trigger predates the ledger's thirty-day sweep — the answer says this node cannot
 tell, because the same operation asked here answers the same way until the
 write reaches this node, and tells the caller to look before writing it again;
 a gesture that stopped part of the way through at such a step is not told to
@@ -113,11 +116,13 @@ another node whose ledger reaches back that far.
 
 The same tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
-with the writes attributed to your token rather than to a seat, and eleven more
+with the writes attributed to your token rather than to a seat, and sixteen more
 beside them that no seat is given: the saved views, the catalogue write, a
-person's own queue and inbox, the trash, and the board drag. That set is built
-once per company as ONE operator catalogue, and every operator transport serves
-it, so what a person can do is the same whichever way they reach the company.
+person's own queue and inbox, the trash, the board drag, answering a parked
+coding run, pausing and resuming a seat, steering a running turn and answering
+from the knowledge base. That set is built once per company as ONE operator
+catalogue, and every operator transport serves it, so what a person can do is
+the same whichever way they reach the company.
 
 Over MCP, each tracker write's answer also carries the **`op_id`** of the
 operation the call was, and the write tools take it back as an argument: an
@@ -140,6 +145,51 @@ Note the deliberate split between personal and shared writes: `reflect_and_persi
 or GitLab issues — an agent works those through the vendor's own MCP tools, so
 the engine mirrors no state it would have to keep in step. See
 [The Tracker](../concepts/task-engine.md).
+
+### The native chat
+
+Nine more, on the same terms and on the third axis: they are registered **only
+where the company runs the engine's own chat** (`chat.backend: native`, the
+default). A company on Slack or Mattermost gets none of them and reaches its
+workspace through that vendor's own MCP tools instead, for the reason the
+tracker section gives — a seat offered a tool against a surface its company
+does not run reaches for it and fails at the call.
+
+| Tool | Description |
+|------|-------------|
+| `post_message` | Say something new in a room, as a top-level message. `@handle` reaches one colleague; `@channel` in the text is what addresses the whole room, and the receipt says so back |
+| `reply_in_thread` | Answer a message under its own thread, beside the question. Threads are one level deep, so a reply to a reply carries the same root |
+| `send_dm` | Say something privately to one colleague or a few, opening the conversation if it is not open. Never the place for an answer that was asked for in the open |
+| `read_channel` | Read a room, newest first, or one thread in it, oldest first. A seat woken in a thread is handed that thread at turn start ([the thread a turn was woken in](../concepts/agent-runtime.md#the-thread-a-turn-was-woken-in)) and reads it here only where that block says it is incomplete; the rest of the room is not handed over |
+| `list_channels` | The rooms this seat is in, most recently active first, with what each is for and the last thing said in it |
+| `search_messages` | Find a message by what it **says**, ranked across every room this seat may read — on a node that holds no data, by a data node, like every read. `read_channel` is the other half: one room, in order, from a point you name |
+| `react_to_message` | Put one emoji on a message, or take yours back |
+| `join_channel` / `leave_channel` | Move this seat's own membership, and nobody else's. A private room cannot be joined this way, and a unit's own room can be neither joined nor left — its membership is the org chart's, and either gesture would be undone by the next apply |
+
+Every tool that takes a `channel` takes the room's id or its **name** — `#eng`
+and `eng` are the same room. A name is the room's address, unique across the
+company, so it resolves for any room the seat may read whether or not it is
+in it: a public room, or a unit's own room, which is where a decision's
+outcome is often promised. A private room's name resolves only for its
+members, and to anybody else answers exactly as a name nobody holds.
+
+**Three of them count as a delivery** for the turn's did-this-reach-anybody
+gate — `post_message`, `reply_in_thread` and `send_dm` — and the obligation is
+*source-scoped*: a turn woken in a room owes an answer **in** a room. A
+reaction is deliberately not one of them. It wakes nobody and discharges
+nothing, because a seat that could answer every obligation with a thumb would.
+
+The same nine are served to **your** AI assistant and to the dashboard over the
+[operator surface](../reference/api-endpoints.md#the-chat-gestures-only-a-person-makes),
+as the person your token is bound to, and seven more that no seat is given:
+`create_channel`, `open_dm`, `update_channel`, `set_channel_members`,
+`edit_message`, `delete_message` and `mark_chat_read`. A seat corrects what it
+said by replying rather than rewriting it; a room, its settings and its
+membership are the company's furniture; and a read cursor is a person's
+attention, which a seat — woken rather than reading — does not have.
+
+See [Chat](../concepts/chat.md) for who a message wakes, which of them owes a
+reply, and the three things the axis deliberately does not do.
 
 ### Per-Role MCP Servers (GitHub)
 
@@ -575,7 +625,7 @@ From the LLM's perspective, builtin tools and MCP tools are identical — both a
 |---|---|---|
 | **Condense** | the prior-work ledger's payloads past their budget (an argument value, a failed call's error, a round's produced text) and a conversation's older turns; a long chat thread's middle at turn start; the round-cap judge's view of the task and the last text; a delegated worker's answer past its share of the next task; a source document `answer_knowledge` reads; a turn card's one-line account; a recalled turn's ask and its account of what it did, each past 600 bytes (`## Similar prior work` when its bullets are shown rather than summarised, and `query_episodes`) or past about 11 KB — a sixth of one auxiliary call's input, so three turns' asks and accounts fit one call — before the episode summary reads them (`learning.summarize_episodes` on), every rewrite of one answer held to one thirty-second deadline; an episode's long task or outcome before the monthly compaction; a coding run's report, failure or question past what its record carries (a question none of whose lines fits is not asked at all) | The text has to fit, and what fits must still be what the text **said**. It is rewritten by the seat's own auxiliary model (`llm_auxiliary`, falling back to `llm`) through `internal/compact`, charged to the seat like any auxiliary call, labelled as condensed wherever it is shown, and cached per text. Where no model can condense it, the fallback is never a cut: whole entries are left out and counted, a size and a digest stand in its place, or it is carried whole |
 | **Refuse** | `reflect_and_persist` and `mark_onboarded` notes, `refine_skill` bodies and reasons, a `secrets` value, a Slack app manifest name, a counterparty trait, a search or `answer_knowledge` query past 400 bytes, a purge reason too long for its one-line record, a coding run's report, question or result line read back from its box past 32 MiB (its event and error streams are read as streams and from their end instead, and the refused piece is described by its size); in the dashboard, a title, a view's name, a question or a save note past the engine's cap, said under the field before the press | The value is *stored* or *sent on*, so half of it is a lasting half-fact. The caller can shorten it and retry, and the refusal names the field and the limit |
-| **Describe, don't quote** | a task's description and a long custom-field value on a history row (`N bytes`), free text past 600 bytes on a row, a set on a row (what joined and left rather than both sides), a vendor's refusal body (an HTML page's title rather than its markup) | A history row is a log line kept forever on every node; it says what moved and by how much, and the change record beside it holds the text |
+| **Describe, don't quote** | a task's description and a long custom-field value on a history row (`N bytes`), free text past 600 bytes on a row, a set on a row (what joined and left rather than both sides), a vendor's refusal body (an HTML page's title rather than its markup) | A history row is a log line kept forever on every data node; it says what moved and by how much, and the change record beside it holds the text |
 | **Say it, in whole units** | a coding run's transcript (whole lines from its start and its end, 64 KiB and 192 KiB, its middle counted — the plan opens it and a crash explains itself at the bottom), the end of its error stream (2 MiB, its unread start said by size) and its delivered refs (16 KiB of whole refs, the rest counted); an MCP server's stderr tail and a control command's output (whole lines, counted); error text on an event (`events.ClipDiagnostic`, 64 KiB, head kept); a vendor refusal past 2 KiB (marked); a knowledge snippet or an inbox excerpt (a preview of something one click away, marked) | The full text genuinely cannot travel — an unbounded subprocess, or an event the queue would REFUSE, which costs the operator the whole record rather than its tail — or it is a preview of something the reader can open; so it carries a marker, and where a reader can get the rest, says how |
 
 The embeddings input — the text a provider turns into a vector — is the one bound on what a machine is given rather than what a reader sees. The bound is the embedding *model's* own, carried per model with the vendor's documented limits ([Configuration § Providers](../getting-started/configuration.md#providers)), and the provider refuses an input past it before sending anything. What a longer text becomes is each caller's choice: the knowledge corpus embeds a document's opening, because the opening is what a search for the document is about, while a turn's ask, an episode and a diary note are split between words into pieces whose vectors are pooled into one, so all of the text is represented. Either way only the vector's input is bounded; the stored and displayed text stays complete.

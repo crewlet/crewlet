@@ -189,9 +189,9 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 //
 // The documentation said readmission puts back exactly the pin the eviction
 // lifted; for the pages log no pin had ever been lifted, and no readmission
-// was ever written there either. Both logs now hold both records, and each
-// log's own rows say the node is back from the position its own readmission
-// landed at.
+// was ever written there either. Every identity-claiming log now holds both
+// records, and each log's own rows say the node is back from the position its
+// own readmission landed at.
 func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)

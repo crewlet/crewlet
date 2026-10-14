@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -730,28 +731,32 @@ func holdsFor(holds []coord.TrimHold, stream string) []statelog.Hold {
 func (r *retention) backupTerm(points []coord.BackupPoint, stream string) (
 	seq uint64, at time.Time, generation uint32, have bool) {
 
-	newest, ok := r.newestCounted(points)
+	newest, ok := r.newestCounted(points, stream)
 	if !ok {
-		return 0, time.Time{}, 0, false
-	}
-	reach, covers := newest.Streams[stream]
-	if !covers {
-		// A BACKUP THAT DOES NOT COVER THIS LOG IS NOT A BACKUP AT
-		// SEQUENCE ZERO — it is no backup of this domain at all, which
+		// NO COUNTED BACKUP COVERS THIS LOG, which is not a backup at
+		// sequence zero — it is no backup of this domain at all, which
 		// blocks. The distinction is the whole reason the term is
 		// three-valued.
 		return 0, time.Time{}, 0, false
 	}
+	reach := newest.Streams[stream]
 	return reach.Seq, newest.At, reach.Generation, true
 }
 
-// newestCounted is the newest verified backup the operator's policy takes the
-// word of — the one point both the trim's backup term and the backup-age alarm
-// read, through [coord.CountedBackups], so the alarm can never age a backup the
-// trim does not count.
-func (r *retention) newestCounted(points []coord.BackupPoint) (coord.BackupPoint, bool) {
-	return coord.NewestBackup(coord.CountedBackups(points,
-		r.cfg.Floor() == config.BackupFloorOperator))
+// newestCounted is the newest verified backup covering one log that the
+// operator's policy takes the word of — the one point both the trim's backup
+// term and the backup-age alarm read for that log, through
+// [coord.CountedBackups] and [coord.NewestBackupOf], so the alarm can never
+// age a backup the trim does not count.
+//
+// PER LOG, and the order of the two questions is the fix. Taking the newest
+// counted point and THEN asking whether it covered the log blocked every log it
+// did not: under `backup_floor: operator` an acknowledgement names one log, so
+// the newest one covered the log acknowledged last and every other log's trim
+// stopped, while the alarm aged that newest row and stayed green.
+func (r *retention) newestCounted(points []coord.BackupPoint, stream string) (coord.BackupPoint, bool) {
+	return coord.NewestBackupOf(coord.CountedBackups(points,
+		r.cfg.Floor() == config.BackupFloorOperator), stream)
 }
 
 // feedTerm is how far this domain's wake feed has acknowledged.
@@ -811,18 +816,20 @@ type evictionLister interface {
 	Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error)
 }
 
-// The two identity-claiming domains this build registers, held to the
-// interface at compile time so a reshaped method is a build failure rather
-// than a boot refusal.
+// The identity-claiming domains this build registers — the tracker, the
+// knowledge base and chat — held to the interface at compile time so a
+// reshaped method is a build failure rather than a boot refusal.
 var (
 	_ evictionLister = tracker.Domain{}
 	_ evictionLister = pages.Domain{}
+	_ evictionLister = chat.Domain{}
 
-	// AND BOTH READ THEIR GATE RECORDS OFF THE LOG — an eviction and the
+	// AND EACH READS ITS GATE RECORDS OFF THE LOG — an eviction and the
 	// readmission that lifts it — which [stateLog.startLog] refuses a
 	// registered identity-claiming domain for lacking.
 	_ statelog.EvictionProbe = tracker.Domain{}
 	_ statelog.EvictionProbe = pages.Domain{}
+	_ statelog.EvictionProbe = chat.Domain{}
 )
 
 // tombstones is every eviction this node has applied for one domain's log.

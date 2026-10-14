@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
@@ -90,6 +91,25 @@ type App struct {
 	// fleetBroker reads and changes the fleet broker's membership. See
 	// fleetbroker.go.
 	fleetBroker FleetBrokerControl
+
+	// chatPurger is chat's two destructive writes, the erase and the
+	// prune. Nil on a company that runs no native chat, which leaves their
+	// routes unmounted — an endpoint that exists and refuses everything
+	// reads as broken, while one that is not there matches what
+	// `chat.backend` says. Every read is a registered question and every
+	// other write an act tool; see chat.go.
+	chatPurger ChatPurger
+
+	// chatActor resolves a request's credential to the seat it acts as.
+	// THE SERVER'S ANSWER, on every call: a caller may never name a seat.
+	chatActor func(ctx context.Context) (chat.Actor, error)
+
+	// chatLive is the chat arm of the socket: the applier's observer, the
+	// per-recipient visibility filter and the presence scatter. Built and
+	// run outside this App, because the applier takes its observer before
+	// an API exists and the scatter serves nodes that have none — see
+	// [Options.ChatLive].
+	chatLive *stream.ChatHub
 
 	// company reads the engine's CURRENT epoch, which is what
 	// [App.Configured] asks.
@@ -257,13 +277,15 @@ type Options struct {
 	// nothing else, through [Probes].
 	Bridge *mcpbridge.Bridge
 
-	// Operator is the company's own tracker and knowledge base as ONE tool
-	// catalogue, served to the people who run it — over MCP for an
-	// operator's own AI assistant, and over the act transport for a person
-	// at the dashboard, who must hold a token bound to their seat
-	// (ADR-0024). Nil serves none and both routes are ABSENT,
-	// which is the honest shape for a company on Jira and Confluence: there
-	// is nothing here it could manage.
+	// Operator is the company's own tracker, knowledge base and chat as ONE
+	// tool catalogue, with the fleet records a person acts on beside them
+	// (a parked run, a paused seat, a running turn), served to the people
+	// who run it — over MCP for an operator's own AI assistant, and over the
+	// act transport for a person at the dashboard, who must hold a token
+	// bound to their seat (ADR-0024). Nil serves none and both routes are
+	// ABSENT, which is the honest shape only where the catalogue would
+	// serve no tool at all — never for an engine node, which always wires
+	// the fleet-record tools whatever its backends are.
 	//
 	// ALWAYS GUARDED — see [auth.GuardedPrefixes]. It writes to the
 	// company, and the credential's own name is what lands on each record
@@ -292,6 +314,37 @@ type Options struct {
 	// FleetBroker reads and changes the fleet broker's membership — see
 	// [FleetBrokerControl].
 	FleetBroker FleetBrokerControl
+
+	// ChatPurger is chat's two destructive writes — the compliance erase
+	// and a room's prune — beside [Options.Purger], the tracker's. Nil
+	// leaves their routes UNMOUNTED, which is the honest shape for a
+	// company on Slack or Mattermost: there is no native conversation here
+	// to destroy.
+	//
+	// THE ONLY CHAT WRITES THIS OPTION CARRIES. Every other one — a post,
+	// an edit, a room, a person's read state — is a tool of the operator
+	// catalogue the dashboard writes through ([Options.Operator],
+	// ADR-0024), and every READ is a registered question in
+	// [queries.Sources], reached by a named route exactly as the board's
+	// and the wiki's are.
+	ChatPurger ChatPurger
+
+	// ChatLive is the chat arm of the live socket. Built by the caller
+	// rather than here, and that is an ORDERING fact: the chat applier
+	// takes its observer when the state log comes up, which is before
+	// this App exists, so a hub built here could never be the observer.
+	// See [stream.ChatHubOptions], whose seams are all functions for the
+	// same reason.
+	//
+	// AND RUN BY THE CALLER: this App registers its sockets with the hub
+	// and pushes through it, and never starts or stops it. Half of what
+	// the hub runs serves the rest of the fleet rather than these sockets,
+	// so it runs on nodes that serve no API at all — see
+	// [EngineChatLive].
+	//
+	// Nil serves no chat frames and no presence. Every method on a nil hub
+	// is a no-op, so nothing downstream needs a branch.
+	ChatLive *stream.ChatHub
 
 	// Backup copies this node's durable state to a path an operator
 	// names.
@@ -440,6 +493,13 @@ func New(opts Options) (*App, error) {
 	a.files = opts.Files
 	a.capacity = opts.Capacity
 	a.fleetBroker = opts.FleetBroker
+	a.chatPurger, a.chatLive = opts.ChatPurger, opts.ChatLive
+	// ONE RESOLUTION OF WHO THE CALLER IS, the one the live channel
+	// identifies a socket with ([NewChatLive]) and the operator catalogue
+	// attributes a chat write with ([operator.ChatActor]): the destructive
+	// routes record their act under it, and a second would let a person
+	// destroy in a room their own socket is not shown.
+	a.chatActor = chatActorFor(opts.Sources.Company, opts.Sources.Env)
 
 	// ONE TABLE, keeping every pattern it is handed: see [routeTable].
 	mux := &routeTable{mux: http.NewServeMux()}
@@ -468,10 +528,14 @@ func New(opts Options) (*App, error) {
 	// what the metadata group counts, and the removal of a member that is
 	// gone for good. See fleetbroker.go.
 	a.mountFleetBroker(mux)
-	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
-	// The OPERATOR surface: the same tracker and knowledge tools a seat
-	// holds, offered to a person's own assistant over MCP and to the person
-	// themself over the act transport. Under its own
+	// The company's own chat: the two writes that DESTROY, beside the
+	// purge. Every read is a registered question reached by a named route,
+	// and every other write an act tool; see chat.go.
+	a.mountChat(mux)
+	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer, a.chatLive))
+	// The OPERATOR surface: the same tracker, knowledge and chat tools a
+	// seat holds, offered to a person's own assistant over MCP and to the
+	// person themself over the act transport. Under its own
 	// always-guarded prefix rather than under /mcp/, which is exempt
 	// wholesale for the sandbox bridge — see operator.MCPPath.
 	a.mountOperator(mux, opts.Operator)
@@ -724,12 +788,19 @@ func (a *App) Configured() bool { return a.company() != nil }
 // broadcast subscription is attached, or an event published between the read
 // and the subscribe falls into the gap. This runs before it, so the seed is
 // the caller's (see observe.Seed, wired in cmd/crewlet).
+//
+// NOR DOES IT START THE CHAT HUB ([Options.ChatLive]), which is not this App's
+// to run: its presence answerer and its person fan-out serve the fleet, and a
+// node with no API has to run them too. See [EngineChatLive].
 func (a *App) Start(ctx context.Context) {
 	a.stream.StartHealthTicks(ctx)
 }
 
-// Stop ends the tick and disconnects every client.
-func (a *App) Stop() { a.stream.Stop() }
+// Stop ends the tick and disconnects every client. The chat hub outlives it
+// (see [App.Start]): the node that built it stops it after the drain.
+func (a *App) Stop() {
+	a.stream.Stop()
+}
 
 func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) {
 	// ALWAYS 200 while the process is alive, INCLUDING through a drain: an
@@ -764,6 +835,7 @@ func (a *App) Queries() *queries.Registry { return a.queries }
 // two to disagree about what "unauthorized" means.
 func (a *App) answer(ctx context.Context, what string, params map[string]any, operatorID string) (any, error) {
 	data, err := a.queries.Answer(ctx, what, params, operatorID)
+	var refused *queries.CallerRefusal
 	switch {
 	case err == nil:
 		return data, nil
@@ -773,6 +845,12 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnauthorized, what)
 	case errors.Is(err, queries.ErrNotFound):
 		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
+	case errors.As(err, &refused):
+		// WHO IS ASKING, under the refusal's own code and with its
+		// sentence, which names the line of the company document to
+		// change — the act transport's answer to the same caller.
+		return nil, &stream.ForbiddenError{What: what, Code: refused.Code,
+			Detail: refused.Detail}
 	case errors.Is(err, queries.ErrBadParams):
 		// TRANSLATED RATHER THAN LEFT TO THE DEFAULT, which is what it
 		// was: an untranslated refusal reached the socket as an
@@ -826,7 +904,16 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 // caller must not learn that a seat does not exist from one path and that the
 // server broke from the other.
 func writeQueryError(w http.ResponseWriter, what string, err error) {
+	var refused *queries.CallerRefusal
 	switch {
+	case errors.As(err, &refused):
+		// 403 AND NOT 401: the credential was accepted, and what is
+		// missing is an identity in the company. The code is the act
+		// transport's for the same caller, and the sentence names the
+		// line of configuration that fixes it.
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": refused.Code, "detail": refused.Detail,
+		})
 	case errors.Is(err, queries.ErrUnknown):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeUnknownQuery})
 	case errors.Is(err, queries.ErrUnauthorized):

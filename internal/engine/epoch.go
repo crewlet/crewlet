@@ -257,9 +257,9 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	startedNative, err := e.startNativeFor(ctx, next)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
-			"detail", "the native tracker and knowledge base could not be "+
-				"started for this node's first company on them; the previous "+
-				"epoch is still current")
+			"detail", "the native runtime (the company's own tracker, "+
+				"knowledge base or chat) could not be started for this node's "+
+				"first company on it; the previous epoch is still current")
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	if startedNative {
@@ -348,6 +348,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		// unconditionally and the other does not.
 		e.reconcileSlack(ctx, next)
 		e.reconcileMattermost(ctx, next)
+		// AND THE ENGINE'S OWN CHAT'S INDICATOR, whose mode is founder
+		// policy edited live and whose surface a revision can switch
+		// on or off. See [Engine.applyChatStatus].
+		e.applyChatStatus(ctx, next)
 	} else if err := e.startInbound(ctx, next); err != nil {
 		// A NODE THAT BOOTED WITH NO COMPANY has no inbound edge for
 		// the reconcilers above to rebuild, and each of them returns
@@ -366,9 +370,9 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// and the answer just changed here. See [integration.Worker.MarkStale].
 	e.integrations.MarkStale()
 	// The NATIVE backends' parsers are on the same edge and rebuilt for
-	// the same reason. Their projectors, index, stores and feeds are NOT:
-	// those follow a coordination family, which a company revision does
-	// not change — see [Engine.reconcileNative].
+	// the same reason. Their apply loops, indexes, stores and feeds are
+	// NOT: those follow a log, which a company revision does not change —
+	// see [Engine.reconcileNative].
 	e.reconcileNative(ctx, next, activatedAt)
 	// AND THE TOOL SKILLS' SOURCE, after the knowledge base's own reconcile
 	// above, because the Confluence source is read off the wiring it left

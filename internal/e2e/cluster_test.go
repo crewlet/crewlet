@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -59,13 +60,16 @@ type cluster struct {
 }
 
 // startCluster stands up n nodes, each an engine and its API, on one clustered
-// broker.
-func startCluster(t *testing.T, n int) *cluster {
+// broker. tune amends every member's bootstrap after the harness's own
+// settings and before anything is seeded or opened from it
+// ([memberBootstrap]) — [TestAFleetOfThree] takes one member's seats away
+// with it ([withoutSeats]).
+func startCluster(t *testing.T, n int, tune ...func(*config.Bootstrap)) *cluster {
 	t.Helper()
 	if n < 2 {
 		t.Fatalf("startCluster(%d): use start(t) for one node", n)
 	}
-	return startMesh(t, jetstreamtest.StartDirectMesh, n)
+	return startMesh(t, jetstreamtest.StartDirectMesh, n, tune...)
 }
 
 // startPartitionableCluster is [startCluster] on a mesh whose every route runs
@@ -89,7 +93,9 @@ func startPartitionableCluster(t *testing.T, n int) *cluster {
 // DIFFERENT NUMBERS." Retrying with the same numbers is retrying the question
 // somebody else already answered, so a genuinely lost port failed all three
 // attempts identically and with nothing to say which of the two causes it was.
-func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstreamtest.Relays, n int) *cluster {
+func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstreamtest.Relays,
+	n int, tune ...func(*config.Bootstrap)) *cluster {
+
 	t.Helper()
 	logs.attribute(t)
 	// BOUNDED IN WALL CLOCK AS WELL AS IN TRIES — see
@@ -123,7 +129,7 @@ func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstr
 		attemptCtx, cancelAttempt := context.WithDeadline(t.Context(),
 			jetstreamtest.StartAttemptEnd(time.Now(), deadline))
 		relays := mesh(attemptCtx, t, n)
-		c, err := startMeshOnce(attemptCtx, t, relays, n)
+		c, err := startMeshOnce(attemptCtx, t, relays, n, tune...)
 		cancelAttempt()
 		if err == nil {
 			return c
@@ -185,7 +191,9 @@ var errNotRetryable = errors.New("not fixable by another attempt")
 
 // ctx BOUNDS THIS ATTEMPT, and is not the test's own: see [startMesh] for why
 // a ceiling the member starts cannot observe bounds nothing.
-func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, n int) (*cluster, error) {
+func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays, n int,
+	tune ...func(*config.Bootstrap)) (*cluster, error) {
+
 	t.Helper()
 	c := &cluster{relays: relays, nodes: make([]*node, n)}
 
@@ -196,7 +204,7 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 	// for the moment a member starts.
 	boots := make([]config.Bootstrap, n)
 	for i := range n {
-		boot, err := memberBootstrap(t, relays, i, n)
+		boot, err := memberBootstrap(t, relays, i, n, tune...)
 		if err != nil {
 			return nil, fmt.Errorf("member %d: %w", i, err)
 		}
@@ -333,13 +341,16 @@ const clusterStartAttempts = jetstreamtest.ClusterStartAttempts
 const clusterHost = "127.0.0.1"
 
 // memberBootstrap is member i's half of Tier A: where it keeps its data, the
-// mesh it routes through, and the fleet-wide settings every member shares.
+// mesh it routes through, and the fleet-wide settings every member shares —
+// and, after all of those, whatever the case's tune amends.
 //
 // EVERY NODE HAS ITS OWN STORE AND ITS OWN STREAM DIRECTORY, because that is
 // what a fleet is: n machines, each with its own disk. Sharing either would
 // make this one node wearing three hats, and every fleet mechanism under it
 // would pass for the wrong reason.
-func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int) (config.Bootstrap, error) {
+func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int,
+	tune ...func(*config.Bootstrap)) (config.Bootstrap, error) {
+
 	port, routes, advertise := relays.Member(i)
 	peers, err := otherMembers(routes, port)
 	if err != nil {
@@ -385,6 +396,13 @@ func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int) (conf
 	// names and a member with none refuses every one — the file uploads
 	// cross the fleet through the API.
 	boot.API.Auth.Tokens = []config.APIToken{{ID: e2eOperatorID, Token: e2eOperatorToken}}
+	// LAST, so a case can amend anything above it — and before anything
+	// reads it: the store is seeded from it ([startMeshOnce]) and the
+	// broker and the engine are opened from it ([buildMember]), which is
+	// the only moment Tier A is read at all.
+	for _, amend := range tune {
+		amend(&boot)
+	}
 	return boot, nil
 }
 
@@ -469,6 +487,34 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	stops.backends = append(stops.backends,
 		func() { backends.Close(context.WithoutCancel(ctx)) })
 
+	// NO LIVE HUB ON A CLUSTER MEMBER, deliberately, and this differs from
+	// how `crewlet run` wires a node — the one boot path in this package
+	// that does not go through [api.NewEngineWithChat].
+	//
+	// It had one briefly, on the reasoning that a member whose applier
+	// announced to nothing is a failure a single node cannot show. That
+	// reasoning does not survive contact with the suite: NO CLUSTER CASE
+	// ASSERTS A PUSH. The cases that do run where the hub IS attached — on
+	// one node ([TestACommittedMessageReachesAWatchingSocket] and the client
+	// replay's capture, [captureChat]) and across the stateless pair, whose
+	// two hubs scatter to each other over the broker
+	// ([TestAnIndicatorRaisedOnANodeWithNoAPIShowsInARoomOnAnother]). So a
+	// hub here bought no coverage at all.
+	//
+	// And it was not free. Each hub serves a presence subject and scatters
+	// to its peers every api/stream.ChatPresenceInterval — three extra
+	// responders and a periodic fan-out per member, arriving while the
+	// embedded brokers are still establishing routes, in the package that
+	// runs alone because standing up N brokers in one process is already
+	// tight ([tickInterval] says what a fleet's periodic work costs it).
+	// NOT A FLAKE FIX, and not claimed as one: it was removed while chasing
+	// a fleet failure whose cause turned out to be a placement race in the
+	// case itself, and it stays removed on its own merits — work with no
+	// assertion behind it, on the harness that can least afford it.
+	//
+	// The applier applies every record with a nil observer — its
+	// documented no-op — so these cases assert exactly what they did
+	// before.
 	e, err := engine.New(ctx, engine.Options{
 		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(nil), Backends: backends,
@@ -497,7 +543,7 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	//
 	// AT THE PRODUCTION TICK, not the single-node cases' 25 ms — see
 	// [tickInterval] for what that costs a fleet.
-	app, srv, apiStops, err := wireAPI(t.Context(), e, boot, //nolint:contextcheck // see above
+	app, srv, apiStops, err := wireAPI(t.Context(), e, boot, nil, //nolint:contextcheck // see above
 		func(opts *api.Options) { opts.HealthInterval = stream.HealthInterval })
 	stops.api = apiStops
 	if err != nil {
@@ -655,8 +701,9 @@ func (c *cluster) whole(t *testing.T, n *node) func() bool {
 }
 
 // fleetClaims are the claims [TestAFleetOfThree] makes of one fleet, in the
-// order it makes them. Each is a subtest under the name it had when it was a
-// case of its own, standing up a fleet of its own.
+// order it makes them, each a subtest named for the claim it makes. A claim
+// that was once a case of its own, standing up a fleet of its own, keeps the
+// name it had then; the chat claim joined as a claim.
 //
 // THE ORDER IS PART OF THE CLAIMS, which is what sharing a fleet costs:
 //   - the snapshots claim is FIRST, because what it holds is a snapshot taken
@@ -670,7 +717,8 @@ func (c *cluster) whole(t *testing.T, n *node) func() bool {
 //   - the rest read only what they wrote, under op ids, titles and paths no
 //     other claim uses, so another claim's rows only add to what they read:
 //     the search's coverage is computed from its own pages and every match
-//     another page adds is still a match.
+//     another page adds is still a match, and the chat claim reads and prunes
+//     the one room it made.
 var fleetClaims = []struct {
 	name string
 	run  func(*testing.T, *cluster)
@@ -681,15 +729,18 @@ var fleetClaims = []struct {
 	{"TheFleetAnswersOneSearchBetweenItsMembers", claimTheFleetAnswersOneSearchBetweenItsMembers},
 	{"AFileUploadedToOneNodeDownloadsFromAnother", claimAFileUploadedToOneNodeDownloadsFromAnother},
 	{"TheCollectorsReportReadsOnEveryNode", claimTheCollectorsReportReadsOnEveryNode},
+	{"AMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees",
+		claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees},
 	{"AFleetAgreesAboutOneCompany", claimAFleetAgreesAboutOneCompany},
 }
 
 // A FLEET OF THREE, AND WHAT ONLY A FLEET CAN SHOW — on ONE fleet.
 //
-// Every claim here stood up a fleet of its own: three members over the same
-// company and the same bootstrap, a boot and a teardown apiece around a body
-// that was often the shorter part. The claims are about a running fleet, not
-// about its boot, so they share one.
+// Every claim here but the chat one stood up a fleet of its own: three members
+// over the same company and the same bootstrap, a boot and a teardown apiece
+// around a body that was often the shorter part. The claims are about a
+// running fleet, not about its boot, so they share one — which is why the
+// chat claim was written as one of them rather than as a case.
 //
 // WHAT THAT COSTS, and what pays for each:
 //   - the claims are ordered — see [fleetClaims] for why each sits where it
@@ -702,9 +753,18 @@ var fleetClaims = []struct {
 //     each count the whole fleet live ([cluster.whole]); when they do not
 //     after a claim, the case stops there naming that claim, rather than
 //     spending a budget per claim reporting it again;
-//   - a run boots one fleet rather than seven, so a defect in booting one
-//     shows once a run where it showed seven times — boot is still exercised
-//     by every case in this package and by the partition case's own fleet.
+//   - a run boots one fleet rather than one per claim, so a defect in
+//     booting one shows once a run rather than once per claim — boot is
+//     still exercised by every case in this package and by the partition
+//     case's own fleet.
+//
+// ONE MEMBER RUNS NO SEATS ([chatWriterNode], [withoutSeats]). The chat claim
+// posts a message on a member the seat it wakes can never be on, which only a
+// member without [placement.RoleSeats] makes a fact rather than a timing; and
+// no other claim runs a turn, so every other claim reads a fleet whose members
+// all hold the estate, serve the API and take duties, exactly as before. It is
+// also a fleet shape deployments run — an ingress member that takes no seats
+// beside two that do.
 //
 // THE PARTITION CLAIM KEEPS A FLEET OF ITS OWN
 // ([TestAPartitionedMemberIsSilentRatherThanSlow]): it needs every route to
@@ -713,7 +773,7 @@ var fleetClaims = []struct {
 // why), and it is the one claim that breaks its fleet on purpose.
 func TestAFleetOfThree(t *testing.T) {
 	noParallel(t)
-	c := startCluster(t, fleetSize)
+	c := startCluster(t, fleetSize, withoutSeats(chatWriterNode))
 	for i, claim := range fleetClaims {
 		after := "the fleet came up"
 		if i > 0 {
@@ -732,6 +792,30 @@ func TestAFleetOfThree(t *testing.T) {
 	}
 }
 
+// withoutSeats is the tune that takes [placement.RoleSeats] from the member
+// called id and leaves it every other role in the vocabulary.
+//
+// EVERY OTHER ROLE, AND STATED AS THE VOCABULARY LESS ONE rather than as a
+// list: [placement.RoleData] is what every cluster member must hold and what
+// ingress and workers both need (Tier A refuses the member otherwise, by
+// name), and a role added to the vocabulary later is one this member should
+// take as every other member does — a list written here would quietly leave
+// it out. What is removed is the ability to RUN a seat, not to reach the
+// fleet: the member still accepts writes and publishes them.
+func withoutSeats(id string) func(*config.Bootstrap) {
+	return func(b *config.Bootstrap) {
+		if b.Node.ID != id {
+			return
+		}
+		b.Node.Roles = nil
+		for _, role := range placement.Vocabulary() {
+			if role != placement.RoleSeats {
+				b.Node.Roles = append(b.Node.Roles, string(role))
+			}
+		}
+	}
+}
+
 // A RECORD ONE NODE WRITES REACHES EVERY NODE'S ROWS.
 //
 // This is the whole claim of the state log stated as a product fact, and it is
@@ -745,7 +829,7 @@ func TestAFleetOfThree(t *testing.T) {
 // from either screen looks exactly like the other node being idle.
 func claimARecordOneNodeWritesReachesEveryNodesRows(t *testing.T, c *cluster) {
 	// THE CHART FIRST. A create takes its key from its project's own
-	// counter, so the project has to exist — every node applies the chart
+	// counter, so the project has to exist — every data node applies the chart
 	// at boot, and this is also the first assertion that it did.
 	task := newTask("ENG", "the fleet-wide one")
 	written, err := operator(t, c.nodes[0]).CreateTask(
@@ -890,7 +974,14 @@ func claimAFleetTakesAndOffersSnapshots(t *testing.T, c *cluster) {
 	// that does not name one of its own domains, so a snapshot missing a
 	// domain is one nobody can adopt — and it is indistinguishable from a
 	// healthy one until somebody needs it.
-	for _, want := range []string{"tracker", "vectors", "pages", "usage"} {
+	//
+	// OVER THE ENGINE'S OWN REGISTER, never over a list written here. It
+	// WAS a list here — "tracker", "vectors", "pages", "usage" — and a
+	// fifth domain added to the register would have left this case
+	// asserting four of five while reporting a pass, which is the exact
+	// shape of the failure it exists to catch.
+	for _, domain := range engine.Domains() {
+		want := domain.Name()
 		if _, named := manifest.Domains[want]; !named {
 			t.Errorf("the snapshot names %v and not %q — a recipient refuses "+
 				"an artefact that does not name every domain it registers",
@@ -1406,7 +1497,7 @@ func claimAFleetAgreesAboutOneCompany(t *testing.T, c *cluster) {
 // had not yet applied a record on a log the case never wrote — a node's usage
 // day, published at boot and whenever a fingerprint moves; an embedding the
 // duty filed — would differ from its peers for a reason that is timing rather
-// than divergence. The domain list is the engine's ([engine.Engine.Domains]),
+// than divergence. The domain list is the engine's ([engine.Domains]),
 // for the reason [replicatedDigest] reads it there.
 //
 // AT ONE END, which is what makes the comparison a property of the rows: a
@@ -1449,7 +1540,7 @@ func (c *cluster) logEnds(t *testing.T) []statelog.Position {
 		t.Fatalf("a JetStream client on member 0: %v", err)
 	}
 	var out []statelog.Position
-	for _, domain := range n.engine.Domains() {
+	for _, domain := range engine.Domains() {
 		name := domain.Stream().Name
 		stream, err := js.Stream(t.Context(), name)
 		if err != nil {
@@ -1484,7 +1575,7 @@ func (c *cluster) logEnds(t *testing.T) []statelog.Position {
 func replicatedDigest(t *testing.T, n *node) map[string]string {
 	t.Helper()
 	out := map[string]string{}
-	for _, domain := range n.engine.Domains() {
+	for _, domain := range engine.Domains() {
 		for table, class := range domain.Tables() {
 			if class != statelog.Replicated {
 				continue

@@ -44,12 +44,24 @@
  * Four subsystems keep a record of the CHANGE a write made. None keeps one of
  * the CALL: a tool call that was refused, one whose answer never came back, and
  * a verb that changes no tracker or wiki record at all — a backup — left
- * nothing anywhere. The runtime audit is that record (`operator_acted` and
- * `backup_requested`, each with the envelope source `operator`), and it is read
- * here as `Runtime`: every call, whatever became of it, with the person the
- * credential is bound to and the node that served it. The arguments are never
- * in it — they are the company's content, and they already live in the history
- * of whatever they changed.
+ * nothing anywhere. The runtime audit is that record (`operator_acted`,
+ * `backup_requested`, `chat_erased` and `chat_pruned`, each with the envelope
+ * source `operator`), and it is read here as `Runtime`: every call, whatever
+ * became of it, with the person the credential is bound to and the node that
+ * served it. The arguments are never in it — they are the company's content,
+ * and they already live in the history of whatever they changed — except a
+ * chat erase's REASON, because what it changed is gone from every node and the
+ * reason is the account of it that is left.
+ *
+ * # Why chat is not a source of its own
+ *
+ * The four sources above are CHANGE RECORDS; a room's transcript is content —
+ * what people said, not what anybody did to the company — and a private room's
+ * is not the operator's to read at all. What a PERSON did in chat is already
+ * here: every ordinary chat write is an operator tool through the act
+ * transport, so it is an `operator_acted` Runtime row like any other, and the
+ * two gestures that destroy — an erase and a prune, routes rather than tools —
+ * leave their own Runtime rows, the room they emptied as the subject.
  *
  * # What each source can and cannot be asked
  *
@@ -164,7 +176,26 @@ const RUNTIME_ROW: Record<
     path: ["settings", "backups"],
     noSubject: "No directory recorded",
   }),
+  // A CHAT DESTRUCTION'S SUBJECT IS THE ROOM IT EMPTIED, which still stands —
+  // only what it said is gone — so it links there. Whether this viewer may read
+  // it is the room's own question, answered there as for any other link.
+  chat_erased: (row) => chatRoom(row, "chat erase"),
+  chat_pruned: (row) => chatRoom(row, "chat prune"),
 };
+
+/** A chat destruction's row: what was done, and the room it was done to. */
+function chatRoom(
+  row: FeedRow,
+  kind: string,
+): Pick<AuditEntry, "kind" | "subject" | "path" | "noSubject"> {
+  const room = row.tags?.channel_id ?? "";
+  return {
+    kind,
+    subject: room ? `room ${short(room)}` : "",
+    path: room ? ["chat", room] : undefined,
+    noSubject: "No room recorded",
+  };
+}
 
 function isRuntimeType(type: string): type is RuntimeType {
   return (RUNTIME_AUDIT_TYPES as readonly string[]).includes(type);

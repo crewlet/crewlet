@@ -313,8 +313,8 @@ type Markers interface {
 // delete or purge record a KV removal leaves behind in a bucket the broker
 // never ages, which every listing that meets one pays a leader read for.
 //
-// The third shared record swept here, beside the channels and the mailboxes,
-// and for their reason: no bucket age can express it. The buckets that keep
+// A shared record swept here, beside the channels, the mailboxes and the chat
+// read state, and for their reason: no bucket age can express it. The buckets that keep
 // these markers are exactly the ones whose records no clock may reap — an open
 // ask, a parked run, a credential — so removing the markers is a decision this
 // duty takes rather than something a broker does on its own.

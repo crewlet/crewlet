@@ -21,11 +21,11 @@ so N nodes is N × that ceiling whether you wanted it or not. Size it per
 node.
 
 **One thing does divide by itself.** Above 10 000 indexed documents a fleet
-splits the knowledge search's 64 buckets between its live nodes, so each scans
-a share of the corpus rather than all of it. Nothing is configured and nothing
-is rebuilt — adding a node divides the buckets again on the next search, and an
-answer a node did not come back for is labelled partial rather than silently
-short. See [Search](search.md).
+splits the knowledge search's 64 buckets between its live data nodes, so each
+scans a share of the corpus rather than all of it. Nothing is configured and
+nothing is rebuilt — adding a data node divides the buckets again on the next
+search, and an answer a node did not come back for is labelled partial rather
+than silently short. See [Search](search.md).
 
 ## What a fleet needs
 
@@ -173,8 +173,8 @@ members.**
 
 **A member of a fleet persists.** A member that names a cluster, lists peers or
 opens a leaf listener holds the fleet's streams for every node that reaches
-it — every seat's mailbox, every record the tracker and the knowledge base
-write, every coordination bucket — so Tier A requires `stream.store_dir` on it
+it — every seat's mailbox, every record the tracker, the knowledge base and
+chat write, every coordination bucket — so Tier A requires `stream.store_dir` on it
 whatever its roles: one kept in memory loses its copy of all of them at its
 next restart.
 
@@ -259,10 +259,10 @@ node:
 
 | Role | What it does |
 |---|---|
-| `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, the vectors) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
+| `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, chat, the vectors and the usage days) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints. A node without it serves only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
-| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state-log trim, the embedding duty, the object store's collector, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
+| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting a departed person's chat read state), the state-log trim, the embedding duty, the object store's collector, native chat's message horizon, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 A role is subtracted from **this node, not from the company**. That means
 a fleet can be assembled, node by node, into a shape where a whole job is
@@ -288,16 +288,17 @@ is the shape for an agent host you want small and disposable, and
 What it can run is `seats` alone. `ingress` and `workers` read and write a
 node's own copy of the estate directly — the API's retention report, capacity,
 reanchor, eviction and backup surfaces, the scheduler, the trim — so Tier A
-refuses either without `data`, naming the field and why. (The API's tracker and knowledge-base
-routes and the operator's MCP do not: they go through the same router a seat's
+refuses either without `data`, naming the field and why. (The API's tracker, knowledge-base and
+chat routes and the operator's MCP do not: they go through the same router a seat's
 tools do, so a data node whose copy is out of service answers its operator from
 a peer's copy, as it answers its seats.) Its seats use exactly the tools a data
 node's seats do, and each of those tools asks a data node over the broker:
 
 - **Reads and writes** go to a data node — any data node, since every one
   holds the whole estate — picked by the asking node, and move to the next if it does not answer or ran nothing — except a
-  knowledge-base write, which has no operation id a repeat could be collapsed
-  on and is reported as unknown rather than sent twice. A data node's own seats
+  knowledge-base or chat write made without its caller's key, which has no
+  operation id a repeat could be collapsed on and is reported as unknown rather
+  than sent twice. A seat's own writes always carry one. A data node's own seats
   go through the same router and are answered from its own copy
   ([how a request reaches the estate](../concepts/scaling.md#how-a-request-reaches-the-estate)).
 - **Its own writes are visible to its next read** on whichever data node
@@ -323,7 +324,7 @@ node's seats do, and each of those tools asks a data node over the broker:
 
 Seat admission on a stateless node asks a data node whether its copy is level
 with its logs, so a stateless node claims no seat until one is. While no data
-node answers, its seats' tracker and knowledge tools fail saying so, and
+node answers, its seats' tracker, knowledge and chat tools fail saying so, and
 `fleet_role_unmanned` names `data` if no live node holds it.
 
 The members that stateless nodes join open a leaf listener
@@ -588,9 +589,10 @@ The consequences worth stating plainly:
   only ever looks down, so a lower-protocol build is never refused and
   takes over a higher node's expired leases unchecked. Nothing in the table
   can stop it.
-- **A node that leaves takes its turn-level history with it.** Every node's
-  event store holds the events it published, and the dashboard's turns,
-  traces and event log are read from every live node at query time. A node
+- **A node that leaves takes its turn-level history with it.** Every data
+  node's event store holds the events it published and the ones it keeps in
+  custody for a node without `data`, and the dashboard's turns, traces and
+  event log are read from every live data node at query time. A node
   you drain for good, or a node whose volume you discard, is a node whose
   turns, phases and events no screen can show again — the spend, turn
   counts and page reads it recorded survive it, in the replicated `usage`
@@ -631,11 +633,13 @@ posture change.
 
 ## How a node that fell behind catches up
 
-The work tracker and the knowledge embeddings are derived on every node from
-an ordered log the fleet shares. A node replays that log from wherever its own
-rows say it stopped — which works only while the log still **holds** those
-records. It does not hold them for ever: once every node has applied past a
-record, a backup covers it and it is at least a week old, it is trimmed.
+The replicated estate — the work tracker, the knowledge base, the embeddings
+that search them, chat and every data node's usage days — is derived on every
+data node from ordered logs the fleet shares, one per domain. A node replays
+each log from wherever its own rows say it stopped — which works only while the
+log still **holds** those records. It does not hold them for ever: once every
+data node has applied past a record, a backup covers it and it is at least a
+week old, it is trimmed.
 
 So a node that was down long enough, or that has never run at all, can wake up
 below what the log still holds. There is nothing left for it to replay, and no
@@ -647,27 +651,28 @@ serves anything.
 
 Three things make that work, and all three are per node:
 
-- **Every node publishes its own position**, every ten seconds and at once
+- **Every data node publishes its own position**, every ten seconds and at once
   when it takes a snapshot. This is what the trim reads to decide what the
   fleet has finished with — a node that publishes nothing is a node the trim
   cannot see, and the log is then trimmed past records that node still needs.
-- **Every node takes snapshots**, into `store.snapshot_dir` (by default
+- **Every data node takes snapshots**, into `store.snapshot_dir` (by default
   `snapshots/` beside the store file), no more often than
   `stream.tracker_retention.snapshot_interval` (default 24h). A node declines
   to take one while it is still catching up, while it holds a record it
   cannot decode, while the disk is short, or while the fleet counts no other
   data node — and retries shortly rather than waiting out the
   interval.
-- **Every node serves them.** There is no designated donor: a fleet whose
-  only donor was down would have nothing to give.
+- **Every data node serves them.** There is no designated donor: a fleet
+  whose only donor was down would have nothing to give. A node without `data`
+  holds no replicated estate, so it takes no snapshot and has none to serve.
 
 **A fleet with no successful backups eventually stops trimming**, which is
 deliberate — see [Backup and restore](backup.md). Until it trims, nothing can
 fall below the floor, and this path is never needed.
 
 Watch for **`statelog_no_snapshot_yet`** (a warning), which says a node has
-never successfully taken one and why. A fleet where every node logs it has no
-recovery path: a member that falls behind will find nothing to adopt, months
+never successfully taken one and why. A fleet where every data node logs it has
+no recovery path: a member that falls behind will find nothing to adopt, months
 later, in the one situation where it matters.
 
 It is logged once per change of reason rather than on every retry, so the line

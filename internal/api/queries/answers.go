@@ -233,10 +233,10 @@ type Sources struct {
 	// an unreported surface as connecting rather than guessing either way.
 	Converges func(kind integration.Kind) bool
 
-	// Work and Pages are this node's projections of the company's own
-	// tracker and knowledge base. Nil leaves their questions unregistered,
-	// which is the honest answer for a company on Jira and Confluence:
-	// there is no native record for this node to have a copy of.
+	// Work and Pages are the company's own tracker and knowledge base,
+	// read through the estate router. Nil leaves their questions
+	// unregistered, which is the honest answer for a company on Jira and
+	// Confluence: there is no native record for any node to have a copy of.
 	//
 	// Consumer-defined interfaces rather than the concrete readers, like
 	// every other seam here — and the READ side only. Nothing on this
@@ -265,6 +265,34 @@ type Sources struct {
 	// Nil leaves `work_search` unregistered, which is what a screen needs
 	// in order to offer the board's filters instead of an empty ranking.
 	WorkSearch WorkSearcher
+
+	// Chat is the company's own conversation through the estate router,
+	// the third native backend beside the tracker and the wiki and gated
+	// the same way: nil is the honest answer for a company talking on
+	// Slack, which has no native rooms for any node to hold.
+	//
+	// EVERY QUESTION IT SERVES IS ABOUT THE CALLER, resolved from their
+	// credential — see chat.go's file doc. There is no handle parameter
+	// anywhere on this family and no operator arm that reads somebody
+	// else's rooms.
+	Chat ChatReader
+
+	// ChatSearch is the ranked search over that conversation, through the
+	// router: the data node that answers resolves the viewer's rooms beside
+	// the index it reads. A seam of its own rather than a method of
+	// [Sources.Chat] because it is a search FOR A VIEWER rather than a read
+	// of rooms — see [ChatSearcher]. Nil leaves `chat_search`
+	// unregistered, which is what a screen needs in order to offer the
+	// rooms instead of an empty ranking.
+	ChatSearch ChatSearcher
+
+	// ChatReads is where each person's eye has reached, which rooms they
+	// have muted and whether they are in do-not-disturb. It is the ONE
+	// piece of chat state that is not on the log — a fact about one
+	// reader's attention, kept in coordination — and nil is "this process
+	// cannot say", which the rail reports rather than badging every room
+	// with its whole history.
+	ChatReads ChatReads
 
 	// PublicBase is where third-party apps reach this deployment, RESOLVED,
 	// or nil when this process cannot say.
@@ -314,9 +342,10 @@ type Sources struct {
 		Since(ctx context.Context, now time.Time) (map[string]time.Time, error)
 	}
 
-	// Backups is the fleet's backup register — each owner's newest
-	// announced point, which is what the trim's backup term reads. With
-	// [Sources.Events] it answers `backups`; nil leaves that unregistered.
+	// Backups is the fleet's backup register — each node's newest announced
+	// point and the operator's newest acknowledgement of each log, which is
+	// what each log's backup term reads. With [Sources.Events] it answers
+	// `backups`; nil leaves that unregistered.
 	Backups interface {
 		BackupPoints(ctx context.Context) ([]coord.BackupPoint, error)
 	}
@@ -410,7 +439,7 @@ func Register(r *Registry, s Sources) {
 		// push names a version of a heavy field newer than the copy it
 		// holds — the push that carried it was dropped. From the projection
 		// alone, so it costs what a push does; `agent` reads the seat's
-		// history from every node as well.
+		// history from every data node as well.
 		r.Register("live_call", s.liveCall)
 		r.Register("tokens", s.tokens)
 	}
@@ -632,7 +661,7 @@ func Register(r *Registry, s Sources) {
 		r.Register("decisions", s.decisions)
 	}
 	if s.Usage != nil {
-		// WHO READ A PAGE, from every node's days — see pagereads.go.
+		// WHO READ A PAGE, from every data node's days — see pagereads.go.
 		// Gated on the USAGE domain rather than on the native pages: a
 		// read is recorded with its backend, so a company on Confluence
 		// has readers too.
@@ -652,6 +681,38 @@ func Register(r *Registry, s Sources) {
 		// could say existed and never show.
 		r.Register("page_activity", s.pageActivity)
 		r.Register("page_revision", s.pageRevision)
+	}
+	if s.Chat != nil {
+		// OPERATOR-ONLY, ALL OF THEM, and this is the one PERSONAL
+		// read family with no anonymous arm.
+		//
+		// The personal questions above are registered ungated and
+		// scoped inside — see [Sources.viewerHandle] — because their
+		// scope rule has an arm for a caller with no credential: your
+		// own seat. Chat has no such arm, because the SEAT IS RESOLVED
+		// FROM THE CREDENTIAL, so a caller with none is not a person
+		// this surface can answer about. Declaring that in the registry
+		// rather than discovering it six times is also what keeps
+		// `api.allow_anonymous_read` away from a transcript.
+		//
+		// The refusal an operator actually has to act on still reaches
+		// them: a token that resolves to NO seat passes this check and
+		// is refused by [Sources.chatViewer], naming
+		// contact.crewlet_operator_id.
+		r.RegisterOperator("chat_channels", s.chatChannels)
+		r.RegisterOperator("chat_channel", s.chatChannel)
+		r.RegisterOperator("chat_messages", s.chatMessages)
+		// A THREAD IS ITS OWN QUESTION, not a filter on the room: it is
+		// opened beside the transcript and paged in the opposite
+		// direction, because a conversation is read forwards.
+		r.RegisterOperator("chat_thread", s.chatThread)
+		r.RegisterOperator("chat_mentions", s.chatMentions)
+		if s.ChatSearch != nil {
+			// GATED ON BOTH HALVES: a surface handed the rooms and no
+			// search offers the rooms rather than a ranking that
+			// answers nothing.
+			r.RegisterOperator("chat_search", s.chatSearch)
+		}
 	}
 	if s.Memory != nil {
 		// ANSWERED BY THE HOLDER, and saying which node that was — see
@@ -744,9 +805,9 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 		// in the store addressable by id.
 		"next": next,
 		// WHICH NODES THE HISTORY CAME FROM. A seat moves between nodes,
-		// so its history is on every node that ever held it; null when it
-		// could not be read at all, which is not the same as a seat that
-		// has never run.
+		// so its history is on every data node it ran on or that kept its
+		// events in custody; null when it could not be read at all, which
+		// is not the same as a seat that has never run.
 		"coverage": coverage,
 	}
 	// ASSIGNED ONLY WHEN THERE IS ONE, because a nil *Overlay stored in an

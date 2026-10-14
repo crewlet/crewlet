@@ -23,10 +23,11 @@ import (
 // and names the rows it holds of a batch it has written and not settled
 // ([EventLog.WriteCustody]) beside the count instead, as [UnsettledRow]s: by
 // identity, with whatever each count needs to add the row in. Whoever sums the
-// fleet asks every node which of the named rows it keeps ([EventLog.KeptRows])
-// and counts each once (internal/eventfan). The named rows are read in the SAME
-// SNAPSHOT as the count they are taken out of: read apart, a batch settled
-// between the two is counted as kept and named as unsettled, or neither.
+// fleet asks every data node which of the named rows it keeps
+// ([EventLog.KeptRows]) and counts each once (internal/eventfan). The named
+// rows are read in the SAME SNAPSHOT as the count they are taken out of: read
+// apart, a batch settled between the two is counted as kept and named as
+// unsettled, or neither.
 //
 // ONE SHAPE AND ONE READ for every count rather than one per question, because
 // what makes a row unsettled is a property of the row and not of the question:
@@ -170,8 +171,8 @@ func readUnsettled(ctx context.Context, q querier, where []string, args []any) (
 // The other half of every count's unsettled rows (see the file doc). A row one
 // node names unsettled may be kept by another — the batch's keeper, which
 // settled first — and that node's count already holds it, while one no node
-// keeps is in no count at all. So whoever sums the fleet asks every node this
-// about the rows named unsettled, and counts a row once unless a node that
+// keeps is in no count at all. So whoever sums the fleet asks every data node
+// this about the rows named unsettled, and counts a row once unless a node that
 // keeps it counted it already. Only the identity of each row is read. ONE
 // SNAPSHOT for the rows held and the batches unsettled, for the counts' own
 // reason. The answer is never nil, and each row in it carries its identity

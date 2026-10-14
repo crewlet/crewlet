@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -30,10 +32,14 @@ type fakeKB struct {
 	// keys is the call key every write arrived with, in order, so a tool
 	// that derived its operation from something other than the caller's
 	// own key — or forgot to pass one — is visible.
-	keys []pages.CallKey
+	keys []statelog.CallKey
 
 	readErr  error
 	writeErr error
+
+	// renameErr, where set, refuses a rename alone — the second of
+	// save_page's two writes, so a case can fail it after the save landed.
+	renameErr error
 
 	// awaited is every position [builtin.PageDeps.Await] was handed, in
 	// order, so a tool that waited for the wrong write — or waited before
@@ -132,10 +138,13 @@ type renamed struct {
 }
 
 func (f *fakeKB) Rename(_ context.Context, actor pages.Actor, pageID, title string,
-	_ bool, key pages.CallKey) (pages.Written, error) {
+	_ bool, key statelog.CallKey) (pages.Written, error) {
 
 	if f.writeErr != nil {
 		return pages.Written{}, f.writeErr
+	}
+	if f.renameErr != nil {
+		return pages.Written{}, f.renameErr
 	}
 	f.renames = append(f.renames, renamed{
 		pageID: pageID, title: title,
@@ -161,7 +170,7 @@ func (f *fakeKB) Comment(_ context.Context, actor pages.Actor, _ string, in page
 type commentEdit struct{ commentID, body string }
 
 func (f *fakeKB) EditComment(_ context.Context, actor pages.Actor, _, commentID, body string,
-	key pages.CallKey) (pages.Comment, pages.Written, error) {
+	key statelog.CallKey) (pages.Comment, pages.Written, error) {
 	if f.writeErr != nil {
 		return pages.Comment{}, pages.Written{}, f.writeErr
 	}
@@ -640,6 +649,84 @@ func TestASaveThatAlsoRenamesWaitsForTheRenamesOwnPosition(t *testing.T) {
 	}
 }
 
+// A SAVE WHOSE RENAME NOBODY ANSWERED SAYS SO, AND NEVER THAT IT WAS NOT MADE.
+//
+// The router sends a rename carrying no key of its caller's — an operator's
+// assistant names none — to one data node and no further, because a repeat
+// would be a second write, and a node that never answered is
+// [estate.ErrOutcomeUnknown]: the rename may have landed. save_page rebuilt
+// every rename refusal as "the edit was saved and the rename … was not",
+// which dropped the unknown mark and said the one thing nobody can know.
+func TestASaveWhoseRenameNobodyAnsweredIsUnknown(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	kb.renameErr = fmt.Errorf("%w (pages.rename, asked of data-1)", estate.ErrOutcomeUnknown)
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb, Await: kb.await})
+
+	got := callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "body": "rewritten", "title": "Deploy Guide",
+	})
+	if !got.Failed || !got.Unknown || got.Refusal != tools.RefusalUnavailable {
+		t.Fatalf("a save whose rename nobody answered: failed %v unknown %v class %q, "+
+			"want an unavailable refusal marked unknown: %s",
+			got.Failed, got.Unknown, got.Refusal, got.Output)
+	}
+	if strings.Contains(got.Output, "was not") || strings.Contains(got.Output, "NOT made") {
+		t.Errorf("a rename nobody answered is said not to have been made: %s", got.Output)
+	}
+	for _, want := range []string{"edit was saved", "not known", "Deploy Guide"} {
+		if !strings.Contains(got.Output, want) {
+			t.Errorf("the answer does not say %q: %s", want, got.Output)
+		}
+	}
+
+	// THE CONTROL: a rename the store REFUSED is the rename's class and does
+	// say it was not made — which is true, and what the case above must not
+	// be confused with.
+	kb = newFakeKB()
+	kb.renameErr = fmt.Errorf("%w: that title is held", pages.ErrTitleTaken)
+	reg = kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb, Await: kb.await})
+	got = callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "body": "rewritten", "title": "Deploy Guide",
+	})
+	if !got.Failed || got.Unknown || got.Refusal != tools.RefusalExists ||
+		!strings.Contains(got.Output, "was not") {
+
+		t.Errorf("a refused rename answered %+v, want the rename's own class "+
+			"saying it was not made", got)
+	}
+}
+
+// A KEYED PAGE WRITE NOBODY ANSWERED IS OFFERED ITS OWN REPEAT.
+//
+// A turn's comment carries its key, so the router asks every data node before
+// it answers [estate.ErrOutcomeUnknown] — and the same call again is the same
+// comment, the safe retry. The answer used to tell every caller that the same
+// write again adds a second comment, which is true only of a caller with no
+// key (an operator's assistant over MCP).
+func TestAKeyedCommentNobodyAnsweredIsOfferedTheSameCall(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	kb.writeErr = fmt.Errorf("%w (pages.comment, asked of data-1, data-2)",
+		estate.ErrOutcomeUnknown)
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	got := callWork(t, reg, builtin.CommentOnPageTool,
+		map[string]any{"page": "p1", "body": "a remark"})
+	if !got.Failed || !got.Unknown {
+		t.Fatalf("a comment nobody answered answered %+v, want unknown", got)
+	}
+	if !strings.Contains(got.Output, builtin.CommentOnPageTool+
+		" again with exactly the same arguments") {
+		t.Errorf("a turn's comment nobody answered is not offered the same "+
+			"call: %s", got.Output)
+	}
+	if strings.Contains(got.Output, "adds a second comment") ||
+		strings.Contains(got.Output, "a second call is a new operation") {
+		t.Errorf("a turn's comment nobody answered is warned its repeat "+
+			"duplicates, which for a turn it does not: %s", got.Output)
+	}
+}
+
 // A PAGE WRITE STATES ITS OUTCOME AND ITS POSITION, as every work write does:
 // they are what a caller outside a turn — a person's assistant, the dashboard —
 // hands back as `min_position` so the read after its write includes it. And a
@@ -760,6 +847,9 @@ func TestAPageBodyIsToldTheLinkTheBacklinksRead(t *testing.T) {
 // A PAGE REMARK MADE AGAIN AFTER A DIFFERENT ONE CARRIES ITS REPEAT COUNT, so
 // the store derives a second comment rather than the first one's retry; a
 // remark repeated with nothing between carries the same count and stays one.
+// And every key carries the digest of the arguments its count compared,
+// because the store's parts are what the arguments resolved to — see
+// statelog.CallKey, and the end-to-end case in internal/pages.
 func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
@@ -779,6 +869,13 @@ func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 	var repeats []int
 	for _, c := range kb.comments {
 		repeats = append(repeats, c.CallKey.Repeat)
+		args := map[string]any{"page": "p1", "body": c.Body}
+		if c.CallKey.Args != turnctx.ArgsDigest(args) {
+			t.Errorf("the remark %q carried argument digest %q, want %q — a "+
+				"count shared by two calls that named the page differently "+
+				"would hand the later one the earlier one's comment",
+				c.Body, c.CallKey.Args, turnctx.ArgsDigest(args))
+		}
 	}
 	if len(repeats) != 4 {
 		t.Fatalf("four remarks reached the store as %d", len(repeats))

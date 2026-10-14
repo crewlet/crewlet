@@ -43,7 +43,7 @@ type fakeNode struct {
 	opIDs     []string
 	patches   []tracker.TaskPatch
 	turns     []tracker.TurnRecord
-	keys      []pages.CallKey
+	keys      []statelog.CallKey
 	queries   []knowledge.Query
 	units     tracker.Units
 	notReady  bool
@@ -80,6 +80,10 @@ type fakeNode struct {
 	// one: waited for until the asker's deadline, where a node that is
 	// simply gone is known to have answered nothing.
 	hang chan struct{}
+
+	// rooms is this node's chat, nil for a company whose chat is not the
+	// engine's own — see chat_test.go.
+	rooms *chatDesk
 }
 
 func (f *fakeNode) note(op string) {
@@ -177,6 +181,19 @@ func (f *fakeNode) Building(context.Context) bool { return false }
 
 // backend is this node as a [Backend] over its copy of the estate.
 func (f *fakeNode) backend() Backend {
+	b := f.halves()
+	f.mu.Lock()
+	rooms := f.rooms
+	f.mu.Unlock()
+	if rooms != nil {
+		b.Chat, b.ChatWriter, b.ChatSearch = rooms, rooms, rooms
+	}
+	return b
+}
+
+// halves is this node's tracker and knowledge base, and the gates every
+// operation passes.
+func (f *fakeNode) halves() Backend {
 	return Backend{
 		Tracker: f, PageWriter: f, Knowledge: f,
 		Writer: func(a Actor) TrackerWriter {
@@ -521,6 +538,49 @@ func TestAnUnansweredTrackerWriteRepeatsUnderTheSameOperation(t *testing.T) {
 	}
 	if len(second.actors) != 1 || second.actors[0].Handle != "swe" {
 		t.Errorf("the write acted as %+v, want the seat that asked", second.actors)
+	}
+}
+
+// A REPEATABLE WRITE NO NODE ANSWERED IS UNKNOWN, NEVER UNSERVED.
+//
+// Every holder was asked under the same operation, and none answered — so each
+// of them may have run it. "No data node serves the estate" is the claim that
+// nothing ran, and a caller told that writes again, under a FRESH id where it
+// minted none, which is a second write: a purge appended twice, a task filed
+// twice. A READ nobody answered is still unserved, since a read ran nothing
+// that matters; and a write every node REFUSED is unserved too, since a node
+// that answered "I did not run it" did not.
+func TestARepeatableWriteNoNodeAnsweredIsUnknown(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	for _, node := range f.nodes {
+		node.set(func(n *fakeNode) { n.silent = true })
+	}
+	_, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-9",
+		tracker.Task{Project: "ENG"}, nil)
+	var unserved *ErrUnserved
+	if !errors.Is(err, ErrOutcomeUnknown) || errors.As(err, &unserved) {
+		t.Fatalf("a write no node answered = %v, want ErrOutcomeUnknown and not "+
+			"ErrUnserved", err)
+	}
+	for _, name := range []string{"data-a", "data-b"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("the unknown write %q does not name %s, which it was sent to", err, name)
+		}
+	}
+
+	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); !errors.As(err, &unserved) || errors.Is(err, ErrOutcomeUnknown) {
+		t.Errorf("a read no node answered = %v, want ErrUnserved", err)
+	}
+
+	refusing := newFleet(t, "data-a", "data-b")
+	for _, node := range refusing.nodes {
+		node.set(func(n *fakeNode) { n.outOfService = true })
+	}
+	_, err = refusing.client.WriterAs(swe).CreateTask(t.Context(), "op-10",
+		tracker.Task{Project: "ENG"}, nil)
+	if !errors.As(err, &unserved) || errors.Is(err, ErrOutcomeUnknown) {
+		t.Errorf("a write every node refused to run = %v, want ErrUnserved", err)
 	}
 }
 
@@ -1102,8 +1162,8 @@ func TestACopyThatAdmitsNoSeatStillServesRequests(t *testing.T) {
 			"question", local.asked)
 	}
 	// AND ADMISSION STILL REFUSES IT: the two gates disagree on purpose.
-	if trackerServed, _, err := r.Serves(t.Context()); err != nil || trackerServed {
-		t.Fatalf("a copy that admits no seat was admitted (%v, %v)", trackerServed, err)
+	if served, err := r.Serves(t.Context()); err != nil || served.Tracker {
+		t.Fatalf("a copy that admits no seat was admitted (%+v, %v)", served, err)
 	}
 }
 
@@ -1261,9 +1321,9 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 	peer := f.nodes["data-a"]
 	local := &fakeNode{name: "data-self", units: chartOf("self"), notAdmitting: true}
 	r := f.router(t, "data-self", local)
-	trackerServed, _, err := r.Serves(t.Context())
-	if err != nil || trackerServed {
-		t.Fatalf("a node whose own copy admits no seat was admitted (%v, %v)", trackerServed, err)
+	served, err := r.Serves(t.Context())
+	if err != nil || served.Tracker {
+		t.Fatalf("a node whose own copy admits no seat was admitted (%+v, %v)", served, err)
 	}
 	if peer.askedFor("admits") {
 		t.Fatal("a peer was asked for a node whose own copy serves")
@@ -1271,15 +1331,15 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 
 	// A COPY OUT OF SERVICE is asked of a data node whose copy serves.
 	local.set(func(n *fakeNode) { n.outOfService = true })
-	trackerServed, _, err = r.Serves(t.Context())
-	if err != nil || !trackerServed {
-		t.Fatalf("a node served by a peer was not admitted (%v, %v)", trackerServed, err)
+	served, err = r.Serves(t.Context())
+	if err != nil || !served.Tracker {
+		t.Fatalf("a node served by a peer was not admitted (%+v, %v)", served, err)
 	}
 
 	// AND A REMOTE NODE THAT ADMITS NO SEAT IS PASSED OVER, like a node
 	// that ran nothing.
 	peer.set(func(n *fakeNode) { n.notAdmitting = true })
-	if trackerServed, _, err = f.client.Serves(t.Context()); trackerServed {
+	if served, err = f.client.Serves(t.Context()); served.Tracker {
 		t.Fatalf("a node was admitted on a data node that admits no seat (%v)", err)
 	}
 }
@@ -1308,7 +1368,7 @@ func TestAdmissionsPingNeedsNoArguments(t *testing.T) {
 		if err := json.Unmarshal(replies[0], &rep); err != nil {
 			t.Fatal(err)
 		}
-		var answer served
+		var answer Served
 		if rep.Err != nil || rep.Unserved != "" || json.Unmarshal(rep.Result, &answer) != nil ||
 			!answer.Tracker {
 			t.Fatalf("%s: the ping was answered %+v, want the admission answer", name, rep)
@@ -1340,8 +1400,8 @@ func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 	begun := time.Now()
 	done := make(chan answer, 1)
 	go func() {
-		served, _, err := r.Serves(t.Context())
-		done <- answer{served, err}
+		served, err := r.Serves(t.Context())
+		done <- answer{served.Tracker, err}
 	}()
 	select {
 	case got := <-done:

@@ -199,11 +199,14 @@ func readOnly(name string) bool {
 // # Who the write is attributed to does not change here
 //
 // The author is the token, the kind `operator`, the bound seat rides beside
-// them — all decided by [WorkActor] off the request's own credential, exactly
-// as on the MCP transport. This handler adds nothing to the actor but the
-// operation its request id names ([WithOperation]) and the seat it admitted
-// the caller as ([withSeat]), so a config apply that rebinds the token while
-// the call runs cannot make it somebody else's.
+// them — all decided by the catalogue's actors ([WorkActor], [PageActor],
+// [ChatActor]) off the request's own credential, exactly as on the MCP
+// transport. A message differs in one field, on both transports alike: its
+// author is the bound seat, because a room renders a speaker by it. This
+// handler adds nothing to the actor but the operation its request id names
+// ([WithOperation]) and the seat it admitted the caller as ([withSeat]), so a
+// config apply that rebinds the token while the call runs cannot make it
+// somebody else's.
 func (s *Server) ActHandler() http.Handler {
 	return http.HandlerFunc(s.act)
 }
@@ -301,7 +304,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	// chart while it runs: the seat admitted here is pinned on the context,
 	// so the actor the tool writes as and the audit record name this one
 	// answer rather than asking the chart again. See [withSeat].
-	ctx = withSeat(ctx, seat)
+	ctx = withSeat(ctx, operatorID, seat)
 
 	logged := []any{"tool", name, "operator_id", operatorID, "seat", seat,
 		"request_id", requestID}
@@ -345,10 +348,18 @@ func declaresJSON(header string) bool {
 // A KEY THIS TRANSPORT DOES NOT READ IS REFUSED rather than ignored: a
 // client that wrote `requestId` would otherwise send every write without an
 // identity it believes it sent.
+//
+// THE ARGUMENTS' NUMBERS ARRIVE AS json.Number, as they do on every other
+// path into these tools — a seat's from its provider, a coding agent's over
+// the bridge. Decoded to a float64 instead, an integer past 2^53 was rounded
+// before any tool saw it: a read cursor is a packed log position whose
+// generation sits above bit 40, so a person's flush on a log past its first
+// eight thousand generations recorded a place they had never read to.
 func decodeAct(raw []byte) (actRequest, error) {
 	var req actRequest
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
+	dec.UseNumber()
 	if err := dec.Decode(&req); err != nil {
 		return actRequest{}, fmt.Errorf("the body must be one JSON object "+
 			"{\"request_id\": \"<uuid>\", \"args\": {…}}: %w", err)

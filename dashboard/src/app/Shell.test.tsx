@@ -13,12 +13,13 @@
 import { useRef, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useSearchTarget } from "./searchTarget.ts";
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
 import { loadChunk } from "./lazyScreen.ts";
 import { Router, buildHash } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
+import { clearToken, LiveSocket, Store, storeToken, type FleetAnswer } from "~/protocol/index.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import { setDensity } from "~/lib/prefs.ts";
 import { Home } from "~/routes/home/Home.tsx";
@@ -116,6 +117,55 @@ function frame(child: ReactNode) {
       ),
   };
 }
+
+// THE SOCKET CHANGES PERSON WITH THE TOKEN, wherever the token changed. Every
+// tab of the dashboard shares the stored token and every REST write reads it
+// when it is sent, so a socket that learned of a new token only from this
+// tab's dialog went on drawing the last person's pushes in a window whose
+// writes were already made as the next.
+describe("a token change", () => {
+  afterEach(() => {
+    clearToken();
+  });
+
+  function watched() {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const setToken = vi.spyOn(socket, "setToken");
+    const reconnect = vi.spyOn(socket, "reconnect").mockImplementation(() => undefined);
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <Shell>
+            <Bare />
+          </Shell>
+        </Router>
+      </ClientContext.Provider>,
+    );
+    return { setToken, reconnect };
+  }
+
+  test("saved in this tab moves the socket to it", () => {
+    const { setToken, reconnect } = watched();
+    act(() => {
+      storeToken("token-ada");
+    });
+    expect(setToken).toHaveBeenLastCalledWith("token-ada");
+    expect(reconnect).toHaveBeenCalledTimes(1);
+  });
+
+  test("saved in another tab moves the socket to it too", () => {
+    const { setToken, reconnect } = watched();
+    act(() => {
+      localStorage.setItem(STORAGE_KEYS.apiToken, "token-bo");
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: STORAGE_KEYS.apiToken, newValue: "token-bo" }),
+      );
+    });
+    expect(setToken).toHaveBeenLastCalledWith("token-bo");
+    expect(reconnect).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("the state bar's coverage", () => {
   test("it is drawn for the screen that published it", () => {

@@ -15,8 +15,8 @@ same question, and each is coherent on its own terms.
 ## `native` — the engine is the tracker
 
 Every change to the company's work is one **record on an ordered log the whole
-fleet shares**, and every node derives the same SQL tables from that log — see
-[the log and the copies](#the-log-and-the-copies). There is a board on the
+fleet shares**, and every data node derives the same SQL tables from that log —
+see [the log and the copies](#the-log-and-the-copies). There is a board on the
 dashboard, tools a seat calls, and an
 [MCP surface](../reference/api-endpoints.md#operatormcp--your-own-assistant)
 your own AI assistant can reach.
@@ -33,7 +33,7 @@ an answer somebody acts on.
 What it is deliberately **not** is a Jira. There is **no workflow engine and
 no permission scheme**, and nothing has to be configured before a company can
 file its first ticket: declaring a unit with a project key in the config
-creates the project, on every node, with no gesture from anybody.
+creates the project, on every data node, with no gesture from anybody.
 
 What it does carry is what an agent company actually uses — a key, a type from
 a per-project catalogue, a status from a closed set of six in four groups, an
@@ -95,11 +95,11 @@ On the native backend a write does not go to a node's database. It is
 **published as a record** onto the domain's own log, on the subject of the
 object it changes — one task, one project, one saved view — and the broker
 arbitrates: two writers racing on one task contend there and exactly one wins,
-while two writers on different tasks never contend at all. Every node then
+while two writers on different tasks never contend at all. Every data node then
 consumes that log in order and applies the same records into its own SQL
 tables, committing **the rows and its position on the log in one
 transaction**. There is no node whose copy is the real one and no leader, and
-every node arrives at the same rows because they all replay the same order.
+every data node arrives at the same rows because they all replay the same order.
 
 What that shape buys is that a copy can say exactly how far along it is, which
 a cache cannot:
@@ -135,15 +135,18 @@ a cache cannot:
   instead: the item, where this node holds it, and `unknown` with no key
   minted where it does not.
 - **A write can wait for itself.** A turn that files a task and then lists the
-  project sees what it just filed, because the tool waits for this node to
-  apply its own position before it reads. A gesture that writes one item
+  project sees what it just filed, because the write's position becomes the
+  floor of the reads that follow it: whichever copy answers the next read —
+  this node's, or a data node's when this one holds none or its copy is out of
+  service — waits until it has applied that far. A gesture that writes one item
   *twice* waits the same way: a dependency change naming both directions
   records the edges this item waits on and the ones that now wait for it as two
   commits on the same item, and the second carries the first's position — so it
-  decides from a state that contains it rather than losing a race with
-  itself. When this node is too far behind for that wait to finish, the refusal
-  names **your own** write and the position to retry against — a different
-  situation from a colleague editing the same item, and it reads differently.
+  decides from a state that contains it rather than losing a race with itself.
+  When the copy answering is too far behind for that wait to finish, the
+  refusal names **your own** write and the position to retry against — a
+  different situation from a colleague editing the same item, and it reads
+  differently.
 - **An answer that could not account for everything says so.** A node holding
   a record a newer build wrote — one this build cannot decode — reports the
   answer as incomplete, names how many records and which objects, and the
@@ -167,8 +170,8 @@ starts anyway, on the history it has, and says what it cannot account for.
 Retention is the one asymmetry worth knowing: tasks, comments and pages are
 kept **for ever** — a tracker that forgot would stop answering the question it
 exists for — while a domain's log keeps only the replay window, which is
-bounded by durability rather than by age: a record is trimmed once every node
-has applied past it, a complete backup covers it, and it is at least a week
+bounded by durability rather than by age: a record is trimmed once every data
+node has applied past it, a complete backup covers it, and it is at least a week
 old. A company that never backs up never trims, deliberately.
 
 ---

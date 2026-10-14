@@ -110,33 +110,58 @@ const (
 	SemanticCoverageFloor = 0.95
 
 	// CensusDriftFactor is how far an observed read rate may exceed the
-	// rate the log's own sizing was derived from. Twice: the log's byte
-	// ceiling, its trim cadence and its join model are all functions of
-	// that number, so at 2× they are describing a different company.
+	// rate the log is held to ([Census.Expected]). Twice: on the tracker's
+	// and the knowledge base's logs that rate is a term in the byte
+	// ceiling, the trim's terms and the join model, so at 2× they are
+	// describing a different company — and on the chat log, whose ceiling
+	// is sized from its messages instead, 2× is a chat turn reading twice
+	// what it was declared to.
 	CensusDriftFactor = 2.0
 
-	// LinearizableReadsPerSeatDay is the read rate this engine's log sizing
-	// was derived from, per agent seat.
+	// LinearizableReadsPerSeatDay is the read rate, per agent seat, that
+	// every log a read appends to is held to — and the one the tracker's
+	// and the knowledge base's logs were sized from.
 	//
 	// ONE HUNDRED AND TWENTY-FIVE: the reference company's 12 500
 	// linearizable reads a day over its 100 seats. It is the census input
-	// every capacity decision under the log rests on — a `linearizable`
-	// read appends a barrier record, so the rate is a term in a log's byte
-	// ceiling, in how often the trim has to run to stay under it, and in
-	// how long a rejoining node's replay takes — and it is PER SEAT because
-	// a seat's tools are what issue those reads: stated for the whole
-	// company it was a fixed 12 500 that a two-hundred-seat company doing
-	// exactly the reference company's work per seat exceeded twofold, so
-	// the alarm fired on the one company whose sizing was still right. It
-	// is a DECLARED expectation rather than a measurement, which is exactly
-	// why it needs an alarm — nothing else notices when a company outgrows
-	// the assumptions its deployment was sized against, and the symptom
-	// arrives as a full log rather than as a slow one.
+	// every capacity decision under those two logs rests on — a
+	// `linearizable` read appends a barrier record, so the rate is a term
+	// in a log's byte ceiling, in how often the trim has to run to stay
+	// under it, and in how long a rejoining node's replay takes — and it
+	// is PER SEAT because a seat's tools are what issue those reads: stated
+	// for the whole company it was a fixed 12 500 that a two-hundred-seat
+	// company doing exactly the reference company's work per seat exceeded
+	// twofold, so the alarm fired on the one company whose sizing was still
+	// right. It is a DECLARED expectation rather than a measurement, which
+	// is exactly why it needs an alarm — nothing else notices when a
+	// company outgrows the assumptions its deployment was sized against,
+	// and the symptom arrives as a full log rather than as a slow one.
 	//
 	// It is the SEATS' term of a log's census and not the whole of it: the
 	// engine's own periodic reads append barriers too, whatever the seats
 	// do, and [Census.Background] is where they are counted. [Census]
 	// turns both into one log's figure.
+	//
+	// AND THE CHAT LOG IS HELD TO IT TOO, rather than to a figure of its
+	// own, with the arithmetic that makes that a decision rather than an
+	// inheritance. A seat's chat tools read at the seat's level like every
+	// other tool, so each read_channel (a room, or one thread in it), room
+	// lookup and search's visible set is a barrier on that log. The reference
+	// company's 3 000 turns a day are thirty a seat — the turns
+	// `chat.ChatMessagesPerDay` is derived from, two messages each — so
+	// this figure expects about four linearizable chat reads a turn, and
+	// the alarm fires past about eight: past the turn-start thread read,
+	// the read a reply is written from and a room lookup, which is a
+	// company whose seats re-read rooms in a loop, exactly the drift worth
+	// telling an operator about. What it does NOT size is that log's
+	// ceiling: at the census the barriers are under 2 MB a day beside the
+	// 30 MB of messages the ceiling was sized against, which is why
+	// census_drift's remedy sends an operator to the ceiling on the other
+	// two logs and away from it on this one. Four a turn is DECLARED, like
+	// the rest of this number, and the measurement it waits on is this
+	// alarm naming the chat log — a company whose chat turns read more
+	// than the tracker's do wants a census term of its own for that log,
+	// not a larger figure for every log.
 	LinearizableReadsPerSeatDay = 125
 )
 
@@ -175,12 +200,11 @@ type Census struct {
 // # The whole company's figure on every log, not a share of it
 //
 // The census says how many reads a company makes and not how they split
-// between the tracker and the knowledge base, so each log is sized for all of
-// them — which is how their ceilings are sized too: each domain's log has its
-// own budget. Divided across the logs instead, the tracker's log would be
-// expected to take a fraction of the census, and the reference company, whose
-// reads are mostly the tracker's, would fire the alarm doing exactly the work
-// it was sized for.
+// between the logs, so each log is held to all of them, as each log's ceiling
+// is a budget of its own rather than a share of one. Divided across the logs
+// instead, the tracker's log would be expected to take a fraction of the
+// census, and the reference company, whose reads are mostly the tracker's,
+// would fire the alarm doing exactly the work it was sized for.
 //
 // # Plus what the engine reads on its own
 //
@@ -266,10 +290,16 @@ type Reading struct {
 	// the trim runs once, and every node whose domain declares no ceiling.
 	HeadroomFraction *float64
 
-	// BackupAge is how old the newest verified backup is, and BackupMaxAge
-	// what the operator asked for. A zero BackupMaxAge is a node with no
-	// backup policy, which is not an alarm — it is a deployment that has
-	// said it does not want one.
+	// BackupAge is how old the backup one log's trim counts is — the
+	// newest verified point the policy counts that covers the log — and
+	// BackupMaxAge what the operator asked for. A zero BackupMaxAge is a
+	// node with no backup policy, which is not an alarm — it is a
+	// deployment that has said it does not want one.
+	//
+	// A PER-DOMAIN CONDITION, evaluated once per log from the report's
+	// rows ([ReportInputs.BackupMaxAge]) for the reason the headroom is:
+	// the logs' backups have one age each, and the one a node-wide
+	// reading carried was the newest point's, whatever it covered.
 	//
 	// BackupAge IS A POINTER, for the reason HeadroomFraction is one: zero
 	// is a real and reassuring value here — a copy verified this second —
@@ -303,7 +333,7 @@ type Reading struct {
 	SearchDegradedFraction, SearchScopedFraction float64
 
 	// HistoryPartialFraction is the fraction of this node's fleet history
-	// reads answered without every live node — one did not answer inside
+	// reads answered without every live data node — one did not answer inside
 	// [eventfan.FleetReadBudget].
 	HistoryPartialFraction float64
 
@@ -413,9 +443,8 @@ type Alarm struct {
 
 	// Domains is every log this alarm stands on, for a condition that is a
 	// property of a log rather than of the node: the logs nearing their
-	// ceiling, the logs whose trim is held, and under [KindBackupAge] the
-	// logs whose trim the missing or stale backup is holding. Empty for a
-	// node-wide condition.
+	// ceiling, the logs whose trim is held, and the logs whose backup is
+	// missing or older than the policy. Empty for a node-wide condition.
 	//
 	// ONE ALARM PER KIND, WITH ITS LOGS IN IT, rather than one alarm per log.
 	// The kind is the alarm's identity on every other surface: the gauge
@@ -437,13 +466,16 @@ type AlarmDomain struct {
 	Detail string `json:"detail"`
 
 	// Term is the trim term holding this log, where the alarm is about its
-	// trim. It is the term's own name, which is what `crewlet retention
-	// status` prints and the retention guide is indexed by.
+	// trim: under [KindTrimBlocked], and under [KindBackupAge] for a log
+	// whose trim the backup term is holding, which raises no
+	// [KindTrimBlocked] of its own. It is the term's own name, which is what
+	// `crewlet retention status` prints and the retention guide is indexed
+	// by.
 	Term TermName `json:"term,omitempty"`
 
-	// Since is when this log's trim stopped advancing, where the alarm is
-	// about its trim. An instant rather than an age, so a reader renders
-	// the age against its own clock instead of trusting one frozen at the
+	// Since is when this log's trim stopped advancing, wherever Term is
+	// set. An instant rather than an age, so a reader renders the age
+	// against its own clock instead of trusting one frozen at the
 	// evaluation.
 	Since time.Time `json:"since,omitzero"`
 }
@@ -543,17 +575,21 @@ var table = []rule{
 				return "", false
 			}
 			if r.BackupAge == nil {
-				return fmt.Sprintf("no verified backup has been recorded, and "+
-					"the policy asks for one every %s", spoken(r.BackupMaxAge)), true
+				return fmt.Sprintf("no verified backup of this log has been "+
+					"recorded, and the policy asks for one every %s",
+					spoken(r.BackupMaxAge)), true
 			}
-			return fmt.Sprintf("the newest verified backup is %s old, and the "+
-					"policy asks for %s", spoken(*r.BackupAge), spoken(r.BackupMaxAge)),
+			return fmt.Sprintf("the newest verified backup of this log is %s "+
+					"old, and the policy asks for %s", spoken(*r.BackupAge),
+					spoken(r.BackupMaxAge)),
 				*r.BackupAge > r.BackupMaxAge
 		},
 		remedy: "Run `crewlet backup` against any node, whatever its roles, " +
-			"and check whatever was meant to run it. The trim does not " +
-			"advance past a backup older than the policy, and does not " +
-			"advance at all until there is one.",
+			"and check whatever was meant to run it; under `backup_floor: " +
+			"operator`, acknowledge the named log's off-host copy with " +
+			"`crewlet retention ack -stream <log>`. The trim does not " +
+			"advance a log past a backup older than the policy, and does " +
+			"not advance it at all until there is one.",
 	},
 	{
 		// THE TERM IS NOT IN THE SENTENCE. It is a field of the log the
@@ -614,8 +650,9 @@ var table = []rule{
 				r.SearchP95 > InteractiveSearchTarget
 		},
 		remedy: "The corpus has outgrown what one node's share can scan in " +
-			"the budget. Adding a node divides the buckets again, with no " +
-			"configuration and no rebuild. See docs/guides/search.md.",
+			"the budget. Adding a data node divides the buckets again, with " +
+			"no configuration and no rebuild; a node without `data` takes " +
+			"no range. See docs/guides/search.md.",
 	},
 	{
 		kind: KindSearchDegraded,
@@ -648,14 +685,15 @@ var table = []rule{
 		kind: KindHistoryPartial,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%.0f%% of fleet history reads were answered without "+
-					"every node, because one did not answer inside the %s fleet read budget",
+					"every data node, because one did not answer inside the %s fleet read budget",
 					r.HistoryPartialFraction*100, spoken(eventfan.FleetReadBudget)),
 				r.HistoryPartialFraction > 0
 		},
-		remedy: "Turn-level history lives only on the node that published it, so " +
-			"a partial answer is missing that node's rows, and every answer names " +
-			"the node in its `coverage`. A node that has left the fleet is gone " +
-			"with its detail, and the aggregates survive it in the usage domain; " +
+		remedy: "Turn-level history lives only on the data node that published it " +
+			"or keeps it in custody, so a partial answer is missing that node's " +
+			"rows, and every answer names the node in its `coverage`. A node that " +
+			"has left the fleet is gone with its detail, and the aggregates " +
+			"survive it in the usage domain; " +
 			"a live node that keeps missing the budget is slow on its own store " +
 			"or its route, and its own `pool_starved` and `apply_lag` alarms say " +
 			"which.",
@@ -722,7 +760,7 @@ var table = []rule{
 	},
 	{
 		// NOT `feed_dead_letters`, WHICH NAMED A PATH THIS ENGINE DOES
-		// NOT HAVE. Both domain consumers set `MaxDeliver: -1`
+		// NOT HAVE. Every domain feed's consumer sets `MaxDeliver: -1`
 		// deliberately — a record nobody can handle yet is a retry
 		// rather than a poison message, and a delivery budget that ran
 		// out would drop a wake silently — so nothing ever reaches a
@@ -786,10 +824,20 @@ var table = []rule{
 			"Every read on this node is queuing before it starts.",
 	},
 	{
-		// THE ONE THAT SAYS AN INPUT HAS STOPPED BEING TRUE. Every sizing
-		// decision under this framework — the log's ceiling, the trim's
-		// cadence, a joining node's transfer — was derived from a read
-		// rate. At twice it, they are describing a different company.
+		// THE ONE THAT SAYS AN INPUT HAS STOPPED BEING TRUE. The tracker's
+		// and the knowledge base's logs were sized with a read rate as one
+		// of their inputs — the ceiling, the trim's terms, a joining node's
+		// transfer — and at twice it they are describing a different
+		// company.
+		//
+		// NOT EVERY LOG'S CEILING, and the remedy says which: the chat
+		// log's is sized from its MESSAGES, which outweigh its barriers
+		// about eight to one even at twice the census
+		// ([LinearizableReadsPerSeatDay] has the arithmetic). What drifted
+		// there is the reads a chat turn was declared to make, and a remedy
+		// sending that operator to resize the log would spend a maintenance
+		// window and three fleet-wide restarts on a ceiling nothing has
+		// outgrown.
 		kind: KindCensusDrift,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%d linearizable reads a day on %s against the %d "+
@@ -798,9 +846,20 @@ var table = []rule{
 				r.LinearizableReadsExpected > 0 &&
 					float64(r.LinearizableReads) > CensusDriftFactor*float64(r.LinearizableReadsExpected)
 		},
-		remedy: "Re-derive the log's ceiling and the trim's cadence from the real " +
-			"rate. See `stream.tracker_retention` in " +
-			"docs/getting-started/configuration.md.",
+		remedy: "On the tracker's or the knowledge base's log the rate is a " +
+			"term in the log's size: re-derive its ceiling from the real rate " +
+			"and set it with `crewlet retention set-capacity` " +
+			"(`stream.tracker_log_max_bytes` and `stream.pages_log_max_bytes` " +
+			"are only what a log is created with), and the trim's terms under " +
+			"`stream.tracker_retention`. On the chat log, leave " +
+			"`stream.chat_log_max_bytes` alone: that ceiling is sized from the " +
+			"log's messages, which outweigh its barriers about eight to one " +
+			"even at twice the census. What drifted there is the four reads a " +
+			"chat turn is declared to make: past eight, seats are re-reading " +
+			"rooms in a loop, which their turns' tool calls show; if they are " +
+			"not, the census needs a term of chat's own, which is a defect in " +
+			"this table rather than a setting, so report it. The arithmetic " +
+			"for both is in docs/guides/retention.md.",
 	},
 	{
 		kind: KindObjectsMissing,

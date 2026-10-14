@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -85,10 +86,13 @@ const StreamBudgetShare = 0.5
 
 // MinDomainCeiling is the floor a scaled-down ceiling never goes below.
 //
-// A gibibyte, which is the same floor Tier A's own validation enforces on an
-// explicit value: below it a log is not a log, it is a window that refuses
-// appends within a week of a company starting work.
-const MinDomainCeiling int64 = 1 << 30
+// TIER A's OWN, rather than a gibibyte written again here. It is the same
+// number for the same reason — below it a log is not a log, it is a window
+// that refuses appends within a week of a company starting work — and an
+// operator who reads the refusal must not be able to find two answers to "how
+// low can this go". It was written twice, with this doc comment asserting the
+// match and nothing enforcing it.
+const MinDomainCeiling int64 = config.LogMaxBytesFloor
 
 // tierACeiling is where Tier A puts one domain's ceiling on a volume with free
 // bytes of headroom.
@@ -118,6 +122,17 @@ const MinDomainCeiling int64 = 1 << 30
 // trailing window — the corpus grows every year the company exists — so an
 // unset one takes the same share of the volume the mutation log derives,
 // whatever the mutation log is set to (config.Stream.VectorsMaxBytes).
+//
+// The chat log holds a trailing window too, and it is the one such log that
+// does NOT follow the mutation log's ceiling: it grows faster than the mutation
+// log, so following it at that ratio would make it the largest ask here, and
+// the proportional division below would then create the vector changelog under
+// a model change on the volumes most deployments have
+// ([config.Stream.ChatLogMaxBytes] has the figures and what they cost). So it
+// asks for a fixed excursion budget, capped on a small volume at a quarter of
+// that same share ([config.DerivedChatLogDivisor]) — see [chatMaxBytes], which
+// is also where the one asymmetry in this switch is written down: chat's
+// default is the DOMAIN's rather than config's.
 func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (domainCeiling, error) {
 	switch domain.Name() {
 	case tracker.Domain{}.Name():
@@ -135,10 +150,59 @@ func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (dom
 		// is already the floor a scaled ceiling is held at.
 		bytes, explicit := stream.UsageMaxBytes()
 		return domainCeiling{Bytes: bytes, Field: "stream.usage_log_max_bytes", Explicit: explicit}, nil
+	case chat.Domain{}.Name():
+		bytes, derived := chatMaxBytes(stream, free)
+		return domainCeiling{Bytes: bytes, Field: "stream.chat_log_max_bytes", Explicit: !derived}, nil
 	}
 	return domainCeiling{}, fmt.Errorf("engine: domain %q is registered and Tier A "+
 		"declares no ceiling for its stream, so it would reserve its own default "+
 		"outside the budget every other state log is sized into", domain.Name())
+}
+
+// chatMaxBytes is the chat log's ask, and whether it was derived.
+//
+// # Why this one is not a method on config.Stream like the other four
+//
+// The number an unset value asks for is DECLARED BY THE DOMAIN —
+// [chat.ChatLogMaxBytes], beside the census it is derived from — and
+// internal/config cannot import internal/chat. The mutation log's, the
+// knowledge base's and the vector changelog's have no such home: they are
+// arithmetic over the disk, or over each other. Copying 8 GiB into config so
+// this could look like its siblings would be the drift `internal/textcut` and
+// `internal/whsec` each exist to record: two spellings of one number, each doc
+// comment asserting it matches the other, with nothing enforcing it.
+//
+// # And why an UNSET value is capped by the disk, at a quarter of the share
+//
+// The declared default is a number chosen for an EXCURSION — here a
+// completely blocked trim — rather than for this machine, and a broker refuses
+// a reservation it cannot back. So an unset value is capped by the disk and
+// the node boots; an operator who WROTE a number gets it, because they named a
+// ceiling for a disk they can see.
+//
+// The cap is a QUARTER of the share of free space the mutation log derives
+// from, not the whole of it, because the fit below scales every derived ask in
+// proportion and this one is paid for out of the vector changelog's room for a
+// model change — an excursion designed not to alarm. Capped at the whole share
+// the 8 GiB was asked for in full on a 64 GiB volume, and the changelog was
+// created where the reference company's fifth-year re-embedding bottoms under
+// the headroom alarm; [config.DerivedChatLogDivisor] has the figures and what
+// the quarter costs this log.
+//
+// It is never derived from the mutation log's ceiling, set or derived, which is
+// what the knowledge base's log is derived from: at the ratio chat grows at
+// beside the mutation log that would make this the largest ask in the budget,
+// and on a 64 GiB volume the division would create the vector changelog under
+// the reference company's fifth-year model change.
+// [config.Stream.ChatLogMaxBytes] states the figures, and what an operator who
+// sizes the mutation log has to do about this one.
+func chatMaxBytes(stream config.Stream, free int64) (int64, bool) {
+	if stream.ChatLogMaxBytes > 0 {
+		return stream.ChatLogMaxBytes, false
+	}
+	capped := min(int64(chat.ChatLogMaxBytes),
+		config.DerivedLogMaxBytes(free)/config.DerivedChatLogDivisor)
+	return max(capped, config.LogMaxBytesFloor), true
 }
 
 // ceilingsFor sizes every registered domain's byte budget from Tier A and the
@@ -158,7 +222,8 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (
 			"path", volume, "error", err.Error(),
 			"detail", "every derived state-log ceiling falls back to its floor; "+
 				"set stream.tracker_log_max_bytes, stream.tracker_vectors_max_bytes, "+
-				"stream.pages_log_max_bytes and stream.usage_log_max_bytes to choose them")
+				"stream.pages_log_max_bytes, stream.usage_log_max_bytes and "+
+				"stream.chat_log_max_bytes to choose them")
 	}
 	return sizeCeilings(ctx, host, boot.Stream, free, volume)
 }
@@ -327,10 +392,11 @@ type heldCeiling struct {
 // # AT ONCE, because each read can take a whole lookup ceiling
 //
 // A read nobody answers is asked again for up to [jsprovision.LookupBudget]
-// ([jetstream.Queue.DomainStreamCeiling]), and asked one after another the four
-// reads cost the boot the PRODUCT, which nothing declared: against a broker
-// that answered none of them, two minutes went here, measured over sixty
-// requests on either topology, before the provision that follows began
+// ([jetstream.Queue.DomainStreamCeiling]), and asked one after another the
+// reads — one per registered log, five with chat's — cost the boot the
+// PRODUCT, which nothing declared: against a broker that answered none of
+// them, two minutes went here on the four-log fleet this was measured on, over
+// sixty requests on either topology, before the provision that follows began
 // spending its own [jsprovision.SequenceBudget]. Asked together, the pass costs
 // what its slowest read costs — one lookup ceiling, measured at thirty seconds
 // over the same sixty requests.

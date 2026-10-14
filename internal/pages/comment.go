@@ -42,7 +42,7 @@ type NewComment struct {
 	// caller can produce: a re-run turn (the turn's key) posts once, and so
 	// does a person's retried request (their request key). The zero key is
 	// a call that named neither, which posts a fresh comment every time.
-	// See [CallKey].
+	// See [statelog.CallKey].
 	//
 	// IT DERIVES THE OPERATION ID as well as the comment's own, so a
 	// re-run is the SAME operation: inside the log's duplicate window the
@@ -50,10 +50,11 @@ type NewComment struct {
 	// apply an upsert of the row the first run wrote, and once this node's
 	// ledger has lost the first run's row the state log answers it
 	// `unknown` rather than deciding it again — which is what the key's
-	// [CallKey.Since] is for. Its [CallKey.Repeat] is what makes a remark
+	// [statelog.CallKey.Since] is for. Its [statelog.CallKey.Repeat] is what makes a remark
 	// made again after a different one a second comment rather than the
-	// first one's retry.
-	CallKey CallKey
+	// first one's retry, and its [statelog.CallKey.Args] what keeps that so when the
+	// page was named by its id in one call and by its title in another.
+	CallKey statelog.CallKey
 
 	Quiet bool
 }
@@ -135,7 +136,7 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 // the key, the comment and the text ([Store.callOpID]), so a retried edit is
 // one record.
 func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
-	commentID, body string, key CallKey) (Comment, Written, error) {
+	commentID, body string, key statelog.CallKey) (Comment, Written, error) {
 
 	if err := actor.validate(); err != nil {
 		return Comment{}, Written{}, err
@@ -314,16 +315,15 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 // to disagree with itself.
 //
 // AND IT CARRIES THE INSTANT THE KEY'S WORK BEGAN, never this call's, for the
-// reason [CallKey.Since] gives.
+// reason [statelog.CallKey.Since] gives.
 func (s *Store) commentOpID(pageID string, in NewComment) string {
-	if in.CallKey.empty() {
+	if in.CallKey.Empty() {
 		return s.newSeqID()
 	}
 	sum := sha256.Sum256([]byte(strings.TrimSpace(in.Body)))
 	// UNNAMED, because this is the comment's own id as well and a reader
 	// addresses it: the page and the turn it came from are on the row.
-	return statelog.DeriveOpID(in.CallKey.Since, "",
-		in.CallKey.identity(commentNamespace, pageID, hex.EncodeToString(sum[:]))...)
+	return in.CallKey.DeriveOpID(commentNamespace, pageID, hex.EncodeToString(sum[:]))
 }
 
 // commentNamespace scopes the derived operation ids. FIXED for the life of the

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/seat"
@@ -298,23 +299,33 @@ func (e *Engine) seatsAdmitted(ctx context.Context) bool {
 	return e.mode.Publishes() && e.NativeHydrated(ctx)
 }
 
-// writeSide is this node's own tracker writer and knowledge-base store — nil
-// where the runtime runs neither, and nil in a mode that does not publish.
+// writeSides are this node's own write authorities over the estate, one per
+// domain a surface writes: the tracker's writer, the knowledge base's store and
+// chat's store. A nil one is a domain this node does not write.
+type writeSides struct {
+	tracker *tracker.Writer
+	pages   *pages.Store
+	chat    *chat.Store
+}
+
+// writeSide is this node's own write authorities — each nil where the runtime
+// does not run that domain natively, and all of them nil in a mode that does
+// not publish.
 //
 // ONE GATE FOR EVERY SURFACE THAT WRITES THE COMPANY'S RECORDS through this
-// node: a seat's tools, the operator's MCP, the purge route, the chart's and
-// the containers' applies, and the estate server writing for a stateless node.
-// Each is handed its writer from here, so a maintenance-mode node hands out none
-// — for [New]'s reason for gating its publishers in one place: a check per
-// surface is a list somebody maintains, and the surface it forgets is a publish
-// during the window the mode exists to rule out, into a log whose usage a
-// resize is being decided against.
-func (e *Engine) writeSide() (*tracker.Writer, *pages.Store) {
+// node: a seat's tools, the operator's MCP, the purge route, the chart's, the
+// containers' and the unit rooms' applies, the chat prune, and the estate
+// server writing for a stateless node. Each is handed its writer from here, so
+// a maintenance-mode node hands out none — for [New]'s reason for gating its
+// publishers in one place: a check per surface is a list somebody maintains,
+// and the surface it forgets is a publish during the window the mode exists to
+// rule out, into a log whose usage a resize is being decided against.
+func (e *Engine) writeSide() writeSides {
 	n := e.native.Load()
 	if n == nil || !e.mode.Publishes() {
-		return nil, nil
+		return writeSides{}
 	}
-	return n.writer, n.pages
+	return writeSides{tracker: n.writer, pages: n.pages, chat: n.chat}
 }
 
 // Mode is what this node started for.

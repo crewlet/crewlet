@@ -67,7 +67,7 @@ func catalogue() []events.Payload {
 		CustodyBatch{},
 		ReflectionDue{},
 		// operator.go
-		OperatorActed{}, BackupRequested{},
+		OperatorActed{}, BackupRequested{}, ChatErased{}, ChatPruned{},
 		// seat.go
 		SeatPaused{}, SeatResumed{}, AgentTurnStopped{}, AgentTurnSteered{},
 	}
@@ -95,6 +95,8 @@ var wireTypes = []string{
 	"backup_requested",
 	"budget_exhausted",
 	"budget_meters",
+	"chat_erased",
+	"chat_pruned",
 	"custody_batch",
 	"reflection_due",
 	"compaction_completed",
@@ -300,6 +302,10 @@ var wireTags = map[string][]string{
 		"refusal", "request_id", "tool", "transport"},
 	"backup_requested": {"actor_seat", "dir", "failed", "operator_id",
 		"outcome", "streams"},
+	"chat_erased": {"actor_seat", "channel_id", "failed", "messages", "op_id",
+		"operator_id", "outcome", "position", "reason", "refusal"},
+	"chat_pruned": {"actor_seat", "channel_id", "cutoff", "failed", "op_id",
+		"operator_id", "outcome", "position", "refusal"},
 	"config_revision_applied":         {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                   {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},
 	"scheduled_task_fired":            {"schedule_name", "scheduled_at", "scope_id", "scope_type", "target_handle"},

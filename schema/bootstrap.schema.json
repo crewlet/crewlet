@@ -776,6 +776,23 @@
     "Stream": {
       "additionalProperties": false,
       "properties": {
+        "chat_log_max_bytes": {
+          "anyOf": [
+            {
+              "maximum": 274877906944,
+              "minimum": 1073741824,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Byte ceiling on the chat log; unset asks for 8 GiB, capped at a sixteenth of the stream volume's free space (a quarter of what an unset tracker_log_max_bytes derives, so the full 8 GiB from 128 GiB free), and does not follow tracker_log_max_bytes - size it for the same blocked-trim horizon, about 30 MB a day at the declared census."
+        },
         "cluster": {
           "$ref": "#/$defs/StreamCluster"
         },
@@ -870,7 +887,7 @@
           "anyOf": [
             {
               "maximum": 70368744177664,
-              "minimum": 5368709120,
+              "minimum": 6442450944,
               "type": [
                 "integer",
                 "null"
@@ -983,7 +1000,7 @@
               "type": "string"
             }
           ],
-          "description": "Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a node's seats and schedules."
+          "description": "Byte ceiling on the usage log, the compacted stream each data node's company days replicate on; default 1 GiB, sized for 181 days of a node's seats and schedules."
         }
       },
       "type": [
