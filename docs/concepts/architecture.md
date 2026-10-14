@@ -832,6 +832,7 @@ here.
 | Detached coding runs | `internal/sandbox`, `internal/hostbox` | [Code sandbox](code-sandbox.md) |
 | The engine's own git repositories: their rows, the committer, the activation fence, the purge | `internal/code`, `internal/engine` (the reconcile of `code.repos` and the `code-retention` duty) | [Code host](code-host.md) |
 | A git node's cache of each repository, and the git processes it runs | `internal/code/cache`, `internal/code/gitproc` | [The cache on a git node](code-host.md#the-cache-on-a-git-node) |
+| A person's git over HTTPS — fetch or push, their bound token, the receive pipeline — and the code reads | `internal/code/host`, `internal/api/auth` (which requests are pushes, the Basic credential), `internal/api` (the `/git/` and `/code/` routes) | [Persons and their tokens](code-host.md#persons-and-their-tokens) · [Hosting code](../guides/code.md) |
 | Cron-scoped recurring work | `internal/schedule` | [Scheduling](scheduling.md) |
 | The company's sealed credentials | `internal/fleetsecrets` | [Secret store](secret-store.md) |
 | The local database and its migrations | `internal/store` | [Database](overview.md#database) · [Backups & restore](../guides/backup.md) |

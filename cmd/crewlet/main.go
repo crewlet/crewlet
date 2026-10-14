@@ -1887,6 +1887,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// until a restart. Through the one adapter the end-to-end harness
 		// serves its node's routes with too.
 		Native: api.EngineNative(e),
+		// THE ENGINE'S OWN GIT HOST AND THE CODE READS, ASKED PER REQUEST
+		// for the same reason: the code host is built with the native
+		// runtime, which a company applied after boot brings up after this
+		// line ran. The git routes are mounted where this node's roles name
+		// git; the reads on every node, through the estate router.
+		Code: api.EngineCode(e),
 		// The capacity window. The engine itself refuses the verb when
 		// this node is publishing, so the route exists in every mode and
 		// answers "you are in the wrong one" rather than 404 — which is

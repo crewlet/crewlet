@@ -273,6 +273,14 @@ type applyProgress struct {
 	// stays confirmed lag across every activation made while it hangs,
 	// and a quick one is ordinary propagation.
 	attemptStarted time.Time
+
+	// targetRead is whether this node has read target's revision, and
+	// targetCode whether that revision sets code.native: what tells a node
+	// that serves no code host because the company does not host code from
+	// one that serves none of the code host the fleet just turned on
+	// ([Engine.CodeUnserved]). Reset with target, set once an attempt at it
+	// has decoded the revision — before the apply that may fail.
+	targetRead, targetCode bool
 }
 
 // behindFor is how long the progress has been behind on the target epoch,
@@ -322,6 +330,19 @@ func (r *Reconciler) snapshot() applyProgress {
 // publish replaces the progress. Callers are the tick alone, which is why a
 // plain load-modify-store needs no compare-and-swap.
 func (r *Reconciler) publish(p applyProgress) { r.progress.Store(&p) }
+
+// noteTargetCode records whether the revision of epoch — the target the tick
+// is applying — sets code.native. The tick alone calls it, like every
+// writer of the progress; an epoch the progress has moved past is not
+// recorded.
+func (r *Reconciler) noteTargetCode(epoch int64, hosts bool) {
+	p := r.snapshot()
+	if p.target != epoch {
+		return
+	}
+	p.targetRead, p.targetCode = true, hosts
+	r.publish(p)
+}
 
 // Applied is the epoch this node is serving, or 0 before its first apply.
 func (r *Reconciler) Applied() int64 { return r.snapshot().applied }
@@ -488,6 +509,7 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 		// because it holds the tick that would get here; what it is late
 		// by meanwhile is [applyProgress.attemptStarted].
 		progress.target, progress.attempts, progress.behindSince = target.Epoch, 0, time.Time{}
+		progress.targetRead, progress.targetCode = false, false
 		if progress.applied != target.Epoch {
 			progress.behindSince = r.now()
 		}
@@ -672,6 +694,11 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 		return configplane.StatusError, nil, fmt.Errorf("engine: parse revision %s: %w",
 			target.RevisionID, err)
 	}
+	// WHAT THE TARGET SAYS OF THE CODE HOST, noted before anything below can
+	// refuse it: a node whose apply of a revision that turns code.native on
+	// fails serves none of the code host, and must say so rather than tell
+	// a person the company hosts no code ([Engine.CodeUnserved]).
+	r.noteTargetCode(target.Epoch, cfg.Code.Native)
 	if invalid := cfg.ValidateRunnable(); invalid != nil {
 		return configplane.StatusError, nil, fmt.Errorf("engine: revision %s is not a "+
 			"runnable company; activate a corrected revision: %w", target.RevisionID, invalid)

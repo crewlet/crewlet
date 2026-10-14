@@ -622,6 +622,34 @@ func TestACodeReadStatesItsFreshness(t *testing.T) {
 	}
 }
 
+// A READ'S LEVEL REFUSAL NAMES EVERY LEVEL IT SERVES, from the list its rule
+// reads: the sentence reaches a person as a REST read's 400, and one written
+// beside the rule told them two levels existed while three were served.
+func TestARefusedLevelNamesEveryLevelTheReadServes(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	seededRepo(t, n, "app")
+	// Each level listed passes the reader's rule: this node has no read
+	// index, so a linearizable read is refused by the LOG, never as a level.
+	for _, level := range code.ReadLevels {
+		if _, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadRepos,
+			Fresh: statelog.Freshness{Level: level}}); errors.Is(err, code.ErrBadLevel) {
+			t.Errorf("Read at %s = %v, want the level served", level, err)
+		}
+	}
+	for _, level := range []statelog.ReadLevel{statelog.ReadSession, "eventual"} {
+		_, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadRepos,
+			Fresh: statelog.Freshness{Level: level, MinPosition: n.waiter.Committed()}})
+		if !errors.Is(err, code.ErrBadLevel) {
+			t.Fatalf("Read at %s = %v, want ErrBadLevel", level, err)
+		}
+		const want = `"%s" is not a level a code read serves: it serves linearizable, stale and consistent_prefix`
+		if !strings.Contains(err.Error(), fmt.Sprintf(want, level)) {
+			t.Errorf("Read at %s refused with %q, want it to name every level the read serves", level, err)
+		}
+	}
+}
+
 // RESOLVE ANSWERS A DELETED REPOSITORY, so the caller can say when it can be
 // restored until; an unknown name is not found; and a record this node
 // deferred on the repository refuses the read rather than answer around it.

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -683,10 +684,33 @@ const (
 	maxPushLimit     = 200
 )
 
+// ReadLevels are the levels [Reader.Read] serves: every level but session,
+// which it refuses because a surface reading the code host holds no position
+// of its own on its log to wait for.
+//
+// ONE LIST, read by the rule and spelled by its refusal, because the refusal
+// is a public answer — a REST read's 400 carries it to a person — and a
+// sentence written beside the rule rather than from it told that person two
+// levels existed while three were served.
+var ReadLevels = []statelog.ReadLevel{
+	statelog.ReadLinearizable, statelog.ReadStale, statelog.ReadConsistentPrefix,
+}
+
+// levelList spells levels as a sentence names them: "a, b and c".
+func levelList(levels []statelog.ReadLevel) string {
+	names := make([]string, len(levels))
+	for i, l := range levels {
+		names[i] = string(l)
+	}
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
 // Read answers a person's or a surface's read: a listing of repositories, one
-// repository in detail, or one repository's push history. The level is stale
-// unless asked; session is refused, because a surface reading the code host
-// holds no position of its own on its log.
+// repository in detail, or one repository's push history, at one of
+// [ReadLevels] — stale unless asked.
 func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	if err := q.validate(); err != nil {
 		return ReadAnswer{}, err
@@ -695,10 +719,9 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	switch {
 	case fresh.Level == "":
 		fresh.Level = statelog.ReadStale
-	case fresh.Level == statelog.ReadSession:
-		return ReadAnswer{}, fmt.Errorf("%w: a code read is stale or linearizable", ErrBadLevel)
-	case !fresh.Level.Valid():
-		return ReadAnswer{}, fmt.Errorf("%w: %q is not a read level", ErrBadLevel, fresh.Level)
+	case !slices.Contains(ReadLevels, fresh.Level):
+		return ReadAnswer{}, fmt.Errorf("%w: %q is not a level a code read serves: it serves %s", ErrBadLevel,
+			fresh.Level, levelList(ReadLevels))
 	}
 	var (
 		out   ReadAnswer

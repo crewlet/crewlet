@@ -18,7 +18,7 @@ import (
 // every edit, replicated it and snapshotted it offered no way to ask what had
 // changed. `work_activity`'s own shape, one domain over.
 func (s Sources) pageActivity(ctx context.Context, n Native, p Params) (any, error) {
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,7 @@ func (s Sources) pageRevision(ctx context.Context, n Native, p Params) (any, err
 	if version <= 0 {
 		return nil, badParams("version", strconv.Itoa(version), nil)
 	}
-	fresh, err := freshness(p)
+	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}

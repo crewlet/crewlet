@@ -377,7 +377,7 @@ func (s Sources) zone() *time.Location {
 // one never clears by waiting, so it must not carry a Retry-After.
 //
 // Answers do not return it themselves. The registry classifies at one boundary
-// (see unavailableIfTransient), so an answer that reads a store which can be
+// (see ClassifyUnavailable), so an answer that reads a store which can be
 // briefly unreachable cannot forget to.
 var ErrUnavailable = errors.New("queries: not available on this node")
 

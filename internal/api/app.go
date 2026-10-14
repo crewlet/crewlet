@@ -75,6 +75,13 @@ type App struct {
 	// [NativeRoutes].
 	native NativeRoutes
 
+	// code is the engine's git host and its reads, ASKED ON EVERY REQUEST —
+	// see [CodeSurface] — and servesGit whether this node's Tier A roles
+	// name git: a fact known at [New], which decides whether the git routes
+	// are mounted at all (code.go).
+	code      CodeSurface
+	servesGit bool
+
 	// capacity drives a stream's byte ceiling through the maintenance
 	// window. On a node that is publishing the verb refuses rather than
 	// the route being absent, because "you are in the wrong mode" is the
@@ -208,8 +215,8 @@ type OperatorSurface interface {
 // Runtime, Sources.Company, Sources.Events, Sources.NodeID, Sources.Coord,
 // Sources.Native, Sources.Retention, the Inbound edge's Publisher, Claims,
 // Secrets and AppFlow, Config, Secrets, Setup, Operator, Retention, Native,
-// Capacity, FleetBroker, Backup and Audit are REQUIRED, and [New] refuses a
-// missing one by name.
+// Code, Capacity, FleetBroker, Backup and Audit are REQUIRED, and [New]
+// refuses a missing one by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that
@@ -219,11 +226,12 @@ type OperatorSurface interface {
 // would hide that mistake behind something an operator reads as deliberate.
 //
 // That holds for the native tracker and knowledge base too, for the state
-// log's retention answer, the routes over them and the operator catalogue:
-// what a real node can lack there is the BACKEND (a company on Jira, a node
-// whose first company has not been applied yet), which
-// [queries.Sources.Native], [queries.Sources.Retention], [NativeRoutes] and
-// [OperatorSurface] answer per request — never the seam that asks. Left nil,
+// log's retention answer, the routes over them, the operator catalogue and
+// the code host: what a real node can lack there is the BACKEND (a company on
+// Jira, one that hosts no code, a node whose first company has not been
+// applied yet), which [queries.Sources.Native], [queries.Sources.Retention],
+// [NativeRoutes], [OperatorSurface] and [CodeSurface] answer per request —
+// never the seam that asks. Left nil,
 // every native question answered `unknown_query` and every native route and
 // operator transport was absent for the life of the process, the very symptom
 // of a runtime read once at assembly, and nothing said it was the wiring.
@@ -349,6 +357,12 @@ type Options struct {
 	// gate, asked of the engine on every request — see [NativeRoutes]. The
 	// file listing is a question, [queries.Native.Files].
 	Native NativeRoutes
+
+	// Code is the engine's own git host — smart HTTP under /git/ on a node
+	// whose roles name git — and the code domain's reads under /code/ on
+	// every node, asked of the engine on every request: see [CodeSurface].
+	// ALWAYS GUARDED, and never on api.public (ADR-0037).
+	Code CodeSurface
 
 	// Capacity drives a stream's byte ceiling.
 	Capacity capacityRunner
@@ -502,6 +516,12 @@ func New(opts Options) (*App, error) {
 	queries.Register(a.queries, sources)
 	a.backup, a.audit = opts.Backup, opts.Audit
 	a.retention, a.native = opts.Retention, opts.Native
+	// WHETHER THIS NODE SERVES GIT is its Tier A roles' answer, never the
+	// company's: a node that lists its roles serves git only if it names
+	// it, and an undeclared node has every role. Which company it serves is
+	// asked per request (code.go).
+	a.code = opts.Code
+	a.servesGit = servesGit(opts.Bootstrap)
 	a.capacity = opts.Capacity
 	a.fleetBroker = opts.FleetBroker
 
@@ -523,6 +543,9 @@ func New(opts Options) (*App, error) {
 	// anonymous-read posture allows. See retention.go.
 	a.mountRetention(mux)
 	a.mountFiles(mux)
+	// The engine's own git host and its reads: git on a node with the git
+	// role, the reads on every node. See code.go.
+	a.mountCode(mux)
 	// The capacity window's own control surface. It is the one thing a
 	// maintenance-mode node serves that a publishing one does not need,
 	// and it is why the verb can run at all on a topology whose broker
@@ -681,6 +704,7 @@ func (o Options) missing() error {
 		{"Operator", o.Operator == nil},
 		{"Retention", o.Retention == nil},
 		{"Native", o.Native == nil},
+		{"Code", o.Code == nil},
 		{"Capacity", o.Capacity == nil},
 		{"FleetBroker", o.FleetBroker == nil},
 		{"Backup", o.Backup == nil},

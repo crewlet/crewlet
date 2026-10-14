@@ -32,5 +32,5 @@ true, because otherwise git itself writes objects the rows never named.
 ## What this does not decide
 
 Who may push which ref beyond the protection rules on the row (how a person reaches git with their own
-token is a record of its own; seats are a later milestone's), how a repository's history is compacted or
+token is ADR-0037; seats are a later milestone's), how a repository's history is compacted or
 expunged, and where a git node with no `data` sits.

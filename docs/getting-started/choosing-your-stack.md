@@ -269,9 +269,10 @@ activation creates, settles and retires them (see
 and GitHub integrations keep working beside it, so a company may host some
 repositories natively and keep others on a vendor.
 
-Today it is the repositories and the decision of every push, not yet a place
-to work: this build serves no git transport, agents do not push to it, and
-there are no merge requests, reviews or checks — read
+Today it is a place for **people** to keep their code: they clone, fetch and
+push over HTTPS with their own API token ([Hosting Code](../guides/code.md)),
+and every push is recorded as the person who made it. Agents do not push to
+it yet, and there are no merge requests, reviews or checks — read
 [What it does not do yet](../concepts/code-host.md#what-it-does-not-do-yet)
 before choosing it as an engineering team's only host. A company that hosts
 code on it takes the [S3 object store](../concepts/object-store.md#an-s3-bucket--s3)

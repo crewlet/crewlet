@@ -14,11 +14,15 @@
 // down, and both the HTTP middleware and the WebSocket handshake consult it, so
 // the two cannot end up guarded in one place and open in the other.
 //
-// A GIT CLIENT IS ANSWERED IN GIT'S OWN TERMS. Which requests under /git/ are
-// fetches and which pushes is [GitAccess]'s answer and nobody else's; on a git
-// route, and on no other, the token may arrive as a Basic credential's
-// password; and a git route's refusal is the challenge git answers with its
-// credential helper, written in the one form git prints ([GitText]).
+// A GIT CLIENT IS ANSWERED IN GIT'S OWN TERMS, AS A PERSON (ADR-0037). git is
+// the third person transport beside the dashboard's act route and the
+// operator's MCP: a token bound to a human seat pushes as that person, one
+// bound to nobody fetches only, and neither /git/ nor /code/ is ever on the
+// public listener. Which requests under /git/ are fetches and which pushes is
+// [GitAccess]'s answer and nobody else's; on a git route, and on no other, the
+// token may arrive as a Basic credential's password; and a git route's refusal
+// is the challenge git answers with its credential helper, written in the one
+// form git prints ([GitText]).
 //
 // A DISABLED GUARD NAMES NOBODY: every caller is the reserved anonymous
 // operator ([AnonymousOperator]), whom no seat can bind, so a surface that acts

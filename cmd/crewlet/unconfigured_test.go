@@ -56,9 +56,20 @@ type unconfiguredNode struct {
 // then calls [unconfiguredNode.reconcile].
 func bootUnconfigured(t *testing.T, token string) *unconfiguredNode {
 	t.Helper()
+	return bootUnconfiguredWith(t, token, nil)
+}
+
+// bootUnconfiguredWith is [bootUnconfigured] over a Tier A amend has changed
+// first, for a case whose subject needs a setting of its own; nil changes
+// nothing.
+func bootUnconfiguredWith(t *testing.T, token string, amend func(*config.Bootstrap)) *unconfiguredNode {
+	t.Helper()
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = freePort(t)
 	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: token}}
+	if amend != nil {
+		amend(boot)
+	}
 	seedEngineStore(t, boot)
 	e, err := engine.New(t.Context(), engine.Options{Bootstrap: boot})
 	if err != nil {

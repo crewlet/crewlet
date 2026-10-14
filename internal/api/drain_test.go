@@ -49,6 +49,10 @@ func drainingAppOn(t *testing.T, rt api.NodeRuntime) *api.App {
 			Secrets:   func() webhooks.Secrets { return webhooks.Secrets{GitHub: "gh-secret"} },
 			Publisher: memory.New(),
 		},
+		// A CODE HOST WHOSE EVERY HANDLER ANSWERS `served`, on a node of
+		// every role: so a git request the gate lets through reaches a
+		// handler, and one it refuses is told from a route that is absent.
+		Code:    fixedCode{git: fakeGitRoutes{}, reads: &fakeCodeReads{}},
 		Sources: queries.Sources{Company: active()},
 	})
 	return a
@@ -85,8 +89,9 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // family: the webhook edge (a delivery, and both of its GET landings, one of
 // which acts and the other of which is refused with it), the config and
 // credential writes, the setup pass, the operator writes, the operator MCP
-// surface, a new git fetch — its advertisement, which would begin one — and a
-// git push, its advertisement as well as its upload.
+// surface, a new git fetch — its advertisement, which would begin one — a git
+// push, its advertisement as well as its upload, and a verify of the node's
+// git cache, which may rebuild it.
 //
 // WHETHER THIS FIXTURE MOUNTS THE ROUTE IS DECLARED, because the gate is
 // middleware and runs BEFORE the mux: it refuses on path and method alone, so
@@ -102,8 +107,8 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // [drainingApp] is a node with no store, no coordination store and no company,
 // so the three surfaces that need one (/config, /secrets, /setup) and the
 // three that need a tracker (/work/{id}/purge, /operator/mcp,
-// /operator/act/{tool}) are not mounted on it — and no node mounts a git route
-// yet, so no git row is mounted either.
+// /operator/act/{tool}) are not mounted on it. Its git routes and the verify
+// are, over a host that answers every request it is handed.
 var startsWork = []struct {
 	method, path string
 	mounted      bool
@@ -124,9 +129,10 @@ var startsWork = []struct {
 	{http.MethodPost, "/work/ENG-1/purge", false},
 	{http.MethodPost, "/operator/mcp", false},
 	{http.MethodPost, "/operator/act/create_work_item", false},
-	{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack", false},
-	{http.MethodGet, "/git/r.git/info/refs?service=git-receive-pack", false},
-	{http.MethodPost, "/git/r.git/git-receive-pack", false},
+	{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack", true},
+	{http.MethodGet, "/git/r.git/info/refs?service=git-receive-pack", true},
+	{http.MethodPost, "/git/r.git/git-receive-pack", true},
+	{http.MethodPost, "/code/repos/web/verify", true},
 }
 
 func TestADrainRefusesEveryRequestThatWouldStartWork(t *testing.T) {
@@ -211,10 +217,10 @@ func TestADrainingNodeFinishesAFetchAndBeginsNoGitWork(t *testing.T) {
 	for _, draining := range []bool{true, false} {
 		a := drainingApp(t, draining)
 		for _, req := range continues {
-			// Past the gate, which runs before the mux: no git route is
-			// mounted yet, so the mux's own 404 is what it reaches.
+			// Past the gate, to the code host behind it, which answers
+			// every request it is handed.
 			rec := send(t, a, req.method, req.path)
-			if refusedForDraining(t, rec) || rec.Code != http.StatusNotFound {
+			if refusedForDraining(t, rec) || rec.Code != http.StatusOK {
 				t.Errorf("draining=%v: %s %s answered %d %q, want it past the gate",
 					draining, req.method, req.path, rec.Code, rec.Body.String())
 			}
@@ -222,7 +228,7 @@ func TestADrainingNodeFinishesAFetchAndBeginsNoGitWork(t *testing.T) {
 		for _, req := range begins {
 			rec := send(t, a, req.method, req.path)
 			if !draining {
-				if refusedForDraining(t, rec) || rec.Code != http.StatusNotFound {
+				if refusedForDraining(t, rec) || rec.Code != http.StatusOK {
 					t.Errorf("%s %s answered %d %q on a node that is not draining, want it past the gate",
 						req.method, req.path, rec.Code, rec.Body.String())
 				}
@@ -512,16 +518,20 @@ func TestADrainingNodeStillServesItsProbesAndItsReads(t *testing.T) {
 	}
 
 	// Every other read keeps answering, which is how an operator watches
-	// the drain: the dashboard, the REST reads and the query surface.
-	for _, path := range []string{"/agents", "/org", "/dashboard", "/query/viewer"} {
+	// the drain: the dashboard, the REST reads (the code reads among them)
+	// and the query surface.
+	for _, path := range []string{"/agents", "/org", "/dashboard", "/query/viewer", "/code/repos"} {
 		if rec := send(t, a, http.MethodGet, path); rec.Code != http.StatusOK {
 			t.Errorf("GET %s answered %d during a drain, want 200", path, rec.Code)
 		}
 	}
-	// And the reads of a guarded surface, and a preflight, are reads too.
+	// And the reads of a guarded surface, and a preflight, are reads too —
+	// a verification's outcome among them, which an operator who began one
+	// before the drain reads while the node drains.
 	for _, req := range []struct{ method, path string }{
 		{http.MethodGet, "/config"},
 		{http.MethodOptions, "/config"},
+		{http.MethodGet, "/code/repos/web/verify/0190d2f2-0000-7000-8000-000000000000"},
 	} {
 		if rec := send(t, a, req.method, req.path); refusedForDraining(t, rec) {
 			t.Errorf("%s %s was refused for draining, and it starts nothing",
