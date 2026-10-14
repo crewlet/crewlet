@@ -55,9 +55,14 @@ const (
 	SpoolCredentialShare = 4
 
 	// MaxCommandSectionBytes bounds a push's command section — the ref
-	// updates before the pack: a thousand commands of a 255-byte ref with
-	// both ids and the capability list is about 400 KiB, so a mebibyte is
-	// what code.MaxCommandsPerPush commands can never exceed.
+	// updates before the pack: one mebibyte. code.MaxCommandsPerPush
+	// commands naming refs the engine takes — at most code.MaxRefNameBytes,
+	// each line its two ids beside the ref, the first its capability list —
+	// come to about 340 KiB. So a section past a mebibyte necessarily holds
+	// refs the engine refuses bad_ref (a pkt-line carries one of up to
+	// 64 KiB, and seventeen such are enough) or lines that parse as no
+	// command, and refusing it whole costs no push the engine would have
+	// taken.
 	MaxCommandSectionBytes = 1 << 20
 
 	// HookDialTimeout is how long the hook gives the engine's socket to

@@ -394,9 +394,15 @@ func randomText(n int) string {
 	return string(raw)
 }
 
-// git's probe before a push past its post buffer is answered 200, empty, and
-// runs nothing.
-func TestTheProbeIsAnsweredEmpty(t *testing.T) {
+// ONLY A LONE FLUSH IS GIT'S PROBE before a push past its post buffer —
+// answered 200, empty, running nothing and recording nothing. A section
+// holding ANY line is a push, whatever the receiver could make of the line: one
+// it cannot parse goes to receive-pack, which refuses it in its own words, and
+// the push is recorded. Read as "no command parsed", a section of lines the
+// receiver could not parse was answered as the probe — an empty 200, the body
+// never read, nothing recorded — and git printed only that the remote end hung
+// up.
+func TestOnlyALoneFlushIsTheProbe(t *testing.T) {
 	path, calls := gittest.Recording(t)
 	c := newCase(t, codetest.SoloOptions{GitPath: path}, codetest.Settings())
 	resp, body := post(t, c, 0, "ceo", "git-receive-pack", "", "0000")
@@ -404,10 +410,129 @@ func TestTheProbeIsAnsweredEmpty(t *testing.T) {
 		resp.Header.Get("Content-Type") != "application/x-git-receive-pack-result" {
 		t.Errorf("the probe answered %d %q %q", resp.StatusCode, resp.Header.Get("Content-Type"), body)
 	}
-	for _, call := range calls() {
-		if len(call.Args) > 0 && call.Args[0] == "receive-pack" {
-			t.Errorf("the probe ran receive-pack %v", call.Args)
+	if n := receivePacks(calls); n != 0 {
+		t.Errorf("the probe ran receive-pack %d times", n)
+	}
+	if audited := c.Fleet.Audited(); len(audited) != 0 {
+		t.Errorf("the probe was recorded: %+v", audited)
+	}
+
+	resp, body = post(t, c, 0, "ceo", "git-receive-pack", "", pkt("not a command\n")+"0000")
+	if resp.StatusCode == http.StatusOK && body == "" {
+		t.Errorf("a section holding a line no command parses from was answered as the probe")
+	}
+	if !strings.Contains(body, "protocol error") {
+		t.Errorf("a line no command parses from answered %d %q, want receive-pack's own words",
+			resp.StatusCode, body)
+	}
+	if n := receivePacks(calls); n != 1 {
+		t.Errorf("a line no command parses from ran receive-pack %d times, want once", n)
+	}
+	if audited := c.Fleet.Audited(); len(audited) != 1 || audited[0].Transport != types.TransportGit ||
+		audited[0].ActorSeat != "ceo" {
+		t.Errorf("a push of a line no command parses from was recorded as %+v, want once, as ceo's", audited)
+	}
+}
+
+// A REF PAST THE LONGEST A PUSH MAY NAME is a command all the same — git
+// accepts one, and a pkt-line carries one of up to 64 KiB — refused bad_ref
+// and recorded, alone and beside a ref that lands. Read as "not a command",
+// such a ref pushed alone was answered as git's probe: git printed that the
+// remote end hung up, and nothing was recorded.
+func TestARefPastTheLongestIsRefusedAsNotARef(t *testing.T) {
+	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	long := "refs/heads/" + strings.Repeat("a", 100) + "/" + strings.Repeat("b", 100) + "/" +
+		strings.Repeat("c", 100)
+	if len(long) <= code.MaxRefNameBytes {
+		t.Fatalf("the ref is %d bytes, not past the longest (%d)", len(long), code.MaxRefNameBytes)
+	}
+	notARef := "(bad_ref: " + code.RefusalBadRef.Sentence() + ")"
+
+	alone := p.Push(c.Ctx, work, c.URL(0), "HEAD:"+long)
+	if reason, rejected := alone.Rejected(long); !rejected || !strings.Contains(reason, "[remote rejected]") ||
+		!strings.Contains(reason, notARef) {
+		t.Errorf("a ref of %d bytes pushed alone printed %q, want it refused %s: %s", len(long), reason,
+			notARef, alone)
+	}
+	audited := c.Fleet.Audited()
+	if len(audited) != 1 || audited[0].Outcome != types.AuditRefused ||
+		audited[0].Refusal != string(code.RefusalBadRef) || audited[0].Transport != types.TransportGit {
+		t.Errorf("a ref of %d bytes pushed alone was recorded as %+v, want one refused/bad_ref", len(long),
+			audited)
+	}
+
+	beside := p.Push(c.Ctx, work, c.URL(0), "main", "HEAD:"+long)
+	if !beside.OK("refs/heads/main") {
+		t.Errorf("main, pushed beside a ref of %d bytes: %s", len(long), beside)
+	}
+	if reason, rejected := beside.Rejected(long); !rejected || !strings.Contains(reason, notARef) {
+		t.Errorf("a ref of %d bytes pushed beside main printed %q, want it refused %s", len(long), reason,
+			notARef)
+	}
+	if rows := c.Rows(); rows.Refs["refs/heads/main"] != head || rows.Refs[long] != "" {
+		t.Errorf("main is at %q and the long ref at %q, want %s and nothing", rows.Refs["refs/heads/main"],
+			rows.Refs[long], head)
+	}
+}
+
+// THE CAPABILITIES ARE THE FIRST COMMAND LINE'S, WHATEVER ITS REF: a push
+// whose first command names a ref past the longest still asked for side-band
+// and --atomic, so its refusal is framed in the band it asked for and refused
+// whole before receive-pack runs — and a refusal line naming the longest ref a
+// pkt-line holds still fits one, the ref whole and the sentence cut to the
+// room left.
+func TestTheFirstCommandsCapabilitiesAreReadWhateverItsRef(t *testing.T) {
+	path, calls := gittest.Recording(t)
+	c := newCase(t, codetest.SoloOptions{GitPath: path}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+
+	// The longest ref the first command line's pkt-line holds beside both
+	// ids and these capabilities.
+	const caps = "\x00side-band-64k atomic\n"
+	ids := gitrefZero + " " + head + " "
+	long := "refs/heads/" + strings.Repeat("l", largePacketDataMax-len(ids)-len(caps)-len("refs/heads/"))
+	body := pkt(ids+long+caps) + pkt(gitrefZero+" "+head+" refs/heads/other\n") + "0000"
+	before, ran := len(c.Fleet.Audited()), receivePacks(calls)
+	resp, answer := post(t, c, 0, "ceo", "git-receive-pack", "", body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("a push whose first ref is %d bytes answered %d %q", len(long), resp.StatusCode, answer)
+	}
+	report, progress, err := demux(answer)
+	if err != nil {
+		t.Fatalf("the report of a push that asked for side-band is not side-band: %v", err)
+	}
+	if !strings.Contains(progress, "crewlet: refused before anything was stored") {
+		t.Errorf("band 2 carried %q", progress)
+	}
+	lines, err := pktLines(report)
+	if err != nil {
+		t.Fatalf("the report is not pkt-lines git reads: %v", err)
+	}
+	if len(lines) != 3 || lines[0] != "unpack ok\n" ||
+		!strings.HasPrefix(lines[1], "ng "+long+" bad_ref: ") ||
+		!strings.HasPrefix(lines[2], "ng refs/heads/other atomic: ") {
+		short := make([]string, len(lines))
+		for i, l := range lines {
+			short[i] = strings.Replace(l, long, "<the long ref>", 1)
 		}
+		t.Errorf("the report read %q, want unpack ok, the long ref refused bad_ref and other refused atomic",
+			short)
+	}
+	if n := receivePacks(calls) - ran; n != 0 {
+		t.Errorf("an --atomic push one ref of which the receiver refused ran receive-pack %d times", n)
+	}
+	if audited := c.Fleet.Audited()[before:]; len(audited) != 1 || audited[0].Outcome != types.AuditRefused ||
+		audited[0].Refusal != string(code.RefusalBadRef) {
+		t.Errorf("the push was recorded as %+v, want one refused/bad_ref", audited)
+	}
+	if got := c.Rows().Refs["refs/heads/other"]; got != "" {
+		t.Errorf("other is at %s after an --atomic push refused whole", got)
 	}
 }
 

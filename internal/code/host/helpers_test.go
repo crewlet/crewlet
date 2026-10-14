@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -264,6 +265,73 @@ func raw(t *testing.T, c *codetest.Case, who, service, protocol string, declared
 
 // pkt is s as one pkt-line.
 func pkt(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
+
+// receivePacks is how many receive-pack processes a recording git has run so
+// far, advertisements included — counted rather than sliced, because the
+// recording lists its calls in no order.
+func receivePacks(calls func() []gittest.Call) int {
+	n := 0
+	for _, call := range calls() {
+		if len(call.Args) > 0 && call.Args[0] == "receive-pack" {
+			n++
+		}
+	}
+	return n
+}
+
+// largePacketDataMax is the most payload one pkt-line carries: git's
+// LARGE_PACKET_DATA_MAX, 65520 bytes on the wire less the four of its length.
+// Written here rather than read from the package, so the readers below hold
+// the package's packets to git's bound, not to its own.
+const largePacketDataMax = 65520 - 4
+
+// pktLines reads s as git's packet reader does — pkt-lines to a flush, a
+// length past git's largest refused — and is each payload.
+func pktLines(s string) ([]string, error) {
+	var out []string
+	for {
+		if len(s) < 4 {
+			return out, fmt.Errorf("no flush after %d packets", len(out))
+		}
+		n, err := strconv.ParseUint(s[:4], 16, 16)
+		switch {
+		case err != nil:
+			return out, fmt.Errorf("a length %q: %w", s[:4], err)
+		case n == 0:
+			return out, nil
+		case n < 4 || n > largePacketDataMax+4:
+			return out, fmt.Errorf("a packet of length %d, past git's largest (%d)", n, largePacketDataMax+4)
+		case int(n) > len(s):
+			return out, fmt.Errorf("a packet of length %d with %d bytes left", n, len(s))
+		}
+		out = append(out, s[4:n])
+		s = s[n:]
+	}
+}
+
+// demux reads a side-band answer as git's demultiplexer does: band 1 the
+// data, band 2 progress, band 3 an error, to the outer flush.
+func demux(s string) (data, progress string, err error) {
+	packets, err := pktLines(s)
+	if err != nil {
+		return "", "", err
+	}
+	var d, p strings.Builder
+	for _, packet := range packets {
+		if packet == "" {
+			return "", "", fmt.Errorf("an empty packet in a side-band stream")
+		}
+		switch packet[0] {
+		case 1:
+			d.WriteString(packet[1:])
+		case 2:
+			p.WriteString(packet[1:])
+		default:
+			return "", "", fmt.Errorf("band %d: %q", packet[0], packet[1:])
+		}
+	}
+	return d.String(), p.String(), nil
+}
 
 // pushRows is every push row of RepoName.
 func pushRows(t *testing.T, c *codetest.Case) []code.PushRow {

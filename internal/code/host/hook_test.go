@@ -176,13 +176,28 @@ func TestTheCommandSectionIsBounded(t *testing.T) {
 		{name: "the probe", body: "0000", empty: true},
 		{name: "a thousand commands", body: many(code.MaxCommandsPerPush) + "0000", commands: code.MaxCommandsPerPush},
 		{name: "a thousand and one", body: many(code.MaxCommandsPerPush+1) + "0000", err: host.ErrTooManyCommands},
-		// PAST A MEBIBYTE IN LINES NO COUNT BOUNDS: a thousand commands of
-		// the longest ref are about 340 KiB, so it is uncounted lines the
-		// byte bound is there for.
+		// PAST A MEBIBYTE: a thousand commands naming refs the engine takes
+		// — at most code.MaxRefNameBytes — come to about 340 KiB, so a
+		// section past it holds lines no count bounds, or refs the engine
+		// refuses bad_ref, of which seventeen of the longest a pkt-line
+		// carries are enough. Either way it is refused whole, and no push
+		// the engine would have taken is.
 		{name: "past a mebibyte", body: strings.Repeat(pkt("shallow "+oid('c')+"\n"),
 			host.MaxCommandSectionBytes/53+1) + "0000", err: host.ErrSectionTooLarge},
+		{name: "refs past the longest, past a mebibyte", body: first +
+			strings.Repeat(command("refs/heads/"+strings.Repeat("z", 65_000)), 17) + "0000",
+			err: host.ErrSectionTooLarge},
 		{name: "a shallow line passes uncounted", body: pkt("shallow "+oid('c')+"\n") + first + "0000", commands: 1},
 		{name: "the capabilities of the first", body: first + command("refs/heads/x") + "0000", commands: 2},
+		// A REF PAST THE LONGEST IS STILL A COMMAND — the push's to refuse
+		// bad_ref — and its line's capabilities are the push's.
+		{name: "a ref past the longest, first", body: pkt(oid('a')+" "+oid('b')+" refs/heads/"+
+			strings.Repeat("y", code.MaxRefNameBytes)+"\x00report-status atomic agent=git/2.43.0\n") +
+			command("refs/heads/x") + "0000", commands: 2},
+		// ANY LINE BUT A LONE FLUSH IS A PUSH, not the probe: what the
+		// receiver cannot parse is receive-pack's to refuse.
+		{name: "a line no command parses from", body: pkt("not a command\n") + "0000"},
+		{name: "a delimiter", body: "0001" + "0000"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, err := host.ReadCommands(strings.NewReader(tc.body), host.MaxCommandSectionBytes, code.MaxCommandsPerPush)

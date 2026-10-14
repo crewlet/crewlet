@@ -64,9 +64,15 @@ type section struct {
 	Caps capabilities
 }
 
-// Empty reports a section with no command and no shallow line: git's probe
-// before a push larger than its post buffer.
-func (s section) Empty() bool { return len(s.Commands) == 0 && s.Shallow == 0 }
+// Empty reports a section that is a LONE FLUSH — git's probe before a push
+// larger than its post buffer, a body of exactly `0000` — and nothing else.
+// A section holding any line at all is a push, whatever the receiver made of
+// the line: one it could not parse is receive-pack's to refuse in its own
+// words, and the push is recorded. Judged by what was parsed, a section of
+// lines the receiver could not read — a ref past the longest, once — was
+// answered as the probe: an empty 200, the body never read, receive-pack never
+// run, nothing recorded, and git printing only that the remote end hung up.
+func (s section) Empty() bool { return string(s.Raw) == flushPkt }
 
 // The two bounds a command section is held to, each its own refusal.
 var (
@@ -76,8 +82,9 @@ var (
 
 // readCommands reads pkt-lines to the first flush. A line `shallow <oid>` is
 // counted and passed; a line `<old> <new> <ref>[\0caps]` — two object ids and
-// a ref of at most code.MaxRefNameBytes — is a command; ANY OTHER LINE (a
-// push-cert the engine never advertises, garbage) is passed uncounted, for
+// a non-empty ref of ANY LENGTH the pkt-line carries — is a command, and the
+// first command's capabilities are the push's whatever its ref; ANY OTHER LINE
+// (a push-cert the engine never advertises, garbage) is passed uncounted, for
 // receive-pack to refuse in its own words: nothing here pre-checks a command it
 // cannot parse. errSectionTooLarge past maxBytes read; errTooManyCommands at
 // the maxCommands+1th command. A read error or a malformed packet is returned
@@ -122,12 +129,17 @@ func readCommands(r *bufio.Reader, maxBytes, maxCommands int) (section, error) {
 	}
 }
 
-// parseCommand reads `<old> <new> <ref>[\0caps]`.
+// parseCommand reads `<old> <new> <ref>[\0caps]`. The ref is read at ANY
+// LENGTH — the pkt-line bounds it, at under 64 KiB — and never held to
+// code.MaxRefNameBytes here: that bound is a REFUSAL, bad_ref
+// (code.StatelessRefusal), which the receiver answers in the report git reads
+// and records. Held to it as a condition of being a command at all, a ref git
+// accepts and the engine does not was no command, a push of nothing else read
+// as git's probe, and the capabilities its line carried went unread.
 func parseCommand(line []byte) (parsedCommand, string, bool) {
 	body, caps, _ := bytes.Cut(line, []byte{0})
 	fields := strings.SplitN(string(body), " ", 3)
-	if len(fields) != 3 || !gitref.ValidOID(fields[0]) || !gitref.ValidOID(fields[1]) ||
-		fields[2] == "" || len(fields[2]) > code.MaxRefNameBytes {
+	if len(fields) != 3 || !gitref.ValidOID(fields[0]) || !gitref.ValidOID(fields[1]) || fields[2] == "" {
 		return parsedCommand{}, "", false
 	}
 	return parsedCommand{Old: fields[0], New: fields[1], Ref: fields[2]}, string(caps), true
