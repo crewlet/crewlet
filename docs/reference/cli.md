@@ -25,6 +25,10 @@ subcommand below is served by it.
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
 | `crewlet work purge <task-id> -project KEY -reason TEXT -confirm <task-key>` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a person or an operator token. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing**, **damaged** and **unanswered** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it |
+| `crewlet code status [config] [-repo NAME] [-json]` | The [code host's](../concepts/code-host.md) repositories as a running node reads them — status, owner, default branch and its head, refs, packs, size and last push — or with `-repo` one repository in detail with its newest pushes: who made each and what became of every ref |
+| `crewlet code verify [config] [-repo NAME]… [-repair] [-json]` | Check **this node's** cache of every repository — or the named ones — against their rows, and with `-repair` rebuild a copy found damaged. Every git node keeps its own cache, so verify each. **Exits non-zero when any copy is not clean**, after checking every one — the hook for a cron on each git node |
+| `crewlet code export <name> <file.bundle> [config] [-git PATH]` | Write one repository — every ref and every object — to a git bundle on this machine, through your own git; `git clone <file.bundle>` restores it |
+| `crewlet code credential [-token-env NAME] get` | git's credential helper for the code host: answers git with the API token in `$CREWLET_API_TOKEN` as the password, over HTTPS (or plain http to this machine) only, and stores nothing |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. As the person the token is bound to |
@@ -791,6 +795,207 @@ coordination store did not answer, the node runs no object store, or it
 answered a state this build does not know — and zero otherwise, files that
 cannot be read included: a store that lost bytes is an answer, and the
 [`objects_missing`](alarms.md) alarm is what pages for it.
+
+## `crewlet code`
+
+```
+crewlet code status [<config.yaml>] [-url URL] [-token TOKEN] [-repo NAME] [-pushes N] [-json]
+crewlet code verify [<config.yaml>] [-url URL] [-token TOKEN] [-repo NAME]... [-repair] [-json]
+crewlet code export <name> <file.bundle> [<config.yaml>] [-url URL] [-token TOKEN] [-git PATH]
+crewlet code credential [-token-env NAME] get|store|erase
+```
+
+The engine's own [git host](../concepts/code-host.md) from the command line.
+`status` and `verify` ask a **running node** through its `/code/` routes
+([API Endpoints](api-endpoints.md#the-code-host-git-and-code)), as the person
+the token is bound to: the repositories are rows the data nodes keep, and a git
+node's cache is files only its own process touches, so nothing here opens
+either. Like every node client they find the node and the token from the Tier
+A file (`-url` and `-token` override it, and `$CREWLET_API_TOKEN` comes before
+its first token). `export` and `credential` are **client-side**: your own git,
+with your own environment, talks to the node's git routes exactly as anyone's
+git does. The git URL of a repository is `<the node's API base>/git/<name>.git`.
+
+`crewlet code hook` is the engine's own: git starts it inside every push. Run
+by hand it says so and exits 2.
+
+### `crewlet code status`
+
+With no `-repo`, every active and archived repository, read at the node's
+default level (`stale`), as many a page as the node serves (500), every page
+after the first at or past the first one's position, and on stderr the
+position the listing was read at, so two runs can be compared:
+
+```
+NAME        STATUS    OWNER               BRANCH  HEAD     REFS  PACKS  SIZE      LAST PUSH
+infra       archived  seat:platform-lead  main    77c0d2e  3     9      12.4 MiB  2026-09-30 08:11 UTC
+nimbus-web  active    unit:engineering    main    3f2a91c  14    212    1.9 GiB   2026-10-10 14:02 UTC
+read at CREWLET_CODE_LOG@0:4127
+```
+
+`HEAD` is the default branch's commit, `-` while it has none; `SIZE` is what
+its live packs hold. A company that declares none says `no repositories:
+code.repos declares none`, never an empty table.
+
+With `-repo NAME`, that repository in detail and its newest pushes
+(`-pushes N`, 10 by default, `0` for none). The repository is **read at
+`linearizable`** — as it is now — and every page of its history at or past the
+position it was read at, which the node serves with no barrier of its own, so
+the command costs the code log one barrier however many pages it reads, and
+asks for no more pushes than it prints:
+
+```
+web — active, owned by unit:engineering, default branch main
+  description:  The customer-facing web app.
+  protections:  refs/heads/main (no force, no delete), refs/heads/release/** (no direct push)
+  refs:         12 branches, 30 tags; main at 3f2a91c0e4d1b5a7f8c2e9d0a1b2c3d4e5f60718
+  packs:        212 live, 1.9 GiB, 1843021 objects
+  limits:       push 1.0 GiB, file 50.0 MiB, repository 20.0 GiB
+  pushes:       340 ever, the last 2026-10-10 14:02 UTC
+  created:      2026-09-01 10:00 UTC
+
+PUSHED AT             BY              NODE    REFS  RESULT
+2026-10-10 14:02 UTC  jane (founder)  data-b  1     ok refs/heads/main 1a2b3c4..3f2a91c
+2026-10-10 13:40 UTC  ci              data-a  2     ok refs/heads/x 0000000..9e8d7c6; ng refs/heads/main 1a2b3c4..77aa001 (stale)
+```
+
+`BY` is the token that pushed and, in parentheses, the person it is bound to;
+each ref's result is `ok`, `noop` or `ng`, with git's own `..` for a fast
+forward and `...` for a forced move, and an `ng`'s reason. `limits` are the
+serving node's `code.limits`. A deleted repository's header says when it was
+deleted and that declaring it again in `code.repos` restores it until
+`code.deleted_retention_days` have passed.
+
+`-json` prints the node's answers as they came — one JSON document a page, the
+repository's first with `-repo` — for a script. What the command holds while it
+reads is what it prints: a page at a time with `-json`, and otherwise each
+repository's or each push's row of text. A repository nobody declared is
+refused in the node's words (`no repository named "web" is declared in
+code.repos`), and a company that hosts no code says `code.native is not set`;
+either exits non-zero.
+
+### `crewlet code verify`
+
+Checks **this node's** copy of each repository against its rows — every pack's
+bytes against the digest its row names, the refs against what was written, and
+git's own connectivity check — and with `-repair` rebuilds a copy found damaged
+(every pack found whole linked rather than downloaded again) and checks the
+rebuilt one. Every git node keeps its own cache, so **verify each** (`-url`
+names the node); with requests routed by repository, a repository is cached on
+one or two of them.
+
+With no `-repo`, every active and archived repository, listed at
+`linearizable` so one declared a moment ago is not missed; `-repo NAME`, as
+often as you like, verifies those — a name nobody declared is refused in the
+node's words, naming `code.repos`. Each is verified in turn, **at the position
+the listing was read at** (`min_position`): the node brings its copy there with
+no barrier of its own, where a check at the log's head appends one, so a sweep
+of every repository costs the code log one barrier rather than one a
+repository:
+
+```
+web: ok (212 packs, 41 refs)
+docs: not held on this node — nothing here to check (verify the git nodes that serve it)
+api: 2 problem(s) (14 packs, 9 refs):
+  pack 01a13ca4-… (pack-166cc99…) hashes to c953e5ea…; its row says b5999284…
+  fsck: error: inflate: data stream error (incorrect data check) (and 2 more)
+  run it again with -repair to rebuild this node's copy
+```
+
+and with `-repair`:
+
+```
+api: damaged, and rebuilt (14 packs, 9 refs); the check before the rebuild found:
+  pack 01a13ca4-… (pack-166cc99…) hashes to c953e5ea…; its row says b5999284…
+api: the rebuilt copy is whole
+```
+
+A repository the node holds **no copy of** is passed over: nothing there can be
+damaged, and the node does not build a copy just to check it. A rebuild that
+leaves a problem names where it is — the object store or the rows — since a
+copy rebuilt from them can be no better than they are.
+
+**The check is the node's operation, not the request's.** It reads every byte
+of the repository — measured at about nine seconds a gigabyte, nearly all of it
+git's connectivity check — so the node runs it on its own time and a proxy's
+read timeout ends nothing. The node answers a check that ends within a quarter
+of a second — a small repository's — in the request that asked for it, and
+otherwise the command reads it, a quarter of a second later and then at
+doubling waits up to five seconds, until it ends. A refusal the node says
+clears by waiting (its verify slot or the check's memory held, a node stopping)
+is asked again after the node's own `Retry-After`, for up to five minutes, and
+then reported. While the node checks the copy it says when it ends that check
+by — a bound from what the copy holds, about 1.1 seconds a mebibyte, past
+which it ends the check itself — and the command waits by it; a node still
+saying it is checking well past that bound, or that stops answering for half a
+minute, is given up on, saying how to read the check's outcome later, and
+asking again hands back a check still running. A node that serves no verify at
+all is said once, naming `-url`, and the sweep stops: it is the address that is
+wrong, not a repository.
+
+**Exits non-zero when any copy is not clean**, after verifying every one — a
+problem found, a check that failed, a name nobody declared — and zero when all
+are clean or not held: the hook for a cron on each git node. `-json` prints
+each verification as the node answered it on stdout, and what it says in words
+on stderr — a company that declares none among them.
+
+### `crewlet code export`
+
+Writes one repository — every ref and every object behind them — to a [git
+bundle](https://git-scm.com/docs/git-bundle) on this machine:
+
+```
+$ crewlet code export web web.bundle
+exported web: 42 refs, 1.9 GiB to web.bundle
+$ git clone web.bundle web        # restores it, anywhere
+```
+
+It runs **your** git — the first on `PATH`, or `-git PATH` (a name is looked
+up on `PATH`, a relative path taken from where you run the command); 2.40 or
+newer — with your environment and your configuration, as a `git clone
+--mirror` through the node's git routes, then bundles the mirror, naming the
+mirror to every command (`--git-dir`), so `safe.bareRepository=explicit` in
+your configuration refuses none of them. Your token reaches git only through
+`crewlet code credential`, in the environment of that one clone and never on a
+command line, and only for the node's own URL: every credential helper your
+configuration lists is set aside for that clone, so a stored password for the
+same host is never sent instead, and a host a redirect sends git to is offered
+nothing. The bundle is written as `<file.bundle>.partial` and **checked whole
+before it is renamed into place**: its header is a bundle's with no
+prerequisite, and its pack is read from start to end and its bytes hashed
+against the trailer git wrote, so a pack cut short or with a byte changed —
+which `git bundle verify`, reading only the header, calls okay, and a clone of
+it refuses — is refused with nothing left at the path. An export that was
+interrupted leaves nothing that looks finished either; the mirror is
+made in a directory **beside the bundle** and removed when the export ends, so
+the bundle's volume needs room for the repository twice while it runs. A
+repository with no refs yet, or one deleted, is refused with nothing written.
+
+### `crewlet code credential`
+
+git's [credential helper](https://git-scm.com/docs/gitcredentials) for the code
+host. Configured for the node's address:
+
+```sh
+export CREWLET_API_TOKEN=…
+git config --global credential.https://code.example.com.helper ''
+git config --global --add credential.https://code.example.com.helper '!crewlet code credential'
+```
+
+— the empty value first, so the node's address has this helper alone: git
+hands a credential it was answered to **every** helper it lists to store, and
+a storing helper your system configures (osxkeychain on macOS, the credential
+manager with Git for Windows) would otherwise keep the token, answer every
+later request with it before this helper is asked, and send a rotated token's
+old value until a refusal erased it. Configured so, it answers git's `get`
+with `username=crewlet` and the token in
+`$CREWLET_API_TOKEN` (`-token-env NAME` reads another variable) as the
+password — the user name is ignored, the token is the credential. It answers
+**only over HTTPS**, or plain http to this machine (`localhost`, `127.0.0.1`,
+`::1`): over plain http to another host it says it will not send a token in
+the clear and answers nothing, and git asks its next helper. An empty variable
+answers nothing too. `store` and `erase` read git's request and do nothing —
+the token's home is the variable, never a file this helper writes.
 
 ## `crewlet fleet broker`
 

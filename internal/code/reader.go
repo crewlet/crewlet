@@ -675,13 +675,18 @@ func scanPush(s scanner) (PushRow, int, error) {
 //   - a push history: 50 by default, a screen of it, and 200 at most, which
 //     at a typical push row (1–2 KB: a few commands and the commits they
 //     introduced) is under half a megabyte, while a page of maximal pushes
-//     (about 460 KB each: MaxCommandsPerPush commands at the longest ref and
-//     MaxIntroduced ids) ends at the byte budget after its tenth.
+//     ends at the byte budget after its tenth (about 460 KB each:
+//     MaxCommandsPerPush commands at the longest ref and MaxIntroduced ids)
+//     — after its third where every byte of every ref is one JSON writes as
+//     six (`<`, `>`, `&`, which a ref may hold: 1.7 MB a row).
+//
+// The two maxima are exported for a client that pages: the most a page may
+// ask for of each, which a page past them is refused naming.
 const (
 	defaultRepoLimit = 100
-	maxRepoLimit     = 500
+	MaxReposPerPage  = 500
 	defaultPushLimit = 50
-	maxPushLimit     = 200
+	MaxPushesPerPage = 200
 )
 
 // ReadLevels are the levels [Reader.Read] serves: every level but session,
@@ -775,7 +780,7 @@ func (q ReadQuery) validate() error {
 			return fmt.Errorf("%w: status: %q is not one of %v", ErrInvalid, s, RepoStatuses())
 		}
 	}
-	bound := map[ReadKind]int{ReadRepos: maxRepoLimit, ReadPushes: maxPushLimit}[q.Kind]
+	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage}[q.Kind]
 	switch {
 	case q.Limit < 0:
 		return fmt.Errorf("%w: limit: %d", ErrInvalid, q.Limit)

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -36,6 +38,11 @@ type nodeClient struct {
 	base  string
 	token string
 	http  *http.Client
+	// maxAnswer is the most one answer may carry, zero for
+	// maxNodeResponseBytes: a client whose routes answer PAGES of a store's
+	// rows reads by the bound those pages are held to — the code reads'
+	// ([nodeClient.forCodeReads]).
+	maxAnswer int
 }
 
 // nodeRequestTimeout bounds one operator call.
@@ -64,6 +71,14 @@ func (c *nodeClient) patiently(limit time.Duration) *nodeClient {
 	patient := *c
 	patient.http = httpx.Client(limit)
 	return &patient
+}
+
+// answerCap is the most one answer of c may carry.
+func (c *nodeClient) answerCap() int {
+	if c.maxAnswer > 0 {
+		return c.maxAnswer
+	}
+	return maxNodeResponseBytes
 }
 
 // nodeClientFor is the shared "one config argument, then find the node"
@@ -158,13 +173,23 @@ func (c *nodeClient) do(ctx context.Context, method, path string, into any) erro
 }
 
 func (c *nodeClient) send(ctx context.Context, method, path string, payload []byte, into any) error {
+	_, err := c.exchange(ctx, method, path, payload, into)
+	return err
+}
+
+// exchange is send answering the node's answer's header beside: what a
+// command that waits by a time the node states reads that time against —
+// the answer's own Date, which the node's clock wrote — rather than this
+// machine's clock, which may disagree with the node's by more than the wait.
+func (c *nodeClient) exchange(ctx context.Context, method, path string, payload []byte, into any) (
+	http.Header, error) {
 	var reader io.Reader
 	if payload != nil {
 		reader = bytes.NewReader(payload)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, reader)
 	if err != nil {
-		return fmt.Errorf("build the request: %w", err)
+		return nil, fmt.Errorf("build the request: %w", err)
 	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -174,7 +199,7 @@ func (c *nodeClient) send(ctx context.Context, method, path string, payload []by
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return noAnswer{fmt.Errorf("reach the node at %s: %w\n\n"+
+		return nil, noAnswer{fmt.Errorf("reach the node at %s: %w\n\n"+
 			"This command acts on state the RUNNING engine holds. Start the node, "+
 			"or pass -url to name another one", c.base, err)}
 	}
@@ -189,30 +214,40 @@ func (c *nodeClient) send(ctx context.Context, method, path string, payload []by
 	//
 	// The read error is no longer discarded either: a connection that died
 	// mid-body is a different fact from a short answer.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxNodeResponseBytes+1))
+	limit := c.answerCap()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
-		return noAnswer{fmt.Errorf("reading the node's answer to %s: %w", path, err)}
+		return nil, noAnswer{fmt.Errorf("reading the node's answer to %s: %w", path, err)}
 	}
-	if len(body) > maxNodeResponseBytes {
+	if len(body) > limit {
 		// NOT THE NODE'S ANSWER EITHER: no answer this API writes comes
 		// near the cap, so what did is something in front of it — and
 		// what the node did with the request is as unknown as if nothing
 		// had come back at all.
-		return noAnswer{fmt.Errorf(
+		return nil, noAnswer{fmt.Errorf(
 			"the answer to %s exceeded %d bytes, so it was not read: this build "+
 				"caps one answer to bound a proxy's error page, and what the node "+
 				"did with the request is unknown. Check that -url names the engine "+
 				"rather than something in front of it",
-			path, maxNodeResponseBytes)}
+			path, limit)}
 	}
-	if resp.StatusCode != http.StatusOK {
+	// ANY 2xx IS THE NODE'S SUCCESS, not only a 200: a route that begins
+	// work outliving its request — a code verify — answers 202 Accepted with
+	// the operation it began, and read as a failure that answer had no error
+	// code and was reported as something in front of the node.
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		if engineCode(body) == "" {
-			return notTheNode(path, resp.StatusCode, resp.Header.Get("Content-Type"), body)
+			return nil, notTheNode(path, resp.StatusCode, resp.Header.Get("Content-Type"), body)
 		}
-		return nodeError(resp.StatusCode, body, c.token != "")
+		err := nodeError(resp.StatusCode, body, c.token != "")
+		var refusal *nodeRefusal
+		if errors.As(err, &refusal) {
+			refusal.RetryAfter = retryAfter(resp.Header)
+		}
+		return nil, err
 	}
 	if into == nil {
-		return nil
+		return resp.Header, nil
 	}
 	if err := json.Unmarshal(body, into); err != nil {
 		// A 200 WHOSE BODY DOES NOT DECODE is an answer cut short — a
@@ -220,10 +255,24 @@ func (c *nodeClient) send(ctx context.Context, method, path string, payload []by
 		// on a clean boundary — and says nothing about what the node did.
 		// Reported as a plain error it read as a failure, and a gesture
 		// that very likely ran printed nothing that finishes it.
-		return noAnswer{fmt.Errorf("the answer to %s was cut short or is not the "+
+		return nil, noAnswer{fmt.Errorf("the answer to %s was cut short or is not the "+
 			"JSON the node writes (%w), so what the node did is unknown", path, err)}
 	}
-	return nil
+	return resp.Header, nil
+}
+
+// retryAfter is a refusal's Retry-After as a duration, zero where it carries
+// none. Whole seconds only: a refusal that reaches it is the node's own (it
+// carries the engine's error code — [notTheNode] takes every other), and the
+// engine writes no other form. A value it cannot read is no wait at all
+// rather than a guess, so a command that retries by it reports the refusal
+// instead.
+func retryAfter(h http.Header) time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(h.Get("Retry-After")))
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // engineCode is the refusal code a non-200 body carries, or "" where it carries
@@ -253,17 +302,21 @@ func engineCode(body []byte) string {
 // proxy or gateway in front of it, or another service at the address. Each
 // is told where to point instead, because "no such route" alone sends an
 // operator looking for a build that lacks one.
-func missingSurface(base, surface, code string) error {
+//
+// flag is the flag the calling command names a node with — `-api` for the
+// config and secrets clients, `-url` for every node client — so the advice
+// names one the command takes.
+func missingSurface(base, surface, code, flag string) error {
 	if code == string(httpjson.CodeNoRoute) {
 		return fmt.Errorf("%s serves no %s surface: it is a node without the "+
-			"%s role, which serves only its probes and tool bridge — point -api at a node "+
+			"%s role, which serves only its probes and tool bridge — point %s at a node "+
 			"whose node.roles include %s", base, surface,
-			placement.RoleIngress, placement.RoleIngress)
+			placement.RoleIngress, flag, placement.RoleIngress)
 	}
 	return fmt.Errorf("%s has no %s surface: whatever answered is not a "+
-		"Crewlet node's API — point -api (or api.host and api.port) at a node "+
+		"Crewlet node's API — point %s (or api.host and api.port) at a node "+
 		"with the %s role rather than at a proxy or another service",
-		base, surface, placement.RoleIngress)
+		base, surface, flag, placement.RoleIngress)
 }
 
 // notTheNode is a non-200 that is not the node's own answer: no engine error
@@ -313,6 +366,17 @@ type nodeRefusal struct {
 	Code    string
 	Actions []string
 
+	// Reason is the refusal's `reason`, where a route names one beside its
+	// code — what tells two refusals with one code apart (a code verify's
+	// `not_held` beside its `not_found`) without reading the sentence.
+	Reason string
+
+	// RetryAfter is the node's Retry-After, zero where it sent none: the
+	// node's word that waiting clears this refusal, and for how long — what a
+	// command that retries a refusal (a code verify a busy node refused)
+	// retries by.
+	RetryAfter time.Duration
+
 	// detail and hint are the refusal's own sentences, which the message
 	// carries beneath its first line.
 	detail, hint string
@@ -353,13 +417,14 @@ func (e *nodeRefusal) asJudgement() *nodeRefusal {
 func nodeError(status int, body []byte, sentToken bool) error {
 	var payload struct {
 		Error   string   `json:"error"`
+		Reason  string   `json:"reason"`
 		Detail  string   `json:"detail"`
 		Hint    string   `json:"hint"`
 		Actions []string `json:"actions"`
 	}
 	_ = json.Unmarshal(body, &payload)
-	refusal := &nodeRefusal{Status: status, Code: payload.Error, Actions: payload.Actions,
-		detail: payload.Detail, hint: payload.Hint}
+	refusal := &nodeRefusal{Status: status, Code: payload.Error, Reason: payload.Reason,
+		Actions: payload.Actions, detail: payload.Detail, hint: payload.Hint}
 	switch {
 	case status == http.StatusForbidden && payload.Error == "unbound":
 		// THE ACT TRANSPORT'S ONE RULE, and not a bad token: the token is

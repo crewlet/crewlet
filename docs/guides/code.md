@@ -140,13 +140,41 @@ git clone https://crewlet.example.com/git/web.git
 ```
 
 git asks for a user name and a password: the password is the token, and the
-user name is ignored. To be asked once, give git a credential helper — your
-platform's keychain is the safe one (`git config --global credential.helper
-osxkeychain`, `libsecret` or `manager`); `credential.helper store` works too,
-and keeps the token in plain text in `~/.git-credentials`.
+user name is ignored. So that git never asks, give it a credential helper.
+The engine's own reads the token from your environment and keeps it nowhere
+else — scoped to the code host's address, so the token is offered to it and
+to nothing else, and configured **from empty**, so that address has this
+helper alone:
 
-**In CI**, hand the token over without a prompt. Either as a bearer header,
-which every route accepts:
+```sh
+export CREWLET_API_TOKEN=…
+git config --global credential.https://crewlet.example.com.helper ''
+git config --global --add credential.https://crewlet.example.com.helper '!crewlet code credential'
+```
+
+The empty value clears the helpers git would otherwise also ask, because git
+hands a credential it was answered to every helper it lists to store: a
+storing helper your system configures (osxkeychain on macOS, the credential
+manager with Git for Windows) would keep the token, answer with it before this
+helper is asked, and go on sending a rotated token's old value until a refusal
+erased it. It answers only over HTTPS (or plain http to your own machine), and `store` and
+`erase` do nothing, so the token's one home is the variable
+([`crewlet code credential`](../reference/cli.md#crewlet-code-credential)). Your
+platform's keychain works too (`git config --global credential.helper
+osxkeychain`, `libsecret` or `manager`); `credential.helper store` keeps the
+token in plain text in `~/.git-credentials`.
+
+**In CI**, hand the token over without a prompt. The same helper, for one
+command, through `-c`:
+
+```sh
+CREWLET_API_TOKEN=$CREWLET_TOKEN git -c credential.helper= \
+  -c 'credential.helper=!crewlet code credential' \
+  clone https://crewlet.example.com/git/web.git
+```
+
+(the empty `credential.helper=` first sets aside any helper the runner's own
+configuration lists). Or as a bearer header, which every route accepts:
 
 ```sh
 git -c "http.extraHeader=Authorization: Bearer $CREWLET_TOKEN" \
@@ -188,10 +216,49 @@ is never said of a push that is merely on its way. Every other condition, the
 exact line git prints and what to do about it is in [What git prints, and what
 it means](../concepts/code-host.md#what-git-prints-and-what-it-means).
 
-## See what is hosted
+## Status and verify
 
-The repositories and their history are read over the API with the same token
-— `/code/` is always guarded:
+**`crewlet code status`** lists what is hosted — each repository's status,
+owner, default branch and its head, refs, packs, size and last push — and
+`-repo web` shows one in detail with its newest pushes: who made each and what
+became of every ref, `ng` with git's reason where a push was refused. Run it
+beside a node's Tier A file, or with `-url` and `-token`; it reads with the
+same token git uses, as the person it is bound to:
+
+```sh
+crewlet code status
+crewlet code status -repo web -pushes 20
+```
+
+**`crewlet code verify`** checks a git node's **cache** — its disposable copy
+of each repository — against the repositories' rows: every pack's bytes, the
+refs, and git's own connectivity check. The rows and the object store are the
+record and the cache is derived from them, so a damaged copy is one node's —
+but it is what that node serves, so run it:
+
+- **on a schedule on each git node** (`-url` names the node): it exits non-zero
+  when any copy is not clean, which is the hook for your cron. A repository the
+  node holds no copy of is passed over;
+- **when git prints an error about a repository on one node and not on the
+  others**, with `-repo` naming it;
+- and with **`-repair`** to rebuild a copy it found damaged: the packs it found
+  whole are kept, the rest downloaded again, and the rebuilt copy checked.
+
+```sh
+crewlet code verify -url https://git-1.internal.example.com:8080
+crewlet code verify -url https://git-1.internal.example.com:8080 -repo web -repair
+```
+
+The check runs on the node, not on your connection: it reads every byte of the
+copy — measured at about nine seconds a gigabyte — and the command waits for it
+while a proxy's timeout ends nothing, by the deadline the node states for the
+check from what the copy holds. A sweep checks every repository at the position
+it listed them at, so it costs the code log one barrier however many it
+verifies. Every flag and what each line means is in
+[`crewlet code verify`](../reference/cli.md#crewlet-code-verify).
+
+Both read the API's `/code/` routes, which a script reads too, with the same
+token — `/code/` is always guarded:
 
 ```sh
 curl -s -H "Authorization: Bearer $CREWLET_TOKEN" \
@@ -204,6 +271,25 @@ A listing is read from the answering node's copy by default; a script that must
 not conclude a repository is missing from an old copy asks
 `read_level=linearizable`. The routes, their parameters and their answers are
 in [API Endpoints](../reference/api-endpoints.md#the-code-host-git-and-code).
+
+## Export
+
+**`crewlet code export`** writes one repository — every branch, every tag and
+every object behind them — to a single [git
+bundle](https://git-scm.com/docs/git-bundle) on your machine, through your own
+git (2.40 or newer) and the same token:
+
+```sh
+crewlet code export web web.bundle
+git clone web.bundle web          # anywhere, with no engine at all
+```
+
+It is how a repository leaves the engine — for an archive, an audit, or another
+host — and it is not a backup of the code host: a [backup](backup.md) of a data
+node holds every repository's rows and packs, and is what restores the code
+host itself. The export needs room for the repository twice beside the bundle
+while it runs, since it clones a mirror there and bundles it; see
+[`crewlet code export`](../reference/cli.md#crewlet-code-export).
 
 ## Delete and restore a repository
 

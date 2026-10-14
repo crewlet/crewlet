@@ -312,7 +312,7 @@ func assertGitChallenge(t *testing.T, res *http.Response, what string) {
 	if _, err := body.ReadFrom(res.Body); err != nil {
 		t.Fatal(err)
 	}
-	if got := body.String(); got != "authentication required: use a Crewlet API token as the password\n" {
+	if got := body.String(); got != "authentication required: use a Crewlet API token as the password (crewlet code credential)\n" {
 		t.Errorf("%s said %q", what, got)
 	}
 }

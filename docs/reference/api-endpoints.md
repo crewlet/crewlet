@@ -247,7 +247,9 @@ every other route.
 > for one caches it and replays it to every route of the origin. A refused git
 > request answers `401` with `WWW-Authenticate: Basic realm="crewlet",
 > charset="UTF-8"` and a `text/plain` body git prints (`authentication
-> required: use a Crewlet API token as the password`), never the JSON below,
+> required: use a Crewlet API token as the password (crewlet code
+> credential)` — the helper that answers git's prompt with the token, see
+> [`crewlet code credential`](cli.md#crewlet-code-credential)), never the JSON below,
 > which git shows as nothing at all. A git request that presented no
 > credential is the protocol's normal first step, so it is logged at debug as
 > `api_auth_challenge`; a credential presented and refused is

@@ -557,8 +557,10 @@ repository whose bitmap the node's memory cannot hold
 A person reaches a repository with git's own smart HTTP at
 `https://<the API's address>/git/<name>.git`, on the node's `api.port`, and
 with the credential they already have: their own Tier A API token, given to
-git as the **password** (git asks for it, or a credential helper answers; the
-user name is ignored). There is no second credential for git — no SSH key and
+git as the **password** (git asks for it, or a credential helper answers —
+[`crewlet code credential`](../reference/cli.md#crewlet-code-credential) is the
+engine's own, reading the token from the environment; the user name is
+ignored). There is no second credential for git — no SSH key and
 no deploy token — because the token is already how the engine knows who a
 person is, and a second identity system would be one more thing to revoke and
 audit ([ADR-0037](https://github.com/crewlet/crewlet/blob/main/adr/0037-a-person-reaches-git-with-their-own-bound-token.md)).
