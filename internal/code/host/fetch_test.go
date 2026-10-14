@@ -172,6 +172,44 @@ func TestAFetchWhoseSyncAtTheHeadFailsIs503(t *testing.T) {
 	}
 }
 
+// A PACK THE STORE HAS LOST is logged by the host as the cache logs the same
+// fact for the sync that found it: code_pack_missing, at WARN, naming the pack
+// by pack_id — the alarm is objects_missing, raised by the collector's audit —
+// so a line's name answers one level and one set of keys whichever component
+// wrote it, and an ERROR the operator alerts on is never this.
+func TestAMissingPackIsLoggedAsTheCacheLogsIt(t *testing.T) {
+	var l logs
+	c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+	rows := c.Rows()
+	if len(rows.Packs) != 1 {
+		t.Fatalf("one push stored %d packs", len(rows.Packs))
+	}
+	pack := rows.Packs[0]
+	if err := c.Fleet.Objects().Delete(c.Ctx, pack.Object.Name()); err != nil {
+		t.Fatalf("delete the pack's object: %v", err)
+	}
+	node := c.Fleet.Nodes()[0]
+	dir := node.CacheDir()
+	c.Fleet.Kill(t, node.ID())
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove %s: %v", dir, err)
+	}
+	c.Fleet.Restart(t, node.ID())
+	if _, _, err := p.TryClone(c.Ctx, c.URL(0)); err == nil {
+		t.Fatal("a clone of a repository whose pack is gone succeeded")
+	}
+	if n := l.count("code_pack_missing", `"level":"WARN"`, `"pack_id":"`+pack.PackID+`"`); n == 0 {
+		t.Errorf("the refused clone logged no code_pack_missing at WARN naming pack_id %s", pack.PackID)
+	}
+	if n := l.count("code_pack_missing", `"level":"ERROR"`); n != 0 {
+		t.Errorf("the refused clone logged code_pack_missing at ERROR %d times, want WARN as the cache does", n)
+	}
+}
+
 // A FETCH WHOSE CLIENT HANGS UP DURING ITS SYNC AT THE LOG'S HEAD ends quietly:
 // nothing is answered to nobody, nothing is logged as the code log failing,
 // and the handler returns without a panic (the suite fails a case on one).

@@ -32,7 +32,9 @@ func (s *Server) syncFailed(w http.ResponseWriter, r *http.Request, name string,
 	case errors.Is(err, code.ErrRepoNotFound):
 		auth.GitText(w, http.StatusNotFound, notFoundSentence(name))
 	case errors.As(err, &missing):
-		s.log.Error("code_pack_missing", "repo", name, "pack", missing.Pack.PackID,
+		// WARN, as the cache's line of the same name for the sync that found
+		// it: objects_missing is the alarm, raised by the collector's audit.
+		s.log.Warn("code_pack_missing", "repo", name, "pack_id", missing.Pack.PackID,
 			"object", missing.Pack.Object.String(), "damaged", missing.Damaged, "error", err)
 		retry(w, UnavailableRetryAfter)
 		what := "is missing from the object store"
@@ -42,7 +44,7 @@ func (s *Server) syncFailed(w http.ResponseWriter, r *http.Request, name string,
 		auth.GitText(w, http.StatusServiceUnavailable, name+"'s pack "+missing.Pack.PackID+" "+what+
 			" (the daily audit raises objects_missing for it); retry in "+seconds(UnavailableRetryAfter))
 	case errors.As(err, &corrupt):
-		s.log.Error("code_pack_checksum_mismatch", "repo", name, "pack", corrupt.Pack.PackID,
+		s.log.Error("code_pack_checksum_mismatch", "repo", name, "pack_id", corrupt.Pack.PackID,
 			"object", corrupt.Pack.Object.String(), "error", err)
 		retry(w, UnavailableRetryAfter)
 		auth.GitText(w, http.StatusServiceUnavailable, name+"'s pack "+corrupt.Pack.PackID+
