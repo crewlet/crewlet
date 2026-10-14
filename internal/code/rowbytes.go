@@ -199,6 +199,7 @@ func (r RepoRef) members() int {
 	return n + field("refs", intBytes(r.Refs), false) +
 		field("live_packs", intBytes(r.LivePacks), false) +
 		field("live_bytes", intBytes(r.LiveBytes), false) +
+		field("live_objects", intBytes(r.LiveObjects), false) +
 		field("position", positionBytes(r.Position), false)
 }
 

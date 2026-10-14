@@ -166,7 +166,7 @@ func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position
 	)
 	err := tx.QueryRowContext(ctx, repoViewSQL, id).Scan(&v.ref.ID, &v.ref.Name, &status, &managed,
 		&owners, &v.ref.Owner.Ref, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &v.ref.Refs,
-		&v.branches, &v.tags, &v.tombstones, &v.ref.LivePacks, &v.ref.LiveBytes,
+		&v.branches, &v.tags, &v.tombstones, &v.ref.LivePacks, &v.ref.LiveBytes, &v.ref.LiveObjects,
 		&v.tombstonesThrough, &v.pushes, &v.lastPushAt, &v.createdAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -802,7 +802,7 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, cp statelog
 		)
 		if err := rows.Scan(&v.ref.ID, &v.ref.Name, &status, &managed, &owners, &v.ref.Owner.Ref,
 			&v.ref.DefaultBranch, &v.ref.Description, &deleted, &v.ref.Refs, &v.ref.LivePacks,
-			&v.ref.LiveBytes, &v.pushes, &v.lastPushAt, &head); err != nil {
+			&v.ref.LiveBytes, &v.ref.LiveObjects, &v.pushes, &v.lastPushAt, &head); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("code: list repositories: %w", err)
 		}
@@ -1170,7 +1170,7 @@ func (r *Reader) purgedAt(ctx context.Context, id string, at statelog.Position) 
 const (
 	repoViewSQL = `SELECT id, name, status, managed_by, owner_kind, owner, default_branch,
 		description, deleted_at, refs, branches, tags, tombstones, live_packs, live_bytes,
-		tombstones_through, pushes, last_push_at, created_at FROM code_repos WHERE id = ?`
+		live_objects, tombstones_through, pushes, last_push_at, created_at FROM code_repos WHERE id = ?`
 	packColumns       = `pack_id, part, object, hash, size, index_bytes, reverse_bytes, git_checksum, objects, kind, state, added_position`
 	packsFullFirstSQL = `SELECT ` + packColumns + ` FROM code_packs WHERE repo_id = ?
 		ORDER BY pack_id, part LIMIT ?`
@@ -1200,7 +1200,7 @@ const (
 		ORDER BY at DESC, position DESC, push_id DESC LIMIT ?`
 	reposSQL = `SELECT r.id, r.name, r.status, r.managed_by, r.owner_kind, r.owner,
 		r.default_branch, r.description, r.deleted_at, r.refs, r.live_packs, r.live_bytes,
-		r.pushes, r.last_push_at, h.target
+		r.live_objects, r.pushes, r.last_push_at, h.target
 		FROM code_repos r LEFT JOIN code_refs h INDEXED BY ` + refsKey + `
 			ON h.repo_id = r.id AND h.ref = 'refs/heads/' || r.default_branch AND h.target != ''
 		WHERE r.status IN (SELECT value FROM json_each(?)) AND r.name > ?

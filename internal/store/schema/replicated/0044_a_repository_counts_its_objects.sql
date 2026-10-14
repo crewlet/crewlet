@@ -1,0 +1,19 @@
+-- A repository counts the objects its live packs hold.
+--
+-- code_repos already kept what its live packs hold in packs (live_packs) and
+-- in bytes (live_bytes), moved by the applier as a push adds a pack and a
+-- purge part removes one, so that no read sums code_packs to learn either.
+-- The code host needs the third measure: how many OBJECTS a repository's live
+-- packs hold. A fetch request names each object it wants once, at fifty bytes
+-- a want on the wire, so the objects a repository holds and its live refs are
+-- the most a legitimate request to it can name — and the host bounds the
+-- request it spools by that before it has read it, from the row its admission
+-- already holds, rather than summing the pack rows for every fetch.
+--
+-- Kept by the applier exactly as live_bytes is, from the pack rows' own object
+-- counts: a push record adds its pack's, and a purge part subtracts those of
+-- the live packs it removes.
+--
+-- Class: code_repos stays reproducible: every record that moves live_bytes
+-- moves this beside it.
+ALTER TABLE code_repos ADD COLUMN live_objects INTEGER NOT NULL DEFAULT 0;
