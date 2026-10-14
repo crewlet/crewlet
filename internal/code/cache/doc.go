@@ -102,12 +102,18 @@
 // back — so installing a pack is one GET, split into three files as it
 // streams, and three renames: no node but the receiving one ever runs
 // index-pack, and a cold sync is bound by the network rather than by a core.
-// Up to [FetchConcurrency] downloads run at once, largest first, and at most
+// Up to [FetchConcurrency] downloads run at once, largest first — their files
+// made by the round in that order, and each asking only once the one before
+// it holds its GET, however the scheduler runs them — and at most
 // [NodeFetches] across every sync on the node — half the node to one
 // repository, so a second repository's sync is never starved behind the
 // first one's longest downloads — each holding its slot for its GET alone
 // and its copy buffer with the slot, so the node's download memory is
-// NodeFetches buffers however many syncs wait. Every byte is SHA-256
+// NodeFetches buffers however many syncs wait. The round's share goes back
+// with the slot: a bundle's syncs and renames hold neither, bounded instead
+// by the packs a round and the node hold IN HAND, two shares of each, and a
+// bundle's three files are synced at once, beside every other bundle being
+// placed, so their syncs share journal commits. Every byte is SHA-256
 // verified against its row on the way in (objstore), and the three sections
 // are held to the row by code.CheckBundle; a bundle that is not its row's is
 // refused and never retried, because the row and the bytes disagree and
