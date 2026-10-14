@@ -188,6 +188,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runWork(rest, stdout, stderr)
 	case "objects":
 		return runObjects(rest, stdout, stderr)
+	case "code":
+		return runCode(rest, stdout, stderr)
 	case "fleet":
 		return runFleet(rest, stdout, stderr)
 	case "seats":
@@ -224,6 +226,8 @@ Usage:
                               produced and which nothing undoes
   crewlet objects status      Where the company's files are kept, and what the
                               object store's collector last found missing
+  crewlet code <cmd>          The engine's own git host: status, verify a node's cache,
+                              export a bundle (credential is git's helper)
   crewlet fleet broker <cmd>  The fleet broker's members, as the nodes advertise them
                               and as its metadata group counts them: list, and
                               remove a member that is gone for good

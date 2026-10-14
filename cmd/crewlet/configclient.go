@@ -160,7 +160,7 @@ func (c *configClient) refusal(status int, contentType string, raw []byte) error
 	case status == http.StatusNotFound:
 		// PUT /config answers no 404 of its own, so any 404 is the surface
 		// missing rather than something under it.
-		return missingSurface(c.base, "/config", body.Error)
+		return missingSurface(c.base, "/config", body.Error, "-api")
 	case status == http.StatusUnauthorized:
 		return fmt.Errorf("%s refused the bearer token: set %s to one of its "+
 			"api.auth.tokens", c.base, apiTokenEnv)

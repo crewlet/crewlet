@@ -183,5 +183,5 @@ const gitRealm = `Basic realm="crewlet", charset="UTF-8"`
 
 // gitAuthSentence is what git prints beside a refused credential: what to put
 // in the password, which is the only half of a Basic credential the guard
-// reads.
-const gitAuthSentence = "authentication required: use a Crewlet API token as the password"
+// reads, and the helper that answers git's prompt with one.
+const gitAuthSentence = "authentication required: use a Crewlet API token as the password (crewlet code credential)"

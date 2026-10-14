@@ -28,6 +28,15 @@ func TestMain(m *testing.M) {
 	if os.Getenv(mainProbeEnv) != "" {
 		runMainProbe()
 	}
+	// GIT'S CREDENTIAL HELPER, as `crewlet code` configures it for a git that
+	// talks to a node — `!'<this binary>' code credential` — and under go test
+	// this binary is the test binary. So a git a case starts, through the CLI
+	// or by hand, calls it back with the production argv, and it answers as
+	// main() does; it must never answer by running the suite inside a git
+	// command, which would start that git again.
+	if isCredentialHelperCall(os.Args[1:]) {
+		runMainProbe()
+	}
 	// THE CODE HOST'S HOOK: an engine this package boots and pushes to
 	// starts this binary as its proc-receive hook through the engine's
 	// DEFAULT hook — os.Executable, which is this test binary — so the
