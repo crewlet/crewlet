@@ -393,7 +393,7 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 		retryAfter  string
 		readerAsked bool
 	}{
-		{"/code/repos/web", http.StatusNotFound, "not_found", `"web"`, "", true},
+		{"/code/repos/web", http.StatusNotFound, "not_found", `"web" is declared in code.repos`, "", true},
 		{"/code/repos/level", http.StatusBadRequest, "bad_params", "stale and consistent_prefix", "", true},
 		{"/code/repos/cursor/pushes", http.StatusBadRequest, "bad_params", "not a cursor", "", true},
 		{"/code/repos/behind", http.StatusServiceUnavailable, "unavailable", "", "7", true},
@@ -581,26 +581,35 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 	}
 	mu.Unlock()
 
-	// REFUSED AT ONCE.
+	// REFUSED AT ONCE — and a repository this node holds no copy of is told
+	// from one nobody declared by its reason, which a client acts on without
+	// reading the sentence: a sweep of every repository on one node passes
+	// over the ones that node does not keep, and fails on the ones nobody
+	// declared.
 	for _, tc := range []struct {
-		name, code, detail, retryAfter string
-		status                         int
+		name, code, reason, detail, retryAfter string
+		status                                 int
 	}{
-		{"gone", "not_found", `no repository named "gone"`, "", http.StatusNotFound},
-		{"elsewhere", "not_found", "holds no copy", "", http.StatusNotFound},
-		{"racing", "verify_running", running.ID.String(), "", http.StatusConflict},
-		{"stopping", "unavailable", "stopping", "30", http.StatusServiceUnavailable},
-		{"busy", "unavailable", "run it again", "10", http.StatusServiceUnavailable},
-		{"nobody", "unavailable", "", "5", http.StatusServiceUnavailable},
-		{"large", "query_failed", "a node with more memory", "", http.StatusInternalServerError},
+		{"gone", "not_found", "", `no repository named "gone" is declared in code.repos`, "",
+			http.StatusNotFound},
+		{"elsewhere", "not_found", "not_held", "holds no copy", "", http.StatusNotFound},
+		{"racing", "verify_running", "", running.ID.String(), "", http.StatusConflict},
+		{"stopping", "unavailable", "", "stopping", "30", http.StatusServiceUnavailable},
+		{"busy", "unavailable", "", "run it again", "10", http.StatusServiceUnavailable},
+		{"nobody", "unavailable", "", "", "5", http.StatusServiceUnavailable},
+		{"large", "query_failed", "", "a node with more memory", "", http.StatusInternalServerError},
 	} {
 		rec := post(tc.name + "/verify")
 		code, detail := errorBody(t, rec)
-		if rec.Code != tc.status || code != tc.code || !strings.Contains(detail, tc.detail) ||
-			rec.Header().Get("Retry-After") != tc.retryAfter {
-			t.Errorf("a verify of %s answered %d %s %q (Retry-After %q), want %d %s naming %q "+
-				"(Retry-After %q)", tc.name, rec.Code, code, detail, rec.Header().Get("Retry-After"),
-				tc.status, tc.code, tc.detail, tc.retryAfter)
+		var reason struct {
+			Reason string `json:"reason"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &reason)
+		if rec.Code != tc.status || code != tc.code || reason.Reason != tc.reason ||
+			!strings.Contains(detail, tc.detail) || rec.Header().Get("Retry-After") != tc.retryAfter {
+			t.Errorf("a verify of %s answered %d %s (reason %q) %q (Retry-After %q), want %d %s "+
+				"(reason %q) naming %q (Retry-After %q)", tc.name, rec.Code, code, reason.Reason, detail,
+				rec.Header().Get("Retry-After"), tc.status, tc.code, tc.reason, tc.detail, tc.retryAfter)
 		}
 	}
 
