@@ -80,8 +80,9 @@ const (
 	// log that went back can give — a broker restored from an older copy.
 	// Counted by the round that reads it whole.
 	RebuildRewound RebuildReason = "rewound"
-	// RebuildVerify is an operator's repair: [Cache.Verify] found the cache
-	// holding something its rows do not say, and was asked to repair it.
+	// RebuildVerify is an operator's repair: a check ([Verification.Run])
+	// found the cache holding something its rows do not say, and was asked
+	// to repair it.
 	// The cache's own, never a git process's: Rebuild refuses it.
 	RebuildVerify RebuildReason = "verify"
 )

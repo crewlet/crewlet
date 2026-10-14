@@ -318,7 +318,7 @@ const GraphBytesPerObject = 56
 // gigabyte (160 bytes an object) and 110 MiB over 100 MB (390, a fixed part of
 // some 70 MiB showing). A check of the largest repository the defaults admit
 // holds some 11 GB — as much as the node's background work is ever given, so
-// it is held to the same budget (Cache.Verify).
+// it is held to the same budget, charged at its admission (Cache.AdmitVerify).
 const FsckBytesPerObject = 192
 
 // MaintenanceMemoryPerCore is how much memory the maintenance runs BESIDE

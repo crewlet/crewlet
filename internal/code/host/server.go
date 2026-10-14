@@ -148,6 +148,9 @@ type Server struct {
 	heads  *allowance
 	spools *spools
 
+	// verifies is every verification this node keeps (verify.go).
+	verifies verifications
+
 	// requestMemory is RequestMemoryBytes, a field so the suite can reach
 	// the spool without megabytes of fixtures (export_test.go).
 	requestMemory int

@@ -62,6 +62,15 @@ var (
 	// are never an error: they are refused and said so (the
 	// code_maintenance_refused alarm).
 	ErrNoMemory = errors.New("cache: this node's memory cannot hold it")
+
+	// ErrNotHeld is a check asked of a repository this node holds no copy
+	// of: it never served it here, or evicted it. Nothing was read or
+	// downloaded, and nothing is: a check builds no copy, since building one
+	// is a whole download of the repository from the object store into a
+	// cache that would then keep it and evict a warm repository to do so
+	// (verify.go). Definite for this node now; a git node that serves the
+	// repository holds one. The API answers it 404.
+	ErrNotHeld = errors.New("cache: this node holds no copy of the repository")
 )
 
 // ErrPackMissing is a pack a row names that the object store could not hand

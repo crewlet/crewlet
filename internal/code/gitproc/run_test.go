@@ -267,6 +267,54 @@ func TestMaintenanceNeverWaitsForASlot(t *testing.T) {
 	}
 }
 
+// A RESERVED SLOT IS HELD UNTIL IT IS RELEASED: taken at once or refused busy
+// at once, like every maintenance admission, it keeps the lane's slot through
+// whatever its holder does before its process — so another maintenance run
+// and another reservation are refused meanwhile — runs its processes in it,
+// and frees it on Release, once. A released reservation runs nothing, and one
+// runs no class but the lane's.
+//
+// Mutation: release the slot as each Reserved.Run ends, and the run refused
+// between two processes is admitted.
+func TestAReservedSlotIsHeldUntilItIsReleased(t *testing.T) {
+	t.Parallel()
+	p := fakePool(t, `case "$1" in hold) `+holdBody+`;; esac`, gitproc.Options{MaxProcesses: 1})
+	gitproc.SetTimings(p, 10*time.Second, time.Second)
+	r, err := p.Reserve()
+	if err != nil {
+		t.Fatalf("Reserve on a free one-slot lane: %v", err)
+	}
+	if _, err := p.Reserve(); !errors.Is(err, gitproc.ErrBusy) || !strings.Contains(err.Error(), "at most 1 maintenance") {
+		t.Fatalf("a second Reserve on one slot: %v, want ErrBusy naming the lane", err)
+	}
+	for range 2 {
+		if _, err := r.Run(t.Context(), quick(gitproc.ClassMaintenance)); err != nil {
+			t.Fatalf("a process in the reserved slot: %v", err)
+		}
+		if _, err := p.Run(t.Context(), quick(gitproc.ClassMaintenance)); !errors.Is(err, gitproc.ErrBusy) {
+			t.Fatalf("a maintenance run beside the reservation, between its processes: %v, want ErrBusy", err)
+		}
+	}
+	if _, err := r.Run(t.Context(), quick(gitproc.ClassRead)); !errors.Is(err, gitproc.ErrInvalid) {
+		t.Fatalf("a read in a reserved maintenance slot: %v, want ErrInvalid", err)
+	}
+	r.Release()
+	r.Release()
+	if _, err := r.Run(t.Context(), quick(gitproc.ClassMaintenance)); !errors.Is(err, gitproc.ErrInvalid) {
+		t.Fatalf("a process in a released reservation: %v, want ErrInvalid", err)
+	}
+	a := hold(t, p, gitproc.ClassMaintenance)
+	if _, err := p.Reserve(); !errors.Is(err, gitproc.ErrBusy) {
+		t.Fatalf("Reserve with the lane's one slot running: %v, want ErrBusy — and the double Release freed none", err)
+	}
+	a.end(t)
+	again, err := p.Reserve()
+	if err != nil {
+		t.Fatalf("Reserve once the slot is free again: %v", err)
+	}
+	again.Release()
+}
+
 // treeBody backgrounds a grandchild, records its pid and waits on it.
 func treeBody(pids pidFile) string {
 	return "sleep 600 & echo $! > " + pids.shell() + "; wait"

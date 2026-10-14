@@ -396,11 +396,11 @@ func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 // maintenanceRuns is how many runs the maintainer keeps in flight at most in
 // a maintenance lane of slots: EVERY SLOT BUT ONE. The one left is a
 // person's: `crewlet code verify`, which every refused rebuild tells an
-// operator to run, checks a repository with an fsck in this lane, and like
-// every maintenance-class process it is refused rather than queued when no
-// slot is free — so with every slot the maintainer's it would be answered
-// "busy, run it again" for as long as the runs last, hours for the largest
-// repositories. A lane of ONE slot (a node of one or two cores) is the
+// operator to run, holds a slot of this lane from its admission to its fsck
+// (Cache.AdmitVerify), and like every maintenance-class process it is refused
+// rather than queued when no slot is free — so with every slot the
+// maintainer's it would be answered "busy, run it again" for as long as the
+// runs last, hours for the largest repositories. A lane of ONE slot (a node of one or two cores) is the
 // maintainer's whole: holding it back would maintain nothing, and a verify
 // there is refused while a run is in flight and answered between them.
 func maintenanceRuns(slots int) int {
@@ -549,10 +549,10 @@ func (f *maintFlight) count() int {
 
 // maintainable reports whether e's current incarnation is due for a run now;
 // e.mu is held. See DUE above: never while a round is in flight or another run
-// is, never while Verify checks the repository (its fsck takes a maintenance
-// slot it is refused rather than queued for, so a run started under it would
-// take the lane's last slot from the person who asked — a one-slot lane's
-// only one), never on an incarnation this process has not read whole, and
+// is, never while a check of the repository is admitted (its listing reads
+// once whether a run is in flight, and a run started under it would leave
+// files the listing reports as damage — holdMaintainer), never on an
+// incarnation this process has not read whole, and
 // never on one leaving the cache (wantsRun). WHAT the run takes, and whether
 // the node's memory holds it, is plan's and admit's to say, not this.
 func (c *Cache) maintainable(e *entry, now time.Time) bool {

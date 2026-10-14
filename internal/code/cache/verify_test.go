@@ -19,6 +19,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
+// verify is the whole of a check, as the host runs one: admitted, run and let
+// go.
+func verify(ctx context.Context, c *cache.Cache, repo string, repair bool) (cache.VerifyReport, error) {
+	v, err := c.AdmitVerify(repo)
+	if err != nil {
+		return cache.VerifyReport{}, err
+	}
+	defer v.Release()
+	return v.Run(ctx, repair)
+}
+
 // problemsOf fails t unless problems holds, for each of want, a problem
 // containing it.
 func problemsOf(t *testing.T, what string, problems []string, want ...string) {
@@ -68,7 +79,7 @@ func TestVerifyRepairsACorruptCache(t *testing.T) {
 	c := w.open(t)
 	s := w.sync(t, c, repo)
 
-	clean, err := c.Verify(t.Context(), repo, false)
+	clean, err := verify(t.Context(), c, repo, false)
 	if err != nil {
 		t.Fatalf("Verify of a clean cache: %v", err)
 	}
@@ -90,7 +101,7 @@ func TestVerifyRepairsACorruptCache(t *testing.T) {
 		"unexpected refs/heads/loose",
 	}
 
-	report, err := c.Verify(t.Context(), repo, false)
+	report, err := verify(t.Context(), c, repo, false)
 	if err != nil {
 		t.Fatalf("Verify of a damaged cache: %v", err)
 	}
@@ -99,7 +110,7 @@ func TestVerifyRepairsACorruptCache(t *testing.T) {
 		t.Errorf("Verify without repair rebuilt: %+v", report)
 	}
 
-	repaired, err := c.Verify(t.Context(), repo, true)
+	repaired, err := verify(t.Context(), c, repo, true)
 	if err != nil {
 		t.Fatalf("Verify with repair: %v", err)
 	}
@@ -137,7 +148,7 @@ func TestVerifysRepairDownloadsOnlyWhatItFoundDamaged(t *testing.T) {
 	_, stray := w.packInto(t, stranger, s.Dir, nil)
 	before, _, _ := w.objects.counts()
 
-	repaired, err := c.Verify(t.Context(), repo, true)
+	repaired, err := verify(t.Context(), c, repo, true)
 	if err != nil {
 		t.Fatalf("Verify with repair: %v", err)
 	}
@@ -183,7 +194,7 @@ func TestARebuildVerifyHasShownWholeEndsItsLine(t *testing.T) {
 	if _, err := c.Rebuild(t.Context(), first, cache.RebuildCorrupt); !errors.Is(err, cache.ErrRebuildRefused) {
 		t.Fatalf("a second rebuild of a rebuild's product = %v, want ErrRebuildRefused", err)
 	}
-	repaired, err := c.Verify(t.Context(), repo, true)
+	repaired, err := verify(t.Context(), c, repo, true)
 	if err != nil || !repaired.Rebuilt || len(repaired.Problems) != 0 {
 		t.Fatalf("Verify with repair of a repository a request may not rebuild = %+v, %v; want a clean rebuild",
 			repaired, err)
@@ -220,7 +231,7 @@ func TestVerifyNamesWhatARebuildCannotFix(t *testing.T) {
 		}
 	}
 
-	report, err := c.Verify(t.Context(), repo, true)
+	report, err := verify(t.Context(), c, repo, true)
 	var missing *cache.ErrPackMissing
 	if !errors.As(err, &missing) || missing.Pack.PackID != row.PackID {
 		t.Fatalf("Verify with repair of a pack the store lost = %v, want an ErrPackMissing naming %s", err, row.PackID)
@@ -238,31 +249,102 @@ func TestVerifyNamesWhatARebuildCannotFix(t *testing.T) {
 	}
 }
 
-// VERIFY IS BUSY RATHER THAN QUEUED: its connectivity check runs in a free
-// maintenance slot or not at all — the lane never waits — so with the lane
-// held it answers at once, saying to run it again, beside what it had
-// checked by then.
-func TestVerifyIsBusyRatherThanQueued(t *testing.T) {
+// A CHECK IS ADMITTED BEFORE IT READS ANYTHING: it takes its maintenance slot
+// — a free one or none, the lane never waits — before its sync, its listing
+// or a byte of a pack, so with the lane held it is refused busy at once,
+// saying to run it again, having read nothing; and it holds that slot from
+// its first read to its last, so on a one-slot lane two checks at once read
+// one repository, never two, and the second is refused before it begins.
+//
+// Mutation: take the slot at the fsck rather than at the admission, and a
+// check is admitted with the lane held, and a second beside the first.
+func TestACheckIsAdmittedBeforeItReadsAnything(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	first, second := w.repo(t, 1), w.repo(t, 2)
+	w.push(t, first, "refs/heads/main", nil)
+	w.push(t, second, "refs/heads/main", nil)
+	var mu sync.Mutex
+	listed := map[string]int{}
+	c := w.open(t, func(o *cache.Options) {
+		cache.BeforeVerifyWaits(o, func(dir string) {
+			mu.Lock()
+			defer mu.Unlock()
+			listed[dir]++
+		})
+	})
+	if got := w.pool.Slots(gitproc.ClassMaintenance); got != 1 {
+		t.Fatalf("the pool has %d maintenance slots, want 1", got)
+	}
+	firstDir, secondDir := w.sync(t, c, first).Dir, w.sync(t, c, second).Dir
+	reads := func() int {
+		opens, _, _ := w.objects.counts()
+		n := 0
+		for _, k := range opens {
+			n += k
+		}
+		return n
+	}
+	before := reads()
+
+	release := holdSlotUntil(t, w.pool, gitproc.ClassMaintenance)
+	if _, err := c.AdmitVerify(first); !errors.Is(err, gitproc.ErrBusy) || !strings.Contains(err.Error(), "run it again") {
+		t.Errorf("a check with the maintenance lane held = %v, want ErrBusy saying to run it again", err)
+	}
+	release()
+
+	v, err := c.AdmitVerify(first)
+	if err != nil {
+		t.Fatalf("a check with the lane free: %v", err)
+	}
+	if _, err := c.AdmitVerify(second); !errors.Is(err, gitproc.ErrBusy) {
+		t.Errorf("a second check beside the first on a one-slot lane = %v, want ErrBusy", err)
+	}
+	if report, err := v.Run(t.Context(), false); err != nil || len(report.Problems) != 0 {
+		t.Errorf("the admitted check = %+v, %v", report, err)
+	}
+	if _, err := v.Run(t.Context(), false); !errors.Is(err, cache.ErrInvalid) {
+		t.Errorf("a second Run of one check = %v, want ErrInvalid", err)
+	}
+	v.Release()
+	v.Release()
+	mu.Lock()
+	if listed[firstDir] != 1 || listed[secondDir] != 0 {
+		t.Errorf("the checks listed %v, want %s once and %s never", listed, firstDir, secondDir)
+	}
+	mu.Unlock()
+	if got := reads(); got != before {
+		t.Errorf("the checks read %d objects from the store, want none: both repositories are held", got-before)
+	}
+	if report, err := verify(t.Context(), c, second, false); err != nil || len(report.Problems) != 0 {
+		t.Errorf("the second check once the first let go = %+v, %v", report, err)
+	}
+}
+
+// A CHECK OF A REPOSITORY THIS NODE HOLDS NO COPY OF IS NONE: a check builds no
+// copy, since building one is a whole download of the repository into a cache
+// that then keeps it, evicting warm repositories to do so — so it is refused
+// at once, having downloaded nothing and left the cache as it was.
+//
+// Mutation: drop the held check from AdmitVerify, and the check downloads the
+// repository and leaves it in the cache.
+func TestACheckOfARepositoryThisNodeDoesNotHoldIsNone(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
 	repo := w.repo(t, 1)
 	w.push(t, repo, "refs/heads/main", nil)
 	c := w.open(t)
-	w.sync(t, c, repo)
-	if got := w.pool.Slots(gitproc.ClassMaintenance); got != 1 {
-		t.Fatalf("the pool has %d maintenance slots, want 1", got)
+	if _, err := verify(t.Context(), c, repo, false); !errors.Is(err, cache.ErrNotHeld) {
+		t.Errorf("a check of a repository the node never served = %v, want ErrNotHeld", err)
 	}
-	release := holdSlotUntil(t, w.pool, gitproc.ClassMaintenance)
-	report, err := c.Verify(t.Context(), repo, false)
-	if !errors.Is(err, gitproc.ErrBusy) || !strings.Contains(err.Error(), "run it again") {
-		t.Errorf("Verify with the maintenance lane held = %v, want ErrBusy saying to run it again", err)
+	if opens, _, _ := w.objects.counts(); len(opens) != 0 {
+		t.Errorf("the refused check read %v from the store, want nothing", opens)
 	}
-	if report.Repo != repo || report.Packs != 1 {
-		t.Errorf("Verify refused its fsck answered %+v, want what it had checked", report)
+	if got := cache.Repos(c); len(got) != 0 {
+		t.Errorf("the refused check left %v in the cache, want nothing", got)
 	}
-	release()
-	if report, err := c.Verify(t.Context(), repo, false); err != nil || len(report.Problems) != 0 {
-		t.Errorf("Verify with the lane free = %+v, %v", report, err)
+	if _, err := c.AdmitVerify("not-an-id"); !errors.Is(err, cache.ErrInvalid) {
+		t.Errorf("a check of an id that is none = %v, want ErrInvalid", err)
 	}
 }
 
@@ -278,7 +360,7 @@ func TestVerifyHashesTheBundleNotThePack(t *testing.T) {
 	_, second := w.push(t, repo, "refs/heads/main", nil)
 	c := w.open(t)
 	s := w.sync(t, c, repo)
-	if report, err := c.Verify(t.Context(), repo, false); err != nil || len(report.Problems) != 0 {
+	if report, err := verify(t.Context(), c, repo, false); err != nil || len(report.Problems) != 0 {
 		t.Fatalf("Verify of a clean cache = %+v, %v; want no problems", report, err)
 	}
 
@@ -294,7 +376,7 @@ func TestVerifyHashesTheBundleNotThePack(t *testing.T) {
 	if err := os.Truncate(rev, first.ReverseBytes-4); err != nil {
 		t.Fatal(err)
 	}
-	report, err := c.Verify(t.Context(), repo, false)
+	report, err := verify(t.Context(), c, repo, false)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -352,7 +434,7 @@ func TestVerifyLeavesAMaintenanceRunToFinish(t *testing.T) {
 	for _, rel := range running {
 		write(t, filepath.Join(s.Dir, rel), "")
 	}
-	report, err := c.Verify(t.Context(), repo, false)
+	report, err := verify(t.Context(), c, repo, false)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -384,7 +466,7 @@ func TestVerifyLeavesAMaintenanceRunToFinish(t *testing.T) {
 	for _, rel := range running {
 		write(t, filepath.Join(s.Dir, rel), "")
 	}
-	report, err = c.Verify(t.Context(), repo, false)
+	report, err = verify(t.Context(), c, repo, false)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -435,7 +517,7 @@ func TestNoMaintenanceRunStartsUnderAVerify(t *testing.T) {
 	clk.Add(cache.MidxDebounce)
 	cache.MaintainerKicked(c) // the sync's own, answered
 
-	report, err := c.Verify(t.Context(), repo, false)
+	report, err := verify(t.Context(), c, repo, false)
 	if err != nil {
 		t.Fatalf("Verify of a repository due for maintenance on a one-slot lane: %v", err)
 	}
@@ -500,7 +582,7 @@ func TestVerifyWaitsForARoundStillWriting(t *testing.T) {
 	})
 	w.sync(t, c, repo)
 
-	report, err := c.Verify(t.Context(), repo, false)
+	report, err := verify(t.Context(), c, repo, false)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -559,7 +641,7 @@ func TestStopEndsARoundWaitingForAListing(t *testing.T) {
 		})
 	})
 	w.sync(t, c, repo)
-	if _, err := c.Verify(t.Context(), repo, false); err != nil {
+	if _, err := verify(t.Context(), c, repo, false); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 }

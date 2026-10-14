@@ -190,18 +190,21 @@
 // repository with no rebuild asked of it for [RebuildQuiet] meets its next
 // failure as new damage.
 //
-// [Cache.Verify] is the operator's side of it: every pack the rows name
-// hashed against its row as the bundle the push stored, every file outside
-// the image named, packed-refs held to the digest written with it, and git's
-// connectivity check in a free maintenance slot — refused rather than queued
-// when there is none. It stops no maintenance run — one in flight finishes,
-// the files it holds while it runs admitted — and none starts on the
-// repository while it checks, so the slot its fsck needs is not taken from
-// under it. Asked to repair, it rebuilds the repository — linking in every
-// pack it has just found whole and downloading only the rest, so one damaged
-// pack costs one GET — and checks the rebuild the same way; a rebuild it has
-// seen whole has ended the damage it was for, so that incarnation's next
-// failure is rebuilt at once.
+// A check ([Cache.AdmitVerify], [Verification.Run]) is the operator's side of
+// it: every pack the rows name hashed against its row as the bundle the push
+// stored, every file outside the image named, packed-refs held to the digest
+// written with it, and git's connectivity check. It is ADMITTED BEFORE IT
+// READS ANYTHING — a free maintenance slot and its fsck's memory taken first,
+// refused rather than queued when either is short, so a refusal costs nothing
+// and the lane bounds how many run — and only of a copy this node HOLDS
+// ([ErrNotHeld]): a check builds no copy, which would be a whole download of
+// the repository. It stops no maintenance run — one in flight finishes, the
+// files it holds while it runs admitted — and none starts on the repository
+// while it is admitted. Asked to repair, it rebuilds the repository — linking
+// in every pack it has just found whole and downloading only the rest, so one
+// damaged pack costs one GET — and checks the rebuild the same way; a rebuild
+// it has seen whole has ended the damage it was for, so that incarnation's
+// next failure is rebuilt at once.
 //
 // # Background work never takes a person's slot
 //
