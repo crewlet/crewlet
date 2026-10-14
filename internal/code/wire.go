@@ -32,6 +32,10 @@ type RepoRef struct {
 	Refs          int64        `json:"refs"`
 	LivePacks     int64        `json:"live_packs"`
 	LiveBytes     int64        `json:"live_bytes"`
+	// LiveObjects is how many objects the live packs hold, kept on the row
+	// beside LiveBytes: the most a fetch request to the repository can
+	// legitimately name, which the code host bounds a request it spools by.
+	LiveObjects int64 `json:"live_objects"`
 	// Position is the checkpoint the rows were read at — read in the same
 	// transaction as them.
 	Position statelog.Position `json:"position"`

@@ -69,10 +69,11 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 	}
 
 	var (
-		final     = map[string]string{}
-		pushRows  []PushEntry
-		packRows  []PackRef
-		packBytes int64
+		final       = map[string]string{}
+		pushRows    []PushEntry
+		packRows    []PackRef
+		packBytes   int64
+		packObjects int64
 	)
 	for _, e := range p.Pushes {
 		if applied[e.PushID] {
@@ -92,6 +93,7 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 		if e.Pack != nil {
 			packRows = append(packRows, *e.Pack)
 			packBytes += e.Pack.Size
+			packObjects += e.Pack.Objects
 		}
 		pushRows = append(pushRows, e)
 	}
@@ -160,7 +162,7 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 		return 0, fmt.Errorf("code: write the pushes at %s: %w", at.position, err)
 	}
 	if _, err = tx.ExecContext(ctx, pushCountersSQL, moved.live, moved.branches, moved.tags,
-		moved.tombstones, len(packRows), packBytes, len(pushRows), at.at(), at.packed,
+		moved.tombstones, len(packRows), packBytes, packObjects, len(pushRows), at.at(), at.packed,
 		p.RepoID); err != nil {
 		return 0, fmt.Errorf("code: count the pushes at %s: %w", at.position, err)
 	}
@@ -380,7 +382,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 	}
 
 	var packIDs []string
-	livePacksGone, liveBytesGone := 0, int64(0)
+	livePacksGone, liveBytesGone, liveObjectsGone := 0, int64(0), int64(0)
 	if budget > 0 {
 		rows, err := tx.QueryContext(ctx, purgePacksSQL, p.RepoID, budget)
 		if err != nil {
@@ -388,8 +390,8 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		}
 		for rows.Next() {
 			var id, state string
-			var size int64
-			if err := rows.Scan(&id, &size, &state); err != nil {
+			var size, objects int64
+			if err := rows.Scan(&id, &size, &objects, &state); err != nil {
 				_ = rows.Close()
 				return 0, fmt.Errorf("code: read %s's packs to purge: %w", p.RepoID, err)
 			}
@@ -397,6 +399,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 			if state == packLive {
 				livePacksGone++
 				liveBytesGone += size
+				liveObjectsGone += objects
 			}
 		}
 		if err := rows.Err(); err != nil {
@@ -426,7 +429,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		deleted += int(n)
 	}
 	if _, err := tx.ExecContext(ctx, purgeCountersSQL, p.Part, gone.live, gone.branches, gone.tags,
-		gone.tombstones, livePacksGone, liveBytesGone, at.packed, p.RepoID); err != nil {
+		gone.tombstones, livePacksGone, liveBytesGone, liveObjectsGone, at.packed, p.RepoID); err != nil {
 		return 0, fmt.Errorf("code: count %s's purge at %s: %w", p.RepoID, at.position, err)
 	}
 	return deleted + 1, nil
@@ -574,8 +577,8 @@ const (
 		WHERE r.repo_id = ?1 AND r.ref = CAST(j.value AS TEXT)`
 	pushCountersSQL = `UPDATE code_repos SET refs = refs + ?, branches = branches + ?,
 		tags = tags + ?, tombstones = tombstones + ?, live_packs = live_packs + ?,
-		live_bytes = live_bytes + ?, pushes = pushes + ?, last_push_at = ?, version = ?
-		WHERE id = ?`
+		live_bytes = live_bytes + ?, live_objects = live_objects + ?, pushes = pushes + ?,
+		last_push_at = ?, version = ? WHERE id = ?`
 	expiredPushesSQL = `SELECT push_id, row_bytes FROM code_pushes WHERE repo_id = ? AND at < ?
 		ORDER BY at, position, push_id LIMIT ?`
 	deletePushesSQL = `DELETE FROM code_pushes
@@ -591,14 +594,15 @@ const (
 	purgePushesSQL = `SELECT push_id, row_bytes FROM code_pushes WHERE repo_id = ?
 		ORDER BY at, position, push_id LIMIT ?`
 	purgeRefsSQL  = `SELECT ref, target FROM code_refs WHERE repo_id = ? ORDER BY ref LIMIT ?`
-	purgePacksSQL = `SELECT pack_id, size, state FROM code_packs WHERE repo_id = ?
+	purgePacksSQL = `SELECT pack_id, size, objects, state FROM code_packs WHERE repo_id = ?
 		ORDER BY pack_id, part LIMIT ?`
 	deletePacksSQL = `DELETE FROM code_packs WHERE rowid IN (SELECT p.rowid
 		FROM json_each(?2) AS j CROSS JOIN code_packs AS p
 		WHERE p.repo_id = ?1 AND p.pack_id = CAST(j.value AS TEXT))`
 	purgeCountersSQL = `UPDATE code_repos SET status = 'purging', purge_parts = ?, refs = refs - ?,
 		branches = branches - ?, tags = tags - ?, tombstones = tombstones - ?,
-		live_packs = live_packs - ?, live_bytes = live_bytes - ?, version = ? WHERE id = ?`
+		live_packs = live_packs - ?, live_bytes = live_bytes - ?, live_objects = live_objects - ?,
+		version = ? WHERE id = ?`
 	releaseNameSQL    = `DELETE FROM code_names WHERE token = ? AND repo_id = ?`
 	purgeAllPushesSQL = `DELETE FROM code_pushes WHERE repo_id = ?`
 	purgeAllRefsSQL   = `DELETE FROM code_refs WHERE repo_id = ?`

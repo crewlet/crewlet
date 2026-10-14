@@ -298,7 +298,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		ManagedBy: code.ManagedConfig, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "eng"},
 		DefaultBranch: "main", Description: "the app",
 		Protections: []code.Protection{{Pattern: "refs/heads/main", DirectPush: code.DirectNone}},
-		Refs:        3, LivePacks: 2, LiveBytes: 9_000, Position: at,
+		Refs:        3, LivePacks: 2, LiveBytes: 9_000, LiveObjects: 1_200, Position: at,
 	}
 	pack := code.PackRow{
 		PackID: "push-1", Part: "push", Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("p1")),

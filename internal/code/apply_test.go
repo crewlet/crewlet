@@ -344,6 +344,40 @@ func TestAPushAppliesEachEntryInOrder(t *testing.T) {
 	}
 }
 
+// A REPOSITORY COUNTS THE OBJECTS ITS LIVE PACKS HOLD, moved beside its
+// bytes from each pack row's own count: a push adds its pack's, and a purge
+// part subtracts those of the live packs it removes. It is the bound the code
+// host holds a spooled fetch request to — a want names one object — read from
+// the row admission already holds rather than summed per fetch.
+func TestARepositoryCountsTheObjectsItsLivePacksHold(t *testing.T) {
+	t.Parallel()
+	e := openApplyEstate(t)
+	e.apply(create(t, "repo-a", "a"))
+	first, second := pushEntry("p1", move("refs/heads/main", ZeroOID, oid("A"))),
+		pushEntry("p2", move("refs/heads/main", oid("A"), oid("B")))
+	first.Pack, second.Pack = packHolding("p1", 3), packHolding("p2", 7)
+	e.apply(pushOf(t, "repo-a", first, second))
+	if got := e.num(`SELECT live_objects FROM code_repos WHERE id = 'repo-a'`); got != 10 {
+		t.Fatalf("live_objects = %d after pushes of 3 and 7 objects, want 10", got)
+	}
+	e.apply(rec(t, RepoSubject("repo-a"), OpDelete, Scope{RepoPath("repo-a")},
+		LifecycleRecord{RepoID: "repo-a", ConfigEpoch: 1}), partOf(t, "repo-a", 1))
+	if packs := e.num(`SELECT COUNT(*) FROM code_packs`); packs != 0 {
+		t.Fatalf("the premise: purge part 1 left %d packs of two", packs)
+	}
+	if got := e.num(`SELECT live_objects FROM code_repos WHERE id = 'repo-a'`); got != 0 {
+		t.Fatalf("live_objects = %d once a purge part removed every pack, want 0", got)
+	}
+}
+
+// packHolding is a pack bundle's reference for a push, holding n objects.
+func packHolding(pushID string, n int64) *PackRef {
+	p := packOf(pushID)
+	p.Objects, p.IndexBytes, p.ReverseBytes = n, IndexBytesFor(n), ReverseBytesFor(n)
+	p.Size = 32*n + p.IndexBytes + p.ReverseBytes
+	return p
+}
+
 // counters is the counted state of one repository.
 func (e *estate) counters(id string) [4]int64 {
 	return [4]int64{
@@ -565,8 +599,8 @@ func (e *estate) seed(id string, pushes, refs, packs int) {
 		e.t.Fatalf("seed %s: %v", id, err)
 	}
 	e.exec(`UPDATE code_repos SET refs = refs + ?, branches = branches + ?,
-		live_packs = live_packs + ?, live_bytes = live_bytes + ? WHERE id = ?`,
-		refs, refs, packs, 10*packs, id)
+		live_packs = live_packs + ?, live_bytes = live_bytes + ?, live_objects = live_objects + ? WHERE id = ?`,
+		refs, refs, packs, 10*packs, packs, id)
 }
 
 // seedWeighed writes n push rows of a repository, each weighing width bytes
