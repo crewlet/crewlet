@@ -7,10 +7,11 @@
 // A repository is ROWS in the code domain (internal/code): its refs, its live
 // packs and its settings, at a log position. A cache answers "this node alone"
 // as files rather than tables — nothing in it is ever the only copy of
-// anything, it is never backed up (its directory carries a CACHEDIR.TAG, so
-// backup tools skip it), and deleting the whole directory loses nothing but
-// time: what a cache holds is derived from the rows and the object store, and
-// is derived again when it is gone. Its refs are exactly the repository's
+// anything, the engine's backup never copies it (and its directory carries a
+// CACHEDIR.TAG, so an operator's backup run with --exclude-caches skips it
+// too), and deleting the whole directory loses nothing but time: what a cache
+// holds is derived from the rows and the object store, and is derived again
+// when it is gone. Its refs are exactly the repository's
 // code_refs at the position its state names, its packs exactly the
 // code_packs there, and [Cache.Sync] writes it by CONVERGENCE — derive the
 // target from the rows, make the directory equal to it — never by replaying

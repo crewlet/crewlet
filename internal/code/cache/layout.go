@@ -27,9 +27,12 @@ var log = logging.Get("code.cache")
 // The names under a cache's root.
 const (
 	// tagName is the Cache Directory Tagging standard's file
-	// (https://bford.info/cachedir/): tar --exclude-caches, borg and restic
-	// skip a directory holding it, so a cache that sits under the store's
-	// directory is never in a backup of it.
+	// (https://bford.info/cachedir/): a backup run with --exclude-caches
+	// (tar, borg and restic all take it) skips a directory holding it, so a
+	// cache that sits under the store's directory is left out of an
+	// operator's backup of it that asks for that. Without the option those
+	// tools copy it like any other directory; the engine's own backup never
+	// reads it at all.
 	tagName = "CACHEDIR.TAG"
 	// lockName is the process claim's sidecar (internal/filelock).
 	lockName = "lock"
@@ -69,10 +72,15 @@ const tagSignature = "Signature: 8a477f597d28d172789f06886806bc55"
 // the marker; it keeps the marker.
 const tagMarker = "# This file marks a crewlet git cache"
 
-// tagContent is the whole of the tag this build writes.
+// tagContent is the whole of the tag this build writes. What follows the
+// marker is for the person who opens the file in the directory, so it claims
+// only what holds of every backup: the engine's own never reads the cache,
+// but tar, borg and restic leave a tagged directory out only when run with
+// --exclude-caches, and copy it otherwise.
 const tagContent = tagSignature + "\n" + tagMarker + ": disposable copies of a company's " +
-	"repositories, rebuilt from the object store whenever they are missing. It is never " +
-	"backed up; see https://bford.info/cachedir/\n"
+	"repositories, rebuilt from the object store whenever they are missing. Crewlet's own " +
+	"backup never copies this directory, and a backup run with --exclude-caches leaves it " +
+	"out; see https://bford.info/cachedir/\n"
 
 // maxTagBytes bounds the read of a tag: ours is a couple of hundred bytes,
 // and the file sits in a directory an operator chose, so whatever is there is

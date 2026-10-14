@@ -628,8 +628,8 @@ func Catalogue() []Instrument {
 			Name: CodeCacheBytes, Kind: KindGauge, Unit: UnitBytes,
 			Shows: "What this node's git cache holds on disk — every " +
 				"repository's packs, indexes and refs, plus the downloads and " +
-				"pushes in flight — against its budget (git.cache_max_bytes), " +
-				"which it is evicted to, least recently used first, and for " +
+				"pushes in flight — against its byte budget, which it is " +
+				"evicted to, least recently used first, and for " +
 				"no other reason. Sitting at the budget is a cache doing its " +
 				"job; held above it is a repository larger than the budget " +
 				"being served, evicted once nothing reads it; climbing past " +
@@ -649,12 +649,12 @@ func Catalogue() []Instrument {
 				"minutes after the first of a line of attempts that keep " +
 				"failing, twice as long after each one after it, at most a " +
 				"day, a line starting again once a day passes with no " +
-				"rebuild asked for. Each refusal is a request answered 503 " +
-				"at once rather than a whole repository downloaded again. " +
+				"rebuild asked for. Each refusal fails the request that asked " +
+				"at once rather than downloading the whole repository again. " +
 				"Rising at all is " +
 				"damage no rebuild repairs — a pack the object store lost or " +
 				"holds damaged, rows naming an object no pack holds — which " +
-				"`crewlet code verify` names; flat while " +
+				"a verify of the repository names; flat while " +
 				"`crewlet.code.cache.rebuilds` rises is damage each rebuild " +
 				"ended.",
 		},
@@ -666,10 +666,13 @@ func Catalogue() []Instrument {
 				"rebuild a git process asked for — it found a pack or an " +
 				"index it could not read, or an object a row names that no " +
 				"pack held — into a new directory beside the damaged one; " +
-				"either rising is disk or object-store damage, which " +
-				"`crewlet code verify` names. `verify` is that check, asked " +
-				"to repair what it found, rebuilding the repository the same " +
-				"way. `stream` is the code log " +
+				"either rising is disk or object-store damage, which a " +
+				"verify of the repository names — every pack checked against " +
+				"its row, the ref file against the digest written with it, " +
+				"and git's connectivity check. `verify` is that check, asked " +
+				"to repair what it " +
+				"found, rebuilding the repository the same way. `stream` is " +
+				"the code log " +
 				"RECREATED under the cache (provisioned anew, its stamp not " +
 				"the one the cache read under); `rewound` is the log gone " +
 				"BACK under it on the same stream — a broker restored from " +
