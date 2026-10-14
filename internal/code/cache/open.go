@@ -42,6 +42,12 @@ type Cache struct {
 	// the suite can narrow both before a sync (export_test.go).
 	fetchConcurrency int
 	fetches          *fetchSlots
+	// roundPacks is how many packs a full round leaves before it writes its
+	// own multi-pack-index (MidxRoundPacks), and midxPacks how many beside
+	// the maintainer's make a repository due again (MidxPacks): fields, so
+	// the suite can lower them rather than push dozens of packs a case
+	// (knobs.roundPacks, knobs.midxPacks).
+	roundPacks, midxPacks int
 	// tmpBytes is what tmp/ holds for the cache's own work: downloads in
 	// flight, until each file is renamed into place or removed, and the
 	// pushed packs adoptions staged for a round or a listing to install
@@ -155,11 +161,18 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 	c := &Cache{
 		dir: b.dir, maxBytes: o.MaxBytes, git: o.Git, objects: o.Objects, fetch: o.Fetch, limits: o.Limits,
 		faults: o.Faults, log: o.Logger, metrics: o.Metrics, now: o.Now, knobs: o.knobs,
-		fetchConcurrency: FetchConcurrency, fetches: newFetchSlots(NodeFetches),
+		fetchConcurrency: FetchConcurrency, fetches: newFetchSlots(NodeFetches), roundPacks: MidxRoundPacks,
+		midxPacks:    MidxPacks,
 		maintMemory:  int64(o.Git.Slots(gitproc.ClassRead)) * MaintenanceMemoryPerCore,
 		releaseClaim: sync.OnceFunc(b.claim.Release),
 		kicks:        make(chan struct{}, 1), maintKicks: make(chan struct{}, 1),
 		entries: map[string]*entry{}, idle: make(chan struct{}),
+	}
+	if o.knobs != nil && o.knobs.roundPacks > 0 {
+		c.roundPacks = o.knobs.roundPacks
+	}
+	if o.knobs != nil && o.knobs.midxPacks > 0 {
+		c.midxPacks = o.knobs.midxPacks
 	}
 	if c.log == nil {
 		c.log = log
@@ -346,17 +359,18 @@ func (c *Cache) isStopped() bool {
 
 // Stop ends the cache: it marks it stopped — nothing of the cache's starts
 // in the directory again — and ends its lifetime, so what runs under it
-// ends with it: a round's downloads, a maintenance run's git. The claim on the directory goes back the moment nothing of
-// the cache's is running in it: at once, before Stop returns, when nothing
-// is (whatever ctx says — that is decided under the cache's own lock, never
-// raced against a context that may already have ended); otherwise Stop
-// waits for it, bounded by ctx, and a wait ctx cuts short leaves the claim
-// held until the last of that work has ended (logged
-// code_cache_stop_unfinished), so no other process can open the directory
-// while something of this one is still writing in it. Pins still held keep
-// their directories until the next Open, which needs nothing from them: a
-// release after Stop moves nothing. Safe to call more than once; a second
-// call waits again, bounded by its own ctx.
+// ends with it: a round's downloads, a maintenance run's git. The claim on
+// the directory goes back the moment nothing of the cache's is running in
+// it: at once, before Stop returns, when nothing is (whatever ctx says —
+// that is decided under the cache's own lock, never raced against a context
+// that may already have ended); otherwise Stop waits for it, bounded by
+// ctx, and a wait ctx cuts short leaves the claim held until the last of
+// that work has ended (logged code_cache_stop_unfinished), so no other
+// process can open the directory while something of this one is still
+// writing in it. Pins still held keep their directories until the next
+// Open, which needs nothing from them: a release after Stop moves nothing.
+// Safe to call more than once; a second call waits again, bounded by its
+// own ctx.
 func (c *Cache) Stop(ctx context.Context) {
 	c.lifeMu.Lock()
 	c.stopped = true

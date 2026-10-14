@@ -76,26 +76,44 @@ const (
 // newSyncWorld is a sync world over a store of the given backend.
 func newSyncWorld(t testing.TB, backend string) *syncWorld {
 	t.Helper()
-	w := &syncWorld{
-		world: newWorld(t), client: gittest.NewClient(t), log: newFakeLog(), repos: map[string]*fixture{},
-		bundles: map[string]gittest.Bundled{},
-	}
 	switch backend {
 	case onMemory:
-		w.mem = memobj.New()
-		w.backend = w.mem
+		mem := memobj.New()
+		w := syncWorldOver(t, mem)
+		w.mem = mem
+		return w
 	case onS3:
-		w.s3 = s3fake.Start(t, "files")
-		b, err := s3obj.Open(t.Context(), s3obj.Config{
-			Endpoint: w.s3.URL, Region: "us-east-1", Bucket: "files", Prefix: "acme/",
-			PathStyle: true, AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
-		})
-		if err != nil {
-			t.Fatalf("opening the S3 fake: %v", err)
-		}
-		w.backend = b
-	default:
-		t.Fatalf("no backend %q", backend)
+		srv := s3fake.Start(t, "files")
+		w := syncWorldOver(t, openS3Fake(t, srv))
+		w.s3 = srv
+		return w
+	}
+	t.Fatalf("no backend %q", backend)
+	return nil
+}
+
+// openS3Fake is the S3 backend over srv, path style, at the production part
+// size: what a sync world stores its packs in when its backend is onS3. A
+// case that sets srv's latency or bandwidth sets it before this, since
+// opening the backend checks the bucket.
+func openS3Fake(t testing.TB, srv *s3fake.Server) objstore.Backend {
+	t.Helper()
+	b, err := s3obj.Open(t.Context(), s3obj.Config{
+		Endpoint: srv.URL, Region: "us-east-1", Bucket: "files", Prefix: "acme/",
+		PathStyle: true, AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
+	})
+	if err != nil {
+		t.Fatalf("opening the S3 fake: %v", err)
+	}
+	return b
+}
+
+// syncWorldOver is a sync world storing its packs in backend.
+func syncWorldOver(t testing.TB, backend objstore.Backend) *syncWorld {
+	t.Helper()
+	w := &syncWorld{
+		world: newWorld(t), client: gittest.NewClient(t), log: newFakeLog(), repos: map[string]*fixture{},
+		bundles: map[string]gittest.Bundled{}, backend: backend,
 	}
 	store, err := objstore.NewStore(w.backend)
 	if err != nil {
@@ -224,10 +242,20 @@ func (w *syncWorld) bundle(cs string) gittest.Bundled {
 // storeBundle stores a bundle's bytes and answers the row naming them.
 func (w *syncWorld) storeBundle(t testing.TB, b gittest.Bundled, packID string) code.PackRow {
 	t.Helper()
-	obj, err := w.store.Put(t.Context(), bytes.NewReader(b.Bytes), int64(len(b.Bytes)),
-		objstore.PutMeta{ContentType: code.BundleContentType})
+	row, err := w.putBundle(t.Context(), b, packID)
 	if err != nil {
 		t.Fatalf("storing a bundle: %v", err)
+	}
+	return row
+}
+
+// putBundle is storeBundle answering its failure, for a fixture storing many
+// bundles at once off the test's goroutine.
+func (w *syncWorld) putBundle(ctx context.Context, b gittest.Bundled, packID string) (code.PackRow, error) {
+	obj, err := w.store.Put(ctx, bytes.NewReader(b.Bytes), int64(len(b.Bytes)),
+		objstore.PutMeta{ContentType: code.BundleContentType})
+	if err != nil {
+		return code.PackRow{}, err
 	}
 	if packID == "" {
 		packID = uuid.Must(uuid.NewV7()).String()
@@ -236,7 +264,7 @@ func (w *syncWorld) storeBundle(t testing.TB, b gittest.Bundled, packID string) 
 		PackID: packID, Part: "pack", Object: obj.Key, Hash: obj.Hash, Size: obj.Size,
 		IndexBytes: b.IndexBytes, ReverseBytes: b.ReverseBytes, GitChecksum: b.Checksum, Objects: b.Objects,
 		Kind: "push", State: "live",
-	}
+	}, nil
 }
 
 // tag tags repo's newest commit: annotated, a tag object pushed as its own

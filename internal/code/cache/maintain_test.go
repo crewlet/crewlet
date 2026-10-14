@@ -15,27 +15,36 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 )
 
+// caseRoundPacks is the round's index threshold a case lowers
+// MidxRoundPacks to (cache.RoundPacksAt), so a handful of pushes exercises
+// the round's own index rather than hundreds.
+const caseRoundPacks = 8
+
 // A FULL ROUND INDEXES MANY PACKS BEFORE IT ANSWERS: one push is one pack and
 // nothing compacts them, so the request a cold cache was synced for would
 // otherwise be served by git searching every pack's index for every object.
 // The round's index has no bitmap — a merge of the packs' own indexes — and
 // a busy node answers without it rather than wait: slower, never wrong. The
 // bitmap is the maintainer's, due as soon as the packs have stood still.
+// Under MidxRoundPacks the round writes none: there the index costs the cold
+// request more than it saves it (BenchmarkPackLookup), and the maintainer's
+// own follows once the packs have stood still and the runs queued before it
+// have ended.
 func TestAFullRoundIndexesManyPacksBeforeItAnswers(t *testing.T) {
 	t.Parallel()
-	t.Run("at MidxPacks", func(t *testing.T) {
+	t.Run("at the threshold", func(t *testing.T) {
 		t.Parallel()
 		w := newSyncWorld(t, onMemory)
 		clk := newClock()
 		repo := w.repo(t, 1)
-		for range cache.MidxPacks {
+		for range caseRoundPacks {
 			w.push(t, repo, "refs/heads/main", nil)
 		}
-		c := w.open(t, clk.on)
+		c := w.open(t, clk.on, cache.RoundPacksAt(caseRoundPacks))
 		s := w.sync(t, c, repo)
 		packDir := filepath.Join(s.Dir, "objects", "pack")
 		if !statOK(t, filepath.Join(packDir, "multi-pack-index")) {
-			t.Fatal("a full round of MidxPacks packs answered with no multi-pack-index")
+			t.Fatalf("a full round of %d packs, its threshold, answered with no multi-pack-index", caseRoundPacks)
 		}
 		for _, name := range names(t, packDir) {
 			if filepath.Ext(name) == ".bitmap" {
@@ -43,9 +52,9 @@ func TestAFullRoundIndexesManyPacksBeforeItAnswers(t *testing.T) {
 			}
 		}
 		doc := readStateDoc(t, s.Dir)
-		if doc.Midx.Packs != cache.MidxPacks || doc.Midx.Bitmap || !doc.Midx.LastRun.IsZero() || doc.Midx.Bytes == 0 {
+		if doc.Midx.Packs != caseRoundPacks || doc.Midx.Bitmap || !doc.Midx.LastRun.IsZero() || doc.Midx.Bytes == 0 {
 			t.Errorf("the state's midx is %+v, want %d packs, no bitmap, no maintenance run, its bytes", doc.Midx,
-				cache.MidxPacks)
+				caseRoundPacks)
 		}
 		if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
 			t.Errorf("fsck over the round's index: %v", err)
@@ -57,8 +66,8 @@ func TestAFullRoundIndexesManyPacksBeforeItAnswers(t *testing.T) {
 		if ran := cache.MaintainerPass(c); len(ran) != 1 {
 			t.Fatalf("the maintainer ran %v over a round's index with no bitmap, want the repository", ran)
 		}
-		if doc := readStateDoc(t, s.Dir); doc.Midx.Packs != cache.MidxPacks || !doc.Midx.Bitmap {
-			t.Errorf("after the maintainer the state's midx is %+v, want %d packs with the bitmap", doc.Midx, cache.MidxPacks)
+		if doc := readStateDoc(t, s.Dir); doc.Midx.Packs != caseRoundPacks || !doc.Midx.Bitmap {
+			t.Errorf("after the maintainer the state's midx is %+v, want %d packs with the bitmap", doc.Midx, caseRoundPacks)
 		}
 		bitmapOf(t, filepath.Join(s.Dir, "objects", "pack"))
 	})
@@ -66,12 +75,12 @@ func TestAFullRoundIndexesManyPacksBeforeItAnswers(t *testing.T) {
 		t.Parallel()
 		w := newSyncWorld(t, onMemory)
 		repo := w.repo(t, 1)
-		for range cache.MidxPacks {
+		for range caseRoundPacks {
 			w.push(t, repo, "refs/heads/main", nil)
 		}
 		w.tag(t, repo, "v1", true)
 		var indexed, peeled bool
-		c := w.open(t, func(o *cache.Options) {
+		c := w.open(t, cache.RoundPacksAt(caseRoundPacks), func(o *cache.Options) {
 			cache.BeforePeel(o, func(dir string) {
 				peeled = true
 				indexed = exists(filepath.Join(dir, "objects", "pack", "multi-pack-index"))
@@ -87,23 +96,41 @@ func TestAFullRoundIndexesManyPacksBeforeItAnswers(t *testing.T) {
 		t.Parallel()
 		w := newSyncWorld(t, onMemory)
 		repo := w.repo(t, 1)
-		for range cache.MidxPacks - 1 {
+		for range caseRoundPacks - 1 {
+			w.push(t, repo, "refs/heads/main", nil)
+		}
+		c := w.open(t, cache.RoundPacksAt(caseRoundPacks))
+		s := w.sync(t, c, repo)
+		if statOK(t, filepath.Join(s.Dir, "objects", "pack", "multi-pack-index")) {
+			t.Errorf("a full round of %d packs, one under its threshold, wrote an index", caseRoundPacks-1)
+		}
+	})
+	t.Run("under MidxRoundPacks", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		packs := 2 * caseRoundPacks
+		if packs >= cache.MidxRoundPacks {
+			t.Fatalf("MidxRoundPacks %d is no more than %d packs: the case needs a count under it",
+				cache.MidxRoundPacks, packs)
+		}
+		for range packs {
 			w.push(t, repo, "refs/heads/main", nil)
 		}
 		c := w.open(t)
 		s := w.sync(t, c, repo)
 		if statOK(t, filepath.Join(s.Dir, "objects", "pack", "multi-pack-index")) {
-			t.Error("a full round under MidxPacks packs wrote an index")
+			t.Errorf("a full round of %d packs, under MidxRoundPacks (%d), wrote an index", packs, cache.MidxRoundPacks)
 		}
 	})
 	t.Run("every read slot held", func(t *testing.T) {
 		t.Parallel()
 		w := newSyncWorld(t, onMemory)
 		repo := w.repo(t, 1)
-		for range cache.MidxPacks {
+		for range caseRoundPacks {
 			w.push(t, repo, "refs/heads/main", nil)
 		}
-		c := w.open(t)
+		c := w.open(t, cache.RoundPacksAt(caseRoundPacks))
 		for range w.pool.Slots(gitproc.ClassRead) {
 			holdSlot(t, w.pool, gitproc.ClassRead)
 		}
@@ -145,18 +172,20 @@ func (b *blocking) Read([]byte) (int, error) {
 // maintainer's — so a full round asks the FILE, not the state, which reads
 // none beside an index on disk when it was unreadable. A pack the round will
 // sweep takes the index with it, and the round writes one of its own over the
-// packs it keeps, to which the maintainer adds the bitmap.
+// packs it keeps — as many as its threshold, which the case lowers — to which
+// the maintainer adds the bitmap.
 func TestARoundNeverReplacesAnIndexThatExists(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
 	clk := newClock()
 	repo := w.repo(t, 1)
-	for range cache.MidxPacks {
+	for range caseRoundPacks {
 		w.push(t, repo, "refs/heads/main", nil)
 	}
 	before := w.log.state()
 	_, last := w.push(t, repo, "refs/heads/main", nil)
-	c := w.open(t, clk.on)
+	round := cache.RoundPacksAt(caseRoundPacks)
+	c := w.open(t, clk.on, round)
 	s := w.sync(t, c, repo)
 	packDir := filepath.Join(s.Dir, "objects", "pack")
 	midx := filepath.Join(packDir, "multi-pack-index")
@@ -167,14 +196,14 @@ func TestARoundNeverReplacesAnIndexThatExists(t *testing.T) {
 	bitmap := bitmapOf(t, packDir)
 	first := inode(t, midx)
 
-	c = w.reopen(t, c, clk.on)
+	c = w.reopen(t, c, clk.on, round)
 	w.sync(t, c, repo)
 	if inode(t, midx) != first || !statOK(t, bitmap) {
 		t.Error("a full round after a restart replaced the index on disk, or its bitmap")
 	}
 
 	write(t, filepath.Join(s.Dir, "crewlet-state.json"), `{"format":`)
-	c = w.reopen(t, c, clk.on)
+	c = w.reopen(t, c, clk.on, round)
 	w.sync(t, c, repo)
 	if inode(t, midx) != first || !statOK(t, bitmap) {
 		t.Error("a full round with an unreadable state replaced the index on disk, or its bitmap")
@@ -200,8 +229,8 @@ func TestARoundNeverReplacesAnIndexThatExists(t *testing.T) {
 		t.Fatalf("the maintainer ran %v after the round's own index, want the repository", ran)
 	}
 	bitmapOf(t, filepath.Join(s.Dir, "objects", "pack"))
-	if doc := readStateDoc(t, s.Dir); doc.Midx.Packs != cache.MidxPacks || !doc.Midx.Bitmap {
-		t.Errorf("after the maintainer the state's midx is %+v, want %d packs with the bitmap", doc.Midx, cache.MidxPacks)
+	if doc := readStateDoc(t, s.Dir); doc.Midx.Packs != caseRoundPacks || !doc.Midx.Bitmap {
+		t.Errorf("after the maintainer the state's midx is %+v, want %d packs with the bitmap", doc.Midx, caseRoundPacks)
 	}
 }
 
@@ -277,7 +306,7 @@ func TestTheMaintainerIndexesAfterABurst(t *testing.T) {
 		t.Errorf("the maintainer ran %v inside MidxMinInterval", ran)
 	}
 
-	// Eight more packs make it due by count; landed just before the
+	// MidxPacks more packs make it due by count; landed just before the
 	// interval is up, they hold it back until they have stood still.
 	clk.Set(ranAt.Add(cache.MidxMinInterval - cache.MidxDebounce/2))
 	for range cache.MidxPacks {
@@ -331,16 +360,16 @@ func TestARepositoryThatNeverStandsStillIsStillMaintained(t *testing.T) {
 	}
 }
 
-// ONE PACK IS INDEXED ONCE, AND EIGHT MORE AGAIN: the bitmap and the
+// ONE PACK IS INDEXED ONCE, AND MIDXPACKS MORE AGAIN: the bitmap and the
 // commit-graph are what a clone counts objects from and what a walk reads
 // commits from, and neither needs a second pack to be worth having — a
 // history imported in one push is one pack, and without them every clone of
 // it walks the whole history. So a repository with no index is due at its
 // first pack, and one with the maintainer's is due again only once MidxPacks
-// packs have gathered beside it — fewer are served from their own indexes at
-// the cost of a handful of extra searches. An empty repository has nothing
-// to index.
-func TestOnePackIsIndexedOnceAndEightMoreAgain(t *testing.T) {
+// packs have gathered beside it — fewer cost a request only the walk of their
+// own commits and trees, a twentieth of a millisecond a pack, against a run
+// that rewrites the whole index. An empty repository has nothing to index.
+func TestOnePackIsIndexedOnceAndMidxPacksMoreAgain(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
 	clk := newClock()
@@ -716,7 +745,7 @@ func TestTheMaintainerLeavesAMaintenanceSlotForAPerson(t *testing.T) {
 }
 
 // MAINTENANCE RUNS BESIDE THE LARGEST AS MEMORY ALLOWS: a bitmap holds about
-// 256 bytes an object of its repository, and a node that has just joined
+// 320 bytes an object of its repository, and a node that has just joined
 // finds its largest repositories due together — so the runs beside the
 // largest in flight are held to an allowance, while the largest itself, the
 // price of serving its repository at all, starts whenever a slot is free.

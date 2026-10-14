@@ -66,14 +66,20 @@ import (
 // without a multi-pack-index every object lookup binary-searches each pack's
 // own .idx in turn, and the request a cold cache was synced for — a clone on a
 // node that just joined, the first fetch after a restart — would be served by
-// pack-objects searching every pack for every object. The round's index has
-// NO BITMAP: it is a merge of the packs' own indexes, proportional to their
-// objects, where a bitmap is a walk of the whole history no request should
-// wait for. It runs in the READ lane, because a request waits on it.
+// pack-objects searching every pack for every object. MANY is MidxRoundPacks
+// (256), where the cold clone alone pays the index back, over 100 MB and over
+// a gigabyte. Under that the index saves the cold request less than it costs
+// it, so the round answers without one, and the maintainer's index follows
+// once the packs have stood still and the runs ahead of it have ended — one
+// at a time on four cores, so on a node that just joined, after every
+// repository ahead of it in the queue. The round's index has NO BITMAP: it is
+// a merge of the packs' own indexes, proportional to their objects, where a
+// bitmap is a walk of the whole history no request should wait for. It runs
+// in the READ lane, because a request waits on it.
 
 // indexRound writes a multi-pack-index without a bitmap over exactly the
-// snapshot's packs, for a full round, when the snapshot names MidxPacks or
-// more packs and the incarnation holds NO multi-pack-index file — one stat,
+// snapshot's packs, for a full round, when the snapshot names MidxRoundPacks
+// or more packs and the incarnation holds NO multi-pack-index file — one stat,
 // never the state's count, which reads zero beside an index on disk when the
 // state was unreadable. A round never writes over an index that exists: git
 // deletes a bitmap that does not match the index it writes.
@@ -81,18 +87,20 @@ import (
 // IT RUNS BEFORE THE REFS, because the refs' peel reads every tag the round
 // sets out of the packs, and without an index each lookup searches every
 // pack's .idx in turn — the very cost the index removes: at 5 000 packs of one
-// commit and one annotated tag each (git 2.43, the cat-file the peel runs over
-// all 5 000 tags, six runs each on four shared vCPUs) the peel took 1.0–1.3 s
-// without the index and 0.23–0.31 s with it, for a 0.16 s write. Over
-// exactly the snapshot's packs (--stdin-packs), so a stray the sweep is about
-// to remove is never in it.
+// commit and one annotated tag each (BenchmarkPeel: git 2.43, the cat-file the
+// peel runs over all 5 000 tags, six counts on four shared vCPUs) the peel
+// took 0.65 s without the index and 0.23 s with it, for a 0.19 s write —
+// though at a thousand such packs it saves less than the write costs, so the
+// peel is no reason for MidxRoundPacks' count. Over exactly the snapshot's
+// packs (--stdin-packs), so a stray the sweep is about to remove is never in
+// it.
 //
 // Never a failure the round fails on: a busy lane or a failed write is
 // logged, the lock file a killed write leaves removed, and the round answers
 // without the index — slower, never wrong. It reports whether it wrote.
 func (c *Cache) indexRound(ctx context.Context, e *entry, inc *incarnation, snap snapshot) bool {
 	packs := len(snap.packs)
-	if packs < MidxPacks {
+	if packs < c.roundPacks {
 		return false
 	}
 	packDir := filepath.Join(inc.dir, "objects", "pack")
@@ -120,12 +128,15 @@ func (c *Cache) indexRound(ctx context.Context, e *entry, inc *incarnation, snap
 	}
 	meta, err := metaBytes(inc.dir)
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	// LastRun and Took stay the maintainer's: the round's index is no
 	// maintenance run, and the bitmap the maintainer adds is due at once.
 	inc.midx.Packs, inc.midx.Bitmap = packs, false
 	if err == nil {
 		c.setSize(inc, inc.diskBytes, meta)
+	}
+	e.mu.Unlock()
+	if c.knobs != nil && c.knobs.roundIndexed != nil {
+		c.knobs.roundIndexed(inc.dir)
 	}
 	return true
 }
@@ -266,7 +277,7 @@ func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 	c.mu.Lock()
 	for _, e := range c.entries {
 		e.mu.Lock()
-		if maintainable(e, now) {
+		if c.maintainable(e, now) {
 			uncovered := e.current.packs
 			if e.current.midx.Bitmap {
 				uncovered -= e.current.midx.Packs
@@ -363,13 +374,13 @@ func (f *maintFlight) count() int {
 // take the lane's last slot from the person who asked — a one-slot lane's
 // only one), never on an incarnation this process has not read whole, and
 // never on one leaving the cache.
-func maintainable(e *entry, now time.Time) bool {
+func (c *Cache) maintainable(e *entry, now time.Time) bool {
 	inc := e.current
 	if e.dead || inc == nil || inc.retired || !inc.converged || e.running != nil || e.maint != nil ||
 		e.verifying > 0 {
 		return false
 	}
-	if inc.packs < 1 || (!indexDue(inc) && inc.midx.Graph) {
+	if inc.packs < 1 || (!c.indexDue(inc) && inc.midx.Graph) {
 		return false
 	}
 	settled := now.Sub(e.lastAdded) >= MidxDebounce ||
@@ -381,8 +392,8 @@ func maintainable(e *entry, now time.Time) bool {
 // disk, one without its bitmap (a full round's own), or MidxPacks packs
 // gathered beside it. One that is current and has its bitmap is due for its
 // commit-graph alone, if that is what it lacks.
-func indexDue(inc *incarnation) bool {
-	return inc.midx.Packs == 0 || !inc.midx.Bitmap || inc.packs-inc.midx.Packs >= MidxPacks
+func (c *Cache) indexDue(inc *incarnation) bool {
+	return inc.midx.Packs == 0 || !inc.midx.Bitmap || inc.packs-inc.midx.Packs >= c.midxPacks
 }
 
 // startMaintenance starts one run of e's current incarnation on a goroutine
@@ -400,7 +411,7 @@ func (c *Cache) startMaintenance(ctx context.Context, e *entry, most int) *maint
 	}
 	e.mu.Lock()
 	now := c.now()
-	if !maintainable(e, now) {
+	if !c.maintainable(e, now) {
 		e.mu.Unlock()
 		c.leave()
 		return nil
@@ -418,7 +429,7 @@ func (c *Cache) startMaintenance(ctx context.Context, e *entry, most int) *maint
 	m := &maintRun{e: e, inc: inc, cancel: cancel, done: make(chan struct{})}
 	e.maint = m
 	inc.pins++
-	plan := runPlan{index: indexDue(inc), covered: inc.packs, disk: inc.diskBytes, memory: mem, startedAt: now}
+	plan := runPlan{index: c.indexDue(inc), covered: inc.packs, disk: inc.diskBytes, memory: mem, startedAt: now}
 	e.mu.Unlock()
 	go func() {
 		defer c.leave()

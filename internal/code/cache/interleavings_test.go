@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io/fs"
 	"math/rand/v2"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -57,13 +59,19 @@ import (
 // in a hundred it was drawn once, at a first step with nothing earlier to go
 // back to), and no seed drew the crash that left a maintenance run's lock in
 // a repository whose first round after it indexed its packs — the
-// interleaving, at seed 8, that showed the sweep moving the lock only after
-// the round's index had been refused over it and had removed it, which failed
-// the round. interleavingOutcomes holds the seeds to reaching every outcome;
-// sixteen reach them all, in about nine seconds under the race detector, the
-// seeds in parallel. Forty steps a seed, a check every ten: enough history
-// for a recreation to go back to and short enough that a failure's trace
-// reads in one screen.
+// interleaving that showed the sweep moving the lock only after the round's
+// index had been refused over it. A round indexes from
+// interleavingRoundPacks packs here, not MidxRoundPacks, which two
+// repositories over forty steps never reach; seeds 6, 12, 14 and 16 draw
+// that crash and that round, and putting the round's index back before the
+// sweep turns the outcome — and the run — red. The maintainer is due again
+// from interleavingMidxPacks packs beside its index rather than MidxPacks,
+// at whose production count no seed maintains a repository over its own
+// index and bitmap. interleavingOutcomes holds the seeds to reaching every
+// outcome; sixteen reach them all, in about nine seconds under the race
+// detector, the seeds in parallel. Forty steps a seed, a check every ten:
+// enough history for a recreation to go back to and short enough that a
+// failure's trace reads in one screen.
 const (
 	interleavingSeeds = 16
 	interleavingSteps = 40
@@ -100,8 +108,8 @@ var interleavingOutcomes = []string{
 	"push", "tag annotated", "tag lightweight", "delete a ref", "refused push", "adopt",
 	"sync stale", "sync session", "sync linearizable",
 	"sync killed at sync.download", "sync killed at sync.refs", "sync killed at sync.state",
-	"crash leaving a maintenance run's files", "evict", "rebuild", "maintain", "sweep tombstones",
-	"recreate backwards",
+	"crash leaving a maintenance run's files", "evict", "rebuild", "maintain", "maintain over its own index",
+	"sweep tombstones", "recreate backwards", "round index", "round index over a crash's lock",
 }
 
 // errKilled is what a killed sync's fault point answers.
@@ -128,6 +136,14 @@ type interleaving struct {
 	// the setup's first: what a recreation goes back to.
 	history []interleaved
 	trace   []string
+
+	// indexMu guards indexed, every incarnation a full round wrote its own
+	// index in — told by the cache's round, on the cache's goroutines.
+	indexMu sync.Mutex
+	indexed map[string]bool
+	// crashDir is the incarnation a crash left a maintenance run's files
+	// in, until a round of the next process has swept them.
+	crashDir string
 }
 
 // interleaved is the log and the repositories' work trees at one moment.
@@ -142,7 +158,7 @@ func interleave(t *testing.T, seed uint64) map[string]bool {
 	w := newSyncWorld(t, onMemory)
 	in := &interleaving{
 		t: t, w: w, rng: rand.New(rand.NewPCG(seed, 1)), clk: newClock(), faults: &codefault.Script{},
-		last: map[string]statelog.Position{}, exercised: map[string]bool{},
+		last: map[string]statelog.Position{}, exercised: map[string]bool{}, indexed: map[string]bool{},
 	}
 	// Logged whatever the verdict: shown with a failure, and under -v the
 	// record of what a passing seed exercised.
@@ -171,6 +187,7 @@ func interleave(t *testing.T, seed uint64) map[string]bool {
 		repo := in.repos[in.rng.IntN(len(in.repos))]
 		in.trace = append(in.trace, fmt.Sprintf("%d: %s, repo-%d", step, o.name, slices.Index(in.repos, repo)+1))
 		in.trace[len(in.trace)-1] += ": " + o.run(in, repo)
+		in.noteRoundIndexes()
 		in.remember()
 		if step%checkEvery == 0 || step == interleavingSteps {
 			in.check(step)
@@ -182,9 +199,54 @@ func interleave(t *testing.T, seed uint64) map[string]bool {
 // saw records an outcome the run reached.
 func (in *interleaving) saw(outcome string) { in.exercised[outcome] = true }
 
-// options runs the cache on the interleaving's clock and fault script.
+// interleavingRoundPacks is the packs a full round leaves before it writes
+// its own index in an interleaving, in place of MidxRoundPacks: two
+// repositories over forty steps hold a dozen packs or so between them, and
+// at the production count no round would ever index — nor meet a dead
+// maintenance run's lock in the way of its index.
+const interleavingRoundPacks = 4
+
+// interleavingMidxPacks is the packs gathered beside the maintainer's index
+// that make a repository due again in an interleaving, in place of
+// MidxPacks: at the production count no repository of a dozen packs is ever
+// maintained over its own index and bitmap, only over none or over a round's.
+const interleavingMidxPacks = 2
+
+// options runs the cache on the interleaving's clock and fault script, its
+// rounds indexing from interleavingRoundPacks packs and telling the run
+// where they did, and the maintainer due again at interleavingMidxPacks.
 func (in *interleaving) options(o *cache.Options) {
 	o.Now, o.Faults = in.clk.Now, in.faults
+	cache.RoundPacksAt(interleavingRoundPacks)(o)
+	cache.MidxPacksAt(interleavingMidxPacks)(o)
+	cache.OnRoundIndex(func(dir string) {
+		in.indexMu.Lock()
+		defer in.indexMu.Unlock()
+		in.indexed[dir] = true
+	})(o)
+}
+
+// noteRoundIndexes records the outcomes the rounds' own indexes reached: any
+// round's, and the first round after a crash writing its index in the
+// incarnation the crash left a maintenance run's lock in — the lock its sweep
+// must move before git will write the index over it.
+func (in *interleaving) noteRoundIndexes() {
+	in.indexMu.Lock()
+	defer in.indexMu.Unlock()
+	if len(in.indexed) > 0 {
+		in.saw("round index")
+	}
+	if in.crashDir == "" {
+		return
+	}
+	lock := filepath.Join(in.crashDir, "objects", "pack", "multi-pack-index.lock")
+	if _, err := os.Lstat(lock); err == nil {
+		return // no round has swept the crash's files yet
+	}
+	if in.indexed[in.crashDir] {
+		in.saw("round index over a crash's lock")
+	}
+	in.crashDir = ""
 }
 
 // remember records the log and the work trees as they stand.
@@ -362,6 +424,10 @@ func (in *interleaving) restart(string) string {
 		write(in.t, filepath.Join(dir, "objects", "pack", "tmp_bitmap_Xq3vRk"), "half a bitmap")
 		write(in.t, filepath.Join(dir, "objects", "info", "commit-graph.lock"), "half a graph")
 		in.saw("crash leaving a maintenance run's files")
+		in.indexMu.Lock()
+		in.crashDir = dir
+		delete(in.indexed, dir)
+		in.indexMu.Unlock()
 	}
 	in.c = in.w.open(in.t, in.options)
 	return detail
@@ -396,11 +462,27 @@ func (in *interleaving) rebuild(repo string) string {
 	return ""
 }
 
+// maintain runs a maintainer pass with the clock past the interval. A run in a
+// repository that already holds the maintainer's bitmap is the one
+// MidxPacks makes due again: it writes over its own index and bitmap.
 func (in *interleaving) maintain(string) string {
 	in.clk.Add(cache.MidxMinInterval + cache.MidxDebounce)
+	bitmapped := map[string]bool{}
+	for repo := range cache.Repos(in.c) {
+		for _, name := range names(in.t, filepath.Join(in.w.dir(in.t, in.c, repo), "objects", "pack")) {
+			if filepath.Ext(name) == ".bitmap" {
+				bitmapped[repo] = true
+			}
+		}
+	}
 	ran := cache.MaintainerPass(in.c)
 	if len(ran) > 0 {
 		in.saw("maintain")
+	}
+	for _, repo := range ran {
+		if bitmapped[repo] {
+			in.saw("maintain over its own index")
+		}
 	}
 	return fmt.Sprintf("maintained %d", len(ran))
 }

@@ -492,9 +492,11 @@ a provider's round trip away, among them — and the SHA-256 rate under every
 verified byte), one arbitrated write end to end and the applier's drain
 (`internal/statelog`), the store's own drain (`internal/store`), a git
 process through the pool and the index-pack a push runs
-(`internal/code/gitproc`), a git node's boot of its cache and what a
-directory sync costs a file (`internal/code/cache`), and the pace a client's
-connection is held to, on a real connection (`internal/api/paced`).
+(`internal/code/gitproc`), the git cache's cold and delta syncs and a
+bundle's own file work, its index maintenance and what a request pays across
+many packs, a node's boot of its cache and what a directory sync costs a file
+(`internal/code/cache`), and the pace a client's connection is held to, on a
+real connection (`internal/api/paced`).
 
 It is **not a gate, and no CI job runs it**. A benchmark on a shared runner
 measures the runner's neighbours, and a gate on figures that noisy is one
@@ -508,13 +510,16 @@ each, on one idle machine, and read the two outputs with
 | `BENCH_PATTERN` | `.` | `-bench`, e.g. `Backend/via=member` |
 | `BENCH_TIME` | `3s` | `-benchtime` |
 | `BENCH_COUNT` | `1` | `-count` |
-| `BENCH_TIMEOUT` | `2h` | `-timeout`, a hang detector |
+| `BENCH_TIMEOUT` | `8h` | `-timeout`, a hang detector: six counts of every arm, the large ones included, take about five hours on four vCPUs |
 
 The packages run one at a time (`-p 1`) and without the race detector, and the
 output is verbose (`-v`), because a skipped benchmark prints nothing otherwise
-— the real-bucket arm of `internal/objstore/s3obj` skips unless
-`CREWLET_BENCH_S3_BUCKET` names a bucket, and that package's doc lists the
-variables that do.
+— the real-bucket arms of `internal/objstore/s3obj` and `internal/code/cache`
+skip unless `CREWLET_BENCH_S3_BUCKET` names a bucket (`internal/objstore/s3obj`'s
+doc lists the variables that do), and the arms of `internal/code/cache` whose
+fixture takes minutes and gigabytes — a cold sync of 2 000 pushes,
+repositories of 10 000 packs, a 5 GB index, a gigabyte split into hundreds
+of packs — skip unless `CREWLET_BENCH_LARGE=1`.
 
 **A figure the design argues from is recorded in the package doc of what it
 measures**, with the machine it was measured on — its CPUs and model, and
