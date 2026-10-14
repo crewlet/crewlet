@@ -239,7 +239,14 @@ func (c *Client) Run(t testing.TB, dir string, args ...string) string {
 // nil; err is the *exec.ExitError (or the deadline's) and never fails t.
 func (c *Client) Try(t testing.TB, dir string, stdin io.Reader, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), ClientDeadline)
+	return c.TryContext(t.Context(), dir, stdin, args...)
+}
+
+// TryContext is [Client.Try] under ctx rather than a test's own: a fixture
+// whose workers run git off the test's goroutine ends the others' processes
+// with the first one's failure, by cancelling the context they share.
+func (c *Client) TryContext(ctx context.Context, dir string, stdin io.Reader, args ...string) (stdout, stderr string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, ClientDeadline)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, c.git, slices.Concat(c.opts, args)...)
 	procgroup.Set(cmd)
@@ -314,16 +321,27 @@ const packedRefsHeader = "# pack-refs with: sorted \n"
 // Pack writes ONE pack into bare's objects/pack holding the objects `git
 // rev-list --objects <revs…>` names in worktree — with the .idx (version 2)
 // and the .rev beside it that index-pack --rev-index writes — and returns its
-// checksum. It moves no ref.
+// checksum. It moves no ref, and fails t on any error ([TryPack] answers it).
 func Pack(t testing.TB, c *Client, bare, worktree string, revs ...string) string {
 	t.Helper()
+	cs, err := TryPack(t.Context(), c, bare, worktree, revs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cs
+}
+
+// TryPack is [Pack] answering its failure rather than failing a test, under
+// ctx, for a fixture that packs many pushes at once on goroutines of its
+// own, where no test may fail and the first failure ends the rest.
+func TryPack(ctx context.Context, c *Client, bare, worktree string, revs ...string) (string, error) {
 	base := filepath.Join(bare, "objects", "pack", "pack")
-	stdout, stderr, err := c.Try(t, worktree, strings.NewReader(strings.Join(revs, "\n")+"\n"),
+	stdout, stderr, err := c.TryContext(ctx, worktree, strings.NewReader(strings.Join(revs, "\n")+"\n"),
 		"-c", "pack.writeReverseIndex=true", "-c", "pack.indexVersion=2", "pack-objects", "--revs", "-q", base)
 	if err != nil {
-		t.Fatalf("packing %v from %s into %s: %v\n%s", revs, worktree, bare, err, stderr)
+		return "", fmt.Errorf("packing %v from %s into %s: %w\n%s", revs, worktree, bare, err, stderr)
 	}
-	return strings.TrimSpace(stdout)
+	return strings.TrimSpace(stdout), nil
 }
 
 // SetRefs rewrites bare's packed-refs to exactly refs (ref → oid), sorted,
@@ -356,20 +374,33 @@ type Bundled struct {
 }
 
 // Bundle reads pack-<checksum>.{pack,idx,rev} from bare's objects/pack; a
-// missing section fails t (Pack always writes all three).
+// missing section fails t (Pack always writes all three), where [ReadBundle]
+// answers it.
 func Bundle(t testing.TB, bare, checksum string) Bundled {
 	t.Helper()
-	read := func(ext string) []byte {
+	b, err := ReadBundle(bare, checksum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// ReadBundle is [Bundle] answering its failure rather than failing a test,
+// for a fixture that reads many pushes' packs at once off the test's
+// goroutine.
+func ReadBundle(bare, checksum string) (Bundled, error) {
+	var sections [3][]byte
+	for i, ext := range []string{".pack", ".idx", ".rev"} {
 		body, err := os.ReadFile(filepath.Join(bare, "objects", "pack", "pack-"+checksum+ext))
 		if err != nil {
-			t.Fatalf("reading the %s of pack %s: %v", ext, checksum, err)
+			return Bundled{}, fmt.Errorf("reading the %s of pack %s: %w", ext, checksum, err)
 		}
-		return body
+		sections[i] = body
 	}
-	pack, idx, rev := read(".pack"), read(".idx"), read(".rev")
+	pack, idx, rev := sections[0], sections[1], sections[2]
 	const header, trailer = 12, 20
 	if len(pack) < header+trailer || string(pack[:4]) != "PACK" {
-		t.Fatalf("pack %s is not a pack: %d bytes", checksum, len(pack))
+		return Bundled{}, fmt.Errorf("pack %s is not a pack: %d bytes", checksum, len(pack))
 	}
 	b := Bundled{
 		Bytes:        append(append(append(make([]byte, 0, len(pack)+len(idx)+len(rev)), pack...), idx...), rev...),
@@ -380,9 +411,9 @@ func Bundle(t testing.TB, bare, checksum string) Bundled {
 		Objects:      int64(binary.BigEndian.Uint32(pack[8:header])),
 	}
 	if b.Checksum != checksum {
-		t.Fatalf("pack-%s.pack ends in the checksum %s", checksum, b.Checksum)
+		return Bundled{}, fmt.Errorf("pack-%s.pack ends in the checksum %s", checksum, b.Checksum)
 	}
-	return b
+	return b, nil
 }
 
 // Fake is a stand-in git: an executable named git in a fresh directory that

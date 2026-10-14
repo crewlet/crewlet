@@ -2,6 +2,7 @@ package gittest_test
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -73,6 +74,64 @@ func TestAFixtureIsARepositoryThePoolAccepts(t *testing.T) {
 		}
 		if !bytes.HasPrefix(sections[1], []byte{0xff, 't', 'O', 'c', 0, 0, 0, 2}) || !bytes.HasPrefix(sections[2], []byte("RIDX")) {
 			t.Errorf("pack %s's index is not version 2 or its reverse index not a RIDX", cs)
+		}
+	}
+}
+
+// THE TRY HELPERS ANSWER WHAT THE OTHERS FAIL ON: a fixture that packs many
+// pushes at once does it on goroutines of its own, where t may not fail, so a
+// pack of a revision the work tree lacks, a bundle missing a section, one
+// that is not a pack and one whose pack ends in another checksum each come
+// back as an error, as does a pack whose context has ended — and a good pack
+// as the bundle Bundle reads.
+func TestTheTryHelpersAnswerTheirFailures(t *testing.T) {
+	t.Parallel()
+	c := gittest.NewClient(t)
+	wt := c.Init(t)
+	tip := c.Commit(t, wt, map[string]string{"a.txt": "a\n"}, "one")
+	bare := gittest.Empty(t)
+	if _, err := gittest.TryPack(t.Context(), c, bare, wt, strings.Repeat("ab", 20)); err == nil {
+		t.Error("TryPack of a revision the work tree lacks answered no error")
+	}
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := gittest.TryPack(ended, c, bare, wt, tip); err == nil {
+		t.Error("TryPack under an ended context answered no error: a fixture's other workers would run on")
+	}
+	cs, err := gittest.TryPack(t.Context(), c, bare, wt, tip)
+	if err != nil {
+		t.Fatalf("TryPack of the work tree's tip: %v", err)
+	}
+	if b, err := gittest.ReadBundle(bare, cs); err != nil || !bytes.Equal(b.Bytes, gittest.Bundle(t, bare, cs).Bytes) {
+		t.Fatalf("ReadBundle of a pack TryPack wrote: %v", err)
+	}
+
+	pack := filepath.Join(bare, "objects", "pack")
+	whole, err := os.ReadFile(filepath.Join(pack, "pack-"+cs+".pack"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two more checksums' sections, copied from the good pack's: one whose
+	// .pack is no pack, one whose .pack is the good pack under another name.
+	notAPack, renamed := strings.Repeat("1", 40), strings.Repeat("2", 40)
+	for name, body := range map[string][]byte{notAPack: []byte("not a pack"), renamed: whole} {
+		for ext, content := range map[string][]byte{".pack": body, ".idx": {0}, ".rev": {0}} {
+			if err := os.WriteFile(filepath.Join(pack, "pack-"+name+ext), content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.Remove(filepath.Join(pack, "pack-"+cs+".rev")); err != nil {
+		t.Fatal(err)
+	}
+	for what, checksum := range map[string]string{
+		"a pack with no .rev":                cs,
+		"a pack nothing wrote":               strings.Repeat("3", 40),
+		"a .pack that is no pack":            notAPack,
+		"a .pack ending in another checksum": renamed,
+	} {
+		if _, err := gittest.ReadBundle(bare, checksum); err == nil {
+			t.Errorf("ReadBundle of %s answered no error", what)
 		}
 	}
 }
