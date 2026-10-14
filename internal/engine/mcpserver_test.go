@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/code/codetest"
 )
 
 // A REAL MCP server, run as a REAL child process, for the ENGINE's wiring.
@@ -36,6 +38,12 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	// THE CODE HOST'S HOOK FIRST: an engine test that pushes for real names
+	// this binary as its proc-receive hook (codetest.HookCommand), and git
+	// starts it inside the push.
+	if status, ok := codetest.RunHookIfAsked(); ok {
+		os.Exit(status)
+	}
 	if os.Getenv(toolServerModeEnv) != "" {
 		os.Exit(runToolServer())
 	}

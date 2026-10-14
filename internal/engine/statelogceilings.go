@@ -768,12 +768,12 @@ func limitSource(source jetstream.BudgetSource, volume string) string {
 // Bavail rather than Bfree: the reserve only root can reach is not space this
 // engine has, and counting it would derive a ceiling the disk cannot honour.
 func volumeFree(dir string) (int64, error) {
-	var fs unix.Statfs_t
-	if err := unix.Statfs(dir, &fs); err != nil {
+	var st unix.Statfs_t
+	if err := unix.Statfs(dir, &st); err != nil {
 		return 0, fmt.Errorf("engine: measure the free space on %s: %w", dir, err)
 	}
 	//nolint:unconvert // Statfs_t.Bsize is int64 on linux and uint32 on
 	// darwin, and both are release targets: the conversion is what makes
 	// this one expression compile on the whole matrix.
-	return int64(fs.Bavail) * int64(fs.Bsize), nil
+	return int64(st.Bavail) * int64(st.Bsize), nil
 }

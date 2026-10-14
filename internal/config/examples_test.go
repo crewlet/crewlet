@@ -260,6 +260,42 @@ func bootstrapExampleLoads(t *testing.T, name string) {
 	}
 }
 
+// THE SHIPPED PAIRS ARE RUNNABLE TOGETHER AND SAY NOTHING ACROSS THE TIERS: a
+// founder copies both files of a pair, so the rules neither tier can check
+// alone ([CheckTiers]) pass, and the consequences only the two together have
+// ([TierWarnings]) are none — the reference company hosts code on one solo
+// member, where the files bucket is the one disk either way.
+func TestTheShippedPairsRaiseNoCrossTierWarning(t *testing.T) {
+	t.Parallel()
+	for boot, company := range map[string]string{
+		"nimbus.config.yaml":            "nimbus.company.yaml",
+		"nimbus-claude-cli.config.yaml": "nimbus-claude-cli.company.yaml",
+	} {
+		t.Run(boot, func(t *testing.T) {
+			t.Parallel()
+			data := readRepoFile(t, "examples", boot)
+			answers := MapSource{}
+			for _, name := range envref.Names(string(data)) {
+				answers[name] = "set-for-this-test"
+			}
+			b, err := ParseBootstrap(data, NewResolver(answers))
+			if err != nil {
+				t.Fatalf("examples/%s does not load: %v", boot, err)
+			}
+			c, err := ParseCompany(readRepoFile(t, "examples", company))
+			if err != nil {
+				t.Fatalf("examples/%s does not load: %v", company, err)
+			}
+			if err := CheckTiers(b, c); err != nil {
+				t.Fatalf("the pair is refused together: %v", err)
+			}
+			if got := TierWarnings(b, c); len(got) != 0 {
+				t.Fatalf("the pair warns across the tiers: %+v", got)
+			}
+		})
+	}
+}
+
 // Tier A in its own shape, as the docs will carry it.
 func TestBootstrapExampleShapeLoads(t *testing.T) {
 	t.Parallel()

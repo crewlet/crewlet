@@ -1080,6 +1080,71 @@ Everything else is either:
 - **An external tool** — task state (Jira, GitLab issues)
 - **The event stream** — routing, with a durable per-subscription backlog
 
+## The code host
+
+A node with the `git` [role](../concepts/configuration.md#noderoles), for a
+company that sets [`code.native`](../concepts/code-host.md), serves the
+company's repositories on its API listener under `/git/`, from a disposable
+cache on its own disk. What such a node needs from its host:
+
+- **git 2.40 or newer on its `PATH`.** The node runs the host's own git as a
+  subprocess per request and checks its version at boot: an older one refuses
+  the boot, naming the version and the path it found. The published image ships
+  2.47 (Debian trixie).
+- **A volume for `git.cache_dir`.** The cache holds every repository the node
+  serves, whole, and a cold sync writes everything it downloads at the speed
+  the object store delivers it — so a volume of its own is worth it: its own
+  filesystem with its own space, never a btrfs subvolume or a ZFS dataset
+  drawing on the store's pool, which shares that pool's space and is read as
+  shared. Its derived budget is then seven eighths of the volume (see
+  [`git`](../concepts/configuration.md#git)). On a volume it shares, the cache
+  first leaves an embedded broker storing its streams there everything that
+  broker may still write under its limit — three quarters of the volume's free
+  space unless `stream.store_max_bytes` says otherwise — and takes half of what
+  is left, so on the single-volume layout (the store, the streams and the cache
+  under one directory, as [the example](../getting-started/configuration.md)
+  has them) a first boot gives the cache an eighth of the free space, settling
+  near a fifth as the broker re-derives its own limit from what the cache has
+  since filled. Size for that, or set `stream.store_max_bytes` and
+  `git.cache_max_bytes` to divide the volume yourself; the node says what it
+  chose, and every figure it chose from, as `code_cache_sized`, at warning
+  level when the budget comes out under 1 GiB. Where the broker's claim and the
+  request spools (64 MiB for each of `git.max_transfers`) leave no room at all
+  — on that layout, a cold cache whose quarter of the free space is no more
+  than the spools, as under 16 GiB free on a sixteen-core node — the node
+  refuses to host code rather than fill the volume the store lives on, and the
+  error names the figures and each setting that gives the cache room. It is
+  never backed up, and a backup tool of your own skips it with
+  `--exclude-caches`.
+- **A writable `$TMPDIR` short enough for a socket.** Every push's git hands its
+  ref updates back to the engine over a unix socket made under `$TMPDIR`, whose
+  path is held to 100 bytes (darwin takes 104, Linux 108): a node whose
+  `$TMPDIR` is longer refuses to start the host, and says to set a shorter one.
+  The engine passes the socket's path and a one-time token to the hook as
+  `CREWLET_HOOK_SOCKET` and `CREWLET_HOOK_TOKEN`
+  ([Environment variables](../reference/environment-variables.md#set-by-the-engine-never-by-you)).
+- **A balancer that does not cut a quiet git request.** git keeps a transfer
+  alive by itself while `upload-pack` counts, and the engine writes a
+  keepalive every 5 s on a push from its hook onward — so an idle timeout of a
+  minute or more on `/git/` is enough for both. Neither covers the silence
+  **before a request's first byte**, which is a cache sync: warm, a few
+  milliseconds; on a node that has never served the repository, or whose budget
+  evicted it, a **cold** sync downloads one object for every push the
+  repository ever took (about 22 s at 10 000 pushes from an S3-shaped store).
+  Either size the idle timeout to the cold sync of your largest repository, or
+  route `/git/<name>` by repository — a balancer hashing the path to a node,
+  with the next one in line when it is down — so each repository stays warm on
+  one or two nodes. Routing by repository is never required for correctness.
+- **Memory for its transfers, cores for its reads.** Each clone, fetch or push
+  holds a few hundred MiB while it runs (224 MiB at the defaults, plus about
+  240 bytes for every object of a repository it clones whole) and a core only
+  now and then, so `git.max_transfers` defaults to four a core and no more than
+  one for every 512 MiB of the node's memory; reads and background indexing
+  take a core each, `git.max_processes` of them. `crewlet.code.git.wait` by
+  `class` is the signal: a `transfer` wait climbing is a node serving as many
+  transfers as its memory backs, a `read` wait one out of cores
+  ([Metrics](../reference/metrics.md)).
+
 ---
 
 ## Observability

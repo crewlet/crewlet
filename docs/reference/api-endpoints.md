@@ -426,9 +426,10 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
 }
 ```
 
-- **`warnings`** is what the engine will run but a person should know about. Always a list, empty when there is nothing to say. Each has the same locators as a [problem](#refusals-carry-located-problems) (`path`, `segments`, and the `seat` handle or `unit` name it is about, empty when neither), plus `from` and `to` as display text. Two kinds:
+- **`warnings`** is what the engine will run but a person should know about. Always a list, empty when there is nothing to say. Each has the same locators as a [problem](#refusals-carry-located-problems) (`path`, `segments`, and the `seat` handle or `unit` name it is about, empty when neither), plus `from` and `to` as display text. Three kinds:
   - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead), `unit` (a root seat's `unit:`), `manages` (one `manages` entry, at the index it was written) or `gitlab_access_level` (a key under `integrations.gitlab.provisioning.access_levels` naming no seat).
   - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company a newer peer admitted under other rules answers with one, one beside each entity the violation names.
+  - `advisory`: a setting that is valid and worth knowing before it runs — the company's own (a unit with no `id`, at `units[i].id` with `unit` naming it; a budget, a repository or a provider entry that will not do what it seems to), or what the company does together with the Tier A of the node that served the write. `path` and `message` locate and say it; `ref`, `from` and `to` are empty. The cross-tier ones are [Warnings across the two tiers](../concepts/configuration.md#warnings-across-the-two-tiers): a fleet hosting code on the default `nats` object store (`store.objects.backend`), a git node whose explicit `git.cache_max_bytes` is below `code.limits.repo_max_bytes`, and a git node behind a disabled guard (`api.auth.disabled`). **They are judged against the Tier A of the node that answered the write**, so the same `PUT /config` can answer them on a git node and not on an ingress node without the `git` role, and a write answers a budget only where it is set explicitly — a derived one is a share of a volume the write never sees, which each git node compares itself when it applies the revision (`config_tier_warning`).
 - **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its effective type, lead and channel (and whether each was inherited). Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
 
 #### Dry runs
@@ -4381,8 +4382,10 @@ omits those fields entirely, and the dashboard draws an em dash. A confident
 `0` would render an idle row for a process that is simply not saying.
 
 Two fields report the failures that are otherwise invisible, because
-their only symptom is an absence: `unmanned_roles` lists roles no live
-node performs, and `unplaceable` lists seats whose `role.placement`
+their only symptom is an absence: `unmanned_roles` lists the roles the
+company needs that no live node performs — `git` only where it sets
+`code.native`, by the same rule each node's `fleet_role_unmanned` warning
+reads — and `unplaceable` lists seats whose `role.placement`
 matches no live node. A lease table that could not be read answers `503`
 with a `Retry-After` rather than an empty fleet: "no node is live" is a
 claim, and a store blip is not evidence for it.

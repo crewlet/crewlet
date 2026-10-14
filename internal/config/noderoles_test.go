@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -138,5 +139,36 @@ func TestAStatelessNodeNamesTheObjectBackend(t *testing.T) {
 	}
 	if b.Store.Objects.BackendOrDefault() != ObjectBackendS3 {
 		t.Fatalf("backend %q", b.Store.Objects.BackendOrDefault())
+	}
+}
+
+// GIT NEEDS INGRESS, whose listener its routes are served on: a git node
+// without it would build a cache and a host no request reaches. The rule holds
+// a data node too, an undeclared node has both (every role), and a node
+// without data naming git and ingress is refused once — by the existing
+// ingress-needs-data rule, never by a second sentence about git.
+//
+// Mutation: drop the git rule, and the first case goes red.
+func TestTheGitRoleNeedsIngress(t *testing.T) {
+	t.Parallel()
+	err := rejectsBootstrap(t, "node:\n  roles: [data, git]\n", "node.roles")
+	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), `"git" needs "ingress"`) {
+		t.Fatalf("[data, git] refused, but not as git needing ingress: %v", err)
+	}
+	for name, doc := range map[string]string{
+		"[data, git, ingress]": "node:\n  roles: [data, git, ingress]\n",
+		"undeclared roles":     "",
+	} {
+		if _, err := ParseBootstrap([]byte(doc), EnvOnly()); err != nil {
+			t.Errorf("%s refused: %v", name, err)
+		}
+	}
+	leaf := "node:\n  roles: [git, ingress]\nstore:\n  scratch: true\n" +
+		"stream:\n  leaf:\n    urls: [\"nats-leaf://a.example.com:7422\"]\n" +
+		"coordination:\n  type: embedded-kv\n"
+	_, err = ParseBootstrap([]byte(leaf), EnvOnly())
+	problems := Problems(err)
+	if len(problems) != 1 || !strings.Contains(problems[0].Message, `"ingress" needs "data"`) {
+		t.Fatalf("[git, ingress] on a leaf: problems %+v, want the one ingress-needs-data refusal", problems)
 	}
 }

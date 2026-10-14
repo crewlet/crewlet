@@ -36,6 +36,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
+	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
@@ -56,6 +57,16 @@ import (
 )
 
 func main() {
+	// THE PROC-RECEIVE HOOK, BEFORE ANYTHING ELSE THIS PROCESS DOES. The
+	// engine's git starts this binary as `crewlet code hook proc-receive`
+	// inside a push; its stdout is git's protocol and its stderr the pushing
+	// person's terminal, so nothing the CLI's own setup prints may reach
+	// either — not a log line, not a usage line. host.HookArgs recognises the
+	// spelling the engine starts it with (host.HookCommand), so the two cannot
+	// drift.
+	if args, ok := host.HookArgs(os.Args[1:]); ok {
+		os.Exit(host.RunHook(args, os.Stdin, os.Stdout, os.Stderr, os.Getenv))
+	}
 	// WHERE THIS PROCESS'S LOGS GO, decided by the one function that owns
 	// the process. Everything below adjusts only the level and the format
 	// (logging.SetVerbosity), because a command that installed a
@@ -741,7 +752,12 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 	// Inserted rather than appended onto Tier A's own list, which is nil
 	// for a document with no warnings at all: the payload promises both
 	// lists are arrays, and `append(nil)` of nothing stays nil.
-	res.Warnings = slices.Insert(res.Warnings, 0, boot.Warnings()...)
+	//
+	// And the warnings neither tier can raise alone ([config.TierWarnings]),
+	// between the two: what the pair does together is read after what the
+	// node's own file says.
+	res.Warnings = slices.Insert(res.Warnings, 0,
+		slices.Concat(boot.Warnings(), config.TierWarnings(boot, company.Company))...)
 	res.Summary = map[string]any{
 		"company": company.Name, "seats": len(company.epoch.Seats()),
 		"llm_providers": len(company.epoch.Models.Keys()),

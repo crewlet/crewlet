@@ -32,8 +32,10 @@
 #     optional extra.
 #   - stdio MCP servers are child processes too, launched by whatever command
 #     the config names.
+#   - The code host (code.native, on a node with the git role) runs git
+#     itself, as a subprocess per request.
 #
-# On `scratch` all three fail at the moment they are used, with an image that
+# On `scratch` all four fail at the moment they are used, with an image that
 # started perfectly happily. The size difference buys nothing an operator
 # wanted.
 #
@@ -45,7 +47,8 @@ FROM debian:trixie-slim
 # ca-certificates: every vendor call is HTTPS, and a container with no trust
 # store fails them all with an error that names the certificate rather than
 # the missing package.
-# git: the shipped sandbox setup recipe drives it.
+# git: the code host runs it on a node with the git role (git >= 2.40; trixie
+# ships 2.47), and the shipped sandbox setup recipe drives it.
 # tini: the engine spawns process trees, and PID 1 without a reaper collects
 # zombies until the pid table fills — the same reason local.go passes --init
 # to the container sandbox backend.

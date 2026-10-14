@@ -120,6 +120,7 @@ func aNodeInModeOf(t *testing.T, mode statelog.MaintenanceMode, doc string) (*En
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	PinGitLanes(&b)
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {

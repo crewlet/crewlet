@@ -39,13 +39,17 @@ from them.
 
 This is the product's current shape, not a configuration choice:
 
-- **No node serves git's HTTP transport yet**, so nobody clones or pushes a
-  repository through this build. What exists is everything a push takes —
-  the repositories, their protection rules, the committer below and the rows
-  it writes, the [cache](#the-cache-on-a-git-node) git is served from, and
-  the git surface itself ([A push, end to end](#a-push-end-to-end)) — built
-  and tested but run by no node yet; the routes that will carry git are
-  reserved and always guarded.
+- **The API does not mount git's HTTP routes yet**, so nobody clones or
+  pushes a repository through this build. What exists is everything a push
+  takes — the repositories, their protection rules, the committer below and
+  the rows it writes — and, on every node with the `git`
+  [role](configuration.md#noderoles), the code host itself, built and started
+  at boot or at the activation that brings the company's native runtime up:
+  the [cache](#the-cache-on-a-git-node) git is served from, sized and placed by
+  the node's Tier A [`git` block](configuration.md#git), the node's own git
+  (2.40 or newer, checked at boot), and the git surface
+  ([A push, end to end](#a-push-end-to-end)). The routes that will carry git
+  are reserved and always guarded.
 - **Agents do not push.** The repositories, their protection rules and the
   decision of every push exist; a seat as a git user does not.
 - **There are no changes, reviews or checks** — no merge request, no review
@@ -411,8 +415,9 @@ goes back because one data node's copy of the rows is behind; it goes back only
 when the code log did — recreated, or restored from an older backup — which the
 node notices, reading every repository whole at its next sync.
 
-**The budget.** A node holds its caches to a byte budget, counting everything
-they hold on disk: every repository's packs, indexes and refs, and the
+**The budget.** A node holds its caches to a byte budget —
+`git.cache_max_bytes`, or a share of the cache's volume derived at every boot
+([`git`](configuration.md#git)) — counting everything they hold on disk: every repository's packs, indexes and refs, and the
 downloads and pushes in flight. Past it, the repositories used least recently
 are evicted, and nothing else evicts one: a repository nobody fetched over a
 weekend is still there on Monday, brought forward by the rows that changed
@@ -592,6 +597,18 @@ applied ([ADR-0036](https://github.com/crewlet/crewlet/blob/main/adr/0036-a-repo
 The scratch is removed when the request ends, and a node that crashed with one
 open sweeps it at its next boot.
 
+**The hook is the engine's own binary.** receive-pack hands its ref updates to
+the engine through a `proc-receive` hook, and that hook is `crewlet code hook
+proc-receive` — this binary, started once a push, which relays them over the
+node's hook socket and exits. Go initialises every package a binary links
+before its first statement, so the engine's own initialisation is on every
+push's path: measured at about 14.5 ms a start on a 4-vCPU machine
+(`BenchmarkTheHookStartsUp`), nearly all of it the packages' initialisation,
+beside about 2 ms for receive-pack's own start — a few per cent of a push that
+also stores a bundle and waits for its record. What the engine's own packages
+do at initialisation is held small by a test of their init trace, so a table a
+package could build at first use is not built on every push.
+
 **Checked before it is stored.** A push naming more than 1 000 refs, a token
 bound to nobody, an archived or deleted repository, a deletion or a direct
 push a protection refuses — each is refused before receive-pack runs, and
@@ -719,6 +736,7 @@ reference](../reference/metrics.md)).
 | `code_fetch_retried` | `INFO` | git found this node's cache damaged during a fetch (`reason`: `corrupt`, `missing`); the cache was rebuilt and the fetch run again over the same request. |
 | `code_fetch_failed`, `code_push_failed` | `WARN` | git failed serving a request on this node — `code_push_failed` a push's (its advertisement, its receive-pack, a process its sync ran), `code_fetch_failed` a fetch's — by itself or ended by the node (`reason`: `deadline`, `stall`, or its `input` or `output` failing here, beside the pool's own `code_git_killed`), before its first byte (the client was told why, a push with its `push_id`) or after it (git's own words ended the answer, or, for a process the node ended, the connection was cut). |
 | `code_git_unavailable` | `WARN` | A git request could not read the code log here (no quorum, a copy out of service, no data node answering), answered 503. |
+| `code_cache_sized` | `INFO` | The node built its code host and sized its cache: the cache's `dir`, its budget in `bytes`, whether it was `derived` from the volume or set as `git.cache_max_bytes`, and every figure it was decided from — the `room` the cache can use, which is the volume's `free` space plus what the cache already `held`, less what an embedded `broker` on the same volume may still write under its limit and the request `spools`' allowance (64 MiB for each of the pool's `transfers`), and whether the volume is `dedicated` to it (half the room where it is shared, seven eighths where it is the cache's own). `WARN`, with a `detail` naming what to change, when a derived budget comes out under 1 GiB or an explicit one is more than the room. A room of nothing is never logged here: the node refuses to build its code host, and the error names the same figures and what to change. |
 | `code_git_ready` | `INFO` | The node's git is 2.40 or newer and its process pool is built: the git's `path` and `version`, its `read_slots`, `maintenance_slots` and `transfer_slots`, the `pack_reuse` it asks git for, and the empty `home` every git process runs with. |
 | `code_git_killed` | `WARN` | The node ended a git process (`class`, `command`): past its deadline (`reason`: `deadline`), or having read and written nothing for its stall bound (`stall`) — a minute for a transfer, twelve of git's keepalives. `DEBUG` when its caller ended it (`caller`): a client that hung up, a node stopping. |
 | `code_git_straggler_killed`, `code_git_pipe_held` | `WARN` | Something a git process started outlived it: still in its process group, and killed; or outside it and holding git's output open, which the node closed after five seconds. |

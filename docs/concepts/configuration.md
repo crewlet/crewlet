@@ -82,8 +82,8 @@ systemd, the host name.
 
 #### `node.roles`
 
-What this process is willing to do. Four roles, and the default is all
-four — one process running a whole company, which is every single-node
+What this process is willing to do. Five roles, and the default is all
+five — one process running a whole company, which is every single-node
 deployment:
 
 ```yaml
@@ -97,6 +97,7 @@ node:
 | Role | What it does | What a fleet loses without it |
 |---|---|---|
 | `data` | Keeps the company's durable state on this node's disk: a copy of the replicated estate and the event log. The company's files are not under it: they are in the [object store](object-store.md), which on the default `nats` backend is a stream the broker's members keep. It says nothing about the broker (see below). `ingress` and `workers` require it | Every seat's tracker and knowledge tools, which a node without `data` answers through one that has it |
+| `git` | Serves the company's git repositories where its company sets [`code.native`](code-host.md): keeps a disposable [cache](code-host.md#the-cache-on-a-git-node) of them on this node's disk (`git.cache_dir`, below) and runs git for their clones, fetches and pushes. Its routes are the API's, so it requires `ingress`. It does nothing for a company that hosts no code | Nobody can clone, fetch or push the company's repositories — said only where the company sets `code.native` |
 | `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints. A node without it serves only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` | No integration can reach the company, and there is nothing to look at |
 | `seats` | Claims seat leases and runs agents, and serves their agent-mode tool bridge (`/mcp/{token}`) when `CREWLET_MCP_BRIDGE_URL` is set | Every trigger queues up unread |
 | `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state logs' trim, the embedding duty, the sandbox waiter, the integration reconcile loop, the object store's collector, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no state log is ever trimmed, no knowledge is embedded for semantic search, no integration is reconciled, and no unnamed object is collected |
@@ -106,8 +107,18 @@ company**, so the fleet as a whole still needs every role somewhere. That
 is a shape no single node's config is wrong for, and every symptom of
 getting it wrong is an absence — so the engine checks it against live
 node presence and logs `fleet_role_unmanned` when nobody is doing a job.
-A node that does not run seats is also left out of the denominator its
-peers divide the seats by; counting it would strand the difference.
+`git` is checked only where the company sets `code.native`: a company that
+hosts no code is missing nothing without it, and a role that stops being
+needed while nobody held it is logged as `fleet_role_unneeded`, never as a
+node coming back. A node that does not run seats is also left out of the
+denominator its peers divide the seats by; counting it would strand the
+difference.
+
+**A node that lists its roles serves git only if it names `git`.** An
+undeclared node has every role, so the single-node deployment, and every fleet
+that never wrote `node.roles`, serves git the moment its company sets
+`code.native`; a node whose list predates the role, or leaves it out, serves
+none.
 
 **`data` is the one role that is a promise about the disk rather than about
 work.** A node without it keeps nothing that has to outlive it, and Tier A
@@ -139,11 +150,99 @@ both ways out: a data node on a leaf, a broker member without `data`, and
 `ingress` or `workers` without `data`. Every data node holds the whole estate
 as a member of the broker, and a node without `data` reaches the estate
 through one — so a node without `data` on an embedded stream joins the fleet
-as a leaf through `stream.leaf.urls`. `crewlet validate` also warns about two
+as a leaf through `stream.leaf.urls`. And `git` without `ingress` is refused
+on every broker, data node or not: its routes are served on the API listener,
+which only an ingress node mounts. `crewlet validate` also warns about two
 valid shapes: a member whose peer list names more than four other members
 (no stream keeps more than five copies, so a sixth member is a voter holding
 nothing — a fleet grows by adding leaves), and a fleet node that left
 `node.roles` undeclared and so runs every role.
+
+#### `git`
+
+How a node with the `git` role serves the company's repositories. Every field
+is a fact about this node's machine — its disk, its cores, its memory — so the
+block is Tier A, read once per process, and two git nodes on different
+hardware size theirs differently:
+
+```yaml
+git:
+  cache_dir: /srv/crewlet-git     # default <store dir>/git; a volume of its own
+  cache_max_bytes: 214748364800   # default: derived at boot, see below
+  max_processes: 0                # default: one a core (GOMAXPROCS)
+  max_transfers: 0                # default: four a process slot, by memory
+```
+
+- **`cache_dir`** — where the node keeps its disposable copies of the
+  repositories. A relative path is resolved against the store's directory, as
+  `store.snapshot_dir` is. A volume of its own is recommended — its own
+  filesystem with its own space: a btrfs subvolume or a ZFS dataset drawing on
+  the store's pool shares that pool's space, and the engine reads it as shared
+  — a dataset whatever recordsize it or the store's is tuned to, since each
+  reports the pool's free space rounded only to its own block.
+  The cache is never backed up: it is rebuilt from the code log and the object
+  store, and its `CACHEDIR.TAG` keeps tar, borg and restic out of it with
+  `--exclude-caches`. A directory that holds the store, the replicated estate
+  or the snapshots is refused at `crewlet validate`, because the cache empties
+  its own `tmp/`, `scratch/` and `trash/` at every boot.
+- **`cache_max_bytes`** — the budget the cache evicts down to, least recently
+  used first; at least 1 GiB when set. Unset, it is derived at every boot from
+  the **room** the cache can use: the volume's free space, **plus what the
+  cache already holds** (free space leaves out the cache's own files, and a
+  budget derived from it alone would shrink at every restart of a warm node),
+  **less what an embedded broker storing its streams on the same volume may
+  still write** under its limit (`stream.store_max_bytes`, or three quarters of
+  the volume's free space when that is unset — a share of the same free space,
+  so a budget taken beside it claimed the same bytes twice) **and less the
+  request spools' allowance** (64 MiB a transfer slot, on this volume and never
+  in the budget). Of that room the cache takes half where the volume also holds
+  the store, the replicated estate, the snapshots or the broker's streams — the
+  other half is the store's to grow into, a snapshot's to be written beside the
+  one it replaces — and seven eighths of a volume of its own (the eighth left
+  free is for what the budget does not count: removals in flight and a new
+  index written beside the old one). Never more, with no floor raising a small
+  share and no ceiling. The node logs what it chose, and every figure it chose
+  from, as `code_cache_sized` — a warning naming what to change where a derived
+  budget comes out under 1 GiB, or an explicit one is more than the room. A
+  volume that leaves **no room at all** — the broker's claim and the spools
+  taking everything it has — derives no budget, and the node refuses to build
+  its code host rather than run a cache in bytes the volume does not have: the
+  boot (or the apply that brings code hosting up) fails naming the figures and
+  what to change — a volume of the cache's own, `cache_max_bytes`, a lower
+  `stream.store_max_bytes`, or fewer `max_transfers`. On the single-volume
+  layout that is a cold cache whose quarter of the free space is no more than
+  the spools: under 16 GiB free on a sixteen-core node's default lane.
+- **`max_processes`** — the git processes the node runs at once to answer
+  reads, one core each, and half as many again for its caches' background
+  maintenance. 0 is one a core.
+- **`max_transfers`** — the clones, fetches and pushes the node serves at
+  once. 0 is four for each process slot, and no more than one for every
+  512 MiB of the node's memory: a transfer holds memory for its whole life and
+  a core only now and then, so size it to memory rather than cores.
+
+A `git` block on a node whose roles name no `git` is read by nothing, and
+`crewlet validate` warns about it.
+
+#### Warnings across the two tiers
+
+Some consequences belong to neither file alone. Three are said wherever both
+are in hand — by `crewlet validate` given both files, in the answer of a
+configuration write (`PUT` or `PATCH /config`, and the dashboard) judged
+against the Tier A of the node that served it, and in the node's own log as
+`config_tier_warning`, once per node per applied epoch:
+
+| Warning | Where | Why |
+|---|---|---|
+| A company with `code.native` in a fleet on the default object store | `store.objects.backend` | Every broker member holding a copy of the files bucket holds every pack of every repository; a company whose code outgrows a member's disk takes `store.objects.backend: s3` |
+| A git node whose cache budget is below `code.limits.repo_max_bytes` | `git.cache_max_bytes` | A repository at its size limit cannot be cached within the budget: it is served, and evicted as soon as it is idle — every fetch of it is a cold sync |
+| A git node whose API guard is disabled, for a company with `code.native` | `api.auth.disabled` | Every git caller is the anonymous operator, whom no seat can name: the repositories fetch and nobody can push |
+
+The cache budget compared is the one each place can know. `crewlet validate`
+and a configuration write compare only an explicit `git.cache_max_bytes`: a
+derived budget is a share of a volume neither file describes. A git node
+compares the budget it **resolved** — derived from its volume where the field
+is unset, which is the default on every git node — at every epoch it applies,
+and names where the budget came from.
 
 #### `node.labels`
 

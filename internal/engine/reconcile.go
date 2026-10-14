@@ -678,13 +678,15 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 	}
 	status, applied, err := r.engine.Apply(ctx, cfg, target.At)
 	if status == configplane.StatusOK {
-		// ON THE SUCCESS BRANCH ONLY, which is what makes both warnings once
+		// ON THE SUCCESS BRANCH ONLY, which is what makes every warning once
 		// per node per applied epoch: Tick never re-applies an epoch this node
 		// has reached, while a refused apply is retried and would repeat the
 		// same lines on every attempt for a revision this node is not even
 		// serving.
 		r.warnAdmission(ctx, target, cfg)
 		reportDanglingRefs(ctx, r.log, target, cfg)
+		warnTiers(ctx, r.log, r.engine.boot, cfg, r.engine.codeCacheBudget(),
+			"revision", target.RevisionID, "epoch", target.Epoch)
 	}
 	return status, applied, err
 }

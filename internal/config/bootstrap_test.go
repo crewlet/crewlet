@@ -464,7 +464,9 @@ func TestUndeclaredRolesMeanEveryRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, role := range []placement.NodeRole{placement.RoleData, placement.RoleIngress, placement.RoleSeats, placement.RoleWorkers} {
+	// THE VOCABULARY, not a copy of it: a role added to it — git, the fifth —
+	// is one an undeclared node runs too.
+	for _, role := range placement.Vocabulary() {
 		if !roles.Has(role) {
 			t.Fatalf("an undeclared node must run %s", role)
 		}

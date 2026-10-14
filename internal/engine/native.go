@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -149,6 +150,22 @@ type native struct {
 	// in a maintenance mode decides nothing.
 	codeStore *code.Store
 	committer *code.Committer
+
+	// codeHost is this node's git surface (internal/code/host) — its cache,
+	// its git pool, the hook relay — built only where the company that
+	// started this runtime set `code.native` AND this node has the git role
+	// ([Engine.hostsGit]), nil otherwise. Read per request through
+	// [Engine.CodeHost], never captured.
+	codeHost *host.Server
+
+	// codeCache is how this node sized its code cache when it built the host
+	// — what [Engine.warnTiers] compares with each applied epoch's
+	// repository limit. Zero where there is no host.
+	codeCache codeCacheSize
+
+	// codeHostStop is the one bounded stop the teardown and the shutdown
+	// share ([native.stopCodeHost]).
+	codeHostStop boundedStop
 
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
@@ -393,6 +410,16 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				return fmt.Errorf("engine: code committer: %w", err)
 			}
 		}
+		// AND ITS GIT SURFACE, on a node with the git role: the cache it
+		// serves persons' clones, fetches and pushes from, which reaches
+		// the rows and the committers through the estate's router like
+		// every other surface. Inside this function's failure path, whose
+		// shutdown stops it first.
+		if e.hostsGit(built) {
+			if n.codeHost, n.codeCache, err = e.buildCodeHost(ctx, n, boot); err != nil {
+				return err
+			}
+		}
 	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER
 	// backend rather than under the wiki's.
@@ -512,7 +539,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// built in a capacity window must not ([Engine.startNativeCollector]).
 	started = true
 	log.InfoContext(ctx, "native_backends_started",
-		"tracker", runTracker, "knowledge", wiki, "code", built.runsCode())
+		"tracker", runTracker, "knowledge", wiki, "code", built.runsCode(), "git", n.codeHost != nil)
 	return nil
 }
 
@@ -735,9 +762,14 @@ func (n *native) shutdown(ctx context.Context) {
 		// counts as answered.
 		_ = n.stopSlices(context.WithoutCancel(ctx))
 	}
-	// THE COMMITTER BEFORE THE LOG IT PUBLISHES ON. The teardown stopped it
-	// already, ahead of the estate subject ([Engine.stopCommitter]); this is
-	// the failure path's stop, and a second one is a no-op.
+	// THE CODE HOST, THEN THE COMMITTER, BEFORE THE LOG THEY PUBLISH ON. The
+	// teardown stopped both already, the host first, ahead of the estate
+	// subject ([Engine.stopCodeHost], [Engine.stopCommitter]); these are the
+	// failure path's stops. A second one of either costs nothing: the host's
+	// stop runs once however many ask for it, so a first stop cut short by its
+	// bound is not waited for again ([native.stopCodeHost]), and the
+	// committer's first stop returns only once its batches have.
+	n.stopCodeHost(ctx)
 	n.stopCommitter(ctx)
 	n.stop()
 	n.done.Wait()
@@ -1712,12 +1744,7 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		// wrote for that person under their credential were invisible to
 		// every seat. Per call, through this node's own chain, for the
 		// roster's reasons.
-		Party: builtin.Parties(func() *org.Organization {
-			if current := e.Company(); current != nil {
-				return current.Org
-			}
-			return nil
-		}, e.LookupSecret),
+		Party: builtin.Parties(e.Chart, e.LookupSecret),
 		// AND THE UNIT SEAM, read per call for the reason the default
 		// project is: a seat's tools are cloned into its lease, an apply
 		// does not rebuild the clone, and a captured chart would render

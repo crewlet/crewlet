@@ -2,7 +2,7 @@
 
 Crewlet companies are defined across **two tiers** — see the [Configuration concept page](../concepts/configuration.md) for the full design.
 
-- **Tier A** (`crewlet.yaml`, restart-only): this node's identity and roles, the store file, the stream and coordination slots, API host/port/auth, the secret keyring, logging (level, shape and an optional rotating log file).
+- **Tier A** (`crewlet.yaml`, restart-only): this node's identity and roles, the store file, the stream and coordination slots, API host/port/auth, the secret keyring, logging (level, shape and an optional rotating log file), and — on a node that serves git — its repository cache and git processes.
 - **Tier B** (`company.yaml` imported into the store, live-editable): everything else — identity, providers, integrations, MCP servers, roles, units, turn engine, learning, budgets, scheduling.
 
 This page documents the **Tier B** fields below.  For Tier A see [Configuration concept page §"Tier A example"](../concepts/configuration.md#tier-a-example-crewletyaml).
@@ -1199,6 +1199,50 @@ store:
                                     #   instance's role. A private CA is read
                                     #   from AWS_CA_BUNDLE
 
+# git:                              # how THIS node serves the company's
+                                    #   repositories — read only where the node
+                                    #   has the `git` role and the company sets
+                                    #   code.native (concepts/code-host.md). A
+                                    #   block on a node without the role is
+                                    #   warned about: nothing reads it
+#   cache_dir: "git"                #   its disposable copies of the
+                                    #   repositories. Absolute, or relative to
+                                    #   the store's directory; unset is
+                                    #   <store dir>/git. A volume of its own is
+                                    #   the production shape. Never backed up:
+                                    #   it is rebuilt from the code log and the
+                                    #   object store, and carries a
+                                    #   CACHEDIR.TAG. A directory holding the
+                                    #   store, its snapshots or the replicated
+                                    #   estate is REFUSED: the cache empties its
+                                    #   own tmp/, scratch/ and trash/ at boot
+#   cache_max_bytes: 0              #   the budget it evicts down to, least
+                                    #   recently used first; at least 1 GiB when
+                                    #   set. UNSET is derived at every boot from
+                                    #   the ROOM the cache can use: the volume's
+                                    #   free space PLUS what the cache already
+                                    #   holds (so a warm restart derives what
+                                    #   its first boot did), LESS what a broker
+                                    #   storing its streams on that volume may
+                                    #   still write under its limit and the
+                                    #   request spools' allowance. Half of that
+                                    #   where the volume also holds the store,
+                                    #   its snapshots or the broker's streams,
+                                    #   seven eighths of a volume of its own;
+                                    #   never more, no floor, no ceiling, and
+                                    #   a volume leaving NO room refuses the
+                                    #   code host, naming what to change.
+                                    #   Logged as code_cache_sized
+#   max_processes: 0                #   git processes run at once to answer
+                                    #   reads, one core each, and half as many
+                                    #   again for background maintenance; 0 is
+                                    #   one a core
+#   max_transfers: 0                #   clones, fetches and pushes served at
+                                    #   once; 0 is four a process slot and no
+                                    #   more than one per 512 MiB of the node's
+                                    #   memory — a transfer holds memory for its
+                                    #   whole life, so size it to memory
+
 coordination:
   type: local                       # one node holding its own seat leases;
                                     #   a fleet needs `embedded-kv`. There is no
@@ -1296,8 +1340,13 @@ somebody acknowledges a backup, a broker member with nowhere to persist the
 streams it holds (never a leaf or a client of an external cluster, which hold
 no stream of their own), a `stream.cluster.peers` entry left out of the member
 count because it is this node's own route or a repeat, a node that declares
-the `ingress` role and binds no port, a unit keyed on a name somebody will
-rename.
+the `ingress` role and binds no port, a `git` block on a node that serves no
+git, a unit keyed on a name somebody will rename. Given both files, it also
+prints the warnings neither file raises alone — a company hosting code on a
+fleet's default object store, a git node whose cache budget cannot hold a
+repository at its size limit, a git node behind a disabled guard — and a
+configuration write answers them too; see
+[Warnings across the two tiers](../concepts/configuration.md#warnings-across-the-two-tiers).
 
 `api.port` is **one** listener per node, on every node, and `node.roles`
 decides what it carries rather than whether it exists. A node without the
@@ -1725,6 +1774,8 @@ code:
 ```
 
 `code.native` turns on the engine's own **git host**. A repository's refs and packs are records on a log of their own — the code log, beside the tracker's and the knowledge base's — and every data node runs a **committer** that decides the pushes it is asked to commit, publishing each batch as one record. A push is asked of its repository's committer: the first data node in a rendezvous order of the repository's id, which every node computes alike, so a repository's pushes meet at one node whichever node received them, and a committer that stops, or answers nothing, hands each of its repositories to that repository's runner-up with the same push id. A node in a [maintenance mode](../guides/retention.md#the-three-modes) decides none: it refuses a push as a node that ran nothing, and the repository's next committer decides it — so while the whole fleet is in a maintenance mode, no push is committed at all. Like `tracker.backend`, it is part of a node's **native runtime**, built once per process: on a node that runs no native backend yet — a company whose tracker and knowledge base are both a vendor's — the activation that sets it starts the code host with no restart, and on a node whose native runtime is already running, a revision that turns it on or off activates normally and takes effect at each node's restart, which the node says with a `native_backend_needs_restart` warning naming `code.native` (see [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)). Setting it starts the state log even on a company whose tracker and knowledge base are both a vendor's, so it needs a stream that survives a restart, as above.
+
+**Where git is served is Tier A's, not this file's.** A node with the `git` [role](../concepts/configuration.md#noderoles) — every node that declares no roles has it — builds the code host when its runtime is built for a company that sets `code.native`: a disposable cache of the repositories on its own disk, sized and placed by the node's [`git` block](#tier-a-crewletyaml), and git 2.40 or newer on its `PATH`, which it checks at boot (the engine image ships 2.47). A node whose git is older refuses to start, naming the version it found. The role needs `ingress`, since git is served on the API listener.
 
 `code.limits` is what one push and one repository may hold, and it is read off the **current** revision at every decision, so a change takes effect at its activation, with no restart. The three nest: a file inside a push, a push inside a repository. A revision that turns `code.native` off must drop `code.limits` with it (below), and a node that keeps serving the code host until its restart goes on holding pushes to the limits of the last revision that hosted code, not to the defaults.
 

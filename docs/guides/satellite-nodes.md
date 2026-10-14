@@ -40,6 +40,12 @@ its seats need a data node to answer — see
 > broker. If that is not possible from where you want the agent, this is
 > not the mechanism you want.
 
+**A stateless satellite cannot serve git in this release.** The `git` role
+serves the company's repositories on the API listener, so it needs `ingress`,
+and `ingress` needs `data` — a node without `data` that names `git` is refused
+at validation. Serve git from the core nodes; a satellite that holds data can
+take `[data, git, ingress, seats]` like any core node.
+
 ---
 
 ## What actually moves
@@ -69,8 +75,8 @@ Slack message routed to that agent works exactly as before.
 ```mermaid
 flowchart LR
     subgraph core["Core network"]
-        C1["node-a<br/><i>data · ingress · seats · workers</i>"]
-        C2["node-b<br/><i>data · ingress · seats · workers</i>"]
+        C1["node-a<br/><i>data · git · ingress · seats · workers</i>"]
+        C2["node-b<br/><i>data · git · ingress · seats · workers</i>"]
         KV[("Coordination<br/>leases · ledgers")]
         MQ[("Event stream")]
     end

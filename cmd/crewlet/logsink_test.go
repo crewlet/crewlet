@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -21,7 +22,20 @@ import (
 // it last — see [TestACommandLogsToTheProcessSinkNotItsCallersWriter].
 // Installing io.Discard once, here, is what a process legitimately does.
 func TestMain(m *testing.M) {
-	// THE ONE CASE THAT RE-EXECUTES THIS BINARY, as the node it signals.
+	// main() ITSELF, FIRST, for the case that watches what it does before
+	// anything — the hook dispatch, which the next step would answer
+	// instead (TestTheHookIsMainsFirstStatement).
+	if os.Getenv(mainProbeEnv) != "" {
+		runMainProbe()
+	}
+	// THE CODE HOST'S HOOK: an engine this package boots and pushes to
+	// starts this binary as its proc-receive hook through the engine's
+	// DEFAULT hook — os.Executable, which is this test binary — so the
+	// production argv is the one exercised.
+	if status, ok := codetest.RunHookIfAsked(); ok {
+		os.Exit(status)
+	}
+	// THE CASE THAT RE-EXECUTES THIS BINARY as the node it signals.
 	// Before the sink below, which the child installs for itself: its log
 	// is what the parent reads the order of the shutdown from.
 	if os.Getenv(drainProbeEnv) != "" {

@@ -31,7 +31,7 @@ flowchart TB
     end
 
     subgraph proc["<b>crewlet run</b> — one process, one binary"]
-        NODE["<b>A node</b><br/>ingress · seats · workers<br/><i>embedded event stream · local store file</i>"]
+        NODE["<b>A node</b><br/>data · git · ingress · seats · workers<br/><i>embedded event stream · local store file</i>"]
     end
 
     MCPS["<b>MCP servers</b><br/>stdio children this process supervises,<br/>or remote http endpoints"]
@@ -103,9 +103,10 @@ act through, and every other one still routes end to end.
 ## 2. Inside one node
 
 `crewlet run` is *the* node, and what it does is a config value:
-`node.roles` picks from `data`, `ingress`, `seats` and `workers`. Declaring none
-means all four, which is the single-process company — one process holding the
-company's records, serving the API and the dashboard, running every agent, and
+`node.roles` picks from `data`, `git`, `ingress`, `seats` and `workers`.
+Declaring none means all five, which is the single-process company — one
+process holding the company's records, serving the API and the dashboard,
+serving its git repositories where it hosts them, running every agent, and
 performing the company-wide duties. A node without `data` holds no copy of the
 replicated estate and answers its seats' tools through a node that does; see
 [Scaling Out](scaling.md#a-node-that-holds-no-data).
@@ -113,6 +114,7 @@ replicated estate and answers its seats' tools through a node that does; see
 ```mermaid
 flowchart TB
     ING["<b>ingress</b>: terminate inbound traffic<br/><i>webhooks · REST · /ws/stream · OTLP · probes</i>"]
+    GIT["<b>git</b>: serve the company's repositories<br/><i>a disposable cache on this node's disk ·<br/>git run per request · needs ingress</i>"]
     ALWAYS["<b>Always on, whatever the roles</b><br/><i>notifications · reconciler · presence ·<br/>observability edge</i>"]
     SEATS["<b>seats</b>: run agents<br/><i>mailbox → batching → turn engine · MCP bridge ·<br/>post-turn reflection</i>"]
     WORK["<b>workers</b> — company-wide singletons<br/><i>each on a worker:DUTY lease</i>"]
@@ -130,17 +132,21 @@ flowchart TB
     ALWAYS --> DB
     ING --> KV
     ING --> DB
+    ING --> GIT
+    GIT -->|"code log reads · pushes to a committer"| STREAM
 ```
 
-That is one `crewlet run` process. `node.roles` picks from `data`, `ingress`,
-`seats` and `workers` — declare none and you get all four — and the always-on
-set runs on every node whatever it says. The three backends are opened together
+That is one `crewlet run` process. `node.roles` picks from `data`, `git`,
+`ingress`, `seats` and `workers` — declare none and you get all five — and the
+always-on set runs on every node whatever it says. `git` serves anything only
+for a company that sets [`code.native`](code-host.md), and only beside
+`ingress`, whose listener its routes are on. The three backends are opened together
 and closed together; on a node without `data` the store is scratch and holds
 the node estate alone.
 
-Three of those four groups are **inventories, not pipelines**: no box inside
-`ingress`, `workers` or the always-on set hands work to another box in the same
-group. They are named here rather than drawn.
+Four of those five groups are **inventories, not pipelines**: no box inside
+`ingress`, `git`, `workers` or the always-on set hands work to another box in
+the same group. They are named here rather than drawn.
 
 **Two slots and a file.** The stream and coordination are the two *chosen*
 backends, validated together — a multi-node fleet cannot coordinate locally, and
@@ -691,8 +697,8 @@ that ownership starts being contested, and there is already a lease for that.
 ```mermaid
 flowchart TB
     subgraph fleetbox["A fleet — every node is the same binary"]
-        N1["<b>node-a</b><br/><i>ingress · seats · workers</i>"]
-        N2["<b>node-b</b><br/><i>ingress · seats · workers</i>"]
+        N1["<b>node-a</b><br/><i>data · git · ingress · seats · workers</i>"]
+        N2["<b>node-b</b><br/><i>data · git · ingress · seats · workers</i>"]
         N3["<b>sat-eu</b><br/><i>seats</i> · labels: zone=eu"]
     end
 

@@ -300,6 +300,19 @@ The coding agent's LLM credential derives from the role's resolved `providers.ll
 
 ---
 
+## Set by the engine, never by you
+
+The [code host](../concepts/code-host.md) runs git as a subprocess, and git starts the engine's own binary as its `proc-receive` hook inside every push — `crewlet code hook proc-receive`, which hands git's ref updates back to the engine. The hook is told where to reach the engine by two variables the engine sets on that one git process:
+
+| Variable | What it is |
+|----------|------------|
+| `CREWLET_HOOK_SOCKET` | The unix socket the engine listens on for its pushes' hooks, made under `$TMPDIR` — which is why a node that serves git needs a `$TMPDIR` short enough for a socket's path ([Deployment § The code host](../guides/deployment.md#the-code-host)) |
+| `CREWLET_HOOK_TOKEN` | A one-time token naming the one push the hook belongs to, consumed when the hook connects |
+
+Neither is read from the engine's own environment, and setting either does nothing: the engine builds every git process's environment itself — its `PATH`, and otherwise only variables of its own choosing, so no variable of yours, and none of the host's git configuration or attributes, reaches git or its hook. Run by hand, `crewlet code hook` says it is run by the engine's git and exits 2.
+
+---
+
 ## Usage in YAML
 
 A `${ENV_VAR}` reference works in both config files, and the two resolve it at different moments, from different places:
