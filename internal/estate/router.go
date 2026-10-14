@@ -706,7 +706,7 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 		// SAID, like every other node that ran nothing: an estate nobody
 		// serves names why this node's own copy was passed over, which
 		// on a single data node is the whole of the answer.
-		w.note("%s: %s", r.self, outOfService(wrong))
+		w.note("%s: %s", r.self, outOfService(r.self, wrong))
 		return nil, false, nil
 	}
 	b.ServerSeams = r.seams

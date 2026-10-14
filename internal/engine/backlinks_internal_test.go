@@ -36,7 +36,7 @@ func TestAWrongTrackerCopyAnswersNoBacklinks(t *testing.T) {
 	}
 	_, err := pagesReader.LinkedFrom(t.Context(), "p.none")
 	var unserved *estate.ErrUnserved
-	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "its copy of "+trackerName) {
+	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "'s copy of "+trackerName+" is out of service") {
 		t.Fatalf("backlinks on a single node whose tracker copy is wrong = %v — want an "+
 			"unserved estate naming the tracker's copy", err)
 	}

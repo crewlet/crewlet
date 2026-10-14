@@ -138,7 +138,7 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 		// included, whose never-repeat rule is about a request that
 		// may have run.
 		out.Unserved = unservedOutOfService
-		out.Detail = s.self + "'s " + outOfService(wrong)
+		out.Detail = outOfService(s.self, wrong)
 		return encodeReply(out)
 	}
 	reason, detail, obsolete := ready(ctx, s.self, spec, b, req.Floors, req.AcceptLagging)

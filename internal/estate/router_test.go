@@ -1882,7 +1882,7 @@ func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
 		return rep
 	}
 	if rep := ask(opTasks.spec.name); rep.Unserved != unservedOutOfService ||
-		rep.Result != nil || !strings.Contains(rep.Detail, "its copy of "+trackerDomain) {
+		rep.Result != nil || rep.Detail != outOfService(peer.name, trackerDomain) {
 		t.Fatalf("a tracker read of a node whose tracker copy is wrong answered %+v, "+
 			"want %q naming the tracker", rep, unservedOutOfService)
 	}
@@ -1899,7 +1899,7 @@ func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
 	_, err = alone.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) ||
-		!strings.Contains(unserved.Detail, "data-self: its copy of "+trackerDomain) {
+		!strings.Contains(unserved.Detail, "data-self: "+outOfService("data-self", trackerDomain)) {
 		t.Fatalf("a single node whose tracker copy is wrong answered %v — want an "+
 			"unserved estate that names this node's own copy", err)
 	}
@@ -1943,7 +1943,7 @@ func TestAPagesBacklinksRunOnlyWhereBothCopiesServe(t *testing.T) {
 	if err != nil || len(replies) != 1 || json.Unmarshal(replies[0], &rep) != nil {
 		t.Fatalf("ask = (%d replies, %v)", len(replies), err)
 	}
-	if rep.Unserved != unservedOutOfService || !strings.Contains(rep.Detail, "its copy of "+trackerDomain) {
+	if rep.Unserved != unservedOutOfService || rep.Detail != outOfService(peer.name, trackerDomain) {
 		t.Fatalf("a peer whose tracker copy is wrong answered backlinks %+v, want %q naming "+
 			"the tracker", rep, unservedOutOfService)
 	}
