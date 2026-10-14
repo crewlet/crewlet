@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // WHAT GIT IS TOLD A PUSH DID: `ok` for a ref ONLY from the push's own applied
@@ -28,6 +29,16 @@ type answered struct {
 // line is the command's proc-receive report line: `ok <ref>`, or `ng <ref>
 // <sentence>`, the sentence the command's Detail where one was formed and
 // `<code>: <the code's sentence>` otherwise.
+//
+// THE LINE FITS ONE PKT-LINE with the newline the report adds (receive-pack's
+// own report adds it to what the hook answers): the ref WHOLE, because git
+// matches a status to its command by the ref's name, and the sentence cut to
+// the room the ref leaves. A ref is read off a command line that held both ids
+// beside it, so it is at most maxPktPayload less 82 bytes and that room is
+// never under 77 — but a ref past code.MaxRefNameBytes is a command (refused
+// bad_ref), and the longest a pkt-line carries left a full sentence a line a
+// few bytes past git's largest, which git refuses to read: the push's whole
+// report lost to a protocol error rather than one sentence cut.
 func (a answered) line() string {
 	if a.OK {
 		return "ok " + a.Ref
@@ -43,7 +54,8 @@ func (a answered) line() string {
 	default:
 		words = string(a.Reason) + ": " + a.Detail
 	}
-	return "ng " + a.Ref + " " + sentence(words)
+	head := "ng " + a.Ref + " "
+	return head + textcut.Within(sentence(words), maxPktPayload-len("\n")-len(head))
 }
 
 // answersFor is cmds as git is told them: ok and noop are ok, ng carries its
