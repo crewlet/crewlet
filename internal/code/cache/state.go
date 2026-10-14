@@ -73,7 +73,8 @@ type midxState struct {
 	// none on disk.
 	Packs int `json:"packs"`
 	// Bitmap reports that the index on disk has its bitmap — the
-	// maintainer's — rather than being one a full round wrote without one.
+	// maintainer's — rather than being one without: a full round's, or the
+	// maintainer's where the node's memory cannot hold the bitmap.
 	Bitmap bool `json:"bitmap"`
 	// Graph reports that the maintainer's commit-graph is on disk. Recorded
 	// apart from the index, because the two are written by two processes and

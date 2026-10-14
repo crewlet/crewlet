@@ -159,6 +159,13 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{ObjectsMissing: 2},
 			"2 file(s) are missing from the object store, damaged in it, or not answered for by it",
 		},
+		"repositories a git node's memory cannot index": {
+			statelog.KindCodeMaintenanceRefused,
+			statelog.Reading{CodeMaintenanceRefused: 2, CodeMaintenanceLargest: 19 << 30,
+				CodeMaintenanceBudget: 1 << 30},
+			"2 repository(ies) on this node are served without a bitmap: the largest's needs about " +
+				"19.0 GiB, and the node can give its background work 1.0 GiB",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := statelog.Evaluate(tc.reading)
@@ -236,6 +243,37 @@ func TestTheIndexRecallAlarmFiresAtTheEvaluationsFloor(t *testing.T) {
 		"nothing measured": {statelog.Reading{IVFRecallFloor: 0.93}, false},
 	} {
 		_, fired := find(statelog.Evaluate(c.reading), statelog.KindIVFRecallBelowFloor)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+	}
+}
+
+// THE CODE MAINTENANCE ALARM FIRES PAST THE NODE'S OWN BUDGET, never at a
+// number of its own: the budget is what the git cache measured the node's
+// memory to leave its background indexing, and a run AT it starts — so only
+// an estimate past it is a repository refused. A node that serves no git
+// measures nothing and must alarm about nothing, and a node whose lanes leave
+// its maintenance nothing at all is the alarm, not the absence.
+//
+// Mutation: fire at the budget, or on any refused count without comparing,
+// and a case below fails.
+func TestTheCodeMaintenanceAlarmFiresPastTheNodesBudget(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"an estimate at the budget": {statelog.Reading{
+			CodeMaintenanceLargest: 1 << 30, CodeMaintenanceBudget: 1 << 30}, false},
+		"an estimate a byte past it": {statelog.Reading{CodeMaintenanceRefused: 1,
+			CodeMaintenanceLargest: 1<<30 + 1, CodeMaintenanceBudget: 1 << 30}, true},
+		"a node that leaves its maintenance nothing": {statelog.Reading{CodeMaintenanceRefused: 1,
+			CodeMaintenanceLargest: 320}, true},
+		"a budget with nothing refused": {statelog.Reading{CodeMaintenanceBudget: 1 << 30}, false},
+		"a node that serves no git":     {statelog.Reading{}, false},
+	} {
+		_, fired := find(statelog.Evaluate(c.reading), statelog.KindCodeMaintenanceRefused)
 		if fired != c.fires {
 			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
 		}

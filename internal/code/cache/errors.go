@@ -51,6 +51,17 @@ var (
 	// repository and `crewlet code verify`, which says what a rebuild could
 	// not repair. The host answers it 503.
 	ErrRebuildRefused = errors.New("cache: a rebuild would not end the failure")
+
+	// ErrNoMemory is a whole-repository git process a person asked for —
+	// Verify's connectivity check — whose charge alone is more than this
+	// node can give its background work: the node's memory, less what it
+	// keeps for its git lanes, the store, the broker and the engine
+	// (memory.go). Definite for this node at this memory, and no retry
+	// changes it; a node with more memory can run it. Wrapped naming the
+	// repository, the charge and the budget. The background work's own steps
+	// are never an error: they are refused and said so (the
+	// code_maintenance_refused alarm).
+	ErrNoMemory = errors.New("cache: this node's memory cannot hold it")
 )
 
 // ErrPackMissing is a pack a row names that the object store could not hand

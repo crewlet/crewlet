@@ -422,7 +422,10 @@ budget is still served, logged as `code_cache_over_budget`, and evicted as soon
 as no request holds it. Every git node that serves a repository caches it
 **whole**, so size the volume for the repositories it serves, not the company's
 total. A dedicated disk is worth it, because a cold sync writes everything it
-downloads at the speed the object store delivers it.
+downloads at the speed the object store delivers it. Size the node's memory
+for its largest repository too: the background index below needs about 1 000
+bytes of memory for every object of a repository to write its bitmap, and a
+repository past what the node can give it is indexed without one.
 
 **Background indexing.** With one pack a push, git would search pack after
 pack for every object. So once a repository's packs have stood still for ten
@@ -435,15 +438,72 @@ run, on one core, takes 16 to 30 seconds a gigabyte of packs, more a gigabyte
 the larger the repository. Runs take at most half the node's cores, one each,
 in a slot that is free or not at all, so they never make a push or a fetch
 wait; and only as many run at once as a quarter of a gibibyte a core holds
-beside the largest, each charged an estimate of 320 bytes of memory for every
-object of its repository — the bitmaps of large repositories were measured
-at about 255 to 266 bytes an object — so a node that has just joined does not
-index all its largest repositories at once. A cold cache of a repository
+beside the largest, so a node that has just joined does not index all its
+largest repositories at once.
+
+**Memory.** Every git process a node runs over a whole repository holds memory
+in proportion to the repository's objects, measured on git 2.43 over a source
+repository's history: about 1 000 bytes an object for the bitmap (702 over
+three million objects, more the larger the repository), 80 for the index
+without one, 56 for the commit-graph, 192 for `crewlet code verify`'s
+connectivity check, and a clone about 240 more than the 224 MiB its git
+transfer slot keeps for it — the clone of a repository with no bitmap walks
+its whole history. A git node reads its memory — the least of the machine's
+and any cgroup limit set on its container — and keeps 224 MiB of it for every
+git transfer it admits at once and 896 MiB for each core its git runs on, for
+the store, the broker, the engine and its reads. Both count only the cores the
+memory backs at 2 GiB a core: a container limited in memory and not in CPU sees
+its host's every core, so a node of 64 cores and 16 GiB admits 32 transfers
+rather than 256, and runs as the eight-core node its memory makes it. What is
+left is the budget of its background work, and every step of it — the
+bitmap, the index without one (a cold cache's included), the commit-graph, a
+connectivity check — is held to the budget together with everything in flight,
+each charged its own figure an object and room beside it for one clone of the
+same repository. A step whose charge alone is past the budget never runs on
+the node, and the repository is served without it: a bitmap refused leaves
+the repository indexed without one — its pushes keep joining an index, so
+lookups stay fast, while a clone walks its history — keeping the bitmap the
+node wrote while it could until 256 packs have gathered outside it. Each step
+refused is logged once as `code_cache_maintenance_refused` with its charge
+and the budget and counted by `crewlet.code.cache.maintenance.refusals`, and
+a refused bitmap raises the [`code_maintenance_refused`](../reference/alarms.md)
+alarm for as long as it stays refused. A connectivity check the budget cannot
+hold is refused to whoever asked for it, and one that the work in flight
+leaves no room for is busy, as a full lane is. A step that fits the budget
+alone but not beside what is running waits for it, and the first such
+repository in the queue is given the room it needs: nothing smaller starts
+in its place.
+
+So **a git node's ceiling on a repository it keeps a bitmap of is bounded by
+memory — about 1 240 bytes an object, with the clone beside it — before it is
+bounded by disk**: at about three million objects a gigabyte of a source
+repository's packs, nearly 4 GB of memory for each gigabyte of packs, and some
+75 GB for the 20 GiB a repository may hold by default, which few nodes have.
+A node of 2 GiB a core leaves a quarter of a gibibyte a core (1 GiB on four
+cores: bitmaps of repositories of up to about 860 000 objects, indexes of up to
+about 3.3 million); 16 GiB on four cores leaves 9 GiB: bitmaps of up to about
+7.7 million objects, indexes of up to about 30 million. Give the node the
+memory: it reads it again every ten seconds, so a container resized in place
+is held to its new limit at once (`code_cache_memory_changed`), while the git
+lanes keep the sizes they took at boot until a restart. A node whose memory
+cannot be read at all refuses to serve git rather than guess it.
+
+The budget bounds the background work and keeps room for one clone beside
+each of its steps; it does not bound the clones themselves, which take the
+node's git transfer slots — four a core and no more than one for each
+512 MiB of its memory, each kept 224 MiB — whatever the repository. A node
+that serves repositories of millions of objects to many cloning clients at
+once needs memory for each clone in flight: about 240 bytes an object of the
+repository, past the 224 MiB.
+
+A cold cache of a repository
 holding 256 packs or more gets an index — without the bitmap — before its
 first request is answered, since at that count it saves the request more than
-it costs; the bitmap follows when the background indexing reaches the
-repository, which on a node that has just joined comes after every repository
-with more packs waiting. A cache without either is slower, never wrong.
+it costs, when the budget holds it beside the work in flight (otherwise it is
+logged as `code_cache_round_index_held` and left to the background); the
+bitmap follows when the background indexing reaches the repository, which on
+a node that has just joined comes after every repository with more packs
+waiting. A cache without either is slower, never wrong.
 
 **Damage and repair.** When git finds a cache damaged — a pack or an index it
 cannot read, an object a row names that no pack holds — the node rebuilds it:
@@ -465,9 +525,11 @@ naming the pack, and the collector's daily audit raises the
 **What to watch.** `crewlet.code.cache.bytes` against the budget,
 `crewlet.code.cache.repos`, `crewlet.code.cache.sync.duration` by `kind` (full
 syncs dominating is a cache too small to stay warm),
-`crewlet.code.cache.rebuilds` by `reason`, and
+`crewlet.code.cache.rebuilds` by `reason`,
 `crewlet.code.cache.rebuild.refusals` by `rule` — rising at all, damage no
-rebuild repairs ([metrics reference](../reference/metrics.md)).
+rebuild repairs — and `crewlet.code.cache.maintenance.refused`, above zero a
+repository whose bitmap the node's memory cannot hold
+([metrics reference](../reference/metrics.md)).
 
 ---
 
@@ -489,7 +551,9 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 
 | Line | Level | Means |
 |---|---|---|
-| `code_cache_opened` | `INFO` | The node opened its cache at boot: the `dir`, the `repos` and `bytes` it already held, its byte `budget`, and how many leftovers it moved aside (`trashed`). |
+| `code_cache_opened` | `INFO` | The node opened its cache at boot: the `dir`, the `repos` and `bytes` it already held, its byte `budget`, and how many leftovers it moved aside (`trashed`); and the node's `memory` as its git read it, where from (`memory_from`: `/proc/meminfo`, a cgroup's limit file, or `sysctl hw.memsize`), what it keeps for everything but its background work (`memory_reserved`), and what that leaves the work (`maintenance_budget`). |
+| `code_cache_memory_changed` | `INFO` | The node's memory read differently from the last reading — a container resized in place — and the background work's `maintenance_budget` moved with it; `was` is the reading before. The git lanes keep their boot sizes until a restart. |
+| `code_cache_memory_unreadable` | `WARN` | The node's memory could not be read again; the last reading and its budget stand until a read succeeds. Once until then. |
 | `code_cache_trashed` | `WARN` | At boot, something in the cache that is not a repository's current copy was moved aside to be removed — a copy an interrupted rebuild left, a stray, or a copy recorded in another build's format; `why` says which. Nothing is lost: the rows and the object store bring the repository back at its next fetch. |
 | `code_cache_state_unreadable` | `WARN` | A repository's copy has no readable record of what it holds. It is kept, and its next fetch reads the repository whole, reusing every pack it already holds. Recurring, it is the disk. |
 | `code_cache_evicted` | `INFO` | A repository's copy was evicted to bring the cache back under its byte budget, least recently used first; `idle_for` is how long it had gone unused. Its next fetch is a cold sync. Frequent, the budget is too small for the repositories this node serves. |
@@ -506,6 +570,8 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_rebuild_seed_failed` | `WARN` | A rebuild could not link a pack it had already found whole into the new copy, so it downloads that pack instead. The disk refusing a hard link. |
 | `code_cache_adopt_failed` | `WARN` | The node that received a push could not link the push's pack into its cache; its next sync downloads the pack instead. Recurring, the disk is refusing writes. |
 | `code_cache_maintenance_failed` | `WARN` | A background indexing run failed at its `step` (`multi-pack-index`, `commit-graph`, or `state` when its record could not be written). The repository is served without the index — slower, never wrong — and the next run waits out the interval. |
+| `code_cache_maintenance_refused` | `WARN` | One `step` of a repository's background work needs more memory than the node can give it — its `estimate`, the step's figure an object and room for a clone beside it, against the `budget`, with the `memory` it was taken from and what was `reserved` — so it never runs on this node. `bitmap`: the repository is indexed without one, and a clone walks its history; `index`: it is served from its packs' own indexes, a cold cache's index included; `graph`: its walks parse every commit. Slower, never wrong. Once for each copy of the repository the cache holds and each step, while [`code_maintenance_refused`](../reference/alarms.md) stands for as long as a bitmap stays refused. Give the node more memory. |
+| `code_cache_round_index_held` | `INFO` | A cold sync of a repository with many packs answered without writing its index first, because the background work in flight left the node's memory no room for it (`estimate` against the `budget`). Slower, never wrong; the background index follows. |
 | `code_cache_round_index_skipped` | `WARN` | A cold sync of a repository with many packs answered without writing its index first: the node's git reads were all busy, or the write failed. Slower, never wrong; the background index follows. |
 | `code_cache_trash_failed` | `WARN` | Something the cache had finished with could not be moved aside or removed. It stays on the disk until a later pass or the next boot removes it; recurring, the disk is refusing work. |
 | `code_cache_held_unmeasured`, `code_cache_scratch_unmeasured` | `WARN` | At boot, or at a pass of the cache's own housekeeping, a file in the cache could not be measured, so the cache counts less than it holds on the disk. Fix the disk or the file's permissions. |

@@ -251,6 +251,9 @@ const (
 	KindPoolStarved         Kind = "pool_starved"
 	KindCensusDrift         Kind = "census_drift"
 	KindObjectsMissing      Kind = "objects_missing"
+
+	// The code host's: a git node's own work, beside the logs'.
+	KindCodeMaintenanceRefused Kind = "code_maintenance_refused"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -401,6 +404,19 @@ type Reading struct {
 	// for the gated record's reason: there is no threshold below which a
 	// file that cannot be opened is acceptable.
 	ObjectsMissing int
+
+	// CodeMaintenanceRefused is how many repositories this node's git cache
+	// cannot write a bitmap of, because the bitmap — charged by the
+	// repository's objects, with room beside it for one clone of the
+	// repository — needs more memory than the node can give its background
+	// work; CodeMaintenanceLargest is the largest of those charges, and
+	// CodeMaintenanceBudget what the node can give: its memory as the cache
+	// last read it, less what it keeps for its git lanes, the store, the
+	// broker and the engine (internal/code/cache). The node's own
+	// measurement, never a threshold of the table's: the alarm fires where
+	// the largest charge passes it. All zero on a node that serves no git.
+	CodeMaintenanceRefused                        int
+	CodeMaintenanceLargest, CodeMaintenanceBudget int64
 }
 
 // Alarm is one condition currently true on this node.
@@ -804,6 +820,39 @@ var table = []rule{
 			"the data nodes, or the S3 bucket) and restore those files from a backup, " +
 			"or upload them again — see docs/guides/backup.md. `crewlet objects " +
 			"status` names them, and what was found of each.",
+	},
+	{
+		// THE THRESHOLD IS THE NODE'S OWN BUDGET, measured rather than set:
+		// the git cache reads the node's memory and keeps back what its
+		// other work is sized to hold, and a bitmap past what is left is
+		// one the kernel kills at every duty cycle — so the number that
+		// already decides whether a bitmap is written is the number the
+		// alarm fires at. Silent at the budget, as a bitmap at it is written.
+		kind: KindCodeMaintenanceRefused,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d repository(ies) on this node are served without a bitmap: "+
+					"the largest's needs about %s, and the node can give its background "+
+					"work %s", r.CodeMaintenanceRefused,
+					bytesHuman(r.CodeMaintenanceLargest), bytesHuman(r.CodeMaintenanceBudget)),
+				r.CodeMaintenanceLargest > r.CodeMaintenanceBudget
+		},
+		remedy: "Each repository is still served and still indexed — the cache " +
+			"writes its multi-pack-index without the bitmap, so lookups stay " +
+			"fast, but a clone counts objects by walking the history rather " +
+			"than reading the bitmap: slower, never wrong. A bitmap is charged " +
+			"at 1000 bytes an object of the repository, and 240 more for room " +
+			"beside it for a clone of the repository; each " +
+			"`code_cache_maintenance_refused` line names a repository, the step " +
+			"refused and its charge (a step `index` or `graph` refused as well " +
+			"is a repository served from its packs' own indexes). The budget is " +
+			"the node's memory — its cgroup's limit where one is set, read again " +
+			"every ten seconds — less what it keeps for its git lanes, the " +
+			"store, the broker and the engine, on the `code_cache_opened` line. " +
+			"Give the node more memory; a container resized in place is held to " +
+			"its new limit within ten seconds, without a restart. A budget of " +
+			"zero is a node whose git lanes now take all its memory: its memory " +
+			"was lowered after it booted, and a restart sizes the lanes to what " +
+			"it has. See docs/concepts/code-host.md.",
 	},
 }
 

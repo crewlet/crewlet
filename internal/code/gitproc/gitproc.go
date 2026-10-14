@@ -99,7 +99,9 @@
 // its record. Counted as cores, a handful of slow clients would refuse every
 // clone on an idle node; so transfers have a lane of their own,
 // [Options.MaxTransfers] wide, bounded by what each transfer holds in MEMORY
-// rather than by the cores it rarely uses.
+// rather than by the cores it rarely uses — by default four a core, and no
+// more than the node's memory backs: one for every [TransferShare] of it,
+// read at New (memory.go).
 //
 // The lanes are separate for a second reason that no sizing could fix: one
 // process waits on others. A push's receive-pack holds its transfer slot
@@ -224,8 +226,19 @@ type Options struct {
 
 	// MaxTransfers is the size of the TRANSFER lane (upload-pack,
 	// receive-pack); 0 is [TransfersPerProcess] × the resolved
-	// MaxProcesses; negative is refused. Passed RAW, like MaxProcesses.
+	// MaxProcesses, and no more than one for every [TransferShare] of the
+	// node's memory (memory.go); negative is refused. Passed RAW, like
+	// MaxProcesses.
 	MaxTransfers int
+
+	// Memory is the node's memory in bytes, which the TRANSFER lane's
+	// default is bounded by: 0 — the engine's setting — reads the node's
+	// own at New, the least of its physical memory and its cgroups' limits
+	// ([Pool.Memory] answers it, [Pool.ReadMemory] reads it again), and New
+	// refuses a node whose memory cannot be read; above zero is that figure,
+	// held for the pool's life, so a suite sizes a lane without the machine
+	// it runs on; negative is refused.
+	Memory int64
 
 	// Home is HOME for every process: absolute; created when absent; its
 	// mode is set to hostbox.DirMode; it must be EMPTY.
@@ -251,18 +264,25 @@ type Options struct {
 // otherwise waits on its client, on the object store or on its record. What
 // it holds for its whole life is memory — the delta window (pack.windowMemory,
 // twice the blob limit: 100 MiB at the defaults), the delta base cache
-// (core.deltaBaseCacheLimit, git's default 96 MiB) and the object list (about
-// 150 B an object) — about 200 MiB at worst for a repository of 100 000
-// objects. Four a core is 800 MiB a core at that worst case; a receive-pack
-// lent cores ([MaxLentCores]) raises its index-pack's base-cache cap by
-// core.deltaBaseCacheLimit a lent thread (git caps it at the limit times its
-// threads), and the loans out never reach the read lane's width, so the true
-// worst case is under 896 MiB a core. That is inside the 2 GiB a vCPU of even
-// the compute-optimised instance shapes (general-purpose ones give 4) with
-// the store and the broker beside it; when every transfer IS
+// (core.deltaBaseCacheLimit, git's default 96 MiB) and the object list
+// ([TransferBytesPerObject] an object of a whole repository, MEASURED) —
+// [TransferMemory], 224 MiB, for a repository of about 120 000 objects. Four a
+// core is 896 MiB a core at that; a receive-pack lent cores ([MaxLentCores])
+// raises its index-pack's base-cache cap by core.deltaBaseCacheLimit a lent
+// thread (git caps it at the limit times its threads), and the loans out
+// never reach the read lane's width. That is inside the 2 GiB a vCPU of even
+// the compute-optimised instance shapes ([CoreMemory]; general-purpose ones
+// give 4) with the store and the broker beside it; when every transfer IS
 // CPU-bound (fast clients on the same network) the scheduler shares the cores
-// four ways and a clone is slower, never refused. A judgment call, and one
-// the operator's own setting overrides.
+// four ways and a clone is slower, never refused. And because it is a memory
+// bound, a node with less memory than that a core — a container limited in
+// memory and not in CPU sees its host's every core — runs one transfer for
+// every [TransferShare] it has rather than four a core (memory.go). A
+// judgment call, and one the operator's own setting overrides.
+//
+// What it does NOT bound is a transfer of a repository of millions of
+// objects, which holds [TransferBytesPerObject] an object whatever its
+// slot: no lane knows which repository a slot will serve.
 const TransfersPerProcess = 4
 
 // Pool runs git processes. It holds no goroutine and needs no Close: every
@@ -279,6 +299,12 @@ type Pool struct {
 	baseEnv []string
 
 	read, maint, transfer *lane
+
+	// memory is the node's memory the lanes were sized by, and fixedMemory
+	// whether Options.Memory gave it, so ReadMemory answers it again
+	// rather than reading the node.
+	memory      Memory
+	fixedMemory bool
 
 	// slotWait, killGrace and captureMax are SlotWait, KillGrace and
 	// CaptureMax; fields so the suite can scale them (export_test.go).
@@ -317,13 +343,17 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 	if o.MaxTransfers < 0 {
 		return nil, fmt.Errorf("gitproc: git.max_transfers %d is negative: 0 is %d for each process slot", o.MaxTransfers, TransfersPerProcess)
 	}
+	memory, err := resolveMemory(o, readNodeMemory)
+	if err != nil {
+		return nil, err
+	}
 	cpuSlots := int64(o.MaxProcesses)
 	if cpuSlots == 0 {
 		cpuSlots = int64(runtime.GOMAXPROCS(0))
 	}
 	transferSlots := int64(o.MaxTransfers)
 	if transferSlots == 0 {
-		transferSlots = TransfersPerProcess * cpuSlots
+		transferSlots = defaultTransfers(cpuSlots, memory.Bytes)
 	}
 
 	home, err := prepareHome(o.Home)
@@ -378,15 +408,17 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 			// The classification table reads git's English.
 			"LC_ALL=C",
 		},
-		read:       newLane(ClassRead, cpuSlots),
-		maint:      newLane(ClassMaintenance, (cpuSlots+1)/2),
-		transfer:   newLane(ClassTransfer, transferSlots),
-		slotWait:   SlotWait,
-		killGrace:  KillGrace,
-		captureMax: CaptureMax,
-		running:    make(map[Class]int64, len(Classes)),
-		log:        logger,
-		metrics:    o.Metrics,
+		memory:      memory,
+		fixedMemory: o.Memory > 0,
+		read:        newLane(ClassRead, cpuSlots),
+		maint:       newLane(ClassMaintenance, (cpuSlots+1)/2),
+		transfer:    newLane(ClassTransfer, transferSlots),
+		slotWait:    SlotWait,
+		killGrace:   KillGrace,
+		captureMax:  CaptureMax,
+		running:     make(map[Class]int64, len(Classes)),
+		log:         logger,
+		metrics:     o.Metrics,
 	}
 	for _, c := range Classes {
 		p.running[c] = 0
@@ -410,7 +442,7 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 	}
 	p.log.Info("code_git_ready", "path", git, "version", found.String(),
 		"read_slots", p.read.size, "maintenance_slots", p.maint.size, "transfer_slots", p.transfer.size,
-		"pack_reuse", p.reuse, "home", home)
+		"pack_reuse", p.reuse, "home", home, "memory", memory.Bytes, "memory_from", memory.From)
 	return p, nil
 }
 

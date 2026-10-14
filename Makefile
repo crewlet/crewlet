@@ -637,8 +637,10 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # BENCH_TIMEOUT is a hang detector, as TEST_TIMEOUT is. The longest package
 # is internal/code/cache, whose fixtures are real git: at BENCH_COUNT=6 on
 # four vCPUs its arms took an hour and three quarters, half an hour of it
-# BenchmarkBoot's thousand repositories, and with CREWLET_BENCH_LARGE=1 about
-# five hours, two of them the gigabyte split into packs, whose clones with no
+# BenchmarkBoot's thousand repositories, and BenchmarkMidx's memory arms add
+# about five minutes a count (the gigabyte's clone walking its history a
+# minute and a half of it); with CREWLET_BENCH_LARGE=1 about five and a half
+# hours, two of them the gigabyte split into packs, whose clones with no
 # index take minutes each. Eight hours holds six counts of everything with
 # room for a slower machine; a real bucket's arm is bounded by its link.
 BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \

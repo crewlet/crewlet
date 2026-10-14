@@ -119,19 +119,34 @@ func TestAPathThatIsNotAbsoluteIsRefused(t *testing.T) {
 }
 
 // THE LANES ARE SIZED HERE AND NOWHERE ELSE: 0 resolves to the cores (and four
-// transfers a core), and a negative size names the setting an operator
-// changes.
+// transfers a core, no more than one for every TransferShare of the node's
+// memory), and a negative size names the setting an operator changes.
+//
+// The memory bound is what a container limited in memory and not in CPU
+// needs: it sees its host's every core, and on 64 of them with 16 GiB four a
+// core admitted 256 transfers that could hold 56 GiB — it runs 32, as the
+// eight cores its memory backs would. A node of CoreMemory a core or more is
+// sized by its cores as it always was, a node too small for one transfer
+// still runs one, and an operator's own count is taken as given.
+//
+// Mutation: size the default by the cores alone, and the 64-core row fails.
 func TestTheLaneSizesAreResolvedHere(t *testing.T) {
 	t.Parallel()
 	cores := runtime.GOMAXPROCS(0)
+	const plenty = 1 << 40
 	for _, tc := range []struct {
 		o                      gitproc.Options
 		read, maint, transfers int
 	}{
-		{gitproc.Options{}, cores, (cores + 1) / 2, gitproc.TransfersPerProcess * cores},
-		{gitproc.Options{MaxProcesses: 3}, 3, 2, 12},
-		{gitproc.Options{MaxProcesses: 1}, 1, 1, 4},
-		{gitproc.Options{MaxProcesses: 3, MaxTransfers: 5}, 3, 2, 5},
+		{gitproc.Options{Memory: plenty}, cores, (cores + 1) / 2, gitproc.TransfersPerProcess * cores},
+		{gitproc.Options{MaxProcesses: 3, Memory: plenty}, 3, 2, 12},
+		{gitproc.Options{MaxProcesses: 1, Memory: plenty}, 1, 1, 4},
+		{gitproc.Options{MaxProcesses: 3, MaxTransfers: 5, Memory: plenty}, 3, 2, 5},
+		{gitproc.Options{MaxProcesses: 4, Memory: 4 * gitproc.CoreMemory}, 4, 2, 16},
+		{gitproc.Options{MaxProcesses: 64, Memory: 16 << 30}, 64, 32, 32},
+		{gitproc.Options{MaxProcesses: 4, Memory: 1 << 30}, 4, 2, 2},
+		{gitproc.Options{MaxProcesses: 4, Memory: 100 << 20}, 4, 2, 1},
+		{gitproc.Options{MaxProcesses: 64, MaxTransfers: 300, Memory: 16 << 30}, 64, 32, 300},
 	} {
 		p := fakePool(t, "exit 0", tc.o)
 		if r, m, x := p.Slots(gitproc.ClassRead), p.Slots(gitproc.ClassMaintenance), p.Slots(gitproc.ClassTransfer); r != tc.read || m != tc.maint || x != tc.transfers {
@@ -148,6 +163,7 @@ func TestTheLaneSizesAreResolvedHere(t *testing.T) {
 	}{
 		{gitproc.Options{MaxProcesses: -1}, "git.max_processes"},
 		{gitproc.Options{MaxTransfers: -1}, "git.max_transfers"},
+		{gitproc.Options{Memory: -1}, "Memory"},
 	} {
 		tc.o.Path, tc.o.Home = fake, filepath.Join(t.TempDir(), "home")
 		if _, err := gitproc.New(t.Context(), tc.o); err == nil || !strings.Contains(err.Error(), tc.name) {

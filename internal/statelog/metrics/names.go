@@ -21,6 +21,8 @@ const (
 	BackupHolds                      = "crewlet.backup.holds"
 	CodeCacheAdoptions               = "crewlet.code.cache.adoptions"
 	CodeCacheBytes                   = "crewlet.code.cache.bytes"
+	CodeCacheMaintenanceRefusals     = "crewlet.code.cache.maintenance.refusals"
+	CodeCacheMaintenanceRefused      = "crewlet.code.cache.maintenance.refused"
 	CodeCacheRebuildRefusals         = "crewlet.code.cache.rebuild.refusals"
 	CodeCacheRebuilds                = "crewlet.code.cache.rebuilds"
 	CodeCacheRepos                   = "crewlet.code.cache.repos"
