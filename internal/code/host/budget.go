@@ -50,8 +50,8 @@ const (
 	// almost no cost to itself. A quarter still lets a CI fleet behind one
 	// token run a quarter of the node's fetches through the spool at once,
 	// leaves three quarters to everybody else, and is also the largest one
-	// request this node will spool: 1 GiB at sixteen cores, some 21 million
-	// wants.
+	// request this node will spool: 1 GiB on a transfer lane of 64 slots
+	// (sixteen cores with the 32 GiB that back them), some 21 million wants.
 	SpoolCredentialShare = 4
 
 	// MaxCommandSectionBytes bounds a push's command section — the ref
@@ -116,7 +116,9 @@ func RequestBound(repo code.RepoRef) int64 {
 
 // RequestMemoryAllowance is the memory every fetch request held on a node may
 // take together, for a transfer lane of transfers slots: RequestMemoryBytes
-// each — 64 MiB at sixteen cores and the default four transfers a core.
+// each — 64 MiB on a lane of 64 slots, the default at sixteen cores with the
+// 32 GiB that back them (gitproc: four a core, and no more than one for every
+// gitproc.TransferShare of the node's memory).
 // Charged as each request's in-memory part grows and given back as soon as
 // upload-pack has read it, so it bounds what requests WAITING for their sync
 // and their transfer slot hold, however many arrive at once; a request that
@@ -128,8 +130,8 @@ func RequestMemoryAllowance(transfers int) int64 {
 
 // SpoolAllowance is the node's spool allowance for a transfer lane of
 // transfers slots: SpoolPerTransfer each. On the cache's volume and never in
-// its budget (cache.Spool): 4 GiB at sixteen cores and the default four
-// transfers a core.
+// its budget (cache.Spool): 4 GiB on a lane of 64 slots, the default at
+// sixteen cores with the 32 GiB that back them.
 func SpoolAllowance(transfers int) int64 {
 	return int64(max(transfers, 1)) * SpoolPerTransfer
 }

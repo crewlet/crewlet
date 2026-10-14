@@ -690,7 +690,7 @@ words, since git does not read the header.
 | The node is stopping | `this node's code host is stopping: retry in 30 s …` (503) | Retry against another node. |
 | A pack the rows name is gone | `<repo>'s pack <id> is missing from the object store (the daily audit raises objects_missing for it) …` (503) | An operator's problem: see [`objects_missing`](object-store.md#alarms). |
 | A fetch request past its repository's bound | `this fetch request is larger than any repository <name> holds could need …` (413) | Fetch in parts. |
-| A fetch request past a quarter of the node's room for large requests | `this fetch request is larger than this node takes from one credential at once …` (413) | Fetch through a node with more cores, or fewer objects at once. |
+| A fetch request past a quarter of the node's room for large requests | `this fetch request is larger than this node takes from one credential at once …` (413) | Fetch through a node with more cores and the memory to back them (its git transfer slots size the room), or fewer objects at once. |
 | The node's room for large requests is in use | `this node's room for large fetch requests is in use …` (503) | Retry, or against another node. |
 | The request's body could not be read (a gzip stream that fails its checksum; for a fetch, a body cut short too) | `the push's body could not be read: …`, or `the request body could not be read: …` for a fetch (400) | Nothing was stored; send it again, and if it fails the same way the client is sending a broken stream. |
 

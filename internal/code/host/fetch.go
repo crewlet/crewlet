@@ -187,7 +187,7 @@ func (s *Server) requestRefused(w http.ResponseWriter, r *http.Request, name str
 	case errors.Is(err, errSpoolPastShare):
 		auth.GitText(w, http.StatusRequestEntityTooLarge, "this fetch request is larger than this node "+
 			"takes from one credential at once ("+sentence(strings.TrimPrefix(err.Error(),
-			errSpoolPastShare.Error()+": "))+"); fetch through a node with more cores, or fewer objects at once")
+			errSpoolPastShare.Error()+": "))+"); fetch through a node with more cores and the memory to back them, or fewer objects at once")
 	case errors.Is(err, paced.ErrBody), errors.Is(err, gzip.ErrChecksum), errors.Is(err, gzip.ErrHeader),
 		errors.Is(err, io.ErrUnexpectedEOF):
 		auth.GitText(w, http.StatusBadRequest, "the request body could not be read: "+sentence(err.Error()))
