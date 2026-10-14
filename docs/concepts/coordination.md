@@ -384,7 +384,7 @@ Every node's presence lease is renewed on its heartbeat, and each renewal carrie
 
 - **`mcp`** — one row per configured [MCP server](../guides/tools-and-mcp.md): whether it is shared, how many of its instances started and how many did not, how many tools one serves, and one failure's reason (clipped to 240 bytes, with the seat it belonged to). One row per *server*, not per child, because a per-role template has a child for every seat the node holds and the status is re-sent on every beat. A status with no rows is a node that started none. A child that dies after starting is not observed here; its next call fails and says so.
 
-Freshness is the heartbeat interval, the same as every other column of the fleet view. A node whose status hook overruns its share of the beat publishes no status for that beat, and a reader treats it as "did not say", never as zero. A key in the status this build does not know is ignored rather than refused, so a successor sharing the fleet can publish what it adds and this build still reads the rest of that node's status.
+Freshness is the heartbeat interval, the same as every other column of the fleet view. A node whose status hook does not answer within its share of the beat publishes no status for that beat, and a reader treats it as "did not say", never as zero. The hook itself reports whether it answered — the beat does not infer it from the clock after the hook returns, which used to discard a complete answer whenever the process was descheduled past the deadline. A key in the status this build does not know is ignored rather than refused, so a successor sharing the fleet can publish what it adds and this build still reads the rest of that node's status.
 
 ---
 
