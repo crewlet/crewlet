@@ -216,20 +216,32 @@ That makes the rotation a runbook with no window in it:
 3. **Flip** `active_key_id` to the new key and restart every node again. New
    tokens name the new key; outstanding ones still name the old one, which is
    still on the ring.
-4. **Run `crewlet secrets rekey`** to re-seal the stored values under the new
-   active key — through a running node, because it moves the identity
-   estate's too: every person's name, address and second factor is sealed
-   under the keyring in rows derived from the identity log, which only a
-   record can change, so the node publishes one per person still under an old
-   key and reports how many (`identity` in the answer — every data node holds the
-   identity estate from boot, company or none). An **outstanding invitation's** address is
-   counted and left — only a re-issue could carry it again — so the rekey says
-   how many are still under an old key.
-5. **Drop** the old key once the longest token lifetime has passed, every
-   state log has trimmed past the records signed under it, the absolute
-   session lifetime (`api.auth.session.absolute`) has elapsed since step 3,
-   *and* `crewlet secrets rekey -dry-run` reports no outstanding invitation
-   under it — each is redeemed or lapses within a week of being issued.
+4. **Re-seal both halves** under the new active key. The keyring seals two
+   stores, and a key dropped while either still holds something under it
+   leaves that thing unreadable on every node:
+   - **The secret store and the identity estate** — run `crewlet secrets
+     rekey`, once for the fleet, through a running node, because it moves the
+     identity estate's values too: every person's name, address and second
+     factor is sealed under the keyring in rows derived from the identity log,
+     which only a record can change, so the node publishes one per person
+     still under an old key and reports how many (`identity` in the answer —
+     every data node holds the identity estate from boot, company or none). An
+     **outstanding invitation's** address is counted and left — only a re-issue
+     could carry it again — so the rekey says how many are still under an old
+     key.
+   - **The company document** — `POST /config/reload` to a node that is up
+     stores the active document again, sealed under that node's active key, and
+     activates it. On a stopped node, [`crewlet config rekey`](../reference/cli.md#crewlet-config-rekey)
+     does the same offline, and the node publishes the result at its next
+     start. Without this half the document stays sealed under the old key, and
+     dropping that key makes the company configuration unreadable at the next
+     apply.
+5. **Drop** the old key once both halves of step 4 have run, the longest token
+   lifetime has passed, every state log has trimmed past the records signed
+   under it, the absolute session lifetime (`api.auth.session.absolute`) has
+   elapsed since step 3, *and* `crewlet secrets rekey -dry-run` reports no
+   outstanding invitation under it — each is redeemed or lapses within a week
+   of being issued.
    From that moment a token, a record or a cookie signed under it is refused,
    which is the point. Dropping it while a log still holds such records leaves
    those records unappliable on a node replaying from the floor, which reports
@@ -466,7 +478,7 @@ activate`](../reference/cli.md#crewlet-config-activate).
 
 - **A missing value still resolves to `""`.** The store removes the most common cause, not the failure mode itself. `sandbox_env_unresolved` warns (names only) when a sandbox launch references something nothing answers, and the sandbox credential check refuses to launch a coding agent on an empty credential.
 - **Backups.** The bucket holds only ciphertext; the keyring is the sole root of trust and lives in Tier A. Back them up separately — a coordination backup alone is unrecoverable, which is the point. With the keyring, though, a backup opens everything it held when it was taken — the bucket's values, and the identity estate's sealed names and addresses in its rows and its log, those of every person removed since included. Removing somebody cannot reach a backup that already exists, so an erasure is finished only once every backup taken before the identity log's trim passed their records is gone ([what a removal reaches](identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows)).
-- **Key rotation.** Add the new key to `secrets.keys` **on every node**, set `active_key_id`, then run **both** `crewlet config rekey` and `crewlet secrets rekey` before dropping the old key. Each record's envelope names the key that sealed it, so mixed-key states are readable throughout. The store is shared, so `crewlet secrets rekey` is run **once** for the fleet, not once per node — and it refuses if the node it reaches seals under a different `active_key_id` than the config it was given, because a silent success there would report a rotation that did not happen. It aborts rather than half-completing if any record cannot be opened with the keyring in hand. Each record is re-sealed only at the version the pass read, so a rotation or a deletion that lands while it runs is never undone — a credential an operator deleted in particular stays deleted rather than being written back as the value the pass read before. The same command moves every person's sealed values in the identity estate, one record per person, and a run that cannot confirm one says so and is run again.
+- **Key rotation.** Follow [the rotation runbook](#rotating-the-keyring-with-nothing-in-flight-lost): add the new key on every node and restart, flip `active_key_id` and restart again, re-seal both halves (`crewlet secrets rekey`, and the company document with `POST /config/reload` or, on a stopped node, `crewlet config rekey`), and only then drop the old key. Flipping `active_key_id` in the same restart that adds the key is safe on a single node and not on a fleet: a node that flips first signs records, cookies and requests under a key its peers do not hold yet. Each record's envelope names the key that sealed it, so mixed-key states are readable throughout. The store is shared, so `crewlet secrets rekey` is run **once** for the fleet, not once per node — and it refuses if the node it reaches seals under a different `active_key_id` than the config it was given, because a silent success there would report a rotation that did not happen. It aborts rather than half-completing if any record cannot be opened with the keyring in hand. Each record is re-sealed only at the version the pass read, so a rotation or a deletion that lands while it runs is never undone — a credential an operator deleted in particular stays deleted rather than being written back as the value the pass read before. The same command moves every person's sealed values in the identity estate, one record per person, and a run that cannot confirm one says so and is run again.
 - **The `_secrets` bucket is created on demand** by the first node to open coordination, and it is durable: on the embedded topology it lives under `stream.store_dir` like every other bucket, so a restart does not lose it. Back that directory up alongside the keyring.
 - **Rows left in a node's own `secret_values` table** — written by `crewlet secrets set` while its engine was stopped — are migrated onto the fleet at that node's next start and removed locally. The pass copies before it deletes, and the **later write wins**: a name the fleet already holds is replaced when the local row was written after the fleet's value (an offline rotation, logged in `secrets_migrated_onto_the_fleet`'s `replaced`), and kept when the fleet's value is the later one — somebody rotated it through a running node after this one stopped — which logs `secrets_offline_writes_superseded` naming it. A migrated record keeps the instant its operator wrote it, never the instant the node booted, so two stopped nodes holding writes to one name are ordered by when the writes were made whichever node starts first. The two instants are the writing nodes' own clocks, so writes closer together than those clocks agree are ordered by the skew. A failure leaves the local rows in place and logs `secret_migration_incomplete`; the node keeps serving from them and retries at the next start.
 

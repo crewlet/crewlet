@@ -1124,19 +1124,21 @@ Because the key gates every read, keep it as available as the database itself: t
 
 **Rotating one secret** (e.g. a leaked LLM key) needs no host access: `PUT /config` (or a per-entity write) with the new value — the whole document is re-encrypted under the active key as a new revision.
 
-**Rotating the master key** uses the keyring's multi-key support so there's no downtime:
+**Rotating the master key** uses the keyring's multi-key support so there's no downtime. [The rotation runbook](secret-store.md#rotating-the-keyring-with-nothing-in-flight-lost) is the whole procedure, and in outline:
 
 ```bash
-crewlet secrets keygen --key-id 2026-07     # mint the new key
-# add it to secrets.keys AND set active_key_id: 2026-07,
-# keeping the old key in secrets.keys so its ciphertext still decrypts
-crewlet config rekey                          # re-encrypt the document under 2026-07
-# verify a clean boot, then drop the old key from crewlet.yaml
+crewlet secrets keygen -key-id 2026-07      # mint the new key
+# 1. add it to secrets.keys on every node, leaving active_key_id alone; restart
+# 2. set active_key_id: 2026-07 on every node; restart again
+crewlet secrets rekey                         # 3. the secret store and every person's sealed values
+curl -X POST "$CREWLET_URL/config/reload" \
+  -H "Authorization: Bearer $CREWLET_API_TOKEN"   #    and the company document
+# 4. drop the old key only once the runbook's conditions hold
 ```
 
-The document's envelope carries the id of the key that sealed it, so `rekey` decrypts under whichever key sealed it and re-encrypts under the active key. `crewlet config rekey --dry-run` reports whether it would re-encrypt without writing.
+**Both re-seals are required.** The company document, the secret store (the engine's own blind-index key included, once anybody has been added) and every person's name, address and second factor in the identity estate are all sealed under this keyring, so a key dropped while any of them is still under it leaves that thing unreadable. A reload stores the active document again under the node's active key; on a stopped node, `crewlet config rekey` does the same offline, and `crewlet config rekey -dry-run` reports whether it would re-encrypt without writing. The document's envelope carries the id of the key that sealed it, so either way it is decrypted under whichever key sealed it and re-encrypted under the active key.
 
-If you also use the [secret store](secret-store.md), run `crewlet secrets rekey` alongside `crewlet config rekey` before dropping the old key — its rows are sealed under the same keyring and would otherwise become unreadable.
+On a single node, steps 1 and 2 can be one restart. On a fleet they cannot: a node that flips first signs records, cookies and requests under a key its peers do not hold yet.
 
 ### Reads and export
 

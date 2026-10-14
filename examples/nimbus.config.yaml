@@ -291,7 +291,10 @@ secrets:
   keys:
     - id: "2026-01"                 # colon-free id; stamped into every envelope and record
       material: "${CREWLET_SECRET_KEY_2026_01}"   # base64(32 bytes)
-#     # During a rotation, keep the previous key here so its ciphertext
-#     # still decrypts, then drop it once `crewlet config rekey` completes:
+#     # During a rotation, keep the previous key here so what it sealed
+#     # still opens: drop it only once `crewlet secrets rekey` and a re-seal
+#     # of the company document (POST /config/reload, or `crewlet config
+#     # rekey` on a stopped node) have run and the rest of the runbook holds —
+#     # docs/concepts/secret-store.md, "Rotating the keyring":
 #     # - id: "2025-07"
 #     #   material: "${CREWLET_SECRET_KEY_2025_07}"
