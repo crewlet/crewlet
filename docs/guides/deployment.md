@@ -1142,6 +1142,20 @@ cache on its own disk. What such a node needs from its host:
   route `/git/<name>` by repository — a balancer hashing the path to a node,
   with the next one in line when it is down — so each repository stays warm on
   one or two nodes. Routing by repository is never required for correctness.
+  A client that does not ask for side-band (every git since 1.6 asks, so this
+  is a hand-built client) hears nothing during a push from the end of its
+  upload to its report: git's own keepalive (`receive.keepAlive`) and the
+  engine's travel in side-band only. That stretch is receive-pack indexing and
+  checking the pack, then the engine scanning it, storing it, proposing the
+  push and waiting for its row. For such clients keep the idle timeout at 3
+  minutes or more, whatever the push's size: the proposal is given two minutes
+  — a minute's write attempt at the repository's committer and another at its
+  runner-up, should the committer stop answering — and a row that resolved
+  pending a minute more. A large push adds what its pack's own work may take
+  before the engine gives it up: 10 s and a second a mebibyte for git's
+  indexing and for each of the engine's three scans of the pack, and a minute
+  and 30 s a mebibyte (the floor every transfer is held to) for the object
+  store's put — about 34 s a mebibyte in all.
 - **Memory for its transfers, cores for its reads.** Each clone, fetch or push
   holds a few hundred MiB while it runs (224 MiB at the defaults, plus about
   240 bytes for every object of a repository it clones whole) and a core only
