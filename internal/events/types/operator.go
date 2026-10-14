@@ -98,9 +98,9 @@ const (
 // OperatorActed is one call a person made that is not a proven read, on any
 // of the three transports: the dashboard's act route and an operator's
 // assistant over MCP call the same catalogue, and a person's git client
-// pushes through the code host — the third person transport, one record a
-// push (internal/code/host). An audit that depended on which one a person used
-// would be missing whichever half nobody tested.
+// pushes through the code host — the third person transport (ADR-0037), one
+// record a push (internal/code/host). An audit that depended on which one a
+// person used would be missing whichever half nobody tested.
 //
 // The ARGUMENTS ARE NEVER HERE, for the reason the act log line omits them: a
 // page body or a comment is the company's content, and it already lives in
@@ -109,7 +109,10 @@ const (
 type OperatorActed struct {
 	// OperatorID is the token's own name — the author every record the
 	// call wrote carries — and ActorSeat the person it is bound to, empty
-	// for a credential nobody bound (which only the MCP transport admits).
+	// for a credential nobody bound: the MCP transport admits one, and the
+	// git transport records such a credential's push — refused at its
+	// advertisement or at its POST — as an `unbound` refusal. The act
+	// transport admits none.
 	OperatorID string `json:"operator_id"`
 	ActorSeat  string `json:"actor_seat,omitempty"`
 
@@ -119,9 +122,11 @@ type OperatorActed struct {
 	// transport. A refused push writes no row in the code domain, so this
 	// record is the only one that says where it was refused.
 	Repo string `json:"repo,omitempty"`
-	// RequestID is the caller's own request identity on the act
-	// transport, canonical, so every retry of one gesture carries the same
-	// value. MCP names none.
+	// RequestID is the act request's identity — the caller's own,
+	// canonical, so every retry of one gesture carries the same value — or
+	// a git push's push id: the one its row and its `code_push` line carry,
+	// and a fresh UUIDv7 for a push refused before it had one, so every git
+	// record names one. MCP names none.
 	RequestID string `json:"request_id,omitempty"`
 
 	Outcome AuditOutcome `json:"outcome"`
