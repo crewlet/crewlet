@@ -641,8 +641,14 @@ sequenceDiagram
 - **A departed node's detail is gone.** Nothing replicates it: a node that has
   left the fleet cannot be asked, and its turns, phases and events leave with
   it. The **aggregates** do not — spend, turn counts and page reads are the
-  replicated `usage` domain precisely so they survive a node's departure. Keep
-  a node's detail past its life by exporting to an OTLP sink.
+  replicated `usage` domain precisely so they survive a node's departure. An
+  OTLP exporter does not keep the detail either: the engine exports spans and
+  metrics and never its events, so a trace backend holds the departed node's
+  turns as timing — their phases, rounds and tool calls, with models and token
+  counts — and none of the prompts, answers and decisions the events carry.
+  The events themselves have no second copy anywhere; a
+  [`crewlet backup`](../guides/backup.md#one-node-or-every-node) of the node
+  taken before it leaves is the only way to keep them.
 - **A reply too large for the transport is cut, not lost.** A node gives up
   rows from the least important end — a long turn's middle before its ending —
   and says it holds more, which the merge already handles.

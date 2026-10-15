@@ -47,6 +47,7 @@ It does not keep a departed node's detail. A node that has left the fleet
 cannot be asked, and its turns, phases and events are gone with it — stated on
 every answer by the node's absence from `coverage` and by the `history_partial`
 alarm, and accepted: an operator who needs that detail past a node's life
-exports it to an OTLP sink. It does not decide the aggregates (ADR-0020), and it
+backs the node up before it leaves, since OTLP export carries the turns'
+timing as spans and never their events. It does not decide the aggregates (ADR-0020), and it
 does not change how events are written: still once, inline, on the publishing
 node.
