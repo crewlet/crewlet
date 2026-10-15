@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,7 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/tracing/tracingtest"
 )
 
 // bundleProvider is a cli-agent provider with a credential directory of its
@@ -186,12 +190,20 @@ func TestOperatorCommandsTakeTheirLevelFromTheEnvironment(t *testing.T) {
 type fakeClaude struct {
 	mu   sync.Mutex
 	seen []string
+	// parents is the `traceparent` each request carried, in order.
+	parents []string
 }
 
 func (f *fakeClaude) saw() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.seen)
+}
+
+func (f *fakeClaude) traceparents() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.parents)
 }
 
 // serveClaude starts it. calls is whether a round calls the smoke tool or
@@ -203,6 +215,7 @@ func serveClaude(t *testing.T, calls bool) (*fakeClaude, string) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		f.mu.Lock()
 		f.seen = append(f.seen, r.Method+" "+r.URL.Path)
+		f.parents = append(f.parents, r.Header.Get("traceparent"))
 		f.mu.Unlock()
 		switch {
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/models/"):
@@ -242,6 +255,12 @@ func serveClaude(t *testing.T, calls bool) (*fakeClaude, string) {
 	return f, srv.URL
 }
 
+// inProcess is the doctor's tracing as a case runs it: nothing configured, so
+// its spans go to the provider internal/tracing's init installs, which
+// tracingtest records on. The production half, [traceDoctor], configures the
+// process's providers, which no case in a shared binary may do.
+func inProcess(context.Context) (func(), error) { return func() {}, nil }
+
 // doctorCompany writes a company whose providers are the given block, and
 // returns the flags pointing doctor at it. The bootstrap path does not exist,
 // so references resolve from the environment alone.
@@ -269,7 +288,7 @@ func TestDoctorExaminesAnAnthropicEntry(t *testing.T) {
 	args := append([]string{"doctor"}, doctorCompany(t,
 		anthropicEntry("claude", "claude-opus-5-5", url)+openAIEntry)...)
 	var out, notes bytes.Buffer
-	if err := runLLM(args, &out, &notes); err != nil {
+	if err := llmCommand(args, &out, &notes, inProcess); err != nil {
 		t.Fatalf("doctor: %v\n%s", err, out.String())
 	}
 	for _, want := range []string{
@@ -291,6 +310,102 @@ func TestDoctorExaminesAnAnthropicEntry(t *testing.T) {
 	}
 }
 
+// EACH ENTRY IS EXAMINED IN A ROOT SPAN OF ITS OWN, and its calls nest beneath
+// it: the Anthropic SDK's span of the Models API read and of the smoke round,
+// each the parent the `traceparent` it sent names — which is what the Claude
+// API's own spans nest under. Before the doctor opened a span, each call was a
+// root of its own, and with nothing configured its sampled `traceparent` named
+// a parent no backend received. An entry with problems ends its span failed.
+//
+// Mutation: diagnose under the caller's context instead of the span's, and
+// each call's traceparent names a trace holding no llm.doctor.
+func TestDoctorExaminesEachEntryInARootSpanOfItsOwn(t *testing.T) {
+	t.Parallel()
+	tracingtest.WatchNamed(doctorSpan)
+	calls, callsURL := serveClaude(t, true)
+	prose, proseURL := serveClaude(t, false)
+	args := append([]string{"doctor"}, doctorCompany(t,
+		anthropicEntry("claude", "claude-opus-5-5", callsURL)+
+			anthropicEntry("talker", "claude-opus-5-5", proseURL))...)
+	var out, notes bytes.Buffer
+	if err := llmCommand(args, &out, &notes, inProcess); err == nil {
+		t.Fatalf("doctor passed an entry that answers in prose:\n%s", out.String())
+	}
+
+	traces := map[string]bool{}
+	for _, tc := range []struct {
+		provider string
+		api      *fakeClaude
+		status   codes.Code
+	}{
+		{"claude", calls, codes.Unset},
+		{"talker", prose, codes.Error},
+	} {
+		parents := tc.api.traceparents()
+		if len(parents) != 2 {
+			t.Fatalf("%s: %d requests, want the Models API read and the smoke round", tc.provider, len(parents))
+		}
+		traceID := traceOf(t, parents[0])
+		if traceOf(t, parents[1]) != traceID {
+			t.Errorf("%s: its two calls were sent in two traces, %v", tc.provider, parents)
+		}
+		if traces[traceID] {
+			t.Errorf("%s was examined in another entry's trace", tc.provider)
+		}
+		traces[traceID] = true
+
+		doctor := tracingtest.Only(t, traceID, doctorSpan)
+		if doctor.Parent().IsValid() {
+			t.Errorf("%s: the doctor's span has a parent, want a root", tc.provider)
+		}
+		if got := tracingtest.Attr(doctor, "crewlet.provider"); got != tc.provider {
+			t.Errorf("crewlet.provider = %q, want %q", got, tc.provider)
+		}
+		if got := doctor.Status().Code; got != tc.status {
+			t.Errorf("%s: the doctor's span ended %v, want %v", tc.provider, doctor.Status(), tc.status)
+		}
+		for _, name := range []string{"anthropic.models.retrieve", "anthropic.messages.create"} {
+			call := tracingtest.Only(t, traceID, name)
+			if call.Parent().SpanID() != doctor.SpanContext().SpanID() {
+				t.Errorf("%s: %s is not beneath the doctor's span", tc.provider, name)
+			}
+		}
+	}
+}
+
+// THE DOCTOR IS TRACED FROM THE `OTEL_*` ENVIRONMENT, as `crewlet run` is: a
+// value that can never work is refused by name before any entry is examined,
+// rather than the command tracing by a rule nobody chose. Through [run], the
+// production entry, so the case is of the wiring rather than of a seam — a
+// refused sampler changes no global, so the binary's other cases are
+// unaffected.
+//
+// Mutation: drop the doctor's trace(ctx) call, and the command examines the
+// entry and passes.
+func TestDoctorIsTracedFromTheOTelEnvironment(t *testing.T) {
+	t.Setenv("OTEL_TRACES_SAMPLER", "always_on")
+	api, url := serveClaude(t, true)
+	var out, errOut bytes.Buffer
+	err := run(append([]string{"llm", "doctor"},
+		doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url))...), &out, &errOut)
+	if err == nil || !strings.Contains(err.Error(), "OTEL_TRACES_SAMPLER") {
+		t.Fatalf("err = %v, want the sampler refused by name", err)
+	}
+	if got := api.saw(); len(got) != 0 {
+		t.Fatalf("the refused command still called the API: %v", got)
+	}
+}
+
+// traceOf is the trace id a `traceparent` header names.
+func traceOf(t *testing.T, traceparent string) string {
+	t.Helper()
+	parts := strings.Split(traceparent, "-")
+	if len(parts) != 4 || len(parts[1]) != 32 {
+		t.Fatalf("traceparent %q is not a W3C trace context", traceparent)
+	}
+	return parts[1]
+}
+
 // A PROBLEM IS A NON-ZERO EXIT, because doctor is what a deploy script gates
 // on.
 func TestDoctorFailsOnAnAnthropicEntryThatDoesNotCall(t *testing.T) {
@@ -298,7 +413,7 @@ func TestDoctorFailsOnAnAnthropicEntryThatDoesNotCall(t *testing.T) {
 	_, url := serveClaude(t, false)
 	args := append([]string{"doctor", "claude"}, doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url))...)
 	var out, notes bytes.Buffer
-	err := runLLM(args, &out, &notes)
+	err := llmCommand(args, &out, &notes, inProcess)
 	if err == nil || !strings.Contains(err.Error(), "1 of 1 providers have problems") {
 		t.Fatalf("err = %v\n%s", err, out.String())
 	}
@@ -317,7 +432,7 @@ func TestDoctorReportsAnEntryThatDoesNotBuildBesideTheOthers(t *testing.T) {
 		anthropicEntry("claude", "claude-opus-5-5", url)+
 			anthropicEntry("broken", `"${CREWLET_DOCTOR_TEST_UNSET_MODEL}"`, url))...)
 	var out, notes bytes.Buffer
-	err := runLLM(args, &out, &notes)
+	err := llmCommand(args, &out, &notes, inProcess)
 	if err == nil || !strings.Contains(err.Error(), "1 of 2 providers have problems") {
 		t.Fatalf("err = %v\n%s", err, out.String())
 	}
@@ -338,13 +453,13 @@ func TestDoctorNamesWhatItDoesNotExamine(t *testing.T) {
 	t.Parallel()
 	_, url := serveClaude(t, true)
 	var out, notes bytes.Buffer
-	err := runLLM(append([]string{"doctor", "gpt"},
-		doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url)+openAIEntry)...), &out, &notes)
+	err := llmCommand(append([]string{"doctor", "gpt"},
+		doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url)+openAIEntry)...), &out, &notes, inProcess)
 	if err == nil || !strings.Contains(err.Error(), `provider "gpt" is type "openai"`) {
 		t.Errorf("err = %v", err)
 	}
-	err = runLLM(append([]string{"doctor", "nobody"},
-		doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url))...), &out, &notes)
+	err = llmCommand(append([]string{"doctor", "nobody"},
+		doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url))...), &out, &notes, inProcess)
 	if err == nil || !strings.Contains(err.Error(), `no provider "nobody" (doctor examines claude)`) {
 		t.Errorf("err = %v", err)
 	}
@@ -352,7 +467,7 @@ func TestDoctorNamesWhatItDoesNotExamine(t *testing.T) {
 	dir := t.TempDir()
 	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  llm:\n"+openAIEntry+
 		"roles:\n  - name: CEO\n    handle: ceo\n    llm: gpt\n")
-	err = runLLM([]string{"doctor", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}, &out, &notes)
+	err = llmCommand([]string{"doctor", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}, &out, &notes, inProcess)
 	if err == nil || !strings.Contains(err.Error(), "declares no cli-agent or anthropic providers") {
 		t.Errorf("err = %v", err)
 	}

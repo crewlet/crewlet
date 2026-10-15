@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/tracing`
-- **Enforced-by:** `internal/tracing.TestTheExporterAndTheReceiverResolveOneDestination`, which holds the engine's exporters and the sandbox receiver to one destination per signal, `internal/tracing.TestTheResolverReadsTheEnvironmentAsTheSDKDoes`, which holds that destination to what the OTel SDK itself sends, `internal/tracing.TestTheSamplingDecisionCrossesTheQueue`, which holds a trace continued on a node whose sampler says otherwise to the decision its root made, and `internal/providers/llm/anthropic.TestTheVendorSwitchesTurnNothingOff` and `internal/providers/llm/anthropic.TestTheSpanCarriesNoContentWhateverTheEnvironmentSays`, which hold the Anthropic SDK's own spans to this configuration rather than to its `ANTHROPIC_OPEN_TELEMETRY*` variables, and `internal/providers/llm/cliagent.TestAClaudeCodeCallIsHandedTraceContextAndNoTelemetryDestination`, which holds a vendor CLI on the engine host to receiving the round's trace context and none of the engine's telemetry configuration, and `internal/sandbox.TestTheRunnersSwitchesTravelOnlyBesideAnEndpoint` with `internal/sandbox/codingagent.TestClaudeCodeSwitchesItsTracesOnAndNothingElse` and `TestClaudeCodeIsToldToExportNoContent`, which hold a vendor CLI in a box to exporting its traces — only its traces, with no content — through the receiver and nowhere else
+- **Enforced-by:** `internal/tracing.TestTheExporterAndTheReceiverResolveOneDestination`, which holds the engine's exporters and the sandbox receiver to one destination per signal, `internal/tracing.TestTheResolverReadsTheEnvironmentAsTheSDKDoes`, which holds that destination to what the OTel SDK itself sends, `internal/tracing.TestTheSamplingDecisionCrossesTheQueue`, which holds a trace continued on a node whose sampler says otherwise to the decision its root made, and `internal/providers/llm/anthropic.TestTheVendorSwitchesTurnNothingOff` and `internal/providers/llm/anthropic.TestTheSpanCarriesNoContentWhateverTheEnvironmentSays`, which hold the Anthropic SDK's own spans to this configuration rather than to its `ANTHROPIC_OPEN_TELEMETRY*` variables, and `internal/providers/llm/cliagent.TestAClaudeCodeCallIsHandedTraceContextAndNoTelemetryDestination`, which holds a vendor CLI on the engine host to receiving the round's trace context and none of the engine's telemetry configuration, and `internal/sandbox.TestTheRunnersSwitchesTravelOnlyBesideAnEndpoint` with `internal/sandbox/codingagent.TestClaudeCodeSwitchesItsTracesOnAndNothingElse` and `TestClaudeCodeIsToldToExportNoContent`, which hold a vendor CLI in a box to exporting its traces — only its traces, with no content — through the receiver and nowhere else, and `cmd/crewlet.TestDoctorIsTracedFromTheOTelEnvironment` with `TestDoctorExaminesEachEntryInARootSpanOfItsOwn`, which hold the one command outside a node that calls a model to this configuration and to a span over every call it makes
 - **Measured:** the provider is installed unconditionally and only the exporter is switched on, so `trace_id` reaches `crewlet_events` — an indexed column, and what `GET /events/trace/{id}` answers on — with no collector anywhere
 - **Cost-when-tried:** OTel's own built-in default provider is a no-op that passes the parent's span context through, which silently reinstates the bug this package removed. `internal/tracing`'s `init` installs a working one for that reason. And two readers of one set of variable names disagreed three ways while a test asserting the names passed — see "How it is held"
 - **Tag-status:** unreleased
@@ -91,6 +91,14 @@ events are its content channel — with every content switch declared off and a
 parent-based sampler, so the box follows the decision `TRACEPARENT` carries. The
 operator's `role.sandbox.env` wins over all of it, as over every variable the
 engine sets in a box.
+
+**A command that calls a model is traced as a node is.** `crewlet llm doctor`
+sends real calls through the engine's own providers, so it configures
+`internal/tracing` from this environment as `crewlet run` does, flushes it as
+it exits, and makes each entry's calls inside a root span of its own. A
+command left on the provider `internal/tracing`'s init installs exports
+nothing and still sends a sampled `traceparent` on every call, so the Claude
+API's spans of its calls named a parent no backend ever received.
 
 ## Why the obvious alternative is wrong
 

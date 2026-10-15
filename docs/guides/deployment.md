@@ -1228,6 +1228,7 @@ flowchart TD
     L["<b>llm.auxiliary</b><br/>one per call on a seat's auxiliary chain"]
     R["<b>learning.reflect</b><br/>reflection on the turn, after it"]
     P["<b>learning.&lt;pass&gt;</b><br/>a background learning pass, a root of its own"]
+    Q["<b>llm.doctor</b><br/><i>crewlet llm doctor</i>, a root per entry it examines"]
     H["<b>anthropic.messages.create</b> (CLIENT)<br/>the Anthropic SDK's span of each HTTP attempt"]
     J["<b>claude -p</b>, a text-mode cli-agent call<br/><i>spans nothing; forwards the round's traceparent</i>"]
     K["<b>claude_code.interaction</b> and its children<br/><i>Claude Code in a coding box, exported through the receiver</i>"]
@@ -1243,6 +1244,8 @@ flowchart TD
     O --> L
     K -.->|"traceparent (bridged tool call)"| F
     L --> H
+    Q --> H
+    Q -.->|"TRACEPARENT"| J
     E -.->|"TRACEPARENT"| J
     F -.->|"TRACEPARENT (run_sandbox)"| K
     C -.->|"TRACEPARENT (agent mode)"| K
@@ -1266,8 +1269,11 @@ person's question — carrying the call's `crewlet.stage` and `crewlet.purpose`;
 `learning.reflect`, the reflection pass after a turn, beneath the turn's span;
 and one root per tick of a background learning pass, named for it
 (`learning.episode_lifecycle`, `learning.skill_curator`,
-`learning.skill_clustering`, `learning.skill_promotion`).
-Beneath `llm.round` or `llm.auxiliary`, a call an `anthropic` provider makes is
+`learning.skill_clustering`, `learning.skill_promotion`). One more comes from
+the command line rather than a node: [`crewlet llm doctor`](../reference/cli.md#crewlet-llm)
+examines each entry in a root `llm.doctor` of its own, naming it
+(`crewlet.provider`).
+Beneath `llm.round`, `llm.auxiliary` or `llm.doctor`, a call an `anthropic` provider makes is
 a span of the Anthropic SDK's own, `anthropic.messages.create`, which is what
 the Claude API's spans nest under; a text-mode Claude Code call spans nothing
 and hands the round's own context on, so the API's spans nest under `llm.round`
@@ -1279,7 +1285,11 @@ of their own, and the callers that used to hold no span hold one now: a
 reflection pass runs in `learning.reflect` under the turn it reflects on, a
 background pass in a root of its own, and a person's question on the operator
 surface in that call's `tool.call`. Where nothing above an auxiliary call
-holds a span even so, `llm.auxiliary` is the root. The call's `auxiliary_spend`
+holds a span even so, `llm.auxiliary` is the root. `crewlet llm doctor` is
+traced the way a node is — from the same `OTEL_*` environment, flushed as it
+exits — so the Models API read and the smoke round it sends nest under its
+`llm.doctor`, and the Claude API's spans of them under those, rather than
+naming a parent nothing exported. The call's `auxiliary_spend`
 record is filed under the call's own span either way — a record coalesces only
 calls of one trace, and names the first one's — so the record and the spans of
 the calls it counts are always one trace.

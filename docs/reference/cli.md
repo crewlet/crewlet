@@ -1605,6 +1605,19 @@ and an entry that does not build at all (a `${VAR}` model that resolved to
 nothing, a dial its resolved model refuses) is reported as one beside the
 others. `openai` entries are not examined.
 
+**`doctor` is traced the way a node is.** It reads the same `OTEL_*`
+environment `crewlet run` does — a value that can never work, such as a sampler
+that is not parent-based, is refused by name before any entry is examined — and
+it examines each entry in a root span of its own, `llm.doctor`, naming the
+entry (`crewlet.provider`) and ended in error when the entry has a problem.
+Beneath it are the Anthropic SDK's spans of the Models API read and of the smoke
+round, and a text-mode Claude Code smoke test is handed the span's
+`TRACEPARENT` as a turn's round is, so the Claude API's own spans of each call
+nest under the check that made it. The spans are flushed as the command exits.
+With no `OTEL_EXPORTER_OTLP_ENDPOINT` nothing is exported, and every call still
+carries the sampler's decision, as a node's does — see
+[Spans from Claude](../guides/deployment.md#spans-from-claude).
+
 **`login`** has four shapes because the vendors do:
 
 | Shape | When |

@@ -131,7 +131,11 @@
 // call on the operator surface runs in a `tool.call` of its own, and a coding
 // box's call back over the tool bridge is filed in its run's trace — under the
 // box's own span where its request names one in that trace
-// ([WithRemoteFrom]).
+// ([WithRemoteFrom]). Outside a node, `crewlet llm doctor` — the one command
+// that calls a model — runs [Configure] as `crewlet run` does and examines each
+// entry in a root of its own (`llm.doctor`): left on the provider this
+// package's init installs, it sent a sampled `traceparent` on every call while
+// exporting nothing, so the Claude API's spans named a parent no backend had.
 //
 // A PROCESS THE ENGINE STARTS is handed its parent in its ENVIRONMENT —
 // TRACEPARENT and TRACESTATE, the propagator's fields upper-cased

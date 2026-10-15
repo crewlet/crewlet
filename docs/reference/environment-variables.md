@@ -251,7 +251,8 @@ makes a running fleet re-read them.
 
 ## OpenTelemetry (Optional)
 
-Read by `crewlet run` at startup, never by `crewlet validate`. The endpoint, header,
+Read by `crewlet run` at startup, and by [`crewlet llm doctor`](cli.md#crewlet-llm), the one
+other command that calls a model; never by `crewlet validate`. The endpoint, header,
 protocol, compression, TLS and exporter variables are resolved by **one resolver** for
 every reader in the engine, so its own exporters and the [sandbox OTLP forwarder](../concepts/code-sandbox.md)
 send each signal to the same place with the same credential. A value that can never work

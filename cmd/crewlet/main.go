@@ -1067,22 +1067,15 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	flushTraces, err := tracing.Configure(ctx, tracing.Options{
+	flushTraces, err := traceProcess(ctx, tracing.Options{
 		NodeID:   nodeID,
 		Version:  version.String(),
 		Recorder: recorder,
-	})
+	}, log)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if flushErr := flushTraces(ctx); flushErr != nil {
-			// Losing telemetry is not worth failing a shutdown that has
-			// otherwise succeeded — the drain has already released the
-			// seats and closed the backends by the time this runs.
-			log.WarnContext(ctx, "trace_flush_failed", "error", flushErr)
-		}
-	}()
+	defer flushTraces()
 
 	// THE EPOCH THIS NODE STARTS ON, and the instant it was activated at:
 	// see [bootOptions], which is where it is decided and what its test
@@ -1298,6 +1291,32 @@ func interruptContext() (context.Context, context.CancelFunc) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	context.AfterFunc(ctx, stop)
 	return ctx, stop
+}
+
+// traceProcess configures this process's tracing from the standard `OTEL_*`
+// environment and returns the flush the process runs on its way out. It is the
+// one way a command of this binary is traced — `crewlet run`, and `crewlet llm
+// doctor`, the one other command that calls a model — because a command left
+// on the provider internal/tracing's init installs still opens spans and still
+// sends a SAMPLED `traceparent` on every call to the Claude API, while
+// exporting nothing: the API's spans then land under a parent no backend ever
+// receives (ADR-0010).
+//
+// The flush LOGS a failure rather than returning one. Losing telemetry is not
+// worth failing a command that has otherwise succeeded — for `run`, the drain
+// has already released the seats and closed the backends by the time it runs.
+// It is handed ctx although ctx is usually cancelled by then, because the
+// flush detaches from it under a bound of its own (see internal/tracing).
+func traceProcess(ctx context.Context, opts tracing.Options, log *slog.Logger) (func(), error) {
+	flush, err := tracing.Configure(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		if err := flush(ctx); err != nil {
+			log.WarnContext(ctx, "trace_flush_failed", "error", err)
+		}
+	}, nil
 }
 
 // shutdown is the one order a node comes down in, whatever stopped it.
