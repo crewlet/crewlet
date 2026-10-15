@@ -32,7 +32,9 @@ import (
 //  3. the ref already at the new value is a noop;
 //  4. the ref not at the old value is stale;
 //  5. a protection ([ProtectionRefusal]), every matching rule consulted;
-//  6. a create past the refs a repository may hold (repo_refs);
+//  6. a create past MaxRefsPerRepo live refs (repo_refs) — judged after
+//     every other command of its push, so the push's own deletions free
+//     their room whatever order git sent them in;
 //  7. otherwise ok.
 //
 // Then over the push's ok commands, a pack named longer ago than a write may
@@ -59,7 +61,7 @@ import (
 // holding that connection and that goroutine: the push ids every proposal
 // names are read in ONE statement, and the refs every command names in ONE
 // more, each over its primary key (planner.go) — never a point read a
-// command, which a maximal batch makes three thousand of. (It holds no write
+// command, which a full batch makes nearly four thousand of. (It holds no write
 // lane; the APPLY does, and reads the same way for that reason,
 // apply_push.go.)
 //
@@ -321,10 +323,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	}
 	for _, i := range open {
 		p := batch[i]
-		cmds, err := w.decide(i, p, v, limits)
-		if err != nil {
-			return nil, nil, 0, err
-		}
+		cmds := w.decide(i, p, v, limits)
 		answers[i].commands = cmds
 		if !slices.ContainsFunc(cmds, isOK) {
 			continue
@@ -353,12 +352,11 @@ func refuseEvery(cmds []Command, code Refusal, detail string) []Command {
 
 // pushRepo is what the push decide reads of a repository's row.
 type pushRepo struct {
-	name       string
-	status     RepoStatus
-	refs       int
-	tombstones int
-	liveBytes  int64
-	version    int64
+	name      string
+	status    RepoStatus
+	refs      int
+	liveBytes int64
+	version   int64
 	// deletedAt is when a deleted or purging repository was deleted, and
 	// zero for any other.
 	deletedAt time.Time
@@ -370,7 +368,7 @@ func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, err
 	var status string
 	var deleted sql.NullInt64
 	err := tx.QueryRowContext(ctx, decideRepoSQL, id).Scan(&r.name, &status, &r.refs,
-		&r.tombstones, &r.liveBytes, &r.version, &deleted)
+		&r.liveBytes, &r.version, &deleted)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return pushRepo{}, false, nil
@@ -434,33 +432,29 @@ func pushRowsIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]PushR
 
 // working is the repository as the batch's earlier pushes leave it: the refs
 // the batch names, and the counts the bounds are judged on.
+//
+// # The live refs are the one count a create is judged on
+//
+// MaxRefsPerRepo bounds LIVE refs, and only they: a ref the repository has no
+// row for and one it holds as a tombstone both read as ZeroOID ([current]),
+// so a create of either is one more live ref and nothing else, and a deletion
+// one fewer — in the push that makes it too ([working.decide]). The deleted
+// refs a repository still keeps as tombstones are bounded apart, by the
+// applier ([MaxTombstonesPerRepo]), which forgets the oldest — or writes a
+// record's deletions as removals — rather than refuse anybody; judged here
+// with the live refs, a repository that deleted its stale branches refused
+// every new one until their deletions aged out two days later.
 type working struct {
-	ctx    context.Context
-	tx     *sql.Tx
-	repoID string
-	name   string
-	now    time.Time
+	name string
+	now  time.Time
 
 	// targets is every ref the batch names that has a ROW: its value, or
 	// "" for a tombstone. A ref absent here has no row at all.
 	targets map[string]string
-	// live is the repository's live refs; table is the rows its refs hold
-	// — live and tombstones — which a create of a ref with no row grows.
-	live, table int
+	// live is the repository's live refs.
+	live int
 	// bytes is the packs the repository holds.
 	bytes int64
-
-	// sweepFloor is the fewest expired tombstones the record's own sweep
-	// takes, whatever the batch decides: what MaxRecordRows leaves past
-	// the most rows the batch's entries can write.
-	sweepFloor int
-	// recreatable is the tombstones the batch names with a command that
-	// would bring the ref back — rows a sweep cannot count on taking.
-	recreatable int
-	// free is the expired tombstones the record's sweep will take, read
-	// once a round and only when a create meets the table's bound.
-	free      int
-	freeKnown bool
 }
 
 // newWorking reads the refs every open proposal's commands name, in ONE
@@ -470,9 +464,7 @@ func newWorking(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, b
 
 	var names []string
 	seen := map[string]bool{}
-	rows := 0
 	for _, i := range open {
-		rows += rowBound(batch[i])
 		for _, c := range batch[i].Commands {
 			if c.Result != ResultNG && !seen[c.Ref] {
 				seen[c.Ref] = true
@@ -484,42 +476,34 @@ func newWorking(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, b
 	if err != nil {
 		return nil, fmt.Errorf("code: read the refs a batch names: %w", err)
 	}
-	w := &working{
-		ctx: ctx, tx: tx, repoID: repoID, name: repo.name, now: now, targets: targets,
-		live: repo.refs, table: repo.refs + repo.tombstones, bytes: repo.liveBytes,
-		sweepFloor: max(0, MaxRecordRows-recordRows(rows)),
-	}
-	recreated := map[string]bool{}
-	for _, i := range open {
-		for _, c := range batch[i].Commands {
-			if target, row := targets[c.Ref]; row && target == "" && c.New != ZeroOID &&
-				c.Result != ResultNG {
-				recreated[c.Ref] = true
-			}
-		}
-	}
-	w.recreatable = len(recreated)
-	return w, nil
+	return &working{name: repo.name, now: now, targets: targets, live: repo.refs,
+		bytes: repo.liveBytes}, nil
 }
 
-// current is ref's value, ZeroOID where it has none, and whether it has a row.
-func (w *working) current(ref string) (string, bool) {
-	target, row := w.targets[ref]
-	if target == "" {
-		return ZeroOID, row
+// current is ref's value, ZeroOID where it has none — no row, or a tombstone.
+func (w *working) current(ref string) string {
+	if target := w.targets[ref]; target != "" {
+		return target
 	}
-	return target, row
+	return ZeroOID
 }
 
 // decide is one push's commands with their results, judged against the
 // working state — which it does not change ([working.apply] does, for a push
 // that becomes an entry). push is p's place in the batch, which its
 // protection verdicts are kept under.
-func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) ([]Command, error) {
+func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) []Command {
 	cmds := slices.Clone(p.Commands)
-	// A PUSH'S OWN CREATES COUNT AGAINST ITS LATER ONES: a thousand
-	// creates at the bound's last free ref are one ok and the rest refused.
-	var creates, newRows int
+	// EVERY COMMAND BUT A CREATE IS JUDGED FIRST, so the live refs the push's
+	// own deletions free are known before any create is judged against the
+	// bound, whatever order git sent them in: deleting a stale branch and
+	// adding a new one at MaxRefsPerRepo ends holding no more than it began
+	// with. Safe because what follows the per-command rules — upload_expired
+	// and repo_size over every ok command, --atomic over the whole push —
+	// refuses every ok command together, so a deletion is never refused
+	// while a create it made room for stands.
+	var creating []int
+	var deletes int
 	for i := range cmds {
 		c := &cmds[i]
 		if c.Result == ResultNG {
@@ -529,7 +513,7 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) ([]Co
 			refuse(c, r, statelessDetail(*c, r))
 			continue
 		}
-		current, row := w.current(c.Ref)
+		current := w.current(c.Ref)
 		switch {
 		case current == c.New:
 			c.Result = ResultNoop
@@ -543,26 +527,26 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) ([]Co
 			continue
 		}
 		if current == ZeroOID {
-			if w.live+creates >= MaxRefsPerRepo {
-				refuse(c, RefusalRepoRefs, fmt.Sprintf("%s holds %d live refs, the most one "+
-					"repository may", w.name, w.live+creates))
-				continue
-			}
-			if !row {
-				free, err := w.freeTombstones()
-				if err != nil {
-					return nil, err
-				}
-				if held := w.table + newRows; held+1 > MaxRefsPerRepo+free {
-					refuse(c, RefusalRepoRefs, fmt.Sprintf("%s's refs hold %d rows counting its "+
-						"deleted refs, the most they may hold (%d); a deleted ref's row goes %s "+
-						"after its deletion", w.name, held, MaxRefsPerRepo, RefTombstoneHorizon))
-					continue
-				}
-				newRows++
-			}
-			creates++
+			creating = append(creating, i)
+			continue
 		}
+		if c.New == ZeroOID {
+			deletes++
+		}
+		c.Result = ResultOK
+	}
+	// A PUSH'S OWN CREATES COUNT AGAINST ITS LATER ONES, in the order git
+	// sent them: a thousand creates at the bound's last free ref are one ok
+	// and the rest refused.
+	var creates int
+	for _, i := range creating {
+		c := &cmds[i]
+		if held := w.live - deletes + creates; held >= MaxRefsPerRepo {
+			refuse(c, RefusalRepoRefs, fmt.Sprintf("%s holds %d live refs, the most one "+
+				"repository may", w.name, held))
+			continue
+		}
+		creates++
 		c.Result = ResultOK
 	}
 	if p.Pack != nil && slices.ContainsFunc(cmds, isOK) {
@@ -580,7 +564,7 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) ([]Co
 	if p.Atomic {
 		cmds = Atomic(cmds)
 	}
-	return cmds, nil
+	return cmds
 }
 
 // apply moves the working state by a push's ok commands, as its record will.
@@ -589,13 +573,10 @@ func (w *working) apply(p Proposal, cmds []Command) {
 		if c.Result != ResultOK {
 			continue
 		}
-		before, row := w.current(c.Ref)
+		before := w.current(c.Ref)
 		switch {
 		case before == ZeroOID && c.New != ZeroOID:
 			w.live++
-			if !row {
-				w.table++
-			}
 		case before != ZeroOID && c.New == ZeroOID:
 			w.live--
 		}
@@ -608,49 +589,6 @@ func (w *working) apply(p Proposal, cmds []Command) {
 	if p.Pack != nil {
 		w.bytes += p.Pack.Size
 	}
-}
-
-// freeTombstones is how many of the repository's tombstones the record's own
-// sweep will take: the expired ones a batch's commands do not bring back, up
-// to the fewest the record's row budget leaves the sweep.
-//
-// # Why the table's bound counts them free
-//
-// The table's rows are what the bound protects — every row is read by a full
-// snapshot and rewritten into every cache's packed-refs — and a tombstone is
-// removed only by a push record's sweep. Judged without them, a repository at
-// the bound whose rows are mostly expired tombstones would refuse every push
-// that creates a ref: a repository whose only traffic is new branches would
-// make no record, so nothing would ever sweep, and it would stay refused. Its
-// own record's sweep takes them, so they are counted as gone.
-//
-// EXPIRED BY THIS NODE'S CLOCK, where the sweep judges by the record's broker
-// instant — later than the decision, so it takes at least as many, unless this
-// clock runs ahead of the broker's; then the table may pass the bound by the
-// deletions of that skew out of a 48-hour horizon, rows the next record sweeps.
-func (w *working) freeTombstones() (int, error) {
-	if w.freeKnown {
-		return w.free, nil
-	}
-	w.freeKnown = true
-	if w.sweepFloor == 0 {
-		// NOTHING IS LEFT FOR THE SWEEP, so nothing is asked: the count
-		// below would be limited to the recreatable tombstones and free
-		// none of them.
-		return 0, nil
-	}
-	// THE LIMIT IS THE SWEEP'S BUDGET, and the one place it is applied: the
-	// count stops at sweepFloor past the tombstones the batch may bring
-	// back, so what is left after them is never more than the sweep takes —
-	// and the covering scan never reads further than that.
-	var expired int
-	if err := w.tx.QueryRowContext(w.ctx, expiredTombstoneCountSQL, w.repoID,
-		store.EncodeTime(w.now.Add(-RefTombstoneHorizon)), w.sweepFloor+w.recreatable).
-		Scan(&expired); err != nil {
-		return 0, fmt.Errorf("code: count %s's expired tombstones: %w", w.repoID, err)
-	}
-	w.free = max(0, expired-w.recreatable)
-	return w.free, nil
 }
 
 // refuse sets one command ng under code with detail.
@@ -731,11 +669,9 @@ func UnheldDetail(old string) string {
 // The push decide's statements, each registered in plan_test.go. The refs a
 // batch names are read by the applier's own statement (refsNamedSQL).
 const (
-	decideRepoSQL = `SELECT name, status, refs, tombstones, live_bytes, version, deleted_at
+	decideRepoSQL = `SELECT name, status, refs, live_bytes, version, deleted_at
 		FROM code_repos WHERE id = ?`
 	decideDeletionSQL = `SELECT name FROM code_deletions WHERE repo_id = ?`
 	pushesNamedSQL    = `SELECT ` + pushColumns + ` FROM code_pushes
 		WHERE push_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
-	expiredTombstoneCountSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_refs
-		WHERE repo_id = ? AND target = '' AND at < ? LIMIT ?)`
 )

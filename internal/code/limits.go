@@ -128,8 +128,8 @@ const (
 	// few indexed reads each), and the per-record ceiling the tracker's bulk
 	// writes use. Group commit's gain is in bursts — a CI fan-out of tag
 	// pushes — where it turns 64 appends into one: applied and committed,
-	// such a record holds the write lane 10–12 ms, 0.16–0.19 ms a push
-	// against 3.0–4.0 ms for one push on its own, far inside
+	// such a record holds the write lane 10–12 ms, 0.16–0.18 ms a push
+	// against 3.4–4.8 ms for one push on its own, far inside
 	// statelog.ApplyTxTimeBudget (doc.go's measured section).
 	MaxPushesPerRecord = 64
 
@@ -143,32 +143,66 @@ const (
 	// the framework's per-transaction budget, which is checked only at record
 	// boundaries — a larger record would hold the shared write lane past it.
 	// A push record's tombstone sweep fills what the record's own rows leave
-	// of it, so a push record reaches it exactly whenever expired tombstones
-	// are waiting.
+	// of it, so a push record reaches it exactly whenever tombstones are due —
+	// past RefTombstoneHorizon, or past MaxTombstonesPerRepo.
 	MaxRecordRows = statelog.ApplyTxRowBudget
 
 	// MaxCommandsPerPush is the most ref updates one push carries. A push's
-	// apply then writes at most 1 003 rows, so three maximal pushes fit one
-	// record's row budget and two its byte budget (about 410 KiB each with
+	// apply then writes at most 1 003 rows, and its record's row bound counts
+	// a deletion twice (rowBound: the old tombstone the sweep may take for
+	// it), so three maximal pushes of updates fit one record's row budget, one
+	// of deletions, and two of either its byte budget (about 410 KiB each with
 	// plain refs at MaxRefNameBytes); an import chunks its refs at this size.
 	// Refs JSON spells long — `&`, `<` and `>` take six bytes each — reach
 	// EntryRoom first, at some six hundred of the longest, and such a push
 	// is refused by its receiver before its work (Proposal.ValidateCommands).
 	MaxCommandsPerPush = 1_000
 
-	// MaxRefsPerRepo is the most live refs a repository holds. A protocol-v0
+	// MaxRefsPerRepo is the most LIVE refs a repository holds. A protocol-v0
 	// advertisement costs about 100 bytes a ref, so this is about 10 MB on
 	// every v0 fetch and a 10 MB packed-refs rewrite on every cache sync;
 	// past it a repository is a namespace problem, refused (repo_refs)
-	// rather than slowly degraded.
-	//
-	// The rows a repository's refs table holds are its live refs AND its
-	// tombstones, which the applier counts beside them (code_repos.refs and
-	// code_repos.tombstones), so the decide that judges a push against this
-	// bound can judge the table rather than the live refs alone: a push that
-	// creates refs on a repository whose deletions have not yet aged past
-	// RefTombstoneHorizon adds rows the sweep cannot take yet.
+	// rather than slowly degraded. A deleted ref never counts against it:
+	// its tombstone is bounded apart, by MaxTombstonesPerRepo, and refuses
+	// nobody.
 	MaxRefsPerRepo = 100_000
+
+	// MaxTombstonesPerRepo is the most TOMBSTONES — refs deleted within
+	// RefTombstoneHorizon, kept so a cache syncing a delta learns of each
+	// deletion — a repository's refs table holds beside its live refs. Past
+	// it the applier forgets the oldest, and a record whose deletions its
+	// sweep cannot make room for removes those refs' rows outright
+	// (apply_push.go); a deletion is never refused for it.
+	//
+	// MaxRefsPerRepo, a hundred thousand, because:
+	//   - the reader gains no new worst case in ROWS whatever the tombstones
+	//     hold: it answers a delta only while the delta carries no more rows
+	//     than the full answer would (reader.go's deltaOutweighs) — a delta
+	//     reads every ref row moved above its floor, tombstones included, and
+	//     a full answer the live refs and every pack — so a cache synced
+	//     before a clean-up larger than what the repository keeps reads what
+	//     is left rather than every deletion;
+	//   - in BYTES, every row at its widest, a delta passes the full answer of
+	//     a repository of as many refs and packs only by tombstones carried in
+	//     place of packs — its live refs and packs are rows that answer
+	//     carries too, and a live ref is wider than its own tombstone — so by
+	//     at most a tombstone less a pack row a pack, for as many packs as
+	//     this bound has tombstones: nothing for names JSON writes as
+	//     themselves, whose tombstone at MaxRefNameBytes (347 bytes) is
+	//     narrower than any pack row (396 at the narrowest), and 1 171 bytes
+	//     a pack for names JSON spells longest (a tombstone of 1 567), 23 MB
+	//     beside the 170 MB a full repository of 20 000 packs answers whole at
+	//     those names
+	//     (TestADeltaPassesTheWidestFullAnswerOnlyByTombstonesInPlaceOfPacks);
+	//   - a clean-up of a full repository — every live ref deleted at once —
+	//     keeps its whole 48-hour horizon;
+	//   - the large company's some 40 000 changes a day, every one landing on
+	//     ONE repository with its branch deleted on merge, make about 80 000
+	//     tombstones in 48 hours, inside it.
+	//
+	// So a repository's refs table holds at most MaxRefsPerRepo +
+	// MaxTombstonesPerRepo rows, exactly, after every record.
+	MaxTombstonesPerRepo = MaxRefsPerRepo
 
 	// MaxIntroduced is the most introduced commit ids a push row lists (43
 	// bytes each); IntroducedCount carries the rest.
@@ -181,7 +215,8 @@ const (
 	// MaxSnapshotItems is the most rows one snapshot or listing page
 	// carries: about 1–2 MB of JSON for typical refs and about 4 MB at
 	// worst (every ref at MaxRefNameBytes), under the estate reply's
-	// ceiling with room; MaxRefsPerRepo refs is ten pages.
+	// ceiling with room; MaxRefsPerRepo refs is ten pages of rows, and more
+	// where MaxPageBytes ends a page first (names JSON spells long).
 	MaxSnapshotItems = 10_000
 
 	// MaxPageBytes is the encoded rows one page may carry WHATEVER its row
@@ -211,12 +246,15 @@ const (
 
 	// RefTombstoneHorizon is how long a deleted ref is kept as a TOMBSTONE —
 	// a row whose oid is empty — so a cache syncing a delta learns of the
-	// deletion. A cache synced within it gets a delta; an older one a full
-	// answer (code_repos.tombstones_through), which re-reads the rows and
-	// reuses every pack the cache holds — so the horizon trades tombstone
-	// rows kept against how often an idle-but-warm cache pays a full
-	// listing, never a download. Two days covers a cache fetched on any
-	// working day across a one-day gap.
+	// deletion: 48 hours, or sooner — oldest first — once the repository
+	// holds MaxTombstonesPerRepo. A record whose deletions its sweep cannot
+	// make room for removes those refs' rows outright. A cache synced before
+	// a swept or removed deletion takes a full answer
+	// (code_repos.tombstones_through), which re-reads the rows and reuses
+	// every pack the cache holds — so the horizon trades tombstone rows kept
+	// against how often an idle-but-warm cache pays a full listing, never a
+	// download. Two days covers a cache fetched on any working day across a
+	// one-day gap.
 	RefTombstoneHorizon = 48 * time.Hour
 
 	// MaxDescriptionBytes is config.CodeMaxDescriptionBytes: a repository
@@ -232,11 +270,14 @@ const (
 	// bounds the same removal by what the rows weigh.
 	//
 	// It does NOT bound the TOMBSTONES a record sweeps. A record can make
-	// three thousand of those, which a share of sixty-four fell behind by
-	// about 936 a record on a repository that deletes refs in bulk; the
+	// nearly two thousand of those, which a share of sixty-four fell behind
+	// by about 936 a record on a repository that deletes refs in bulk; the
 	// sweep takes every row the record leaves of MaxRecordRows instead —
-	// 3 995 behind a one-command push, 992 behind the largest record — so
-	// what a record writes and removes together is MaxRecordRows at most.
+	// 3 995 behind a one-command push, at least one for each of its own
+	// deletions behind any record the committer forms (rowBound counts a
+	// deletion twice), and none behind one it filled to the row bound with
+	// creations — so what a record writes and removes together is
+	// MaxRecordRows at most.
 	HorizonDeletesPerRecord = 64
 
 	// HorizonBytesPerRecord is how many BYTES of expired push rows one push

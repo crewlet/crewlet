@@ -1587,9 +1587,12 @@ configuration rather than by a command, and its three stages are timed:
 Inside a repository that is not deleted, two horizons are kept by the records
 that apply to it, never by a sweep: a push row expires **181 days** after its
 push, the same half year as the [usage history](#old-data-is-not-cold-data),
-and a deleted ref's tombstone after **48 hours**. The code log itself is
-trimmed by the same six terms as every other log; a push record names its pack
-and never carries it, so trimming the log removes no repository's bytes.
+and a deleted ref's tombstone after **48 hours**, or sooner, oldest first, once
+the repository holds 100 000 of them (see
+[ref tombstones](../concepts/code-host.md#retention-and-history)). The code log
+itself is trimmed by the same six terms as every other log; a push record names
+its pack and never carries it, so trimming the log removes no repository's
+bytes.
 
 ## Old data is not cold data
 

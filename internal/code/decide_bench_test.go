@@ -20,8 +20,8 @@ import (
 //
 // The batches and their rules:
 //
-//   - maximal: three pushes of [MaxCommandsPerPush] ref creations, the most a
-//     record's rows hold, against rules of the shape a team's convention
+//   - maximal: three pushes of [MaxCommandsPerPush] ref creations against
+//     rules of the shape a team's convention
 //     writes (refs/heads/teamNN/release/**), each rule asked about each
 //     command because none matches — the batch a burst of wide pushes makes;
 //   - group: [MaxPushesPerRecord] pushes of one command each against the same

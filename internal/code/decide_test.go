@@ -287,37 +287,110 @@ func TestABatchSeesItsEarlierPushes(t *testing.T) {
 	})
 }
 
-// THE TABLE'S BOUND counts the rows a repository's refs hold — live and
-// deleted — for a create of a ref with no row, and counts as gone the expired
-// tombstones the record's own sweep takes: a repository at the bound whose
-// rows are expired tombstones takes a create, and one whose tombstones are
-// fresh does not, while a create over a ref's own tombstone grows nothing.
-func TestTheRefsTableIsBoundedWithItsSweep(t *testing.T) {
+// DELETED REFS NEVER REFUSE A CREATE: MaxRefsPerRepo bounds a repository's
+// LIVE refs, and its tombstones — the deletions a delta still has to carry —
+// are bounded apart, by the applier ([MaxTombstonesPerRepo]), which forgets
+// the oldest rather than refuses anybody. Judged against the whole table, a
+// repository of 40 000 live refs that deleted 60 000 stale branches refused
+// every new branch for two days: a limit stated in live refs, not met.
+//
+// Mutation: count the tombstones beside the live refs against MaxRefsPerRepo
+// and the first two rows are refused repo_refs.
+func TestDeletedRefsNeverRefuseACreate(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		age    time.Duration
-		ref    string
-		result CommandResult
+		live, tombstones int
+		ref              string
+		result           CommandResult
 	}{
-		"fresh tombstones":                {age: time.Hour, ref: "refs/heads/new", result: ResultNG},
-		"expired tombstones":              {age: RefTombstoneHorizon + time.Hour, ref: "refs/heads/new", result: ResultOK},
-		"a create over its own tombstone": {age: time.Hour, ref: "refs/heads/dead-0", result: ResultOK},
+		"ten fresh tombstones": {live: MaxRefsPerRepo - 10, tombstones: 10,
+			ref: "refs/heads/new", result: ResultOK},
+		"tombstones past their own bound": {live: MaxRefsPerRepo - 10, tombstones: MaxTombstonesPerRepo + 10,
+			ref: "refs/heads/new", result: ResultOK},
+		"a create over its own tombstone": {live: MaxRefsPerRepo - 10, tombstones: 10,
+			ref: "refs/heads/dead-00000", result: ResultOK},
+		"the live refs at their bound": {live: MaxRefsPerRepo,
+			ref: "refs/heads/new", result: ResultNG},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			e := decideEstate(t)
-			for i := range 10 {
-				e.exec(`INSERT INTO code_refs (repo_id, ref, target, position, at) VALUES (?, ?, '', 1, ?)`,
-					decideRepo, "refs/heads/dead-"+string(rune('0'+i)), store.EncodeTime(decideAt.Add(-tc.age)))
+			if tc.tombstones > 0 {
+				e.seedTombstoneRows("dead", tc.tombstones, time.Hour)
 			}
-			e.exec(`UPDATE code_repos SET refs = ?, tombstones = 10 WHERE id = ?`, MaxRefsPerRepo-10, decideRepo)
+			e.exec(`UPDATE code_repos SET refs = ? WHERE id = ?`, tc.live, decideRepo)
 			_, answers := decideIn(t, e, DefaultLimits(), proposalOf(cmd(tc.ref, ZeroOID, oid("N"))))
 			got := answers[0].commands[0]
 			if got.Result != tc.result {
 				t.Fatalf("decided %s %s (%q), want %s", got.Result, got.Reason, got.Detail, tc.result)
 			}
-			if got.Result == ResultNG && got.Reason != RefusalRepoRefs {
-				t.Fatalf("refused %s, want repo_refs", got.Reason)
+			if got.Result != ResultNG {
+				return
+			}
+			// THE DETAIL NAMES THE LIVE COUNT, the one a person can act on.
+			if want := fmt.Sprintf("web holds %d live refs", tc.live); got.Reason != RefusalRepoRefs ||
+				!strings.Contains(got.Detail, want) {
+				t.Fatalf("refused %s (%q), want repo_refs saying %q", got.Reason, got.Detail, want)
+			}
+		})
+	}
+}
+
+// A PUSH'S OWN DELETIONS MAKE ROOM FOR ITS CREATES, in whichever order git
+// sends them: MaxRefsPerRepo bounds the live refs a repository holds, and a
+// push that deletes a stale branch and adds a new one at the bound ends
+// holding no more than it began with — `git push origin :old new`, or a
+// --prune or --mirror push. Only a deletion the decide takes counts: one
+// refused stale or by a protection frees nothing, and a deletion frees room
+// for ONE create, the first. Safe because every refusal after the
+// per-command rules — upload_expired, repo_size, --atomic — refuses every ok
+// command of the push together, so no deletion is refused while a create it
+// made room for stands.
+//
+// Mutation: judge a create against the live refs and the push's creates
+// alone, and the first two rows refuse the create repo_refs.
+func TestAPushsOwnDeletionsMakeRoomForItsCreates(t *testing.T) {
+	t.Parallel()
+	drop := cmd("refs/heads/feature", oid("F"), ZeroOID)
+	for name, tc := range map[string]struct {
+		cmds   []Command
+		atomic bool
+		want   []Refusal
+		result []CommandResult
+	}{
+		"a deletion before the create": {cmds: []Command{drop, cmd("refs/heads/new", ZeroOID, oid("N"))},
+			result: []CommandResult{ResultOK, ResultOK}},
+		"a deletion after the create": {cmds: []Command{cmd("refs/heads/new", ZeroOID, oid("N")), drop},
+			result: []CommandResult{ResultOK, ResultOK}},
+		"atomic": {cmds: []Command{cmd("refs/heads/new", ZeroOID, oid("N")), drop}, atomic: true,
+			result: []CommandResult{ResultOK, ResultOK}},
+		"one deletion, two creates": {cmds: []Command{cmd("refs/heads/a", ZeroOID, oid("N")), drop,
+			cmd("refs/heads/b", ZeroOID, oid("M"))},
+			result: []CommandResult{ResultOK, ResultOK, ResultNG},
+			want:   []Refusal{"", "", RefusalRepoRefs}},
+		"a stale deletion frees nothing": {cmds: []Command{cmd("refs/heads/feature", oid("Z"), ZeroOID),
+			cmd("refs/heads/new", ZeroOID, oid("N"))},
+			result: []CommandResult{ResultNG, ResultNG}, want: []Refusal{RefusalStale, RefusalRepoRefs}},
+		"a protected deletion frees nothing": {cmds: []Command{cmd("refs/heads/main", oid("A"), ZeroOID),
+			cmd("refs/heads/new", ZeroOID, oid("N"))},
+			result: []CommandResult{ResultNG, ResultNG}, want: []Refusal{RefusalProtectedDelete, RefusalRepoRefs}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := decideEstate(t)
+			e.exec(`UPDATE code_repos SET refs = ? WHERE id = ?`, MaxRefsPerRepo, decideRepo)
+			p := proposalOf(tc.cmds...)
+			p.Atomic = tc.atomic
+			_, answers := decideIn(t, e, DefaultLimits(), p)
+			for i, got := range answers[0].commands {
+				var want Refusal
+				if tc.want != nil {
+					want = tc.want[i]
+				}
+				if got.Result != tc.result[i] || got.Reason != want {
+					t.Errorf("%s decided %s %s (%q), want %s %s", got.Ref, got.Result, got.Reason,
+						got.Detail, tc.result[i], want)
+				}
 			}
 		})
 	}
@@ -332,96 +405,6 @@ func (e *estate) seedTombstoneRows(prefix string, n int, age time.Duration) {
 		SELECT ?, printf('refs/heads/%s-%05d', ?, i), '', 1, ? FROM k`,
 		n, decideRepo, prefix, store.EncodeTime(decideAt.Add(-age)))
 	e.exec(`UPDATE code_repos SET tombstones = tombstones + ? WHERE id = ?`, n, decideRepo)
-}
-
-// THE TOMBSTONES A BATCH BRINGS BACK ARE NOT THE SWEEP'S: a batch that
-// recreates every expired tombstone of a repository at the table's bound
-// leaves its sweep nothing to take, so a create of a ref with no row beside
-// them is refused — while the same create alone, with the expired tombstones
-// still the sweep's, is taken.
-func TestARecreatedTombstoneIsNotFreeForTheSweep(t *testing.T) {
-	t.Parallel()
-	recreate := func() []Command {
-		var cmds []Command
-		for i := range 5 {
-			cmds = append(cmds, cmd(fmt.Sprintf("refs/heads/dead-%05d", i), ZeroOID, oid(fmt.Sprint("back", i))))
-		}
-		return cmds
-	}
-	for name, tc := range map[string]struct {
-		cmds []Command
-		want CommandResult
-	}{
-		"beside the tombstones it brings back": {append(recreate(), cmd("refs/heads/new", ZeroOID, oid("N"))), ResultNG},
-		"alone":                                {[]Command{cmd("refs/heads/new", ZeroOID, oid("N"))}, ResultOK},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			e := decideEstate(t)
-			e.seedTombstoneRows("dead", 5, RefTombstoneHorizon+time.Hour)
-			e.seedTombstoneRows("fresh", 5, time.Hour)
-			e.exec(`UPDATE code_repos SET refs = ? WHERE id = ?`, MaxRefsPerRepo-10, decideRepo)
-			_, answers := decideIn(t, e, DefaultLimits(), proposalOf(tc.cmds...))
-			cmds := answers[0].commands
-			for _, c := range cmds[:len(cmds)-1] {
-				if c.Result != ResultOK {
-					t.Fatalf("a create over its own tombstone is %s %s (%q), want ok", c.Result,
-						c.Reason, c.Detail)
-				}
-			}
-			got := cmds[len(cmds)-1]
-			if got.Result != tc.want || (tc.want == ResultNG &&
-				(got.Reason != RefusalRepoRefs || !strings.Contains(got.Detail, "deleted refs"))) {
-				t.Fatalf("the create of a ref with no row is %s %s (%q), want %s", got.Result,
-					got.Reason, got.Detail, tc.want)
-			}
-		})
-	}
-}
-
-// THE SWEEP TAKES ONLY WHAT THE RECORD'S ROWS LEAVE IT: of thousands of
-// expired tombstones at the table's bound, a batch of three maximal pushes
-// counts as free only the rows MaxRecordRows leaves past the most its entries
-// can write — so exactly that many of its creates of refs with no row are
-// taken, and the rest are refused rather than grown into a table no record
-// sweeps back under the bound.
-func TestTheSweepFreesOnlyWhatTheRecordLeavesIt(t *testing.T) {
-	t.Parallel()
-	const expired = 5_000
-	e := decideEstate(t)
-	e.seedTombstoneRows("dead", expired, RefTombstoneHorizon+time.Hour)
-	e.exec(`UPDATE code_repos SET refs = ? WHERE id = ?`, MaxRefsPerRepo-expired, decideRepo)
-	var batch []Proposal
-	rows := 0
-	for p := range 3 {
-		var cmds []Command
-		for c := range MaxCommandsPerPush {
-			cmds = append(cmds, cmd(fmt.Sprintf("refs/heads/new/%d/%04d", p, c), ZeroOID, oid(fmt.Sprint(p, c))))
-		}
-		batch = append(batch, proposalOf(cmds...))
-		rows += rowBound(batch[p])
-	}
-	floor := MaxRecordRows - recordRows(rows)
-	if floor <= 0 || floor >= expired {
-		t.Fatalf("the sweep's floor is %d — the case needs one above none and below the %d "+
-			"expired tombstones", floor, expired)
-	}
-	_, answers := decideIn(t, e, DefaultLimits(), batch...)
-	taken := 0
-	for _, a := range answers {
-		for _, c := range a.commands {
-			switch {
-			case c.Result == ResultOK:
-				taken++
-			case c.Reason != RefusalRepoRefs || !strings.Contains(c.Detail, "deleted refs"):
-				t.Fatalf("%s is %s %s (%q), want ok or the table's repo_refs", c.Ref, c.Result,
-					c.Reason, c.Detail)
-			}
-		}
-	}
-	if taken != floor {
-		t.Fatalf("%d creates taken, want the %d rows the record leaves its sweep", taken, floor)
-	}
 }
 
 // A PACK IS JUDGED OVER THE PUSH'S OK COMMANDS: past the write bound it is

@@ -226,7 +226,7 @@ type RepoDetail struct {
 	// Tombstones is the deleted refs the repository still holds as rows, so
 	// a cache syncing a delta learns of each deletion: what its refs hold
 	// beyond Refs, until a push sweeps them RefTombstoneHorizon after the
-	// deletion.
+	// deletion, or sooner, oldest first, past MaxTombstonesPerRepo.
 	Tombstones int64     `json:"tombstones"`
 	CreatedAt  time.Time `json:"created_at"`
 	// Limits are the SERVING node's epoch's: what an import chunks to.

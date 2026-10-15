@@ -31,8 +31,8 @@ import (
 // writes. An idle repository commits a record a push and waits for nobody;
 // a busy one amortises the append over everything that arrived during the
 // last one, which is when amortising pays (doc.go's measured section: a
-// group commit of sixty-four small pushes holds the lane 0.16–0.19 ms a push
-// against 3.0–4.0 ms for one alone).
+// group commit of sixty-four small pushes holds the lane 0.16–0.18 ms a push
+// against 3.4–4.8 ms for one alone).
 //
 // # An ok is only ever reported from a row
 //
@@ -686,13 +686,19 @@ func (c *Committer) commit(repoID string, batch []*queued) {
 
 // withinRecord refuses a decision past a record's bytes or rows, which the
 // batching keeps from ever forming — the check makes the invariant the
-// record's own rather than the batcher's.
+// record's own rather than the batcher's. Rows are counted as [rowBound]
+// counts them, a deletion twice: its ref, and the sweep's room for the
+// tombstone it makes.
 func withinRecord(d statelog.Decision, entries []PushEntry) error {
 	rows := 0
 	for _, e := range entries {
 		rows++
 		for _, c := range e.Commands {
-			if c.Result == ResultOK {
+			switch {
+			case c.Result != ResultOK:
+			case c.New == ZeroOID:
+				rows += 2
+			default:
 				rows++
 			}
 		}
@@ -721,11 +727,10 @@ func withinRecord(d statelog.Decision, entries []PushEntry) error {
 // decides again — at a later instant, perhaps from rows that do not hold the
 // first round's record yet — and the publisher may then find the first one in
 // its ledger and answer it, collapsed, without deciding again. Two decisions
-// of one batch differ through the clock (an upload past its bound, a
-// tombstone past its horizon) and through whatever a peer wrote between them,
-// so once a record applied, every proposal whose push has a row is answered
-// FROM THAT ROW, whichever round wrote it, and the decision answers only a
-// proposal with none.
+// of one batch differ through the clock (an upload past its bound) and
+// through whatever a peer wrote between them, so once a record applied, every
+// proposal whose push has a row is answered FROM THAT ROW, whichever round
+// wrote it, and the decision answers only a proposal with none.
 func (c *Committer) answers(ctx context.Context, repoID string, batch []Proposal, last round,
 	res statelog.Result, err error, opID string) []answered {
 

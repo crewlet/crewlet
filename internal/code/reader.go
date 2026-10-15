@@ -255,7 +255,10 @@ func (p *page) left() int { return p.maxRows - p.rows }
 
 // Snapshot answers one page of a repository's refs and packs: in full — every
 // pack and every live ref — or as a delta from q.Since — the packs added and
-// the refs moved (tombstones included) above it.
+// the refs moved (tombstones included) above it. Page 1 decides which: a delta
+// only from a position on this generation of the log, at or past the
+// repository's tombstone mark, and carrying no more rows than the full answer
+// ([deltaOutweighs]).
 //
 // # One monotone history across pages
 //
@@ -319,6 +322,11 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 		if first {
 			full := q.Since.IsZero() || q.Since.Stream != topics.CodeLogStream ||
 				q.Since.Generation != cp.At.Generation || q.Since.Packed() < v.tombstonesThrough
+			if !full {
+				if full, err = deltaOutweighs(ctx, tx, q.RepoID, q.Since.Packed(), v); err != nil {
+					return err
+				}
+			}
 			cur = StateCursor{Full: full, Phase: phasePacks, From: cp.At, Seen: cp.At, Stream: cp.KeyedTo}
 			if !full {
 				cur.Since = q.Since
@@ -345,6 +353,63 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 		return RepoSnapshot{}, err
 	}
 	return out, nil
+}
+
+// deltaOutweighs reports whether a delta from since would carry more rows than
+// the full answer it stands in for: then the full answer is served, which is
+// always correct and here the smaller.
+//
+// # Why a delta can outweigh the full answer
+//
+// A delta carries every ref row that moved above its floor, TOMBSTONES
+// INCLUDED, and a full answer only the live refs. A repository holds up to
+// MaxTombstonesPerRepo tombstones beside its live refs, so a cache synced
+// before a clean-up that deleted more refs than the repository keeps — sixty
+// thousand deleted, forty thousand left — would be handed a delta of sixty
+// thousand rows where the full answer is forty, on every git node holding the
+// repository, and a cache holds a whole snapshot in memory before it writes
+// any of it. Answered here, NO DELTA IS EVER MORE ROWS THAN THE FULL ANSWER,
+// so by rows the largest answer the reader serves is what it was before
+// tombstones were bounded apart: a full snapshot of a full repository.
+//
+// # Every row each answer carries, packs included
+//
+// A delta's packs are those added above its floor and a full answer's every
+// pack the repository holds, so the packs only ever favour the delta: a
+// repository of many packs keeps its delta past a clean-up a repository of
+// few would not, which a comparison of the refs alone would answer in full
+// for a fraction of the rows. The full answer's size is the repository's own
+// counters, kept as the rows move (live_packs is every pack row: every pack
+// this build stores is live); the delta's is COUNTED, each table at most one
+// row past the full answer deep, over the index the delta's pages read
+// (code_refs_changed_idx, code_packs_added_idx) — so the usual delta after a
+// push reads a handful of index entries, and the count never reads more of
+// either index than the larger answer would. A tie is a delta: a cache
+// applies a delta in place, where a full answer sweeps its directory to the
+// snapshot's image.
+//
+// # Rows, and what that leaves in bytes
+//
+// It compares ROWS because a row is what both indexes count in a bounded
+// read; an answer's bytes are the JSON its names spell, which only a read of
+// every name the full answer carries could sum. So in bytes the rule holds an
+// answer at its widest, not each answer to its own full answer — a delta of
+// long deleted names beside short live ones may be wider than the full answer
+// it replaces — and at its widest, a delta passes the full answer of a
+// repository of as many refs and packs only by tombstones carried in place of
+// packs, at most a tombstone less a pack row a pack: nothing for names JSON
+// writes as themselves, 1 171 bytes a pack for names it spells longest
+// ([MaxTombstonesPerRepo] gives the arithmetic). Weighing each pack as a
+// fraction of the widest ref row would close that, and answer a repository of
+// many packs in full for every delta of ordinary names, whose tombstones are
+// narrower than a pack row rather than wider.
+func deltaOutweighs(ctx context.Context, tx *sql.Tx, repoID string, since int64, v repoView) (bool, error) {
+	whole := v.ref.Refs + v.ref.LivePacks
+	var delta int64
+	if err := tx.QueryRowContext(ctx, deltaRowsSQL, repoID, since, whole+1).Scan(&delta); err != nil {
+		return false, fmt.Errorf("code: count %s's delta: %w", repoID, err)
+	}
+	return delta > whole, nil
 }
 
 // fill serves the snapshot's phases from cur, in order, until the page is
@@ -1218,6 +1283,12 @@ const (
 		ORDER BY position, ref LIMIT ?`
 	refsDeltaAfterSQL = `SELECT ref, target, position FROM code_refs WHERE repo_id = ?
 		AND position >= ? AND (position > ? OR ref > ?) ORDER BY position, ref LIMIT ?`
+	// deltaRowsSQL is a BOUNDED COUNT of the rows a delta from ?2 carries,
+	// each table counted at most ?3 deep over the index the delta's pages
+	// read (deltaOutweighs).
+	deltaRowsSQL = `SELECT
+		(SELECT COUNT(*) FROM (SELECT 1 FROM code_refs WHERE repo_id = ?1 AND position > ?2 LIMIT ?3))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs WHERE repo_id = ?1 AND added_position > ?2 LIMIT ?3))`
 	pushColumns = `push_id, repo_id, position, at, actor, actor_kind, actor_seat, node, atomic,
 		commands, pack_id, pack_bytes, introduced, introduced_count, received_at`
 	pushSQL        = `SELECT ` + pushColumns + ` FROM code_pushes WHERE push_id = ?`

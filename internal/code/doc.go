@@ -154,13 +154,22 @@
 //     pace, and no more, because a push row is the estate's one wide row and
 //     its delete frees its overflow pages — so "what happened over the last
 //     half year" has one answer across the engine;
-//   - REF TOMBSTONES, [RefTombstoneHorizon] (48 hours): a deleted ref is kept
+//   - REF TOMBSTONES, [RefTombstoneHorizon] (48 hours), or sooner — oldest
+//     first — past [MaxTombstonesPerRepo] (100 000): a deleted ref is kept
 //     as a tombstone so a cache syncing a delta learns of the deletion, and a
-//     push record sweeps its repository's expired ones — as many as the
-//     record leaves of [MaxRecordRows], because one record can make three
+//     push record sweeps its repository's due ones — as many as the record
+//     leaves of [MaxRecordRows], because one record can make nearly two
 //     thousand and a fixed share fell behind any repository that deletes
-//     refs in bulk — and raises the mark past which a delta is no longer
-//     complete;
+//     refs in bulk, and never fewer than the record's own deletions, which
+//     the committer counts twice in a record's rows — and raises the mark
+//     past which a delta is no longer complete; a record whose deletions its
+//     sweep cannot make room for, which no committer of this build forms,
+//     removes their rows outright and raises the mark to its own position.
+//     So a deletion never counts against the live refs' [MaxRefsPerRepo]
+//     and never refuses a push, the refs table holds at most the two bounds'
+//     sum, and a delta is answered only while it carries no more rows than
+//     the full answer (so a cache synced before a clean-up larger than what
+//     the repository keeps reads what is left, never every deletion);
 //   - A PURGE, in bounded parts: a repository deleted longer ago than its
 //     retention is removed [PurgePartRows] rows a record, its push rows only
 //     until their bytes reach [PurgePartBytes] ([Store.PurgeStep]), and the
@@ -199,20 +208,29 @@
 // every data node — and statelog.ApplyTxTimeBudget (250 ms) is checked only
 // at a record's boundary, so each is held to it here.
 //
-// A PUSH RECORD (BenchmarkApplyAPushRecord): 70–75 ms at the largest record
-// the committer forms (three pushes of [MaxCommandsPerPush] ref creations,
-// 3 007 rows, against a repository of 10 000 refs), and 81–88 ms when expired
-// tombstones wait behind it and it sweeps the 992 its rows leave; and no
-// slower, 74–87 ms, with [HorizonDeletesPerRecord] expired push rows of the
-// widest a row can be (461 000 bytes) waiting as well — the longest shape a
-// push record has — because the history's removal stops at
+// A PUSH RECORD (BenchmarkApplyAPushRecord, one run): 86–94 ms for the most
+// ref creations a record the committer forms carries (three pushes of
+// [MaxCommandsPerPush] and a fourth of the 926 its row bound leaves, 3 935
+// rows, against a repository of 10 000 refs), and no slower, 86–95 ms, with
+// [HorizonDeletesPerRecord] expired push rows of the widest a row can be
+// (461 000 bytes) waiting — because the history's removal stops at
 // [HorizonBytesPerRecord], three of them, where a bound of rows alone removed
-// sixty-four (29 MB) and added 60–82 ms; 10–12 ms for a group commit of
-// [MaxPushesPerRecord] pushes of one command each, which is 0.16–0.19 ms a
-// push against 3.0–4.0 ms for one push alone — the commit, not the rows, is
-// a small record's cost, and group commit is what pays it once; and 53–66 ms
-// for one small push whose record sweeps a whole row budget of expired
-// tombstones (3 995).
+// sixty-four (29 MB) and added 60–82 ms; 96–105 ms for the most deletions a
+// record the committer forms carries (1 965 in two pushes, each counted
+// twice in its bound) at a repository holding [MaxTombstonesPerRepo] expired
+// tombstones, which writes its 1 965 tombstones and sweeps the 2 029 its rows
+// leave — every row of MaxRecordRows touched — and 94–114 ms with the widest
+// expired push rows waiting as well, the longest shape a record the
+// committer forms has, under half of statelog.ApplyTxTimeBudget; 10–12 ms
+// for a group commit of [MaxPushesPerRecord] pushes of one command each,
+// which is 0.16–0.18 ms a push against 3.4–4.8 ms for one push alone — the
+// commit, not the rows, is a small record's cost, and group commit is what
+// pays it once; 53–61 ms for one small push whose record sweeps a whole row
+// budget of expired tombstones (3 995); and 65–69 ms for a record whose
+// deletions are REMOVALS — three pushes of [MaxCommandsPerPush] deletions at
+// a repository already holding [MaxTombstonesPerRepo] fresh tombstones, a
+// record no committer of this build forms, whose cost the applier bounds all
+// the same.
 //
 // A PURGE RECORD (BenchmarkApplyAPurgePart): 56–60 ms for a part of
 // [PurgePartRows] push rows of a kilobyte; 81–88 ms for a part over the
@@ -276,8 +294,20 @@
 // them again inside its snapshot: 1.85–2.13 s at that worst.
 //
 // A READ: one full page of a snapshot's refs ([MaxSnapshotItems]) from a
-// repository of [MaxRefsPerRepo] refs is 57–64 ms to serve, 5.7–6.4 µs a
-// ref, nearly all of it the driver's scan; measuring the page's rows costs
+// repository of [MaxRefsPerRepo] refs is 57–59 ms to serve, 5.7–5.9 µs a
+// ref, nearly all of it the driver's scan. A full read's walk of the refs'
+// key passes every tombstone in its pages' key ranges, so the most a
+// repository may hold ([MaxTombstonesPerRepo]) costs a page by where they
+// sort: 62–66 ms, about a tenth more, INTERLEAVED one after every live ref —
+// what every page of a whole snapshot pays — and 90–97 ms, about three fifths
+// more, CLUSTERED before the first live ref, a clean-up of one prefix — the
+// most ONE page pays, since the whole cluster lies in its range; either way
+// the snapshot is no page longer, and its walk passes each tombstone once
+// (four counts of twenty, one run). Page 1's choice between a delta and the
+// full answer costs, at its dearest — a delta from below every row of that
+// repository, counted one row past the full answer deep before the full
+// answer is served — 8.5–10.8 ms, a sixth of one page of what it then
+// serves, and after a push a handful of index entries. Measuring the page's rows costs
 // 0.08–0.09 µs a ref and no allocation, where encoding each one to measure it
 // cost 0.78–0.83 µs and three (BenchmarkServeASnapshotPage).
 package code

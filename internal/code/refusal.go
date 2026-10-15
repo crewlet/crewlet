@@ -41,7 +41,7 @@ const (
 	RefusalRepoDeleted Refusal = "repo_deleted"
 	// RefusalRepoSize is a push past code.limits.repo_max_bytes.
 	RefusalRepoSize Refusal = "repo_size"
-	// RefusalRepoRefs is a create past MaxRefsPerRepo.
+	// RefusalRepoRefs is a create past MaxRefsPerRepo live refs.
 	RefusalRepoRefs Refusal = "repo_refs"
 	// RefusalUploadExpired is a pack uploaded longer ago than a write may
 	// still name it (objstore.RecordWithin).
@@ -107,7 +107,7 @@ var sentences = map[Refusal]string{
 	RefusalRepoArchived:    "the repository is archived and read-only",
 	RefusalRepoDeleted:     "the repository is deleted, being purged or gone, and takes no push",
 	RefusalRepoSize:        "the repository would hold more than code.limits.repo_max_bytes",
-	RefusalRepoRefs:        "the repository holds as many refs as one repository may",
+	RefusalRepoRefs:        "the repository holds as many live refs as one repository may",
 	RefusalUploadExpired:   "the pack was uploaded too long ago to be committed; run git push again",
 	RefusalAtomic:          "refused with the rest of this --atomic push",
 	RefusalBlobTooLarge:    "a blob is larger than code.limits.max_blob_bytes; keep large binaries in tracker files",
