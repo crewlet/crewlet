@@ -343,6 +343,12 @@ providers:
                                         #   a bench is SHARED across the fleet, so a peer's 429 benches the
                                         #   key here too — see concepts/coordination.md
       base_url: "${LLM_BASE_URL}"       # optional — custom endpoint; supports ${ENV_VAR} references.
+                                        #   An http:// or https:// URL with a host, and NO QUERY OR
+                                        #   FRAGMENT: both SDKs resolve each request's path against
+                                        #   it, which drops them, so `?api-version=…` or `?key=…` would
+                                        #   never be sent — refused at validation, and a ${VAR} whose
+                                        #   value carries one is refused when the provider is built.
+                                        #   A key belongs in api_keys; userinfo is sent, as Basic auth.
                                         #   REQUIRED for openai-compatible and REFUSED when it is
                                         #   empty — including when a ${VAR} resolved to nothing.
                                         #   `openai-compatible` means "not OpenAI", and an empty
@@ -492,10 +498,12 @@ providers:
     api_key: "${OPENAI_API_KEY}"        # supports ${ENV_VAR} references; empty falls
                                         #   back to OPENAI_API_KEY, the same variable
                                         #   the chat backend reads
-    base_url: "..."                     # optional — custom endpoint. This is the only
+    base_url: "http://127.0.0.1:8080/v1" # optional — custom endpoint. This is the only
                                         #   difference between `openai` and
                                         #   `openai-compatible`, so a local embedding
-                                        #   server needs nothing else
+                                        #   server needs nothing else. The same rules
+                                        #   as an LLM entry's base_url: an http(s) URL
+                                        #   with a host, no query or fragment
   # dimensions: 1024                  # OPTIONAL OVERRIDE, 64..4096. Unset takes the
                                         #   named model's OWN width, which is what
                                         #   you want unless you are deliberately

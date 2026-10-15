@@ -2976,3 +2976,38 @@ func TestTheCallsSpanEndsAsTheDocsSay(t *testing.T) {
 		})
 	}
 }
+
+// A QUERY OR FRAGMENT IN base_url IS NEVER SENT, and this pins the SDK
+// behaviour config.CheckBaseURL refuses such a base_url over: the SDK resolves
+// each request's path against the base, which replaces the base's query and
+// drops its fragment. Were a release to start sending the query, this fails
+// first, and the refusal would be the thing to revisit.
+func TestABaseURLsQueryIsNeverSent(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var sent []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		sent = append(sent, r.URL.Path+"?"+r.URL.RawQuery)
+		mu.Unlock()
+		writeJSON(w, http.StatusOK, okMessage("hi"))
+	}))
+	defer srv.Close()
+	for _, suffix := range []string{"/gw?key=k", "/gw/?api-version=2025", "/gw#frag"} {
+		mu.Lock()
+		sent = nil
+		mu.Unlock()
+		p := newProvider(t, srv.URL+suffix, nil)
+		if _, err := p.Complete(context.Background(), userTurn("hi")); err != nil {
+			t.Fatalf("%s: Complete: %v", suffix, err)
+		}
+		mu.Lock()
+		got := slices.Clone(sent)
+		mu.Unlock()
+		if want := []string{"/gw/v1/messages?"}; !slices.Equal(got, want) {
+			t.Errorf("base_url ending %q sent %q, want %q: the SDK now keeps part of a "+
+				"base_url's query or fragment, so config.CheckBaseURL's refusal is "+
+				"worth revisiting", suffix, got, want)
+		}
+	}
+}

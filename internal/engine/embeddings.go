@@ -48,6 +48,10 @@ func (e *Engine) buildEmbedder(c *Company) (embeddings.Embedder, error) {
 	// an input past them before sending it, and packs a batch into requests
 	// they admit.
 	limits := cfg.Limits()
+	baseURL := env.Value(cfg.BaseURL)
+	if err := resolvedBaseURL(cfg.BaseURL, baseURL); err != nil {
+		return nil, fmt.Errorf("engine: providers.embeddings: %w", err)
+	}
 	provider, err := embeddings.New(embeddings.Config{
 		Model:      env.Value(cfg.Model),
 		Dimensions: cfg.Width(),
@@ -57,7 +61,7 @@ func (e *Engine) buildEmbedder(c *Company) (embeddings.Embedder, error) {
 		// THE CONFIGURATION'S RULE for which key, the conventional
 		// OPENAI_API_KEY included, resolved through the store-aware chain.
 		APIKey:  cfg.ResolvedKey(env),
-		BaseURL: env.Value(cfg.BaseURL),
+		BaseURL: baseURL,
 		Limits: embeddings.Limits{
 			InputBytes:    limits.InputBytes,
 			BatchInputs:   limits.BatchInputs,
