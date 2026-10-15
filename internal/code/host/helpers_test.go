@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -165,6 +166,19 @@ func (l *logs) count(msg string, attrs ...string) int {
 	return n
 }
 
+// at is every line logged at level ("ERROR", "WARN", …).
+func (l *logs) at(level string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for line := range strings.Lines(l.buf.String()) {
+		if strings.Contains(line, `"level":"`+level+`"`) {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
 // get is a hand-built GET of RepoName's advertisement on node i, as who, under
 // protocol ("" for none).
 func get(t *testing.T, c *codetest.Case, i int, who, service, protocol string) (*http.Response, string) {
@@ -266,6 +280,17 @@ func raw(t *testing.T, c *codetest.Case, who, service, protocol string, declared
 // pkt is s as one pkt-line.
 func pkt(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
 
+// emptyPack is a pack of no objects as git writes one, in dir: what a push
+// whose objects the repository already holds sends after its commands.
+func emptyPack(t *testing.T, c *gittest.Client, dir string) string {
+	t.Helper()
+	pack, stderr, err := c.Try(t, dir, strings.NewReader(""), "pack-objects", "--stdout", "-q")
+	if err != nil {
+		t.Fatalf("git pack-objects of nothing: %v\n%s", err, stderr)
+	}
+	return pack
+}
+
 // receivePacks is how many receive-pack processes a recording git has run so
 // far, advertisements included — counted rather than sliced, because the
 // recording lists its calls in no order.
@@ -273,6 +298,18 @@ func receivePacks(calls func() []gittest.Call) int {
 	n := 0
 	for _, call := range calls() {
 		if len(call.Args) > 0 && call.Args[0] == "receive-pack" {
+			n++
+		}
+	}
+	return n
+}
+
+// pushReceives is how many receive-pack processes a recording git has run so
+// far to RECEIVE a push — its advertisements left out.
+func pushReceives(calls func() []gittest.Call) int {
+	n := 0
+	for _, call := range calls() {
+		if len(call.Args) > 0 && call.Args[0] == "receive-pack" && !slices.Contains(call.Args, "--advertise-refs") {
 			n++
 		}
 	}

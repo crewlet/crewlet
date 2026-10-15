@@ -149,6 +149,7 @@ var typedKinds = []typedKind{
 	{"usage.ErrFutureVersion", reflect.TypeFor[*usage.ErrFutureVersion]()},
 
 	{"code.ErrFutureVersion", reflect.TypeFor[*code.ErrFutureVersion]()},
+	{"code.TooWideError", reflect.TypeFor[*code.TooWideError]()},
 
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},
 	{"statelog.EvictionRefusal", reflect.TypeFor[*statelog.EvictionRefusal]()},

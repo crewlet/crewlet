@@ -697,8 +697,8 @@ func TestAnInboxFullOfBytesIsBusy(t *testing.T) {
 // together — from each push's queueing to its caller's answer, its batch
 // included — because a node commits for every repository rendezvous ranks it
 // first for, and a thousand of the largest pushes from as many
-// repositories, each under its own repository's bound, held over 400 MiB of
-// entries. Every push it held is released once its caller has its answer.
+// repositories, each under its own repository's bound, held about a gibibyte
+// of entries. Every push it held is released once its caller has its answer.
 func TestANodeFullOfBytesIsBusy(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

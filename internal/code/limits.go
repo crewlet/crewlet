@@ -150,7 +150,10 @@ const (
 	// MaxCommandsPerPush is the most ref updates one push carries. A push's
 	// apply then writes at most 1 003 rows, so three maximal pushes fit one
 	// record's row budget and two its byte budget (about 410 KiB each with
-	// refs at MaxRefNameBytes); an import chunks its refs at this size.
+	// plain refs at MaxRefNameBytes); an import chunks its refs at this size.
+	// Refs JSON spells long — `&`, `<` and `>` take six bytes each — reach
+	// EntryRoom first, at some six hundred of the longest, and such a push
+	// is refused by its receiver before its work (Proposal.ValidateCommands).
 	MaxCommandsPerPush = 1_000
 
 	// MaxRefsPerRepo is the most live refs a repository holds. A protocol-v0
@@ -370,7 +373,8 @@ const (
 	// the bytes each proposal's entry can reach in its record: SIXTEEN
 	// RECORDS' BYTES, which makes CommitterInbox's own reason exact for
 	// large pushes as well as small ones. A count alone held 1 024 maximal
-	// proposals — about 400 MiB for ONE repository — where a burst of large
+	// proposals — about a gibibyte for ONE repository, at EntryRoom each —
+	// where a burst of large
 	// pushes (an import, a fan-out of wide tag pushes) now queues sixteen
 	// records' worth and is refused busy past it. The limits test holds it
 	// to at least two records — a full record always queues behind an
@@ -391,18 +395,20 @@ const (
 	// registration of their own as wide as one repository's whole queue
 	// (CommitterInbox), so a thousand of the largest pushes at once — each
 	// one a receive-pack some receiving node holds open, from as many
-	// repositories — held over 400 MiB of entries on the committer, and as
-	// much again decoded. The largest entry this domain admits is about
-	// 440 KiB (MaxCommandsPerPush commands at MaxRefNameBytes, then
-	// MaxIntroduced ids: 451 222 bytes measured), so four repositories'
-	// queues is room for four bursts taken whole at once, or about 150 of the
-	// largest pushes — where the estate's one shared registration held at
-	// most sixty-four proposals a node, about 28 MiB of them, before
-	// proposals had a registration of their own. A JUDGEMENT, of a burst's
-	// reach against a node's memory: about 64 MiB of entries, some two and
-	// a third times what the shared registration could hold, on a node that
-	// holds the whole estate, so that four repositories' bursts queue whole
-	// at once. Small pushes
+	// repositories — held about a gibibyte of entries on the committer, and
+	// as much again decoded. The largest entry this domain admits is
+	// EntryRoom, 1 048 064 bytes: a push of refs JSON spells long, some six
+	// hundred `&` refs at MaxRefNameBytes (Proposal.ValidateCommands). One of
+	// plain refs is at most 451 222 bytes (MaxCommandsPerPush commands at
+	// MaxRefNameBytes, then MaxIntroduced ids, measured). So four
+	// repositories' queues is room for four bursts taken whole at once:
+	// sixty-four of the largest entries, or about 150 of the largest plain
+	// ones. A JUDGEMENT, of a burst's reach against a node's memory: 64 MiB
+	// of entries, on a node that holds the whole estate, so that four
+	// repositories' bursts queue whole at once. That is also the most the
+	// estate's one shared registration could hold before proposals had a
+	// registration of their own: sixty-four proposals a node, 64 MiB at the
+	// largest entry and about 28 MiB at the largest plain one. Small pushes
 	// never reach it — a thousand at a kilobyte or two meet CommitterInbox
 	// long before — while large ones, an import's thousand-ref chunks, queue
 	// four repositories' worth at once and are refused busy past it, and the

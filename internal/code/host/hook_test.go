@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
@@ -228,6 +229,8 @@ func TestTheCommandSectionIsBounded(t *testing.T) {
 		err      error
 		commands int
 		empty    bool
+		// raw is what the section holds, when it ends before the body does.
+		raw string
 	}{
 		{name: "the probe", body: "0000", empty: true},
 		{name: "a thousand commands", body: many(code.MaxCommandsPerPush) + "0000", commands: code.MaxCommandsPerPush},
@@ -250,10 +253,19 @@ func TestTheCommandSectionIsBounded(t *testing.T) {
 		{name: "a ref past the longest, first", body: pkt(oid('a')+" "+oid('b')+" refs/heads/"+
 			strings.Repeat("y", code.MaxRefNameBytes)+"\x00report-status atomic agent=git/2.43.0\n") +
 			command("refs/heads/x") + "0000", commands: 2},
-		// ANY LINE BUT A LONE FLUSH IS A PUSH, not the probe: what the
-		// receiver cannot parse is receive-pack's to refuse.
+		// ANY LINE BUT A LONE FLUSH IS A PUSH, not the probe: a line no
+		// command parses from is one receive-pack dies on, in its own words.
 		{name: "a line no command parses from", body: pkt("not a command\n") + "0000"},
-		{name: "a delimiter", body: "0001" + "0000"},
+		// A DELIMITER ENDS THE SECTION, as it ends receive-pack's reading of
+		// commands: what follows is the pack's, for git to read.
+		{name: "a delimiter", body: "0001" + "0000", raw: "0001"},
+		{name: "a command after a delimiter is none", body: first + "0001" + command("refs/heads/x") + "0000",
+			commands: 1, raw: first + "0001"},
+		{name: "ids in capitals", body: pkt(strings.ToUpper(oid('a')+" "+oid('b'))+" refs/heads/x\n") + "0000",
+			commands: 1},
+		{name: "an empty ref", body: pkt(oid('a')+" "+oid('b')+" \n") + "0000", commands: 1},
+		{name: "a push certificate", body: pkt("push-cert\x00report-status\n") + pkt("certificate version 0.1\n") +
+			"0000", err: host.ErrPushCertificate},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, err := host.ReadCommands(strings.NewReader(tc.body), host.MaxCommandSectionBytes, code.MaxCommandsPerPush)
@@ -266,11 +278,141 @@ func TestTheCommandSectionIsBounded(t *testing.T) {
 			if len(s.Commands) != tc.commands || s.Empty != tc.empty {
 				t.Errorf("read %d commands (empty %v), want %d (%v)", len(s.Commands), s.Empty, tc.commands, tc.empty)
 			}
-			if string(s.Raw) != tc.body {
-				t.Errorf("the section's bytes are not the client's")
+			raw := tc.raw
+			if raw == "" {
+				raw = tc.body
 			}
-			if strings.Contains(tc.body, "atomic") && (!s.Atomic || s.Agent != "git/2.43.0") {
-				t.Errorf("the first command's capabilities read as atomic %v, agent %q", s.Atomic, s.Agent)
+			if string(s.Raw) != raw {
+				t.Errorf("the section's bytes are %q, want the client's %q", s.Raw, raw)
+			}
+			for _, c := range s.Commands {
+				if !gitref.ValidOID(c[0]) || !gitref.ValidOID(c[1]) {
+					t.Errorf("a command read as %q %q, not two ids in their one spelling", c[0], c[1])
+				}
+			}
+			if strings.Contains(tc.body, "atomic") && !s.Caps.Atomic {
+				t.Errorf("the first command's capabilities read as %+v, without atomic", s.Caps)
+			}
+		})
+	}
+}
+
+// THE COMMAND SECTION IS READ AS RECEIVE-PACK READS IT, measured against real
+// git: each section, followed by an empty pack, is handed to `git receive-pack
+// --stateless-rpc` in a bare repository holding one commit and NO HOOK, so git
+// creates every ref it queued that its own rules take. What git created is
+// held to what the reader read: every ref git creates is a command the reader
+// read — so no check the receiver makes before receive-pack runs is skipped for
+// a command git acts on — and the reader's capabilities are the ones git
+// answered with (its report, and its side-band). Each row pins git's side as
+// well as the reader's, so a git that changes its reading fails here rather
+// than in a push. A section the reader refuses is one git acts on regardless,
+// which is why it is refused.
+func TestTheCommandSectionIsReadAsReceivePackReadsIt(t *testing.T) {
+	c := gittest.NewClient(t)
+	work := c.Init(t)
+	head := c.Commit(t, work, map[string]string{"README.md": "one\n"}, "one")
+	upper, mixed := strings.ToUpper(head), strings.ToUpper(head[:20])+head[20:]
+	create := func(id, ref string) string { return gitref.ZeroOID + " " + id + " " + ref }
+	pack := emptyPack(t, c, work)
+	for _, tc := range []struct {
+		name    string
+		section string   // the command section, the packet that ends it included
+		created []string // the refs git creates, measured
+		read    []string // the refs of the commands the reader reads, in order
+		err     error    // the reader's refusal
+		dies    bool     // git dies on the section, before it acts on any command
+	}{
+		{name: "ids in capitals", section: pkt(create(upper, "refs/heads/upper")+"\x00report-status\n") + "0000",
+			created: []string{"refs/heads/upper"}, read: []string{"refs/heads/upper"}},
+		{name: "ids in mixed case", section: pkt(create(mixed, "refs/heads/mixed")+"\x00report-status\n") + "0000",
+			created: []string{"refs/heads/mixed"}, read: []string{"refs/heads/mixed"}},
+		{name: "the capabilities on a later line", section: pkt(create(head, "refs/heads/one")+"\n") +
+			pkt(create(head, "refs/heads/two")+"\x00report-status side-band-64k\n") + "0000",
+			created: []string{"refs/heads/one", "refs/heads/two"}, read: []string{"refs/heads/one", "refs/heads/two"}},
+		{name: "capabilities past a second NUL", section: pkt(create(head, "refs/heads/nul")+
+			"\x00report-status\x00side-band-64k\n") + "0000",
+			created: []string{"refs/heads/nul"}, read: []string{"refs/heads/nul"}},
+		{name: "an empty ref, which git refuses itself", section: pkt(create(head, "")+"\x00report-status\n") +
+			pkt(create(head, "refs/heads/ok")+"\n") + "0000",
+			created: []string{"refs/heads/ok"}, read: []string{"", "refs/heads/ok"}},
+		{name: "a ref holding a line feed before its capabilities", section: pkt(create(head, "refs/heads/lf\n")+
+			"\x00report-status\n") + pkt(create(head, "refs/heads/cr\r")+"\n") + "0000",
+			read: []string{"refs/heads/lf\n", "refs/heads/cr\r"}},
+		{name: "shallow lines: in capitals, with more after the id, with capabilities git does not read",
+			section: pkt("shallow "+upper+"\n") + pkt("shallow "+head+" "+create(head, "refs/heads/hidden")+"\n") +
+				pkt("shallow "+head+"\x00side-band-64k\n") +
+				pkt(create(head, "refs/heads/shallow")+"\x00report-status\n") + "0000",
+			created: []string{"refs/heads/shallow"}, read: []string{"refs/heads/shallow"}},
+		{name: "a delimiter ends the commands", section: pkt(create(head, "refs/heads/delim")+"\x00report-status\n") +
+			"0001", created: []string{"refs/heads/delim"}, read: []string{"refs/heads/delim"}},
+		{name: "and so does a response end", section: pkt(create(head, "refs/heads/end")+"\x00report-status\n") +
+			"0002", created: []string{"refs/heads/end"}, read: []string{"refs/heads/end"}},
+		{name: "a line git dies on", section: pkt(create(head, "refs/heads/before")+"\x00report-status\n") +
+			pkt("not a command\n") + pkt(create(head, "refs/heads/after")+"\n") + "0000",
+			read: []string{"refs/heads/before", "refs/heads/after"}, dies: true},
+		{name: "an id that is not hex", section: pkt(create(strings.Repeat("g", 40), "refs/heads/g")+
+			"\x00report-status\n") + "0000", dies: true},
+		{name: "a push certificate, whose commands no line of their own carries", section: pkt("push-cert\x00"+
+			"report-status\n") + pkt("certificate version 0.1\n") + pkt("pusher p <p@example.com> 0 +0000\n") +
+			pkt("pushee crewlet\n") + pkt("nonce n\n") + pkt("\n") +
+			pkt(create(head, "refs/heads/cert1")+"\n"+create(head, "refs/heads/cert2")+"\n") +
+			pkt(create(head, "refs/heads/ce")) + pkt("rt3\n") + pkt("push-cert-end\n") + "0000",
+			created: []string{"refs/heads/cert1", "refs/heads/cert2", "refs/heads/cert3"},
+			err:     host.ErrPushCertificate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := host.ReadCommands(strings.NewReader(tc.section+pack), host.MaxCommandSectionBytes,
+				code.MaxCommandsPerPush)
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("ReadCommands = %v, want %v", err, tc.err)
+			}
+			var read []string
+			for _, cmd := range s.Commands {
+				read = append(read, cmd[2])
+			}
+			if tc.err == nil && !slices.Equal(read, tc.read) {
+				t.Errorf("the reader read %q, want %q", read, tc.read)
+			}
+
+			bare := t.TempDir()
+			c.Run(t, bare, "init", "--bare", "-q")
+			c.Run(t, work, "push", "-q", bare, "main")
+			stdout, stderr, gitErr := c.Try(t, bare, strings.NewReader(tc.section+pack), "receive-pack",
+				"--stateless-rpc", bare)
+			if (gitErr != nil) != tc.dies {
+				t.Fatalf("git receive-pack exited %v, want it to die: %v\n%s", gitErr, tc.dies, stderr)
+			}
+			var created []string
+			for line := range strings.Lines(c.Run(t, bare, "for-each-ref", "--format=%(refname)")) {
+				if ref := strings.TrimSuffix(line, "\n"); ref != "refs/heads/main" {
+					created = append(created, ref)
+				}
+			}
+			if !slices.Equal(created, tc.created) {
+				t.Fatalf("git created %q, want %q: the row no longer says what git does\n%s", created, tc.created,
+					stderr)
+			}
+			if tc.err != nil {
+				return
+			}
+			for _, ref := range created {
+				if !slices.Contains(read, ref) {
+					t.Errorf("git created %q, which the reader read no command for: no check before "+
+						"receive-pack ever saw it", ref)
+				}
+			}
+			if tc.dies {
+				return
+			}
+			banded := len(stdout) > 4 && (stdout[4] == 1 || stdout[4] == 2)
+			if banded != s.Caps.SideBand64k {
+				t.Errorf("git answered in side-band: %v; the reader read side-band-64k: %v", banded,
+					s.Caps.SideBand64k)
+			}
+			if reported := strings.Contains(stdout, "unpack ok"); reported != (s.Caps.ReportStatus ||
+				s.Caps.ReportStatusV2) {
+				t.Errorf("git wrote a report: %v; the reader read %+v", reported, s.Caps)
 			}
 		})
 	}

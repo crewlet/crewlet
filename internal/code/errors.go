@@ -1,6 +1,9 @@
 package code
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // The sentinels. Each is a fact a caller acts on differently, which is why
 // they are separate; each is errors.Is-comparable, and each keeps that
@@ -40,8 +43,13 @@ var (
 
 	// ErrInvalidProposal is a push proposal this domain cannot decide,
 	// wrapped with the field and the reason ([Proposal.Validate]), or one
-	// whose push id names a push to another repository. Never a refusal of
-	// the push — the receiver formed it, so it is the receiver's bug.
+	// whose push id names a push to another repository. At a committer it is
+	// never a refusal of the push — the receiver formed the proposal, and
+	// held the client's commands (every one receive-pack acts on, read as it
+	// reads them) to [Proposal.ValidateCommands] before any work, so it is
+	// the receiver's bug. From ValidateCommands itself it is
+	// the CLIENT'S push, past what one push may carry, which the receiver
+	// refuses in the client's words.
 	ErrInvalidProposal = errors.New("code: not a push this domain can decide")
 
 	// ErrNotServing is a node's code half that RAN NOTHING: a committer that
@@ -81,3 +89,23 @@ var (
 	// published.
 	ErrBadBundle = errors.New("code: a pack bundle is not the one its row describes")
 )
+
+// TooWideError is a push whose entry can reach Bytes in its record, past the
+// Room one push's entry may take ([EntryRoom]) — [ErrInvalidProposal] by
+// identity. Typed, so the receiver tells the client what the push takes and
+// what one push may, and the client pushes its refs in parts: from
+// [Proposal.ValidateCommands] it is the client's push, and from
+// [Proposal.Validate] at a committer the receiver's bug.
+type TooWideError struct {
+	// Bytes is what the push's entry can reach; Room what one entry may.
+	Bytes, Room int
+}
+
+func (e *TooWideError) Error() string {
+	return fmt.Sprintf("%v: commands: the push's entry can reach %d bytes in its record, past the %d one "+
+		"entry may take (MaxRecordBytes less a record's own overhead) — a push this wide is pushed in parts",
+		ErrInvalidProposal, e.Bytes, e.Room)
+}
+
+// Unwrap is ErrInvalidProposal.
+func (e *TooWideError) Unwrap() error { return ErrInvalidProposal }

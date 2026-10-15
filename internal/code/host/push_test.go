@@ -478,6 +478,300 @@ func TestARefPastTheLongestIsRefusedAsNotARef(t *testing.T) {
 	}
 }
 
+// A REF PAST THE LONGEST RIDES ITS RECORD BOUNDED: a ref the engine refuses
+// bad_ref may run to a pkt-line's 64 KiB, and JSON spells an `&` in six bytes,
+// so four such refs carried whole beside main took the push's entry past its
+// record's budget — the committer refused the receiver's own proposal, main
+// was refused with them, an ERROR said the receiver had a bug, and the bundle
+// was stored for nothing. And a ref that is not UTF-8 reads back from JSON as
+// another ref: told to git from the row, two of them were statuses for refs
+// git never sent, and git printed that proc-receive failed to report. Carried
+// as code.RecordedRef, each costs the record a few hundred bytes: main lands,
+// git is told each refused ref by the name it sent, and the push's row holds
+// each in its bounded form.
+func TestALongRefRidesItsRecordBounded(t *testing.T) {
+	l := &logs{}
+	c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	refspecs := []string{"main"}
+	var long []string
+	for i := range 4 {
+		ref := fmt.Sprintf("refs/heads/%d/%s", i, strings.Repeat("&", 60_000))
+		long = append(long, ref)
+		refspecs = append(refspecs, "HEAD:"+ref)
+	}
+	for _, ref := range []string{"refs/heads/\xff", "refs/heads/\xfe"} {
+		long = append(long, ref)
+		refspecs = append(refspecs, "HEAD:"+ref)
+	}
+	notARef := "(bad_ref: " + code.RefusalBadRef.Sentence() + ")"
+
+	res := p.Push(c.Ctx, work, c.URL(0), refspecs...)
+	if !res.OK("refs/heads/main") {
+		t.Errorf("main, pushed beside four refs of 60 KiB of '&', was not taken: %s",
+			strings.ReplaceAll(res.String(), strings.Repeat("&", 60_000), "<60 000 &>"))
+	}
+	for _, ref := range long {
+		if reason, rejected := res.Rejected(ref); !rejected || !strings.Contains(reason, notARef) {
+			t.Errorf("a ref of %d bytes printed %q, want it refused %s", len(ref), reason, notARef)
+		}
+	}
+	if got := c.Rows().Refs["refs/heads/main"]; got != head {
+		t.Errorf("main is at %q, want %s", got, head)
+	}
+	if lines := l.at("ERROR"); len(lines) > 0 {
+		t.Errorf("a push of refs the engine refuses logged at ERROR: %q", lines)
+	}
+	rows := pushRows(t, c)
+	if len(rows) != 1 {
+		t.Fatalf("%d push rows, want the one push", len(rows))
+	}
+	recorded := map[string]code.Command{}
+	for _, cmd := range rows[0].Commands {
+		recorded[cmd.Ref] = cmd
+	}
+	for _, ref := range long {
+		cmd, ok := recorded[code.RecordedRef(ref)]
+		if !ok || cmd.Result != code.ResultNG || cmd.Reason != code.RefusalBadRef {
+			t.Errorf("the push row holds %+v for a ref of %d bytes, want it as %q, refused bad_ref", cmd,
+				len(ref), code.RecordedRef(ref))
+		}
+		if len(cmd.Ref) > code.MaxRefNameBytes {
+			t.Errorf("the push row holds a ref of %d bytes, past the longest (%d)", len(cmd.Ref),
+				code.MaxRefNameBytes)
+		}
+	}
+}
+
+// A PUSH TOO WIDE FOR ITS RECORD IS REFUSED BEFORE ITS WORK: seven hundred
+// refs of the longest, each spelled six times over in the record's JSON (`&`),
+// beside main reach about 1.1 MiB of entry, past the room one push may take.
+// Refused by its committer, such a push had already run receive-pack, its
+// scans and its bundle's upload and made the estate's round trip, and was
+// answered as the engine refusing its own proposal — an ERROR, the push
+// recorded failed and its bundle stored for nothing. The receiver measures the
+// commands as it reads them, with everything the work could add at its
+// largest, and refuses the push in the client's words before receive-pack.
+func TestAPushTooWideForItsRecordStoresNothing(t *testing.T) {
+	l := &logs{}
+	path, calls := gittest.Recording(t)
+	c := newCase(t, codetest.SoloOptions{GitPath: path, Logger: l.logger()}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	var create strings.Builder
+	var wide []string
+	for i := range 700 {
+		ref := fmt.Sprintf("refs/heads/%s%04d", strings.Repeat("&", code.MaxRefNameBytes-len("refs/heads/")-4), i)
+		wide = append(wide, ref)
+		fmt.Fprintf(&create, "create %s %s\n", ref, head)
+	}
+	if _, stderr, err := p.Git().Try(t, work, strings.NewReader(create.String()), "update-ref", "--stdin"); err != nil {
+		t.Fatalf("create the refs: %v: %s", err, stderr)
+	}
+
+	res := p.Push(c.Ctx, work, c.URL(0), "refs/heads/*:refs/heads/*")
+	for _, ref := range append([]string{"refs/heads/main"}, wide[0], wide[len(wide)-1]) {
+		reason, rejected := res.Rejected(ref)
+		if !rejected || !strings.Contains(reason, "(this push's ref updates take up to ") ||
+			!strings.Contains(reason, "push them in parts") {
+			t.Errorf("%.40s… of a push too wide for its record printed %q, want it refused for its width",
+				ref, reason)
+		}
+	}
+	if n := pushReceives(calls); n != 0 {
+		t.Errorf("a push too wide for its record ran receive-pack %d times", n)
+	}
+	if names := objects(t, c); len(names) > 0 {
+		t.Errorf("a push too wide for its record stored %v", names)
+	}
+	if lines := l.at("ERROR"); len(lines) > 0 {
+		t.Errorf("a push too wide for its record logged at ERROR: %q", lines)
+	}
+	if audited := c.Fleet.Audited(); len(audited) != 1 || audited[0].Outcome != types.AuditRefused ||
+		audited[0].Refusal != string(host.RefusalCommands) {
+		t.Errorf("a push too wide for its record was recorded as %+v, want one refused/commands", audited)
+	}
+	if got := c.Rows().Refs["refs/heads/main"]; got != "" {
+		t.Errorf("main is at %s after its push was refused whole", got)
+	}
+}
+
+// A HAND-BUILT PUSH IS JUDGED AS RECEIVE-PACK READS IT. A command whose ids a
+// client wrote in capitals, or whose capabilities ride a later line, is the
+// command git acts on, so every check the receiver makes before receive-pack
+// holds it — read as no command, a push of hundreds of the widest refs in
+// capitals ran receive-pack and was refused by the receiver's own proposal
+// check, as its bug, at ERROR; and one ref named in both cases was a ref named
+// twice the same way. A push certificate, whose commands receive-pack acts on
+// though the engine never advertised one, is refused before anything runs.
+// And a command list that cannot be read is recorded like every other push.
+func TestAHandBuiltPushIsJudgedAsReceivePackReadsIt(t *testing.T) {
+	l := &logs{}
+	path, calls := gittest.Recording(t)
+	settings := codetest.Settings()
+	settings.Protections = append([]code.Protection{{Pattern: "refs/heads/frozen", DirectPush: code.DirectNone}},
+		settings.Protections...)
+	c := newCase(t, codetest.SoloOptions{GitPath: path, Logger: l.logger()}, settings)
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+	upper := strings.ToUpper(head)
+	create := func(id, ref string) string { return gitrefZero + " " + id + " " + ref }
+	pack := emptyPack(t, p.Git(), work)
+	var wide strings.Builder
+	for i := range 700 {
+		caps := "\n"
+		if i == 0 {
+			caps = "\x00report-status\n"
+		}
+		wide.WriteString(pkt(create(upper, fmt.Sprintf("refs/heads/%s%04d",
+			strings.Repeat("&", code.MaxRefNameBytes-len("refs/heads/")-4), i)) + caps))
+	}
+	certificate := pkt("push-cert\x00report-status\n") + pkt("certificate version 0.1\n") +
+		pkt("pusher ceo <ceo@example.com> 0 +0000\n") + pkt("pushee crewlet\n") + pkt("nonce n\n") + pkt("\n") +
+		pkt(create(head, "refs/heads/signed")+"\n") + pkt("push-cert-end\n") + "0000"
+
+	for _, tc := range []struct {
+		name    string
+		body    string
+		status  int
+		banded  bool   // the answer is side-band framed
+		answer  string // in the answer (its band 1, when banded)
+		absent  string // never in the answer
+		outcome types.AuditOutcome
+		refusal host.AuditRefusal
+		lands   string // the ref the push lands, after receive-pack has run
+	}{
+		{name: "ids in capitals, too wide for the record", body: wide.String() + "0000" + pack,
+			status: http.StatusOK, answer: "0000 this push's ref updates take up to ", outcome: types.AuditRefused,
+			refusal: host.RefusalCommands},
+		{name: "one ref named in both cases", body: pkt(create(head, "refs/heads/twice")+"\x00report-status\n") +
+			pkt(create(upper, "refs/heads/twice")+"\n") + "0000" + pack, status: http.StatusOK,
+			answer: `"refs/heads/twice" is named twice`, outcome: types.AuditRefused, refusal: host.RefusalCommands},
+		{name: "ids in capitals, protected", body: pkt(create(upper, "refs/heads/frozen")+"\x00report-status\n") +
+			"0000" + pack, status: http.StatusOK, answer: "ng refs/heads/frozen protected_direct",
+			outcome: types.AuditRefused, refusal: host.AuditRefusal(code.RefusalProtectedDirect)},
+		{name: "the capabilities on a later line", body: pkt(create(head, "refs/notes/a")+"\n") +
+			pkt(create(head, "refs/notes/b")+"\x00report-status side-band-64k\n") + "0000" + pack,
+			status: http.StatusOK, banded: true, answer: "ng refs/notes/b reserved_ref",
+			outcome: types.AuditRefused, refusal: host.AuditRefusal(code.RefusalReservedRef)},
+		// A CLIENT THAT ASKS FOR NO REPORT GETS NONE, as from receive-pack.
+		{name: "a refusal to a client that asked for no report", body: pkt(create(head, "refs/notes/c")+
+			"\x00side-band-64k\n") + "0000" + pack, status: http.StatusOK, banded: true, absent: "unpack",
+			outcome: types.AuditRefused, refusal: host.AuditRefusal(code.RefusalReservedRef)},
+		{name: "a push certificate", body: certificate + pack, status: http.StatusBadRequest,
+			answer: "this push carries a push certificate (a signed push)", outcome: types.AuditRefused,
+			refusal: host.RefusalCommands},
+		{name: "a command list that is not pkt-lines", body: "zzzz", status: http.StatusBadRequest,
+			answer: "the push's command list could not be read", outcome: types.AuditRefused,
+			refusal: host.RefusalCommands},
+		{name: "a command list cut short", body: pkt(create(head, "refs/heads/cut") + "\x00report-status\n")[:40],
+			status: http.StatusBadRequest, answer: "the push's command list could not be read",
+			outcome: types.AuditFailed},
+		{name: "ids in capitals land", body: pkt(create(upper, "refs/heads/upper")+"\x00report-status\n") + "0000" +
+			pack, status: http.StatusOK, answer: "ok refs/heads/upper", outcome: types.AuditApplied,
+			lands: "refs/heads/upper"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before, ran, stored, logged := len(c.Fleet.Audited()), pushReceives(calls), len(objects(t, c)),
+				len(l.at("ERROR"))
+			resp, answer := post(t, c, 0, "ceo", "git-receive-pack", "", tc.body)
+			if resp.StatusCode != tc.status {
+				t.Fatalf("answered %d %q, want %d", resp.StatusCode, answer, tc.status)
+			}
+			if tc.banded {
+				data, _, err := demux(answer)
+				if err != nil {
+					t.Fatalf("the answer to a push asking for side-band on its second line is not side-band: "+
+						"%v: %q", err, answer)
+				}
+				answer = data
+			}
+			if !strings.Contains(answer, tc.answer) {
+				t.Errorf("answered %.300q, want it to say %q", answer, tc.answer)
+			}
+			if tc.absent != "" && strings.Contains(answer, tc.absent) {
+				t.Errorf("answered %.300q, which says %q", answer, tc.absent)
+			}
+			if runs := pushReceives(calls) - ran; runs != 0 && tc.lands == "" {
+				t.Errorf("ran receive-pack %d times for a push refused before it", runs)
+			}
+			if got := len(objects(t, c)); got != stored {
+				t.Errorf("stored %d objects", got-stored)
+			}
+			if lines := l.at("ERROR")[logged:]; len(lines) > 0 {
+				t.Errorf("logged at ERROR: %q", lines)
+			}
+			if audited := c.Fleet.Audited()[before:]; len(audited) != 1 || audited[0].Outcome != tc.outcome ||
+				audited[0].Refusal != string(tc.refusal) {
+				t.Errorf("recorded as %+v, want one %s/%s", audited, tc.outcome, tc.refusal)
+			}
+			for ref, at := range c.Rows().Refs {
+				if ref != "refs/heads/main" && (ref != tc.lands || at != head) {
+					t.Errorf("%.40s… is at %s after the push", ref, at)
+				}
+			}
+		})
+	}
+}
+
+// A PROPOSAL ITS RECEIVER REFUSES IS NEVER SENT, AND ITS UPLOAD IS ENDED: the
+// receiver holds its proposal to every rule its committer will once the
+// commits it introduces are listed, while its bundle is still uploading — so a
+// receiver's bug is answered as the committer would answer it, with nobody
+// asked and no bundle stored for a push no row will name. Stood in by the
+// check itself, since no push the commands' own bound admits reaches it.
+func TestAProposalItsReceiverRefusesIsNeverSent(t *testing.T) {
+	l, e := &logs{}, &recording{}
+	c := newCase(t, codetest.SoloOptions{Logger: l.logger(), Shape: codetest.Shape{WrapEstate: e.wrap}},
+		codetest.Settings())
+	held, reached := make(chan struct{}), make(chan struct{})
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(held) }) })
+	c.Fleet.Faults().Arm(codefault.HostUpload, codefault.Action{Once: true, Block: held, Reached: reached})
+	checked := make(chan struct{})
+	host.SetProposalCheck(c.Fleet.Nodes()[0].Host(), func(code.Proposal) error {
+		select { // the upload is held when the check refuses
+		case <-reached:
+		case <-time.After(10 * time.Second):
+		}
+		close(checked)
+		return fmt.Errorf("%w: a receiver's bug", code.ErrInvalidProposal)
+	})
+	go func() { // a check never asked must not hold the push for ever
+		select {
+		case <-checked:
+		case <-time.After(10 * time.Second):
+			release.Do(func() { close(held) })
+		}
+	}()
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+
+	res := p.Push(c.Ctx, work, c.URL(0), "main")
+	if reason, _ := res.Rejected("refs/heads/main"); !strings.Contains(reason,
+		"(unavailable: the engine refused its own proposal: ") || !strings.Contains(reason, "a receiver's bug") {
+		t.Errorf("a push whose proposal its receiver refused printed %q: %s", reason, res)
+	}
+	if n := len(e.seen("propose")); n != 0 {
+		t.Errorf("a proposal its receiver refused was sent %d times", n)
+	}
+	if names := objects(t, c); len(names) > 0 {
+		t.Errorf("a push whose proposal its receiver refused stored %v", names)
+	}
+	if n := l.count("code_push_invalid", `"level":"ERROR"`); n != 1 {
+		t.Errorf("code_push_invalid logged %d times at ERROR, want once: it is the receiver's bug", n)
+	}
+	if audited := c.Fleet.Audited(); len(audited) != 1 || audited[0].Outcome != types.AuditFailed {
+		t.Errorf("the push was recorded as %+v, want one failed", audited)
+	}
+}
+
 // THE CAPABILITIES ARE THE FIRST COMMAND LINE'S, WHATEVER ITS REF: a push
 // whose first command names a ref past the longest still asked for side-band
 // and --atomic, so its refusal is framed in the band it asked for and refused
@@ -494,7 +788,7 @@ func TestTheFirstCommandsCapabilitiesAreReadWhateverItsRef(t *testing.T) {
 
 	// The longest ref the first command line's pkt-line holds beside both
 	// ids and these capabilities.
-	const caps = "\x00side-band-64k atomic\n"
+	const caps = "\x00report-status side-band-64k atomic\n"
 	ids := gitrefZero + " " + head + " "
 	long := "refs/heads/" + strings.Repeat("l", largePacketDataMax-len(ids)-len(caps)-len("refs/heads/"))
 	body := pkt(ids+long+caps) + pkt(gitrefZero+" "+head+" refs/heads/other\n") + "0000"

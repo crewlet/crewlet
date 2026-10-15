@@ -16,26 +16,33 @@ import (
 type Section struct {
 	Raw      []byte
 	Commands [][3]string // old, new, ref
-	Shallow  int
 	Empty    bool
-	Atomic   bool
-	Agent    string
+	Caps     Capabilities
+}
+
+// Capabilities are what a section's lines asked for, as readCommands read
+// them.
+type Capabilities struct {
+	ReportStatus, ReportStatusV2, SideBand64k, Atomic, Quiet bool
 }
 
 // ReadCommands is readCommands over r.
 func ReadCommands(r io.Reader, maxBytes, maxCommands int) (Section, error) {
 	s, err := readCommands(bufio.NewReader(r), maxBytes, maxCommands)
-	out := Section{Raw: s.Raw, Shallow: s.Shallow, Empty: s.Empty(), Atomic: s.Caps.atomic, Agent: s.Caps.agent}
+	out := Section{Raw: s.Raw, Empty: s.Empty(), Caps: Capabilities{ReportStatus: s.Caps.reportStatus,
+		ReportStatusV2: s.Caps.reportStatusV2, SideBand64k: s.Caps.sideBand64k, Atomic: s.Caps.atomic,
+		Quiet: s.Caps.quiet}}
 	for _, c := range s.Commands {
 		out.Commands = append(out.Commands, [3]string{c.Old, c.New, c.Ref})
 	}
 	return out, err
 }
 
-// The command section's two refusals.
+// The command section's refusals.
 var (
 	ErrSectionTooLarge = errSectionTooLarge
 	ErrTooManyCommands = errTooManyCommands
+	ErrPushCertificate = errPushCertificate
 )
 
 // IdxOIDs is idxOIDs.
@@ -77,3 +84,8 @@ func ProtectAfterForce(cmds []code.Command, rules []code.Protection, judged []co
 // RebuildReason is rebuildReason: whether a git process's failure in a cache
 // directory is one a rebuild repairs, and under which reason.
 func RebuildReason(err error) (cache.RebuildReason, bool) { return rebuildReason(err) }
+
+// SetProposalCheck replaces s's own check of a proposal before its bundle is
+// stored (code.Proposal.ValidateUnstored) — how a case stands in the
+// receiver's bug no push reaches. Set before s's first push.
+func SetProposalCheck(s *Server, check func(code.Proposal) error) { s.checkProposal = check }
