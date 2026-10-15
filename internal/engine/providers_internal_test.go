@@ -1,17 +1,22 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/anthropic"
 	"github.com/crewlet/crewlet/internal/providers/llm/openai"
@@ -489,34 +494,35 @@ func TestBuildAnthropicIsTheBuildASeatGets(t *testing.T) {
 	}
 }
 
-// A RESOLVED base_url IS HELD TO THE RULE ITS TEXT WAS. A `${VAR}` is judged at
-// validation only around its references, so a query the VARIABLE carries is
-// first seen here, and the SDK would drop it without a word (see
-// config.CheckBaseURL). The build is refused naming the provider and the
-// variable, never the value, since a query is where a key gets written. The
-// embeddings provider is held to the same rule; userinfo, which is sent, builds.
+// A RESOLVED base_url IS HELD TO BOTH HALVES OF ITS RULE, by class. A `${VAR}`
+// is judged at validation only around its references, so what the VARIABLE
+// holds is first seen here. One no call can be sent on is REFUSED, naming the
+// provider and the variable, never the value. One whose query or fragment the
+// SDK drops BUILDS — every call is sent, only without the part, and the rule
+// that refuses one on a write is an admission rule a later build may relax —
+// and is warned about as provider_base_url_unsent, naming the provider, the
+// part and the variable and never the value, since a query is where a key
+// gets written. The embeddings provider is held to the same two.
 //
-// Mutation: drop the resolvedBaseURL check from resolveEndpoint, or from
-// buildEmbedder, and that half builds.
-func TestAResolvedBaseURLIsHeldToTheWrittenRule(t *testing.T) {
+// Mutation: refuse a revealed part in config.resolveBaseURL, and the query
+// cases fail to build; drop warnUnsentBaseURL from resolveEndpoint or from
+// embeddingsBaseURL, and that half logs nothing.
+func TestAResolvedBaseURLIsRefusedOnlyWhenNoCallCanBeSent(t *testing.T) {
 	t.Parallel()
 	const secret = "sk-in-the-query"
-	r := tierB(map[string]string{
+	r := config.NewResolver(storeSource{
 		"LLM_BASE_URL":   "https://gw.example.com/v1?key=" + secret,
-		"LLM_NO_SCHEME":  "gw.example.com/v1",
-		"LLM_USERINFO":   "https://user:pass@gw.example.com/v1",
+		"LLM_NO_SCHEME":  "gw.example.com/v1?key=" + secret,
 		"EMBED_BASE_URL": "https://embed.example.com/v1#" + secret,
+		"EMBED_NO_HOST":  "https:///v1#" + secret,
 	})
 	for _, kind := range []config.LLMProviderType{config.LLMAnthropic, config.LLMOpenAI, config.LLMOpenAICompatible} {
-		for variable, want := range map[string]string{"LLM_BASE_URL": "query", "LLM_NO_SCHEME": "http://"} {
-			_, _, err := buildProvider("gw", config.LLMProvider{
-				Type: kind, Model: "claude-opus-5-5", BaseURL: "${" + variable + "}",
-			}, r)
-			if err == nil {
-				t.Errorf("%s: built over a base_url whose %s holds a %s", kind, variable, want)
-				continue
-			}
-			for _, named := range []string{`"gw"`, variable, want} {
+		spec := config.LLMProvider{Type: kind, Model: "claude-opus-5-5", BaseURL: "${LLM_NO_SCHEME}"}
+		_, _, err := buildProvider("gw", spec, r)
+		if err == nil {
+			t.Errorf("%s: built over a base_url with no scheme", kind)
+		} else {
+			for _, named := range []string{`"gw"`, "LLM_NO_SCHEME", "http://"} {
 				if !strings.Contains(err.Error(), named) {
 					t.Errorf("%s: %q does not name %s", kind, err, named)
 				}
@@ -525,18 +531,216 @@ func TestAResolvedBaseURLIsHeldToTheWrittenRule(t *testing.T) {
 				t.Errorf("%s: the refusal repeats the resolved value: %v", kind, err)
 			}
 		}
-		if _, _, err := buildProvider("gw", config.LLMProvider{
-			Type: kind, Model: "claude-opus-5-5", BaseURL: "${LLM_USERINFO}",
-		}, r); err != nil {
-			t.Errorf("%s: userinfo, which the SDK sends as Basic credentials, was refused: %v", kind, err)
+
+		var logged bytes.Buffer
+		spec.BaseURL = "${LLM_BASE_URL}"
+		e, err := resolveEndpoint(slog.New(slog.NewJSONHandler(&logged, nil)), "gw", spec, r)
+		if err != nil {
+			t.Errorf("%s: a base_url whose variable holds a query was refused: %v", kind, err)
+			continue
+		}
+		if e.baseURL != "https://gw.example.com/v1?key="+secret {
+			t.Errorf("%s: the backend is handed %q", kind, e.baseURL)
+		}
+		assertUnsentWarning(t, logged.String(), "gw", "query", "LLM_BASE_URL", secret)
+		if _, _, err := buildProvider("gw", spec, r); err != nil {
+			t.Errorf("%s: buildProvider refused what resolveEndpoint built: %v", kind, err)
 		}
 	}
 
-	e := &Engine{environ: config.MapSource{"EMBED_BASE_URL": "https://embed.example.com/v1#" + secret}}
-	_, err := e.buildEmbedder(companyWith(t, strings.Replace(fmt.Sprintf(embeddingDoc, 1536),
-		"    api_key: sk-embed\n", "    api_key: sk-embed\n    base_url: ${EMBED_BASE_URL}\n", 1)))
-	if err == nil || !strings.Contains(err.Error(), "EMBED_BASE_URL") || strings.Contains(err.Error(), secret) {
-		t.Errorf("an embeddings base_url resolving to a fragment: %v, want a refusal naming "+
-			"EMBED_BASE_URL and not the value", err)
+	embedder := func(variable string) *config.EmbeddingProvider {
+		return &config.EmbeddingProvider{
+			Type: config.EmbeddingOpenAICompatible, Model: "text-embedding-3-small",
+			APIKey: "sk-embed", BaseURL: "${" + variable + "}",
+		}
+	}
+	var logged bytes.Buffer
+	base, err := embeddingsBaseURL(slog.New(slog.NewJSONHandler(&logged, nil)), embedder("EMBED_BASE_URL"), r)
+	if err != nil || base != "https://embed.example.com/v1#"+secret {
+		t.Errorf("an embeddings base_url whose variable holds a fragment = %q, %v; want it built", base, err)
+	}
+	assertUnsentWarning(t, logged.String(), "embeddings", "fragment", "EMBED_BASE_URL", secret)
+	_, err = embeddingsBaseURL(slog.New(slog.NewJSONHandler(io.Discard, nil)), embedder("EMBED_NO_HOST"), r)
+	if err == nil || !strings.Contains(err.Error(), "EMBED_NO_HOST") || strings.Contains(err.Error(), secret) {
+		t.Errorf("an embeddings base_url with no host: %v, want a refusal naming EMBED_NO_HOST "+
+			"and not the value", err)
+	}
+}
+
+// assertUnsentWarning holds a captured log to exactly one
+// provider_base_url_unsent line naming provider, part and variable, and
+// carrying nothing of the value.
+func assertUnsentWarning(t *testing.T, logged, provider, part, variable, secret string) {
+	t.Helper()
+	if strings.Contains(logged, secret) {
+		t.Errorf("the warning repeats the value: %s", logged)
+	}
+	var line struct {
+		Msg       string   `json:"msg"`
+		Provider  string   `json:"provider"`
+		Parts     []string `json:"parts"`
+		Variables []string `json:"variables"`
+	}
+	if trimmed := strings.TrimSpace(logged); strings.Contains(trimmed, "\n") ||
+		json.Unmarshal([]byte(trimmed), &line) != nil {
+		t.Fatalf("want one JSON warning, logged %q", logged)
+	}
+	if line.Msg != "provider_base_url_unsent" || line.Provider != provider ||
+		len(line.Parts) != 1 || line.Parts[0] != part ||
+		len(line.Variables) != 1 || line.Variables[0] != variable {
+		t.Errorf("warning = %+v, want provider_base_url_unsent naming %s, %s and %s",
+			line, provider, part, variable)
+	}
+}
+
+// WHAT IS JUDGED IS WHAT IS SENT. A stored base_url with surrounding space or a
+// trailing CR (`crewlet secrets set` strips only one newline) passed a check
+// that trimmed and was then handed to the SDK as written, which failed every
+// call with the whole URL — userinfo included — in its parse error. The
+// endpoint is trimmed once, and the call reaches the server.
+//
+// Mutation: drop the trim from config.resolveBaseURL, and the build is
+// refused over a value that was always sendable.
+func TestAResolvedBaseURLIsSentAsItWasJudged(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, chatCompletion)
+	}))
+	defer srv.Close()
+	r := config.NewResolver(storeSource{"LLM_BASE_URL": " " + srv.URL + "\r"})
+	p, _, err := buildProvider("gw", config.LLMProvider{
+		Type: config.LLMOpenAICompatible, Model: "gpt-test", BaseURL: "${LLM_BASE_URL}",
+		APIKeys: []string{"sk-test"},
+	}, r)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	if _, err := p.Complete(t.Context(), llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+	}); err != nil || calls.Load() != 1 {
+		t.Fatalf("Complete over a CR-terminated base_url: %v (%d calls), want one call answered", err, calls.Load())
+	}
+}
+
+// WHERE A BASE_URL'S USERINFO IS SENT, measured on every backend: the fact the
+// admission rule on userinfo (config.BaseURLUnsent) rests on. Go's HTTP client
+// sends a URL's userinfo as Basic credentials only on a request carrying no
+// Authorization of its own, and openai-go sends any key it holds as
+// `Authorization: Bearer` — so on the openai backend and the embedder the
+// userinfo reaches the gateway ONLY on an entry with no key, while the
+// Anthropic SDK, whose key travels as x-api-key, always sends it.
+func TestWhereABaseURLsUserinfoIsSent(t *testing.T) {
+	t.Parallel()
+	const basic = "Basic Z3ctdXNlcjpndy1wYXNz" // gw-user:gw-pass
+	type seen struct{ authorization, apiKey string }
+	server := func(t *testing.T, answer func(http.ResponseWriter)) (*httptest.Server, func() seen) {
+		var (
+			mu  sync.Mutex
+			got seen
+		)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			got = seen{r.Header.Get("Authorization"), r.Header.Get("X-Api-Key")}
+			mu.Unlock()
+			answer(w)
+		}))
+		t.Cleanup(srv.Close)
+		return srv, func() seen { mu.Lock(); defer mu.Unlock(); return got }
+	}
+	withUserinfo := func(srv *httptest.Server) string {
+		return strings.Replace(srv.URL, "http://", "http://gw-user:gw-pass@", 1)
+	}
+	ask := llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}}
+
+	for _, tc := range []struct {
+		name string
+		keys []string
+		want seen
+	}{
+		{"an openai entry with a key", []string{"sk-test"}, seen{authorization: "Bearer sk-test"}},
+		{"an openai entry with no key", nil, seen{authorization: basic}},
+	} {
+		srv, got := server(t, func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, chatCompletion)
+		})
+		p, _, err := buildProvider("gw", config.LLMProvider{
+			Type: config.LLMOpenAICompatible, Model: "gpt-test", BaseURL: withUserinfo(srv), APIKeys: tc.keys,
+		}, config.NewResolver(storeSource{}))
+		if err != nil {
+			t.Fatalf("%s: buildProvider: %v", tc.name, err)
+		}
+		if _, err := p.Complete(t.Context(), ask); err != nil {
+			t.Fatalf("%s: Complete: %v", tc.name, err)
+		}
+		if got() != tc.want {
+			t.Errorf("%s: the gateway saw %+v, want %+v", tc.name, got(), tc.want)
+		}
+	}
+
+	srv, got := server(t, func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, event := range []string{
+			`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}`,
+			`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+			`{"type":"message_stop"}`,
+		} {
+			kind := strings.SplitN(strings.TrimPrefix(event, `{"type":"`), `"`, 2)[0]
+			_, _ = io.WriteString(w, "event: "+kind+"\ndata: "+event+"\n\n")
+		}
+	})
+	p, _, err := buildProvider("claude", config.LLMProvider{
+		Type: config.LLMAnthropic, Model: "claude-test", BaseURL: withUserinfo(srv), APIKeys: []string{"sk-ant-test"},
+	}, config.NewResolver(storeSource{}))
+	if err != nil {
+		t.Fatalf("anthropic: buildProvider: %v", err)
+	}
+	if _, err := p.Complete(t.Context(), ask); err != nil {
+		t.Fatalf("anthropic: Complete: %v", err)
+	}
+	if want := (seen{authorization: basic, apiKey: "sk-ant-test"}); got() != want {
+		t.Errorf("an anthropic entry with a key: the gateway saw %+v, want %+v", got(), want)
+	}
+
+	for _, tc := range []struct {
+		name, key string
+		want      seen
+	}{
+		{"an embedder with a key", "sk-embed", seen{authorization: "Bearer sk-embed"}},
+		{"an embedder with no key", "", seen{authorization: basic}},
+	} {
+		srv, got := server(t, func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			vector := strings.TrimSuffix(strings.Repeat("0.5,", 1536), ",")
+			fmt.Fprintf(w, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[%s]}],"model":"m"}`, vector)
+		})
+		cfg := &config.EmbeddingProvider{
+			Type: config.EmbeddingOpenAICompatible, Model: "text-embedding-3-small",
+			APIKey: tc.key, BaseURL: withUserinfo(srv),
+		}
+		base, err := embeddingsBaseURL(slog.New(slog.NewJSONHandler(io.Discard, nil)), cfg, config.NewResolver(storeSource{}))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		limits := cfg.Limits()
+		embedder, err := embeddings.New(embeddings.Config{
+			Model: cfg.Model, Dimensions: cfg.Width(), APIKey: tc.key, BaseURL: base,
+			Limits: embeddings.Limits{
+				InputBytes: limits.InputBytes, BatchInputs: limits.BatchInputs,
+				BatchBytes: limits.BatchBytes, InputOverhead: limits.InputOverhead,
+			},
+		})
+		if err != nil {
+			t.Fatalf("%s: embeddings.New: %v", tc.name, err)
+		}
+		if _, err := embedder.Embed(t.Context(), "hello"); err != nil {
+			t.Fatalf("%s: Embed: %v", tc.name, err)
+		}
+		if got() != tc.want {
+			t.Errorf("%s: the gateway saw %+v, want %+v", tc.name, got(), tc.want)
+		}
 	}
 }

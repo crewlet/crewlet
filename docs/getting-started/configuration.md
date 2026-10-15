@@ -343,12 +343,25 @@ providers:
                                         #   a bench is SHARED across the fleet, so a peer's 429 benches the
                                         #   key here too — see concepts/coordination.md
       base_url: "${LLM_BASE_URL}"       # optional — custom endpoint; supports ${ENV_VAR} references.
-                                        #   An http:// or https:// URL with a host, and NO QUERY OR
-                                        #   FRAGMENT: both SDKs resolve each request's path against
-                                        #   it, which drops them, so `?api-version=…` or `?key=…` would
-                                        #   never be sent — refused at validation, and a ${VAR} whose
-                                        #   value carries one is refused when the provider is built.
-                                        #   A key belongs in api_keys; userinfo is sent, as Basic auth.
+                                        #   Trimmed, then held to two rules. It must be an http:// or
+                                        #   https:// URL with a host — anything else is refused on
+                                        #   every write AND at apply, since no call could be sent, and
+                                        #   a ${VAR} resolving to one fails the provider's build. And
+                                        #   it must carry nothing its backend never sends: NO QUERY
+                                        #   OR FRAGMENT (both SDKs resolve each request's path
+                                        #   against it, which drops them, so `?api-version=…` or
+                                        #   `?key=…` is never sent), and NO USERINFO beside a key on
+                                        #   openai / openai-compatible (the key goes out as
+                                        #   `Authorization: Bearer`, and userinfo is sent as Basic
+                                        #   credentials only on a request with no Authorization of
+                                        #   its own — so only on an entry running on no key, while
+                                        #   anthropic, whose key is x-api-key, always sends it).
+                                        #   That second rule is refused on every write; a stored
+                                        #   revision breaking it is applied with an
+                                        #   org_admission_warning, and a ${VAR} whose value breaks it
+                                        #   builds with a provider_base_url_unsent warning — the
+                                        #   calls are sent, without the part. A key belongs in
+                                        #   api_keys, sent as the provider's own key header.
                                         #   REQUIRED for openai-compatible and REFUSED when it is
                                         #   empty — including when a ${VAR} resolved to nothing.
                                         #   `openai-compatible` means "not OpenAI", and an empty
@@ -359,9 +372,10 @@ providers:
                                         #   only symptom.
                                         #   On `openai` / `anthropic` it is genuinely optional and
                                         #   points the vendor's own wire format at a gateway or
-                                        #   proxy instead of the vendor host. REFUSED on cli-agent,
-                                        #   whose CLI makes its own calls: point it at a gateway in
-                                        #   its cli.env (ANTHROPIC_BASE_URL for Claude Code)
+                                        #   proxy instead of the vendor host. Refused on a cli-agent
+                                        #   write, whose CLI makes its own calls: point it at a
+                                        #   gateway in its cli.env (ANTHROPIC_BASE_URL for Claude
+                                        #   Code)
       timeout_seconds: 600              # optional — bounds one HTTP attempt (default: 600). A unary call IN TOTAL;
                                         #   a streamed call (every anthropic call, and an executor's rounds
                                         #   elsewhere) by its SILENCE — the longest
@@ -504,9 +518,12 @@ providers:
                                         #   difference between `openai` and
                                         #   `openai-compatible`, so a local embedding
                                         #   server needs nothing else. The same rules
-                                        #   as an LLM entry's base_url: an http(s) URL
-                                        #   with a host, no query or fragment, and
-                                        #   REQUIRED for openai-compatible — refused
+                                        #   as an openai LLM entry's base_url: an
+                                        #   http(s) URL with a host, no query or
+                                        #   fragment, no userinfo beside an api_key
+                                        #   (sent as Bearer, so userinfo reaches the
+                                        #   endpoint only from an embedder with no
+                                        #   key), and REQUIRED for openai-compatible — refused
                                         #   when it is empty, a ${VAR} that resolved
                                         #   to nothing included, which would send the
                                         #   company's documents to api.openai.com

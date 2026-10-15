@@ -18,12 +18,12 @@ package engine
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -99,7 +99,7 @@ func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, map
 // diagnose than a constructor that refused to exist and took the whole company
 // down at boot with a message about one key.
 func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm.Provider, endpoint, error) {
-	e, err := resolveEndpoint(key, spec, r)
+	e, err := resolveEndpoint(log, key, spec, r)
 	if err != nil {
 		return nil, endpoint{}, err
 	}
@@ -148,27 +148,30 @@ func BuildAnthropic(key string, spec config.LLMProvider, r *config.Resolver) (*a
 	if spec.Type != config.LLMAnthropic {
 		return nil, fmt.Errorf("engine: provider %q is type %q, not %q", key, spec.Type, config.LLMAnthropic)
 	}
-	e, err := resolveEndpoint(key, spec, r)
+	e, err := resolveEndpoint(log, key, spec, r)
 	if err != nil {
 		return nil, err
 	}
 	return buildAnthropic(key, spec, e)
 }
 
-// resolvedBaseURL holds a provider's base_url AS RESOLVED to the rule its
-// written text was held to at validation ([config.CheckBaseURL]), because a
-// value a `${VAR}` carries is first known here. The error names the variables
-// it was resolved from and never the value: a query is exactly where a
-// credential gets written into a URL.
-func resolvedBaseURL(written, resolved string) error {
-	err := config.CheckBaseURL(resolved)
-	if err == nil {
-		return nil
+// warnUnsentBaseURL logs what a provider's RESOLVED base_url carries that its
+// backend never sends ([config.ResolvedBaseURL.Revealed]) — a query or a
+// fragment a variable held, or userinfo beside the conventional key the entry
+// resolved. A WARNING, not a refusal: the provider builds and every call is
+// sent, only without the part, and the admission rule that refuses one on a
+// write is a rule a later build may relax (see [config.BaseURLUnsent]). It
+// names the provider, the parts and the variables, and never the value: a
+// query and userinfo are exactly where a credential gets written into a URL.
+func warnUnsentBaseURL(logger *slog.Logger, provider string, b config.ResolvedBaseURL) {
+	if len(b.Revealed) == 0 {
+		return
 	}
-	if names := envref.Names(written); len(names) > 0 {
-		return fmt.Errorf("base_url, resolved from %s, %w", strings.Join(names, ", "), err)
-	}
-	return fmt.Errorf("base_url %w", err)
+	logger.Warn("provider_base_url_unsent",
+		"provider", provider, "parts", b.Revealed, "variables", b.From,
+		"hint", "the provider is built and its calls are sent without these "+
+			"parts of base_url; a key belongs in api_keys (or api_key), and a "+
+			"query parameter an endpoint insists on needs a proxy that adds it")
 }
 
 // endpoint is what every entry resolves before its backend is built: the
@@ -182,9 +185,11 @@ type endpoint struct {
 	cooldowns credential.Policy
 }
 
-// resolveEndpoint resolves an entry's references and refuses the two that
-// cannot be sent anywhere.
-func resolveEndpoint(key string, spec config.LLMProvider, r *config.Resolver) (endpoint, error) {
+// resolveEndpoint resolves an entry's references and refuses the three that
+// cannot be sent anywhere: a model that resolved to nothing, an
+// openai-compatible entry with no endpoint, and a base_url no call can be sent
+// on. What its base_url's backend drops is warned about on logger.
+func resolveEndpoint(logger *slog.Logger, key string, spec config.LLMProvider, r *config.Resolver) (endpoint, error) {
 	// The CONFIG's default applies, through Timeout(): the backends keep a
 	// default of their own only for a Config built without one, and the
 	// value an operator reads in the docs must be the one that runs.
@@ -210,7 +215,20 @@ func resolveEndpoint(key string, spec config.LLMProvider, r *config.Resolver) (e
 	// and examples/nimbus.company.yaml ships exactly that reference, against
 	// the variable docs/reference/environment-variables.md documents.
 	model, modelMissing := r.Expand(spec.Model)
-	baseURL, baseURLMissing := r.Expand(spec.BaseURL)
+	// THE ONE RESOLUTION OF THE ENDPOINT: expanded, trimmed once, and that
+	// exact string judged and handed to the backend, refused only when no
+	// call on it can be sent (config.CheckBaseURL), with what its backend
+	// drops of it warned about rather than refused (config.BaseURLUnsent).
+	// A cli-agent entry is not resolved here: nothing reads its base_url,
+	// which its own admission rule says on a write.
+	var base config.ResolvedBaseURL
+	if spec.Type != config.LLMCLIAgent {
+		var err error
+		if base, err = spec.ResolveBaseURL(r); err != nil {
+			return endpoint{}, fmt.Errorf("engine: provider %q: %w", key, err)
+		}
+		warnUnsentBaseURL(logger, key, base)
+	}
 	// A REFERENCE THAT RESOLVED TO NOTHING is not the same as a field
 	// somebody left out, and the two need different sentences. A provider
 	// entry that plainly reads `model: "${LLM_MODEL}"` and is refused with
@@ -237,25 +255,19 @@ func resolveEndpoint(key string, spec config.LLMProvider, r *config.Resolver) (e
 	// an OpenAI key, to api.openai.com. That is a silent misroute of the
 	// company's whole model traffic to a third party, and the only symptom
 	// is a 401 naming a vendor the operator never configured.
-	if spec.Type == config.LLMOpenAICompatible && strings.TrimSpace(baseURL) == "" {
+	if spec.Type == config.LLMOpenAICompatible && base.URL == "" {
 		where := "base_url is empty"
-		if len(baseURLMissing) > 0 {
+		if len(base.Missing) > 0 {
 			where = fmt.Sprintf("base_url is %q and %s resolved to nothing",
-				spec.BaseURL, strings.Join(baseURLMissing, ", "))
+				spec.BaseURL, strings.Join(base.Missing, ", "))
 		}
 		return endpoint{}, fmt.Errorf(
 			"engine: provider %q: %s. An openai-compatible entry needs an endpoint "+
 				"— without one every request would go to api.openai.com under "+
 				"this entry's own key", key, where)
 	}
-	// THE RESOLVED ENDPOINT, held to the rule the document's text already
-	// was (config.CheckBaseURL): a variable's value is first known here, and
-	// a query in it would otherwise reach the SDK, which never sends one.
-	if err := resolvedBaseURL(spec.BaseURL, baseURL); err != nil {
-		return endpoint{}, fmt.Errorf("engine: provider %q: %w", key, err)
-	}
 	return endpoint{
-		model: model, baseURL: baseURL, keys: keys, timeout: timeout,
+		model: model, baseURL: base.URL, keys: keys, timeout: timeout,
 		// Through the accessors, not the raw fields: those apply the bounds
 		// and the defaults, and reading the fields directly would send a
 		// zero cooldown for every provider that did not configure one.
