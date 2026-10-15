@@ -210,16 +210,33 @@ func TestAnUnknownProtocolIsRefusedByName(t *testing.T) {
 
 // The never-fail-on-a-typo rule the log level already follows: a bad sampler
 // ratio must not be why a company will not boot.
+//
+// NaN is in the list because ParseFloat accepts it and every comparison with
+// it is false, so a range check written as `ratio < 0 || ratio > 1` waved it
+// through to a threshold no conversion defines.
 func TestABadSamplerRatioStillBoots(t *testing.T) {
-	for _, arg := range []string{"banana", "-1", "2", "1e", ""} {
-		t.Run("arg="+arg, func(t *testing.T) {
-			configure(t, map[string]string{SamplerArgVar: arg})
-			ctx, span := Start(context.Background(), "test", "op")
-			defer span.End()
-			if len(TraceOf(ctx).TraceID) != 32 {
-				t.Error("tracing did not work after a bad sampler ratio")
-			}
-		})
+	for _, arg := range []string{"banana", "-1", "2", "1e", "NaN", "+Inf", ""} {
+		for _, sampler := range []string{"", samplerRatio} {
+			t.Run("sampler="+sampler+",arg="+arg, func(t *testing.T) {
+				configure(t, map[string]string{SamplerVar: sampler, SamplerArgVar: arg})
+				ctx, span := Start(context.Background(), "test", "op")
+				defer span.End()
+				if len(TraceOf(ctx).TraceID) != 32 {
+					t.Error("tracing did not work after a bad sampler ratio")
+				}
+				// AND THE FALLBACK IS TO SAMPLE, not to stop: the failure
+				// an operator can see beats the one they cannot. Asked of
+				// the rule itself, because a NaN ratio that slipped
+				// through samples by accident on one CPU and not another.
+				if !span.IsRecording() {
+					t.Errorf("a bad ratio %q fell back to sampling nothing", arg)
+				}
+				if got, want := rootSampler().Description(),
+					sdktrace.AlwaysSample().Description(); got != want {
+					t.Errorf("a bad ratio %q became %s, want %s", arg, got, want)
+				}
+			})
+		}
 	}
 }
 
@@ -324,24 +341,27 @@ func TestAnUnreachableCollectorDoesNotFailTheBoot(t *testing.T) {
 // The failure below is the one an operator can actually reach: a metrics
 // endpoint with a protocol this build does not speak. The traces half never
 // looks at the protocol (it has no endpoint of its own here), so the refusal
-// comes from the metrics half — AFTER the TracerProvider has been built. Left
-// installed, that provider is published to every span site in the process
-// while the caller holds no flush for it; its batch processor and exporter run
-// on for the life of a boot that failed.
+// comes from the metrics half — AFTER the TracerProvider has been built, and
+// after it was built with a sampler. Left installed, that provider is
+// published to every span site in the process while the caller holds no flush
+// for it; its batch processor and exporter run on for the life of a boot that
+// failed.
 //
 // Mutation: install the provider where it is built (`otel.SetTracerProvider(tp)`
 // immediately after `sdktrace.NewTracerProvider`) and this goes red on the
 // identity check — the global is the half-built provider nothing can flush.
+// Store the root rule there too, and it goes red on the sampler check.
 func TestAFailedConfigureLeavesTheInstalledProviderAlone(t *testing.T) {
 	// Establish the precondition explicitly: a working provider, installed.
 	// Every test in this file that needs one does the same, because the
 	// previous test's cleanup leaves the global terminated.
 	configure(t, nil)
-	before := otel.GetTracerProvider()
+	before, beforeRoot := otel.GetTracerProvider(), rootSampler()
 
 	_, err := Configure(context.Background(), Options{Env: envOf(map[string]string{
 		MetricsEndpointVar: "http://127.0.0.1:1/v1/metrics",
 		ProtocolVar:        "otlp",
+		SamplerVar:         samplerAlwaysOff,
 	})})
 	if err == nil {
 		t.Fatal("a protocol this build cannot speak was accepted by the metrics half")
@@ -352,6 +372,10 @@ func TestAFailedConfigureLeavesTheInstalledProviderAlone(t *testing.T) {
 	if got := otel.GetTracerProvider(); got != before {
 		t.Error("a failed Configure installed its half-built TracerProvider — " +
 			"the caller got no Shutdown, so nothing can ever flush or stop it")
+	}
+	if got := rootSampler(); got != beforeRoot {
+		t.Errorf("a failed Configure installed its root rule %s — a span-less "+
+			"root would be decided by a sampler no provider runs", got.Description())
 	}
 
 	// And the process is still tracing. A terminated or no-op provider mints

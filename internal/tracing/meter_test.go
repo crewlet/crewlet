@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/sdk/resource"
 
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -18,8 +19,11 @@ import (
 // instrument becomes a no-op on a deployment with no collector — which is
 // every development deployment, so the code path nobody tests is the one
 // everybody runs.
+//
+// NOT PARALLEL: Configure replaces the process's global providers and its
+// flush terminates them, so it shares a process with every other test here
+// that starts a span.
 func TestTheProviderIsInstalledWithoutAnEndpoint(t *testing.T) {
-	t.Parallel()
 	rec, err := metrics.New()
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -59,7 +63,7 @@ func TestEveryInstrumentRegistersAgainstTheProvider(t *testing.T) {
 	}
 	mp, err := configureMeter(t.Context(), Options{
 		Env: func(string) string { return "" },
-	}, rec)
+	}, resource.Empty(), rec)
 	if err != nil {
 		t.Fatalf("configureMeter: %v", err)
 	}

@@ -34,6 +34,29 @@
 // value is a state where they disagree. A `tracing.endpoint:` field beside
 // OTEL_EXPORTER_OTLP_ENDPOINT would be exactly that.
 //
+// # Only W3C trace context propagates
+//
+// The global propagator is TraceContext alone — no Baggage. This engine never
+// writes baggage, so the only baggage a context here could carry is what a
+// third party put on a webhook, and a propagator that extracted it would hand
+// it to every outbound call that injects through the global propagator: a
+// vendor's key-value pairs forwarded, under this engine's name, to whoever it
+// calls next. TraceContext is the half that does a job here — it is what makes
+// an inbound `traceparent` join an existing trace.
+//
+// # Sampling is decided once per trace, at its root
+//
+// The sampler is ALWAYS parent-based: a span whose parent is sampled is
+// sampled, and the operator's OTEL_TRACES_SAMPLER decides only what happens at
+// a root. A sampler that re-decided a trace already in flight would split its
+// tree at the collector — sampled children under a parent that was never
+// exported — and this engine's traces cross processes routinely. So the
+// non-parent-based samplers the specification lists are refused at
+// [Configure], by name, with the parent-based spelling to use instead. The
+// root rule is also kept beside the provider (see [rootSampler]), replaced at
+// the same commit, for the trace this engine roots WITHOUT a span — an event
+// published outside one — which has no provider to ask.
+//
 // # What is deliberately NOT spanned
 //
 // THE REST API'S OWN ROUTES. `/events`, `/config`, `/secrets` and the dashboard
@@ -63,10 +86,12 @@ package tracing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -103,14 +128,24 @@ const (
 	// it.
 	ProtocolVar = "OTEL_EXPORTER_OTLP_PROTOCOL"
 
-	// ServiceNameVar overrides the reported service. Defaults to "crewlet";
-	// an operator running two companies against one collector is the reason
-	// it is settable at all.
+	// SamplerVar names the sampler. Only the parent-based ones are accepted
+	// — see [rootSamplerFor] for why the others are refused.
+	SamplerVar = "OTEL_TRACES_SAMPLER"
+
+	// SamplerArgVar is the head-sampling ratio, 0..1. Set ALONE it means
+	// parentbased_traceidratio, which is what it meant before the sampler's
+	// name was read at all.
+	SamplerArgVar = "OTEL_TRACES_SAMPLER_ARG"
+
+	// ServiceNameVar overrides the reported service, and wins over
+	// OTEL_RESOURCE_ATTRIBUTES's service.name as the specification says.
+	// An operator running two companies against one collector is the
+	// reason it is worth setting at all.
 	ServiceNameVar = "OTEL_SERVICE_NAME"
 
-	// SamplerArgVar is the head-sampling ratio, 0..1. The sampler itself is
-	// always parent-based — see [sampler].
-	SamplerArgVar = "OTEL_TRACES_SAMPLER_ARG"
+	// ResourceAttributesVar adds resource attributes, and wins over every
+	// value this package supplies — see [resourceFor].
+	ResourceAttributesVar = "OTEL_RESOURCE_ATTRIBUTES"
 
 	// TracesEndpointVar is the SIGNAL-SPECIFIC endpoint, used verbatim when
 	// set. The spec gives the two variables different meanings and this is
@@ -157,6 +192,14 @@ const (
 // typo is told what it could have been.
 var Protocols = []string{ProtocolHTTP, ProtocolGRPC}
 
+// The samplers [SamplerVar] may name. All three are parent-based, which is the
+// point: see the package doc.
+const (
+	samplerAlwaysOn  = "parentbased_always_on"
+	samplerAlwaysOff = "parentbased_always_off"
+	samplerRatio     = "parentbased_traceidratio"
+)
+
 // exportTimeout bounds one batch's delivery to the collector.
 //
 // Tied to something real rather than picked: the SDK's own default is 30s,
@@ -171,6 +214,31 @@ const exportTimeout = 5 * time.Second
 // than one export attempt so a single in-flight batch can finish, and far
 // short of anything a supervisor's SIGKILL timer would notice.
 const flushGrace = 8 * time.Second
+
+// rootRule is the sampler that decides a trace this process ROOTS.
+//
+// Boxed in a struct because the samplers share no concrete type and
+// [atomic.Pointer] needs one — an [atomic.Value] would panic on the first
+// Store of a different sampler than the one before it.
+type rootRule struct{ sampler sdktrace.Sampler }
+
+// root is the current [rootRule]. [Configure] replaces it at its commit,
+// together with the TracerProvider whose ParentBased sampler wraps it, so the
+// provider and a span-less root never answer the same trace differently.
+var root atomic.Pointer[rootRule]
+
+// rootSampler is the sampler that decides a trace this process roots.
+//
+// The provider's own sampler decides every root that opens a SPAN. This is for
+// the root that opens none — an event published outside any span still
+// carries a freshly minted trace — so that it is decided by the same rule.
+// Every sampler [rootSamplerFor] builds decides on the trace id alone, so one
+// id asked twice gets one answer.
+func rootSampler() sdktrace.Sampler { return root.Load().sampler }
+
+// propagator is the one global propagator this package installs: W3C trace
+// context and nothing else. The package doc says why Baggage is not beside it.
+func propagator() propagation.TextMapPropagator { return propagation.TraceContext{} }
 
 // A REAL PROVIDER FROM THE START, installed by this package's own init for
 // exactly the reason internal/logging's init installs os.Stderr: the default
@@ -189,11 +257,10 @@ const flushGrace = 8 * time.Second
 // install in a package init and safe never to shut down. [Configure] replaces
 // it with the configured one.
 func init() {
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{}, propagation.Baggage{},
-	))
+	otel.SetTextMapPropagator(propagator())
+	root.Store(&rootRule{sampler: sdktrace.AlwaysSample()})
 	otel.SetTracerProvider(sdktrace.NewTracerProvider(
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample()))))
+		sdktrace.WithSampler(sdktrace.ParentBased(rootSampler()))))
 }
 
 // Shutdown flushes buffered spans and releases the exporter.
@@ -215,6 +282,12 @@ type Options struct {
 
 	// Env reads an environment variable. Nil means os.Getenv; a test passes
 	// its own so it never has to mutate the process.
+	//
+	// It reads every variable this package resolves itself: the OTLP
+	// destination and the sampler. The two RESOURCE variables are the
+	// exception — the SDK's own detector reads them, from the process
+	// environment, because their parse is the SDK's and a copy of it here
+	// would be one more reading of one setting.
 	Env func(string) string
 
 	// Recorder is the one place the engine's measurements are written, and
@@ -242,9 +315,11 @@ func (o Options) env(name string) string {
 // unreachable collector is not detected here (the exporter connects lazily and
 // retries), and an unparseable sampler ratio WARNS and falls back, on the same
 // never-fail-on-a-typo rule the log level follows. It DOES return an error for
-// a malformed endpoint, because that is a value the operator typed that can
-// never work, and silently exporting nowhere is how a promise like this stops
-// being true without anyone noticing.
+// a value the operator typed that can never work — a protocol this build does
+// not speak, a sampler that is not parent-based — because silently exporting
+// nowhere, or sampling by a rule nobody chose, is how a promise like this
+// stops being true without anyone noticing. Each error names the variable to
+// change.
 //
 // WHEN IT DOES RETURN AN ERROR IT CHANGES NOTHING. Both providers are built
 // before either is installed, so a failure leaves the process tracing through
@@ -254,9 +329,7 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 	// The propagator is installed whether or not anything exports: it is
 	// what makes an inbound `traceparent` join an existing trace, and what
 	// the sandbox receiver's stamped TRACEPARENT is read back with.
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{}, propagation.Baggage{},
-	))
+	otel.SetTextMapPropagator(propagator())
 
 	// The SDK reports its own failures through a global handler. Left
 	// unset it writes to the standard logger, which in this process is the
@@ -276,14 +349,18 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 		log.Warn("otel_internal_error", "error", err)
 	}))
 
-	res, err := resourceFor(opts)
+	sampler, err := rootSamplerFor(opts)
+	if err != nil {
+		return nil, err
+	}
+	res, err := resourceFor(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	tpOpts := []sdktrace.TracerProviderOption{
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sampler(opts)),
+		sdktrace.WithSampler(sdktrace.ParentBased(sampler)),
 	}
 
 	endpoint := tracesEndpoint(opts)
@@ -335,23 +412,27 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 			return nil, abandon(ctx, tp, err)
 		}
 	}
-	mp, err := configureMeter(ctx, opts, rec)
+	mp, err := configureMeter(ctx, opts, res, rec)
 	if err != nil {
 		return nil, abandon(ctx, tp, err)
 	}
 
-	// THE COMMIT. Everything that can fail has succeeded, so the two
-	// globals change together and nothing below here may be fallible: a
-	// step added after this line would reopen exactly the window the
-	// build-then-install order closes.
+	// THE COMMIT. Everything that can fail has succeeded, so the globals
+	// change together and nothing below here may be fallible: a step added
+	// after this line would reopen exactly the window the build-then-install
+	// order closes. The root rule moves with the provider whose sampler
+	// wraps it, so a span-less root is decided by the rule the provider
+	// decides a span's root by.
 	otel.SetMeterProvider(mp)
 	otel.SetTracerProvider(tp)
+	root.Store(&rootRule{sampler: sampler})
 
 	// Logged AFTER the commit, so the line is a record of what is running
 	// rather than an announcement the next statement can still retract.
 	log.InfoContext(ctx, "tracing_configured",
 		"exporting", endpoint != "", "endpoint", endpoint,
-		"protocol", protocol(opts), "service", serviceName(opts))
+		"protocol", protocol(opts), "service", serviceName(res),
+		"sampler", sampler.Description())
 
 	return func(ctx context.Context) error {
 		// BOTH, and the traces error wins when both fail: it is the one
@@ -439,71 +520,151 @@ func protocol(opts Options) string {
 	return ProtocolHTTP
 }
 
-func serviceName(opts Options) string {
-	if n := opts.env(ServiceNameVar); n != "" {
-		return n
-	}
-	return "crewlet"
+// serviceName is the service.name the resource settled on, for the log line —
+// read back rather than recomputed, because which of three sources won is the
+// resource's decision.
+func serviceName(res *resource.Resource) string {
+	v, _ := res.Set().Value(semconv.ServiceNameKey)
+	return v.AsString()
 }
 
-func resourceFor(opts Options) (*resource.Resource, error) {
-	attrs := []attribute.KeyValue{semconv.ServiceName(serviceName(opts))}
+// resourceFor builds the resource every span and metric is reported under.
+//
+// # The operator's attributes win
+//
+// This package supplies three values — service.name `crewlet`,
+// service.version, and service.instance.id from the node id, which is exactly
+// what "which copy of this service" means and without which a fleet's spans
+// are indistinguishable at the collector. They are FALLBACKS: an operator who
+// set OTEL_SERVICE_NAME or wrote any of them into OTEL_RESOURCE_ATTRIBUTES has
+// said what the collector should see, so the environment is merged LAST and
+// wins. Merged the other way round, as this once was, `crewlet` overwrote the
+// service name in OTEL_RESOURCE_ATTRIBUTES — the variable the comment beside
+// it promised kept working.
+//
+// The SDK's own detector reads the environment, with its own precedence
+// between the two variables (OTEL_SERVICE_NAME wins, as the specification
+// says) and its own parse, so there is no second reading of either here. The
+// result carries the telemetry.sdk.* attributes and nothing about the host or
+// the process — the SDK's default resource has never detected those, whatever
+// this comment once said.
+//
+// An OTEL_RESOURCE_ATTRIBUTES entry with no `=` is WARNED and the rest kept,
+// as the SDK keeps it, on the never-fail-on-a-typo rule. The semconv version
+// MUST match the SDK's own (sdk/resource/builtin.go): a resource merged from
+// two schema URLs is refused outright, which fails Configure and takes
+// tracing out entirely.
+func resourceFor(ctx context.Context, opts Options) (*resource.Resource, error) {
+	fallbacks := []attribute.KeyValue{semconv.ServiceName("crewlet")}
 	if opts.Version != "" {
-		attrs = append(attrs, semconv.ServiceVersion(opts.Version))
+		fallbacks = append(fallbacks, semconv.ServiceVersion(opts.Version))
 	}
 	if opts.NodeID != "" {
-		// service.instance.id is the semconv spelling of "which copy of
-		// this service", which is exactly what a node id is. A fleet's
-		// spans are otherwise indistinguishable at the collector.
-		attrs = append(attrs, semconv.ServiceInstanceID(opts.NodeID))
+		fallbacks = append(fallbacks, semconv.ServiceInstanceID(opts.NodeID))
 	}
-	// Merged onto the SDK's default resource so the process, host and SDK
-	// attributes an operator expects are present without restating them,
-	// and so OTEL_RESOURCE_ATTRIBUTES keeps working.
-	//
-	// The semconv version MUST match the one resource.Default() was built
-	// with (sdk/resource/builtin.go). Merge refuses two different schema
-	// URLs outright, so a mismatch is not a subtle attribute difference —
-	// it fails Configure and takes tracing out entirely.
-	res, err := resource.Merge(resource.Default(),
-		resource.NewWithAttributes(semconv.SchemaURL, attrs...))
+	res, err := resource.New(ctx,
+		resource.WithSchemaURL(semconv.SchemaURL),
+		resource.WithTelemetrySDK(),
+		resource.WithAttributes(fallbacks...),
+		// LAST, so what the operator wrote wins over every fallback above.
+		resource.WithFromEnv())
 	if err != nil {
-		return nil, fmt.Errorf("tracing: building the OTel resource: %w", err)
+		if !errors.Is(err, resource.ErrPartialResource) ||
+			errors.Is(err, resource.ErrSchemaURLConflict) {
+			return nil, fmt.Errorf("tracing: building the OTel resource: %w", err)
+		}
+		log.WarnContext(ctx, "otel_resource_attributes_partial",
+			"var", ResourceAttributesVar, "error", err,
+			"detail", "an entry with no '=' is skipped; write each as key=value")
 	}
 	return res, nil
 }
 
-// sampler is ALWAYS parent-based, and the ratio only decides what happens at a
-// root.
+// rootSamplerFor reads the operator's sampler: the rule for a trace this node
+// ROOTS. The provider wraps it in ParentBased, so a trace that arrived with a
+// decision keeps it.
 //
-// A trace that starts at a webhook and continues through a queue must not be
-// half-sampled: an unsampled parent with sampled children is a broken tree at
-// the collector, and this engine's traces cross processes routinely. So a
-// remote decision is always honoured and the ratio governs the roots this node
-// mints.
+// # Only the parent-based samplers are accepted
 //
-// An unparseable or out-of-range ratio WARNS and falls back to always-on,
-// rather than refusing to boot — the same rule `-log-level` follows, and for
-// the same reason: a typo in a telemetry knob must never be why a company will
-// not start. Falling back to always-on rather than off is deliberate: the
-// failure an operator can see is better than the one they cannot.
-func sampler(opts Options) sdktrace.Sampler {
-	raw := opts.env(SamplerArgVar)
-	if raw == "" {
-		return sdktrace.ParentBased(sdktrace.AlwaysSample())
+// The specification's always_on, always_off and traceidratio re-decide at
+// every span, and a node that re-decided a trace already in flight would split
+// its tree at the collector — an unsampled parent with sampled children, or
+// the reverse. The parent-based spelling of each is what an operator asking
+// for one of those almost always means, so the refusal names it rather than
+// silently substituting it. jaeger_remote and the rest are samplers this build
+// does not have.
+//
+// # A bad ratio does not stop a company
+//
+// An unparseable or out-of-range ratio WARNS and falls back to sampling
+// everything rather than refusing to boot — the same rule `-log-level` follows,
+// and for the same reason: a typo in a telemetry knob must never be why a
+// company will not start. Falling back to always-on rather than off is
+// deliberate: the failure an operator can see is better than the one they
+// cannot. A sampler NAME this build does not have is the other kind of value —
+// it says something about every trace, and there is no fallback that is not a
+// guess about which.
+func rootSamplerFor(opts Options) (sdktrace.Sampler, error) {
+	name, arg := opts.env(SamplerVar), opts.env(SamplerArgVar)
+	switch strings.ToLower(name) {
+	case "":
+		if arg == "" {
+			return sdktrace.AlwaysSample(), nil
+		}
+		return ratioSampler(arg), nil
+	case samplerAlwaysOn:
+		ignoredArg(name, arg)
+		return sdktrace.AlwaysSample(), nil
+	case samplerAlwaysOff:
+		ignoredArg(name, arg)
+		return sdktrace.NeverSample(), nil
+	case samplerRatio:
+		if arg == "" {
+			// The specification's default ratio for this sampler is 1:
+			// every trace, which is what always-on says in fewer words.
+			return sdktrace.AlwaysSample(), nil
+		}
+		return ratioSampler(arg), nil
+	case "always_on", "always_off", "traceidratio":
+		return nil, fmt.Errorf("%s=%s is not parent-based, and this engine's "+
+			"sampler always is: its traces cross processes, and a node that "+
+			"re-decided a trace already in flight would split its tree at the "+
+			"collector. Set %s=parentbased_%s — a trace this node starts is "+
+			"decided by %s, and one it continues keeps its parent's decision",
+			SamplerVar, name, SamplerVar, strings.ToLower(name), strings.ToLower(name))
 	}
+	return nil, fmt.Errorf("%s=%q is not a sampler this build has: set it to "+
+		"%s, %s or %s (with %s), or leave it unset to sample every trace",
+		SamplerVar, name, samplerAlwaysOn, samplerAlwaysOff, samplerRatio, SamplerArgVar)
+}
+
+// ratioSampler reads a ratio, warning and sampling everything on a bad one.
+func ratioSampler(raw string) sdktrace.Sampler {
 	ratio, err := strconv.ParseFloat(raw, 64)
 	switch {
 	case err != nil:
 		log.Warn("trace_sampler_arg_unparseable", "var", SamplerArgVar,
 			"value", raw, "using", "always")
-		return sdktrace.ParentBased(sdktrace.AlwaysSample())
-	case ratio < 0 || ratio > 1:
+		return sdktrace.AlwaysSample()
+	case !(ratio >= 0 && ratio <= 1):
+		// Written so NaN fails it: ParseFloat accepts "NaN", every
+		// comparison with it is false, and TraceIDRatioBased would turn
+		// it into a threshold no conversion defines.
 		log.Warn("trace_sampler_arg_out_of_range", "var", SamplerArgVar,
 			"value", raw, "range", "0..1", "using", "always")
-		return sdktrace.ParentBased(sdktrace.AlwaysSample())
+		return sdktrace.AlwaysSample()
 	}
-	return sdktrace.ParentBased(sdktrace.TraceIDRatioBased(ratio))
+	return sdktrace.TraceIDRatioBased(ratio)
+}
+
+// ignoredArg warns that a ratio was given to a sampler that takes none, which
+// the specification says is ignored — and an ignored setting an operator
+// believes is in force is worth one line.
+func ignoredArg(sampler, arg string) {
+	if arg != "" {
+		log.Warn("trace_sampler_arg_ignored", "var", SamplerArgVar, "value", arg,
+			"sampler", sampler, "detail", "only parentbased_traceidratio takes a ratio")
+	}
 }
 
 // Tracer names one instrumentation scope. Every span in the engine comes from

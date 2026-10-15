@@ -259,8 +259,10 @@ All read directly by the engine.
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | The traces endpoint in full, used verbatim. Overrides the base above when you need a non-standard path. | `https://collector.example.com/otlp/v1/traces` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | `k=v,k2=v2` headers for the OTLP backend (e.g. auth). Also used engine-side as the upstream auth for forwarded sandbox telemetry — never handed to the sandbox itself. | `authorization=Bearer%20...` |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | How the **engine** talks to the collector: `http/protobuf` (default) or `grpc`. Anything else is refused at startup, naming the two that work. | `http/protobuf` |
-| `OTEL_SERVICE_NAME` | The service the spans are reported under. Defaults to `crewlet`; set it when two companies share one collector. | `crewlet-acme` |
-| `OTEL_TRACES_SAMPLER_ARG` | Head-sampling ratio for traces this node **roots**, `0`–`1`. Unset samples everything. An unparseable or out-of-range value warns and falls back to always-on rather than refusing to boot. | `0.1` |
+| `OTEL_SERVICE_NAME` | The service everything is reported under. Defaults to `crewlet`; set it when two companies share one collector. Wins over a `service.name` in `OTEL_RESOURCE_ATTRIBUTES`. | `crewlet-acme` |
+| `OTEL_RESOURCE_ATTRIBUTES` | Extra resource attributes, `key=value` pairs with percent-encoded values. They **win** over the engine's own `service.name` (`crewlet`), `service.version` (the build) and `service.instance.id` (the node id), so naming `service.instance.id` here replaces the node id a fleet's spans are told apart by. An entry with no `=` is skipped with an `otel_resource_attributes_partial` warning and the rest kept. | `deployment.environment.name=prod` |
+| `OTEL_TRACES_SAMPLER` | Which traces this node records, decided where a trace **starts**: `parentbased_always_on` (the default), `parentbased_always_off` or `parentbased_traceidratio`, in any case. Only parent-based samplers are accepted — `always_on`, `always_off` and `traceidratio` are refused at startup with the `parentbased_` spelling to use, and any other sampler (`jaeger_remote`, `xray`, …) is refused naming the three that work. | `parentbased_traceidratio` |
+| `OTEL_TRACES_SAMPLER_ARG` | The ratio, `0`–`1`, for `parentbased_traceidratio` (default `1`). Set **alone**, with no `OTEL_TRACES_SAMPLER`, it means `parentbased_traceidratio`. The other two samplers take no ratio and warn that it is ignored. An unparseable or out-of-range value (`NaN` included) warns and falls back to sampling everything rather than refusing to boot. | `0.1` |
 
 > **The base and the signal endpoint are different settings.** `OTEL_EXPORTER_OTLP_ENDPOINT`
 > is a base that the exporter appends `/v1/traces` to; `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
@@ -268,10 +270,17 @@ All read directly by the engine.
 > reaches the sandbox forwarder, which appends `/v1/{signal}` of its own, so the
 > collector sees `/v1/traces/v1/traces`.
 
-**Sampling is parent-based**, always. A remote sampling decision is honoured
-whatever the ratio says, because these traces cross processes routinely and an
-unsampled parent with sampled children is a broken tree at the collector. The
-ratio governs only the traces this node starts itself.
+**Sampling is parent-based**, always. The sampler decides a trace where it starts; a
+trace that arrives already decided — an inbound W3C `traceparent` on a webhook — keeps
+its decision whatever the sampler says, because an unsampled parent with sampled children
+is a broken tree at the collector, and these traces cross processes routinely. Sampling
+does not depend on whether anything exports: with no endpoint, spans are created and
+decided exactly as they would be with one, and their ids still flow into every event.
+
+Only W3C **trace context** propagates — `traceparent` and `tracestate` — and
+`OTEL_PROPAGATORS` is not read. W3C baggage is neither read from an inbound request nor
+sent on: this engine writes none, so the only baggage it could carry is what a third
+party put on a webhook.
 
 When `OTEL_EXPORTER_OTLP_ENDPOINT` (or the traces endpoint) is set, the engine
 exports spans to it — Jaeger, Grafana Tempo, or any OTLP backend. Without it,

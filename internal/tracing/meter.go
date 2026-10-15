@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	otelmetric "go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -102,13 +103,8 @@ func metricInterval(opts Options) time.Duration {
 // there. A half that installed itself would be a global written by a call that
 // can still return an error to a caller with no handle to undo it.
 func configureMeter(
-	ctx context.Context, opts Options, rec *metrics.Recorder,
+	ctx context.Context, opts Options, res *resource.Resource, rec *metrics.Recorder,
 ) (*sdkmetric.MeterProvider, error) {
-	res, err := resourceFor(opts)
-	if err != nil {
-		return nil, err
-	}
-
 	providerOpts := []sdkmetric.Option{sdkmetric.WithResource(res)}
 	if metricsEnabled(opts) {
 		endpoint := metricsEndpoint(opts)

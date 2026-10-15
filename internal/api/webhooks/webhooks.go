@@ -373,7 +373,10 @@ func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, 
 	// appears from nowhere. No third-party app Crewlet serves sends W3C traceparent
 	// today, but the propagator is installed and an inbound one is honoured
 	// if it ever is — which costs nothing and is what makes a delivery
-	// forwarded through an operator's own gateway join their trace.
+	// forwarded through an operator's own gateway join their trace. Only the
+	// trace context is extracted: the global propagator carries no baggage,
+	// so a vendor's baggage header is never carried onward from here (see
+	// internal/tracing).
 	ctx, span := tracing.Start(
 		otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(req.Header)),
 		"api.webhooks", "webhook.receive",

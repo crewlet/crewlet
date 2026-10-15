@@ -1280,8 +1280,15 @@ produces are exported rather than dropped. Without it, spans are still created
 and their ids still reach every event, the event store and the dashboard's
 trace view — there is simply nothing shipping them anywhere.
 
-The full set of variables, including the protocol, the service name and the
-sampling ratio, is in
+The sampler is the standard `OTEL_TRACES_SAMPLER`, and it is always parent-based:
+`parentbased_always_on` (the default), `parentbased_always_off`, or
+`parentbased_traceidratio` with `OTEL_TRACES_SAMPLER_ARG` as the ratio. A sampler
+that would re-decide a trace already in flight — `always_on`, `traceidratio` — is
+refused at startup with the parent-based spelling to use. Only W3C trace context
+propagates; baggage is neither accepted nor sent.
+
+The full set of variables, including the protocol, the service name, the resource
+attributes and the sampler, is in
 [Environment Variables](../reference/environment-variables.md#opentelemetry-optional).
 The engine's exporter and the sandbox OTLP forwarder read the **same** endpoint
 and headers on purpose: a coding agent's spans land in the same backend as the
