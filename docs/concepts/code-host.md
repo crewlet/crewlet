@@ -530,10 +530,14 @@ read until it ends rather than answered in one request, and it is **admitted
 before it reads anything**: it holds a slot of the maintenance lane — the one
 the background indexing leaves free — and its connectivity check's memory from
 its first read to its last, and a node with neither free refuses it at once
-rather than after reading the repository. It checks only a copy the node
-holds: one it never served has nothing to check, and building one would be a
-download of the whole repository that evicts a warm one — so a check goes to
-the git nodes that serve the repository.
+rather than after reading the repository. Each check pass is **bounded by what
+the copy holds** — about 1.1 seconds a mebibyte, against a measured 9 ms,
+nearly all of it git's connectivity check — and ended there, so a check wedged
+on a disk holds neither its slot nor the operator who asked; the node says
+when it ends the pass running, and a client waits by that. It checks only a
+copy the node holds: one it never served has nothing to check, and building one
+would be a download of the whole repository that evicts a warm one — so a
+check goes to the git nodes that serve the repository.
 
 **What to watch.** `crewlet.code.cache.bytes` against the budget,
 `crewlet.code.cache.repos`, `crewlet.code.cache.sync.duration` by `kind` (full

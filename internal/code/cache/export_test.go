@@ -109,6 +109,15 @@ func BeforeVerifyFsck(o *Options, f func(dir string)) {
 	o.knobs.verifyFsck = f
 }
 
+// SetCheckBudget makes f the bound of every check pass, over the bytes the
+// copy holds, in place of CheckBudget's.
+func SetCheckBudget(o *Options, f func(bytes int64) time.Duration) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.checkBudget = f
+}
+
 // WhileAdopting makes every adoption that takes its share of the repository's
 // directory call f with the repository's id before it links.
 func WhileAdopting(o *Options, f func(repo string)) {
@@ -618,4 +627,31 @@ func lookup(c *Cache, repoID string) *entry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.entries[repoID]
+}
+
+// HashPacks hashes every pack in the incarnation directory dir as a check
+// does — each bundle's .pack, .idx and .rev back to back (hashBundle) —
+// answering the bytes it read: the share of a check BenchmarkVerify's
+// step=hash times.
+func HashPacks(ctx context.Context, dir string) (int64, error) {
+	packs, err := filepath.Glob(filepath.Join(dir, "objects", "pack", "pack-*.pack"))
+	if err != nil {
+		return 0, err
+	}
+	buf := make([]byte, copyBuffer)
+	var read int64
+	for _, p := range packs {
+		stem := p[:len(p)-len(".pack")]
+		if _, err := hashBundle(ctx, stem, buf); err != nil {
+			return read, err
+		}
+		for _, ext := range []string{".pack", ".idx", ".rev"} {
+			info, err := os.Stat(stem + ext)
+			if err != nil {
+				return read, err
+			}
+			read += info.Size()
+		}
+	}
+	return read, nil
 }

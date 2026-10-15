@@ -250,10 +250,18 @@ func (v *Verification) Release() {
 // word is (rebuild.go): that window exists because the cache never sees a
 // request succeed, and Verify has just seen the whole of it whole.
 //
+// EACH CHECK PASS HAS A BOUND OF ITS OWN, CheckBudget over what the copy it
+// checks holds, counted from the pass's start and told to how.Checking as it
+// begins: a pass past it is ended, ErrPastBound. The sync before it and a
+// repair's rebuild are not under it — each read of the object store they
+// make is bounded on its own (objstore.ReadBudget, objstore.ReadStall), as
+// every sync's is — and how.Checking is told zero as a rebuild begins.
+//
 // EVERY ANSWER CARRIES THE REPORT SO FAR beside its error — what the check
 // found before it failed, the repository named whenever it was known — so a
 // check cut short by a stop or a failure still says what it saw.
-func (v *Verification) Run(ctx context.Context, repair bool) (VerifyReport, error) {
+func (v *Verification) Run(ctx context.Context, how VerifyRun) (VerifyReport, error) {
+	repair := how.Repair
 	v.mu.Lock()
 	if v.ran || v.released {
 		v.mu.Unlock()
@@ -273,9 +281,12 @@ func (v *Verification) Run(ctx context.Context, repair bool) (VerifyReport, erro
 	if err = v.charge(s); err != nil {
 		return report, err
 	}
-	report, whole, err := c.check(ctx, s, v.slot)
+	report, whole, err := v.pass(ctx, s, how.Checking)
 	if err != nil || !repair || len(report.Problems) == 0 {
 		return report, err
+	}
+	if how.Checking != nil {
+		how.Checking(0)
 	}
 	rebuilt, err := c.rebuild(ctx, s, RebuildVerify, false, whole)
 	if err != nil {
@@ -285,7 +296,7 @@ func (v *Verification) Run(ctx context.Context, repair bool) (VerifyReport, erro
 	if err = v.charge(rebuilt); err != nil {
 		return report, err
 	}
-	second, _, err := c.check(ctx, rebuilt, v.slot)
+	second, _, err := v.pass(ctx, rebuilt, how.Checking)
 	second.Rebuilt, second.Found = true, report.Problems
 	if err == nil && len(second.Problems) == 0 {
 		rebuilt.entry.mu.Lock()
@@ -293,6 +304,66 @@ func (v *Verification) Run(ctx context.Context, repair bool) (VerifyReport, erro
 		rebuilt.entry.mu.Unlock()
 	}
 	return second, err
+}
+
+// VerifyRun is how a [Verification] runs.
+type VerifyRun struct {
+	// Repair rebuilds a copy the check finds damaged, and checks the
+	// rebuilt one.
+	Repair bool
+	// Checking, when set, is told the bound of each check pass as the pass
+	// begins (CheckBudget over what the copy it checks holds), and zero as
+	// a repair's rebuild begins: what the caller says of when the node ends
+	// what it is doing. Called on the verification's own goroutine.
+	Checking func(bound time.Duration)
+}
+
+// CheckBudget bounds one check pass over a copy holding bytes on disk — its
+// packs and packed-refs, and the maintainer's files beside them: the
+// listing's wait for a round of the repository in flight, and the read of its
+// rows, one read attempt (gitproc.ReadDeadline); every bundle hashed at
+// VerifyHashPerMiB; and git's connectivity check at
+// gitproc.PackWorkDeadline, the deadline its fsck already runs under. A
+// BOUND, never a schedule: BenchmarkVerify measured a whole check at 9.4 ms
+// a mebibyte over 100 MB of a source repository's composition (296 000
+// objects), the connectivity check most of it, where this gives about 1.1 s
+// — the gigabyte about nineteen minutes. What is past it is a disk or a node
+// far slower than every bound of the cache's own work allows for, or a check
+// wedged, and is ended rather than holding its maintenance slot and the
+// operator's sweep.
+func CheckBudget(bytes int64) time.Duration {
+	mib := max(bytes+objstore.MiB-1, 0) / objstore.MiB
+	return gitproc.ReadDeadline + time.Duration(mib)*VerifyHashPerMiB + gitproc.PackWorkDeadline(bytes)
+}
+
+// pass is one check of the incarnation s pins, run under the pass's own bound
+// — CheckBudget over what the incarnation holds, counted from now — which
+// checking is told as the pass begins. A pass the bound ends fails
+// ErrPastBound, naming the bound; one its caller ended fails as that.
+func (v *Verification) pass(ctx context.Context, s Synced, checking func(time.Duration)) (
+	VerifyReport, []string, error) {
+
+	c := v.c
+	s.entry.mu.Lock()
+	held := s.inc.diskBytes + s.inc.metaBytes
+	s.entry.mu.Unlock()
+	bound := CheckBudget(held)
+	if c.knobs != nil && c.knobs.checkBudget != nil {
+		bound = c.knobs.checkBudget(held)
+	}
+	if checking != nil {
+		checking(bound)
+	}
+	past := fmt.Errorf("%w — %s over the %d bytes this node holds of the repository; ask again", ErrPastBound,
+		bound, held)
+	bounded, cancel := context.WithTimeoutCause(ctx, bound, past)
+	defer cancel()
+	report, whole, err := c.check(bounded, s, v.slot)
+	if err != nil && ctx.Err() == nil && errors.Is(context.Cause(bounded), ErrPastBound) &&
+		!errors.Is(err, ErrPastBound) {
+		err = fmt.Errorf("cache: verify %s: %w (%w)", report.label(), past, err)
+	}
+	return report, whole, err
 }
 
 // holdMaintainer keeps the maintainer from starting a run on e until the

@@ -513,8 +513,13 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 		Started: time.Now().Add(-time.Minute), Ended: time.Now(),
 		Report: cache.VerifyReport{Repo: "r2", Name: "lost", Packs: 1, Problems: found},
 		Err:    errors.New("cache: verify lost: a rebuild could not repair it: pack p1 is missing")}
+	ends := time.Now().Add(time.Minute).Truncate(time.Second)
+	checking := host.Verification{ID: uuid.Must(uuid.NewV7()), Repo: "deep", State: host.VerifyRunning,
+		Started: time.Now(), Deadline: ends}
+	done.Deadline = ends // what an ended verification is never answered with
 	g := fakeGitRoutes{
-		kept: map[uuid.UUID]host.Verification{done.ID: done, stopped.ID: stopped, failed.ID: failed},
+		kept: map[uuid.UUID]host.Verification{done.ID: done, stopped.ID: stopped, failed.ID: failed,
+			checking.ID: checking},
 		start: func(_ context.Context, name string, repair bool) (host.Verification, error) {
 			mu.Lock()
 			repairs = append(repairs, repair)
@@ -617,12 +622,13 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 	// a stop the node can clear by restarting is `unavailable`, anything
 	// else `query_failed` — and what this node does not keep is none.
 	type view struct {
-		ID     string              `json:"id"`
-		State  host.VerifyState    `json:"state"`
-		Ended  time.Time           `json:"ended"`
-		Report *cache.VerifyReport `json:"report"`
-		Error  string              `json:"error"`
-		Detail string              `json:"detail"`
+		ID       string              `json:"id"`
+		State    host.VerifyState    `json:"state"`
+		Deadline time.Time           `json:"deadline"`
+		Ended    time.Time           `json:"ended"`
+		Report   *cache.VerifyReport `json:"report"`
+		Error    string              `json:"error"`
+		Detail   string              `json:"detail"`
 	}
 	read := func(path string) (int, view) {
 		rec := ask(t, a, http.MethodGet, "/code/repos/"+path, true)
@@ -633,8 +639,15 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 		return rec.Code, v
 	}
 	if status, v := read("web/verify/" + done.ID.String()); status != http.StatusOK || v.State != host.VerifyDone ||
-		v.Ended.IsZero() || v.Report == nil || v.Report.Packs != 2 || v.Report.Refs != 5 || v.Error != "" {
-		t.Errorf("a done verification read %d %+v, want 200 done with its report", status, v)
+		v.Ended.IsZero() || v.Report == nil || v.Report.Packs != 2 || v.Report.Refs != 5 || v.Error != "" ||
+		!v.Deadline.IsZero() {
+		t.Errorf("a done verification read %d %+v, want 200 done with its report and no deadline", status, v)
+	}
+	// CHECKING: running, with when the node ends its check.
+	if status, v := read("deep/verify/" + checking.ID.String()); status != http.StatusOK ||
+		v.State != host.VerifyRunning || !v.Deadline.Equal(ends) || v.Report != nil {
+		t.Errorf("a verification checking its copy read %d %+v, want 200 running, ending its check by %s", status,
+			v, ends)
 	}
 	for _, tc := range []struct {
 		v      host.Verification

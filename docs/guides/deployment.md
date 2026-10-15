@@ -55,7 +55,7 @@ and both clients read an answer the engine did not write as one that never
 arrived, keeping the operation id to finish it with — but the operator then
 has to finish it to see what it did. The one route whose work grows with what
 it reads — a check of a git node's copy of a repository
-(`POST /code/repos/{name}/verify`), tens of seconds a gigabyte — needs no
+(`POST /code/repos/{name}/verify`), about nine seconds a gigabyte — needs no
 longer timeout: it answers `202` at once and runs on the node's own time, and
 its outcome is read with `GET /code/repos/{name}/verify/{id}` until it ends
 ([API reference](../reference/api-endpoints.md#post-codereposnameverify)).

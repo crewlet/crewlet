@@ -27,7 +27,7 @@ func verify(ctx context.Context, c *cache.Cache, repo string, repair bool) (cach
 		return cache.VerifyReport{}, err
 	}
 	defer v.Release()
-	return v.Run(ctx, repair)
+	return v.Run(ctx, cache.VerifyRun{Repair: repair})
 }
 
 // problemsOf fails t unless problems holds, for each of want, a problem
@@ -300,10 +300,10 @@ func TestACheckIsAdmittedBeforeItReadsAnything(t *testing.T) {
 	if _, err := c.AdmitVerify(second); !errors.Is(err, gitproc.ErrBusy) {
 		t.Errorf("a second check beside the first on a one-slot lane = %v, want ErrBusy", err)
 	}
-	if report, err := v.Run(t.Context(), false); err != nil || len(report.Problems) != 0 {
+	if report, err := v.Run(t.Context(), cache.VerifyRun{}); err != nil || len(report.Problems) != 0 {
 		t.Errorf("the admitted check = %+v, %v", report, err)
 	}
-	if _, err := v.Run(t.Context(), false); !errors.Is(err, cache.ErrInvalid) {
+	if _, err := v.Run(t.Context(), cache.VerifyRun{}); !errors.Is(err, cache.ErrInvalid) {
 		t.Errorf("a second Run of one check = %v, want ErrInvalid", err)
 	}
 	v.Release()
@@ -318,6 +318,98 @@ func TestACheckIsAdmittedBeforeItReadsAnything(t *testing.T) {
 	}
 	if report, err := verify(t.Context(), c, second, false); err != nil || len(report.Problems) != 0 {
 		t.Errorf("the second check once the first let go = %+v, %v", report, err)
+	}
+}
+
+// A CHECK PASS ENDS AT ITS BOUND, AND SAYS SO AS IT BEGINS: every pass is told
+// to its caller with the bound what the copy holds gives it (CheckBudget), a
+// repair's rebuild with none — its reads of the object store are bounded each
+// on its own — and a pass still running at its bound is ended there,
+// ErrPastBound naming the bound, with what it found before; the copy is no
+// worse for it, and a check with room checks it whole. The bound grows with
+// what a copy holds: the hashing and the connectivity check over every byte.
+//
+// Mutation: run the pass under its caller's context alone, and the wedged
+// check outlives its bound until its caller gives up.
+func TestACheckPassEndsAtItsBound(t *testing.T) {
+	t.Parallel()
+	if small, large := cache.CheckBudget(1<<20), cache.CheckBudget(1<<30); small >= large ||
+		small > time.Minute || large > time.Hour {
+		t.Errorf("a check's bound is %s over a mebibyte and %s over a gibibyte; want it to grow with the "+
+			"bytes, a mebibyte's in seconds and a gibibyte's under an hour", small, large)
+	}
+	if got, want := cache.CheckBudget(1<<30)-cache.CheckBudget(0), 1024*(cache.VerifyHashPerMiB+
+		gitproc.PackWorkPerMiB); got != want {
+		t.Errorf("a gibibyte adds %s to a check's bound, want %s: VerifyHashPerMiB and gitproc.PackWorkPerMiB "+
+			"each mebibyte", got, want)
+	}
+
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	var (
+		mu     sync.Mutex
+		bound  = time.Hour
+		wedged bool
+	)
+	c := w.open(t, func(o *cache.Options) {
+		cache.SetCheckBudget(o, func(int64) time.Duration {
+			mu.Lock()
+			defer mu.Unlock()
+			return bound
+		})
+		cache.BeforeVerifyFsck(o, func(string) {
+			mu.Lock()
+			wait := wedged
+			mu.Unlock()
+			if wait {
+				time.Sleep(200 * time.Millisecond)
+			}
+		})
+	})
+	w.sync(t, c, repo)
+
+	var told []time.Duration
+	checking := func(b time.Duration) { told = append(told, b) }
+	mu.Lock()
+	bound, wedged = 20*time.Millisecond, true
+	mu.Unlock()
+	v, err := c.AdmitVerify(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := v.Run(t.Context(), cache.VerifyRun{Checking: checking})
+	v.Release()
+	if !errors.Is(err, cache.ErrPastBound) || !strings.Contains(err.Error(), "20ms") || report.Packs != 1 {
+		t.Fatalf("a check wedged past its bound = %+v, %v; want ErrPastBound naming the bound, its packs "+
+			"counted", report, err)
+	}
+	if len(told) != 1 || told[0] != 20*time.Millisecond {
+		t.Errorf("the check told its caller %v, want its one pass's bound", told)
+	}
+
+	// THE REPAIR: a damaged copy found, the rebuild told with no bound, and
+	// the rebuilt copy's pass told its own.
+	mu.Lock()
+	bound, wedged = time.Hour, false
+	mu.Unlock()
+	packs, err := filepath.Glob(filepath.Join(w.dir(t, c, repo), "objects", "pack", "pack-*.pack"))
+	if err != nil || len(packs) != 1 {
+		t.Fatalf("the copy's packs are %v (%v)", packs, err)
+	}
+	damage(t, packs[0], 28, []byte{0xff, 0xff, 0xff, 0xff})
+	told = nil
+	v, err = c.AdmitVerify(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err = v.Run(t.Context(), cache.VerifyRun{Repair: true, Checking: checking})
+	v.Release()
+	if err != nil || !report.Rebuilt || len(report.Problems) != 0 {
+		t.Fatalf("a repair with room = %+v, %v; want the copy rebuilt whole", report, err)
+	}
+	if !slices.Equal(told, []time.Duration{time.Hour, 0, time.Hour}) {
+		t.Errorf("a repair told its caller %v, want the check's bound, none for the rebuild, the recheck's", told)
 	}
 }
 

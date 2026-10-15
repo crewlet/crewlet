@@ -4099,8 +4099,9 @@ downloaded again) that is then checked the same way. `repair` is `true` or
 `false`; anything else is `400 bad_params`.
 
 **It is the one `/code/` route whose work grows with the repository**: it reads
-every byte of the copy — tens of seconds a gigabyte, minutes for a large
-repository, more with a repair — which outlives any proxy's read timeout. So
+every byte of the copy — measured at about nine seconds a gigabyte, git's
+connectivity check nearly all of it, minutes for a large repository, and
+about twice that with a repair — which outlives any proxy's read timeout. So
 it answers at once, **`202 Accepted`**, with the verification running and its
 address in `Location`, and the check runs on the node's own time: the request
 ending, or a proxy closing it, ends nothing. Read the outcome there (below)
@@ -4150,6 +4151,15 @@ and after a repair `rebuilt` and, as `found`, what the first check found — or
 stop among them; `query_failed` otherwise), `detail`, its sentence — a pack the
 object store does not hold, the stop that cut it short — and `report`, **what
 the check found before it failed**. `ended` is set once it is not running.
+
+While it is `running` and checking the copy, `deadline` is **when the node
+ends that check by**: each check pass is bounded by what the copy holds —
+about 1.1 seconds a mebibyte, git's connectivity check given a second of it
+and the hashing a tenth, against a measured 9 ms — and a pass still running
+then is ended, `failed` saying it ran past its bound, rather than holding its
+slot. A client waits by it. It is absent while the node first brings its copy
+to the rows it checks against, and while a repair rebuilds it: each read of
+the object store those make is bounded on its own, as every sync's is.
 
 The node keeps a verification **an hour after it ends**, until the
 repository's next verify begins, and never across a restart: a verification it

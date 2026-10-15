@@ -321,6 +321,21 @@ const GraphBytesPerObject = 56
 // it is held to the same budget, charged at its admission (Cache.AdmitVerify).
 const FsckBytesPerObject = 192
 
+// VerifyHashPerMiB is what a check's hashing is given for each mebibyte of
+// the bundles it reads (CheckBudget), beside the connectivity check's own
+// gitproc.PackWorkDeadline.
+//
+// A TENTH OF A SECOND. BenchmarkVerify's op=hash reads and hashes a bundle at
+// 0.95–1.08 ms a mebibyte (about 1 GB/s: SHA-256 with the CPU's SHA
+// extensions, from the page cache, on the machine the package doc's
+// Measured names). A cold read from a disk at 50 MB/s is 20 ms, and a CPU
+// without the extensions hashes at a few hundred megabytes a second, so a
+// tenth of a second is five times the slowest of those and a hundred times
+// the measured — room for a disk the store, the broker and the node's clones
+// share, without letting a check wedged on a disk hold its slot and the
+// operator's sweep for days.
+const VerifyHashPerMiB = 100 * time.Millisecond
+
 // MaintenanceMemoryPerCore is how much memory the maintenance runs BESIDE
 // THE LARGEST ONE IN FLIGHT may be charged at together, for every core the
 // node's memory backs at gitproc.CoreMemory a core (the read lane's slots,

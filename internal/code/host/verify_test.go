@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // awaitVerify is the verification id of name once it has ended, failing t if
@@ -166,6 +167,70 @@ func TestAVerifyOutlivesItsRequest(t *testing.T) {
 	}
 	if r := ended.Report; !r.Rebuilt || len(r.Found) == 0 || len(r.Problems) != 0 {
 		t.Errorf("the repair reported %+v, want what it found and a rebuild that left no problem", r)
+	}
+}
+
+// A VERIFY SAYS WHEN THE NODE ENDS ITS CHECK: while it brings its copy to the
+// rows first it states no deadline — each read of the object store that sync
+// makes is bounded on its own — and once its check pass begins the
+// verification carries the instant the pass's bound ends it by
+// (cache.CheckBudget over what the copy holds), which a caller waits by; an
+// ended verification carries none.
+//
+// Mutation: drop the deadline the check pass is told, and the running
+// check states none.
+func TestAVerifySaysWhenItEndsItsCheck(t *testing.T) {
+	var (
+		holding atomic.Bool
+		reached = make(chan struct{})
+		release = make(chan struct{})
+		once    sync.Once
+	)
+	e := &recording{state: func(ctx context.Context, inner host.Estate, q code.StateQuery) (code.RepoSnapshot, error) {
+		// The check's read of the rows is at the floor of what it listed:
+		// held there, the check is under way.
+		if holding.Load() && q.Fresh.Level == statelog.ReadSession {
+			once.Do(func() { close(reached) })
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return code.RepoSnapshot{}, ctx.Err()
+			}
+		}
+		return inner.RepoState(ctx, q)
+	}}
+	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: e.wrap}}, codetest.Settings())
+	h := c.Fleet.Nodes()[0].Host()
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+
+	holding.Store(true)
+	began := time.Now()
+	started, err := h.StartVerify(c.Ctx, codetest.RepoName, false)
+	if err != nil {
+		t.Fatalf("a verify failed to start: %v", err)
+	}
+	if !started.Deadline.IsZero() {
+		t.Errorf("a verify not yet checking stated a deadline, %s", started.Deadline)
+	}
+	select {
+	case <-reached:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the check never read its rows")
+	}
+	checking, ok := h.Verification(codetest.RepoName, started.ID)
+	if most := began.Add(cache.CheckBudget(1 << 30)); !ok || checking.State != host.VerifyRunning ||
+		checking.Deadline.Before(began.Add(cache.CheckBudget(0))) || checking.Deadline.After(most) {
+		t.Errorf("a verify checking its copy states %+v, %v; want it running, ending its check within the "+
+			"bound of a small copy from its start", checking, ok)
+	}
+	holding.Store(false)
+	close(release)
+	if ended := awaitVerify(t, h, codetest.RepoName, started.ID); ended.State != host.VerifyDone ||
+		!ended.Deadline.IsZero() {
+		t.Errorf("the verify ended %+v, want done and stating no deadline", ended)
 	}
 }
 

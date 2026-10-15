@@ -19,8 +19,10 @@ import (
 // A VERIFY IS AN OPERATION THAT OUTLIVES ITS REQUEST. An operator's check of
 // this node's cache of a repository reads every byte of it — a hash of every
 // pack, then git's connectivity check over the whole history — and with a
-// repair rebuilds and checks again: tens of seconds a gigabyte, minutes for a
-// large repository. Answered in one request, the check outlived every
+// repair rebuilds and checks again: about nine seconds a gigabyte measured
+// (cache.BenchmarkVerify, the connectivity check most of it), twice that with
+// a repair, minutes for a large repository. Answered in one request, the check
+// outlived every
 // balancer's read timeout in front of the API (nginx's default is sixty
 // seconds), and the timeout's close cancelled the request and with it the
 // check and any rebuild in flight — so a large repository could never be
@@ -88,6 +90,14 @@ type Verification struct {
 	// ErrStopping wrapping what the cut left when the host's stop cut it
 	// short.
 	Err error
+	// Deadline is, while it checks the copy, when this node ends that check
+	// by: the bound of the check pass running (cache.CheckBudget over what
+	// the copy holds), counted from the pass's start. Zero while it brings
+	// the copy to the rows it is checked against first, or rebuilds it for
+	// a repair — whose reads of the object store are bounded each on its
+	// own (objstore.ReadBudget, objstore.ReadStall), as every sync's are —
+	// and once it has ended.
+	Deadline time.Time
 }
 
 // VerifyRunningError is a verification refused because one of the same
@@ -271,13 +281,26 @@ func (s *Server) resolveVerified(ctx context.Context, name string) (code.RepoRef
 func (s *Server) runVerify(id uuid.UUID, checked *cache.Verification, repair bool) {
 	defer s.inflight.Done()
 	defer checked.Release()
-	report, err := checked.Run(s.life, repair) //nolint:contextcheck // the host's lifetime, never a request's: see the file's doc
+	// WHEN THE NODE ENDS WHAT IT IS DOING is said as each check pass begins,
+	// so a caller reading the verification waits by the node's own bound.
+	checking := func(bound time.Duration) {
+		s.verifies.mu.Lock()
+		defer s.verifies.mu.Unlock()
+		if v := s.verifies.byID[id]; v != nil {
+			v.Deadline = time.Time{}
+			if bound > 0 {
+				v.Deadline = s.now().Add(bound)
+			}
+		}
+	}
+	//nolint:contextcheck // the host's lifetime, never a request's: see the file's doc
+	report, err := checked.Run(s.life, cache.VerifyRun{Repair: repair, Checking: checking})
 	if err != nil && s.life.Err() != nil {
 		err = fmt.Errorf("%w: %w", ErrStopping, err)
 	}
 	s.verifies.mu.Lock()
 	s.verifies.end(id, s.now(), func(v *Verification) {
-		v.Report, v.Err, v.State = report, err, VerifyDone
+		v.Report, v.Err, v.State, v.Deadline = report, err, VerifyDone, time.Time{}
 		if err != nil {
 			v.State = VerifyFailed
 		}
