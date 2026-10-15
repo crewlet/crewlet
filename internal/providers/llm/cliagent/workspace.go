@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
@@ -198,10 +199,16 @@ func (w *Workspace) Acquire(seat, callID string) (*Checkout, error) {
 			return nil, err
 		}
 	}
-	for _, d := range []string{home, cache, work} {
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			return nil, fmt.Errorf("cli-agent: preparing %q: %w", d, err)
-		}
+	// EVERY DIRECTORY THE ISOLATION NAMES, through the preparer the local
+	// box uses too: a child is entitled to find its TMPDIR, its XDG
+	// directories and its vendor relocation directory already there. The
+	// TMPDIR in particular was a directory nothing created, so every
+	// temporary file a CLI made failed with ENOENT.
+	if err := hostbox.Prepare(w.profile.SeatEnv(home, cache)); err != nil {
+		return nil, fmt.Errorf("cli-agent: %w", err)
+	}
+	if err := os.MkdirAll(work, hostbox.DirMode); err != nil {
+		return nil, fmt.Errorf("cli-agent: preparing %q: %w", work, err)
 	}
 	// The working directory is this call's own, so its settings files
 	// are written per call rather than per seat generation.
@@ -258,8 +265,19 @@ func (w *Workspace) seatState(seat string) *seatState {
 	return state
 }
 
-// prune deletes the profile's volatile paths from a seat home.
+// prune deletes the profile's volatile paths from a seat home, and the
+// isolation's TMPDIR ([hostbox.TempDir]) with them.
+//
+// THE TEMPORARY DIRECTORY IS VOLATILE WHATEVER THE PROFILE SAYS. A seat home
+// outlives every call, and a temporary file is exactly what nothing else
+// deletes, so left alone it piles up for the life of the deployment — and a
+// file one call left there is state the next call can read. Pruned with the
+// rest, it lives as long as the calls in flight in that seat, and [Acquire]
+// creates it again for the next.
 func (w *Workspace) prune(home string) error {
+	if err := os.RemoveAll(hostbox.TempDir(home)); err != nil {
+		return fmt.Errorf("cli-agent: pruning the seat's temporary directory: %w", err)
+	}
 	for _, rel := range w.profile.VolatilePaths {
 		target, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {

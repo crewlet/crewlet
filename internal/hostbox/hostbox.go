@@ -5,11 +5,16 @@
 // CLI LLM backend, which drives a coding CLI per seat with its own HOME, and
 // the local sandbox provider, which runs a whole coding agent in a box. Both
 // seed operator-supplied credential paths in, both copy a refreshed login back
-// out, and both hand a child process an environment. A second implementation
-// of any of those is the one that drifts — and each of them is a guard, so
-// drift means a hole.
+// out, and both hand a child process an environment: what it may inherit from
+// the host ([PassthroughEnv]) and the ISOLATION that keeps its state inside
+// one home ([Isolation], with [Prepare] making each directory it names exist).
+// A second implementation of any of those is the one that drifts — and each
+// of them is a guard, so drift means a hole. The isolation did drift, before
+// it moved here: the two copies spelled TMPDIR differently, and the CLI
+// backend's pointed at a directory nothing created.
 //
-// Nothing here imports the rest of Crewlet: it sits below both consumers.
+// Nothing here imports the rest of Crewlet: it sits below both consumers, and
+// below config, which reads the isolation's names through the CLI profile.
 package hostbox
 
 import (

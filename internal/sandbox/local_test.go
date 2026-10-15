@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
@@ -1586,5 +1588,31 @@ func TestAnEmptyCredentialMapIsNotAFailure(t *testing.T) {
 	layout := boxLayout{id: "box-3", root: t.TempDir()}
 	if err := recordCredentialMap(layout, nil); err != nil {
 		t.Errorf("recordCredentialMap(nil): %v", err)
+	}
+}
+
+// A DIRECT BOX'S ISOLATION IS THE HOST ISOLATION, the one spelling the CLI
+// backend's seats use too, with the cache inside the box's home.
+func TestADirectBoxsIsolationIsTheHostIsolation(t *testing.T) {
+	t.Parallel()
+	if got, want := directIsolation("/box"), hostbox.Isolation("/box", "/box/.cache"); !maps.Equal(got, want) {
+		t.Errorf("a direct box sets %v, want the host isolation %v", got, want)
+	}
+}
+
+// AND EVERY DIRECTORY IT NAMES EXISTS when the box is created, so a coding
+// agent can make a temporary file — `mktemp` fails with ENOENT under a TMPDIR
+// nothing created — and finds its XDG directories already there.
+//
+// Mutation: drop hostbox.Prepare from the box's creation, and mktemp fails.
+func TestAChildCanMakeATemporaryFileInADirectBox(t *testing.T) {
+	t.Parallel()
+	box := mustCreate(t, newDirect(t), Spec{})
+	result, err := box.Exec(t.Context(), `mktemp && test -d "$XDG_CONFIG_HOME" && test -d "$XDG_CACHE_HOME"`, ExecOptions{})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if result.ExitCode != 0 || !strings.HasPrefix(strings.TrimSpace(result.Stdout), box.Home()) {
+		t.Fatalf("mktemp in the box = %d %q %q, want a file inside the box", result.ExitCode, result.Stdout, result.Stderr)
 	}
 }

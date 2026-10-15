@@ -2,11 +2,13 @@ package cliagent
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
@@ -358,5 +360,47 @@ func TestSeatSlugNeverCollides(t *testing.T) {
 				prev, in, got)
 		}
 		seen[got] = in
+	}
+}
+
+// A CLI CHILD CAN MAKE A TEMPORARY FILE, and nothing it makes outlives the
+// calls in flight in its seat. TMPDIR pointed at a directory nothing created,
+// so `mktemp`, Node's mkdtemp and Go's os.CreateTemp failed with ENOENT in
+// every text-mode call; and a seat home persists across calls, so a TMPDIR
+// that is never emptied piles up for the life of the deployment and hands one
+// call's scratch to the next.
+//
+// Mutation: drop hostbox.Prepare from Acquire, and mktemp fails; drop the
+// TMPDIR from prune, and the file survives the release.
+func TestACLIChildCanMakeATemporaryFileThatDiesWithTheCall(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	co, err := ws.Acquire("dev", "call-1")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	cmd := exec.Command("/bin/sh", "-c", "mktemp")
+	cmd.Env = buildEnv(ws.profile, co, nil, Auth{})
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mktemp under the seat's TMPDIR: %v: %s", err, out)
+	}
+	made := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(made, hostbox.TempDir(co.Home)) {
+		t.Fatalf("mktemp made %q, want a file in the seat's TMPDIR %q", made, hostbox.TempDir(co.Home))
+	}
+	if err := co.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if _, err := os.Stat(made); !os.IsNotExist(err) {
+		t.Errorf("the temporary file %q outlived the seat's last call: %v", made, err)
+	}
+	next, err := ws.Acquire("dev", "call-2")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer func() { _ = next.Release() }()
+	if info, err := os.Stat(hostbox.TempDir(next.Home)); err != nil || !info.IsDir() {
+		t.Errorf("the next call has no TMPDIR: %v", err)
 	}
 }

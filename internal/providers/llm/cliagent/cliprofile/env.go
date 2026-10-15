@@ -6,21 +6,17 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/hostbox"
 )
 
 // seatBase is the part of the isolation every profile gets, whatever it
-// declares: HOME, the XDG base directories and TMPDIR, each pointed inside the
-// seat's home — except XDG_CACHE_HOME, which lives BESIDE the home at cache,
+// declares: the host isolation both subsystems that run somebody else's
+// process share ([hostbox.Isolation]) — HOME, the XDG base directories and
+// TMPDIR inside the seat's home, and XDG_CACHE_HOME BESIDE it at cache,
 // because a cache is warm across calls and holds no conversation.
 func seatBase(home, cache string) map[string]string {
-	return map[string]string{
-		"HOME":            home,
-		"XDG_CONFIG_HOME": filepath.Join(home, ".config"),
-		"XDG_DATA_HOME":   filepath.Join(home, ".local", "share"),
-		"XDG_STATE_HOME":  filepath.Join(home, ".local", "state"),
-		"XDG_CACHE_HOME":  cache,
-		"TMPDIR":          filepath.Join(home, "tmp"),
-	}
+	return hostbox.Isolation(home, cache)
 }
 
 // SeatEnv is the ISOLATION, by name and value: every variable a CLI could keep
