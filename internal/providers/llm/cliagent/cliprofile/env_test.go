@@ -1,10 +1,13 @@
 package cliprofile
 
 import (
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/hostbox"
 )
 
 // THE ENGINE OWNS THE ISOLATION AND THE PER-CALL CHANNELS, AND NOTHING ELSE.
@@ -163,5 +166,23 @@ func TestNoShippedProfileDeclaresWhatItsCLINeverReads(t *testing.T) {
 		if err := p.ValidateAuthoring(name); err != nil {
 			t.Error(err)
 		}
+	}
+}
+
+// A SEAT'S BASE ISOLATION IS THE HOST ISOLATION, the one spelling a direct
+// local box uses too: the two copies drifted (TMPDIR at `home/tmp` here and
+// `home/.tmp` there), and this one's TMPDIR was a directory nothing created.
+// What a profile adds is only its vendor's relocation variables.
+//
+// Mutation: spell the base here again with any difference, and this fails.
+func TestTheSeatBaseIsTheHostIsolation(t *testing.T) {
+	t.Parallel()
+	var p Profile
+	if got, want := p.SeatEnv("/h", "/c"), hostbox.Isolation("/h", "/c"); !maps.Equal(got, want) {
+		t.Errorf("a profile with no relocation gets %v, want the host isolation %v", got, want)
+	}
+	p.ConfigEnv = map[string]string{"VENDOR_DIR": ".vendor"}
+	if got := p.SeatEnv("/h", "/c"); len(got) != len(hostbox.Isolation("/h", "/c"))+1 || got["VENDOR_DIR"] != "/h/.vendor" {
+		t.Errorf("a relocation is not layered over the host isolation: %v", got)
 	}
 }

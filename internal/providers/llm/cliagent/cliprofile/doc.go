@@ -13,9 +13,10 @@
 // provider: a revision the API activates and the fleet then refuses. Config
 // cannot import the backend itself: that would pull a subprocess supervisor
 // into the package everything imports, and the backend's own tests read
-// config. So the table lives here, depending on the standard library and the
-// YAML decoder alone, the same arrangement providers/llm/anthropic/claudemodel
-// has for the Claude request shapes.
+// config. So the table lives here, depending on the standard library, the
+// YAML decoder and internal/hostbox — itself standard library alone — the same
+// arrangement providers/llm/anthropic/claudemodel has for the Claude request
+// shapes.
 //
 // TWO RULE SETS, because config holds them differently. [Profile.Validate],
 // which [Load] runs, is whether the merged profile can drive a CLI at all —
@@ -31,11 +32,14 @@
 // slip looks: a relocation that leaves the seat home shares state between
 // seats and is runnable, one that names a base variable is ignored and is not.
 //
-// It is also where the ISOLATION is spelled ([Profile.SeatEnv]): which
+// It is also where a seat's ISOLATION is assembled ([Profile.SeatEnv]): which
 // variables point a CLI's state inside one seat's home, and therefore which
 // ones no other layer of a child's environment may name
 // ([Profile.EngineEnv]). Here rather than in the backend because both read
-// it — the backend sets them, config refuses a document that names one.
+// it — the backend sets them, config refuses a document that names one. The
+// BASE of it is not spelled here: it is hostbox.Isolation, the one spelling
+// the local sandbox's direct boxes use too, and what this package adds over it
+// is only each vendor's own relocation variables ([Profile.ConfigEnv]).
 //
 // It is DATA, not code. Every field is replaceable from YAML because these
 // flags and JSON shapes belong to vendors who rename them between releases,

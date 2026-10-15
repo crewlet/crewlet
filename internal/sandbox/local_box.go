@@ -186,19 +186,13 @@ func (b *directBox) shell(cmd string, opts ExecOptions) ([]string, map[string]st
 	return []string{"/bin/sh", "-l", "-c", script}, env, nil
 }
 
-// directIsolation is a direct box's ISOLATION, by name and value: HOME, the
-// XDG base directories and TMPDIR, each inside the box's own home — every
-// place a coding agent keeps state, so that state is the box's rather than
-// the engine user's.
+// directIsolation is a direct box's ISOLATION: the host isolation the CLI
+// backend's seats get too ([hostbox.Isolation]), with the cache INSIDE the
+// box's home, since a box is one run and nothing of it is kept warm — every
+// place a coding agent keeps state, so that state is the box's rather than the
+// engine user's.
 func directIsolation(home string) map[string]string {
-	return map[string]string{
-		"HOME":            home,
-		"XDG_CONFIG_HOME": filepath.Join(home, ".config"),
-		"XDG_DATA_HOME":   filepath.Join(home, ".local", "share"),
-		"XDG_STATE_HOME":  filepath.Join(home, ".local", "state"),
-		"XDG_CACHE_HOME":  filepath.Join(home, ".cache"),
-		"TMPDIR":          filepath.Join(home, ".tmp"),
-	}
+	return hostbox.Isolation(home, filepath.Join(home, ".cache"))
 }
 
 // isolationKept is every name of the isolation a run env also writes, sorted:

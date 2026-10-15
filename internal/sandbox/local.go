@@ -552,8 +552,11 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	if err = os.Chmod(layout.root, hostbox.DirMode); err != nil {
 		return nil, localErrorf("could not secure local sandbox %s at %s: %v", id, layout.root, err)
 	}
-	if err = os.MkdirAll(filepath.Join(layout.home(), ".tmp"), hostbox.DirMode); err != nil {
-		return nil, localErrorf("could not create local sandbox %s tmpdir: %v", id, err)
+	// EVERY DIRECTORY THE ISOLATION NAMES, through the one preparer the CLI
+	// backend's seats use too: a child finds its TMPDIR and XDG directories
+	// there, and a container box's mounted home carries them as well.
+	if err = hostbox.Prepare(directIsolation(layout.home())); err != nil {
+		return nil, localErrorf("could not prepare local sandbox %s home: %v", id, err)
 	}
 	if err = os.MkdirAll(layout.records(), hostbox.DirMode); err != nil {
 		return nil, localErrorf("could not create local sandbox %s records at %s: %v",

@@ -192,12 +192,10 @@ func applyAuth(env map[string]string, p cliprofile.Profile, auth Auth) {
 func (p *Provider) probeEnv() []string {
 	home := filepath.Join(p.ws.Root(), "probe-home")
 	cache := filepath.Join(p.ws.Root(), "probe-cache")
-	for _, dir := range []string{home, cache} {
-		// Best effort: a CLI that cannot write its config still prints
-		// its version, and a probe that refused to run over a mkdir
-		// would report the drift it exists to detect as an absence.
-		_ = os.MkdirAll(dir, 0o700)
-	}
+	// Best effort: a CLI that cannot write its config still prints its
+	// version, and a probe that refused to run over a mkdir would report
+	// the drift it exists to detect as an absence.
+	_ = hostbox.Prepare(p.profile.SeatEnv(home, cache))
 	return buildEnv(p.profile, &Checkout{Home: home, Cache: cache}, p.env, p.auth)
 }
 

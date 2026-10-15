@@ -74,9 +74,13 @@ its own place to run:
 ```
 
 **Between seats.** Every seat gets its own `home`. `HOME`,
-`XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `TMPDIR` and the
-vendor's own relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, …)
-all point inside it, and `XDG_CACHE_HOME` beside it. Nothing in a CLI's
+`XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `TMPDIR` (the home's
+`.tmp`) and the vendor's own relocation variable (`CLAUDE_CONFIG_DIR`,
+`CODEX_HOME`, …) all point inside it, and `XDG_CACHE_HOME` beside it — the
+same layout a [`direct` local sandbox](code-sandbox.md#local-sandboxes) gets,
+from one definition — and every one of those directories exists before the
+CLI starts, so a temporary file or a config directory it makes needs no
+directory it has to create first. Nothing in a CLI's
 state layout is reachable across that boundary — and nothing you write can
 move it: the engine sets these variables **last**, over the profile's `env`,
 its `passthrough_env` and your `cli.env`, and a document naming one in any of
@@ -86,7 +90,8 @@ the base variables changes nothing: the engine's value stands.
 
 **Between turns.** Each profile declares its `volatile_paths` —
 sessions, transcripts, history, todo state. They are deleted before and
-after every call. Crewlet's memory model is the [agent
+after every call, and so is the seat's `TMPDIR` whatever the profile
+declares, since a temporary file is exactly what nothing else deletes. Crewlet's memory model is the [agent
 diary](agent-learning.md) and the episode store; a second, invisible
 memory inside the CLI would make turns non-reproducible and would carry
 one task's context into the next.

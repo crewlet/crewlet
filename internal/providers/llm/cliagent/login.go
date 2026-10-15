@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
@@ -460,8 +461,8 @@ func (p *Provider) runInCredentialHome(
 		}
 	}
 	checkout := &Checkout{Home: home, Cache: filepath.Join(p.ws.Root(), "login-cache")}
-	if err := os.MkdirAll(checkout.Cache, 0o700); err != nil {
-		return fmt.Errorf("cliagent: preparing %q: %w", checkout.Cache, err)
+	if err := hostbox.Prepare(p.profile.SeatEnv(checkout.Home, checkout.Cache)); err != nil {
+		return fmt.Errorf("cliagent: %w", err)
 	}
 
 	cmd := exec.CommandContext(ctx, p.profile.Binary, args...) //nolint:gosec // args come from a validated profile
