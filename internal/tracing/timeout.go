@@ -11,6 +11,15 @@ import (
 // SECOND time, beside what [otlpenv] resolves — each superseded by a value
 // this package hands the SDK explicitly, so the SDK's own reading of it never
 // takes effect.
+//
+// A superseded BOUND is refused and a superseded SHAPE is reported, and the
+// line between them is whether the operator was promised something else. A
+// second timeout is a second key for a value the OTLP timeout already sets,
+// and an export cut off at one bound while the deployment believes another is
+// the disagreement Tier A refuses everywhere. A histogram aggregation promises
+// nothing about delivery: every histogram is still exported, at the
+// boundaries the engine records it at, and refusing to boot over a shape is
+// refusing the vendor snippet ADR-0010 exists to let an operator paste.
 const (
 	// BSPExportTimeoutVar is the batch span processor's bound on one
 	// export, superseded by [exportTimeout].
@@ -46,15 +55,25 @@ func refuseSuperseded(opts Options) error {
 		{MetricExportTimeoutVar, "each metric export is bounded by " +
 			otlpenv.Metrics.TimeoutVar() + ", else " + otlpenv.TimeoutVar +
 			", which every layer of an export is held to"},
-		{HistogramAggregationVar, "every histogram the engine records is " +
-			"bucketed at its own fixed boundaries, which a collector sums " +
-			"as they are"},
 	} {
 		if opts.env(v.name) != "" {
 			return fmt.Errorf("%s is not honoured: %s — unset %s", v.name, v.instead, v.name)
 		}
 	}
 	return nil
+}
+
+// reportUnhonoured warns about a variable that shapes an export the engine
+// shapes itself, so an operator who set it reads at boot that it changed
+// nothing, rather than finding out from the backend. See the const block for
+// why this one is reported and the timeouts are refused.
+func reportUnhonoured(ctx context.Context, opts Options) {
+	if v := opts.env(HistogramAggregationVar); v != "" {
+		log.WarnContext(ctx, "otel_variable_not_honoured", "var", HistogramAggregationVar,
+			"value", v, "detail", "every histogram the engine records is exported at "+
+				"its own fixed boundaries, which a collector sums as they are; unset it "+
+				"to silence this")
+	}
 }
 
 // reportTimeouts warns about the timeout each destination resolved that will

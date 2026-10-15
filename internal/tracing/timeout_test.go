@@ -154,24 +154,42 @@ func TestOneTimeoutBoundsEveryLayerOfAnExport(t *testing.T) {
 	}
 }
 
-// A VARIABLE AN EXPLICIT SETTING SUPERSEDES IS REFUSED BY NAME, rather than
-// read by the SDK and then overridden in silence: the batch processor's and the
-// metric reader's own export timeouts, superseded by the one OTLP timeout, and
-// the metric exporter's default histogram aggregation, superseded by the view
-// every histogram is registered under.
+// A SECOND BOUND AN EXPLICIT SETTING SUPERSEDES IS REFUSED BY NAME, rather
+// than read by the SDK and then overridden in silence: the batch processor's
+// and the metric reader's own export timeouts, superseded by the one OTLP
+// timeout.
 //
-// Mutation: drop any one from refuseSuperseded and its case boots.
+// Mutation: drop either from refuseSuperseded and its case boots.
 func TestASupersededVariableIsRefusedByName(t *testing.T) {
 	t.Parallel()
 	for name, value := range map[string]string{
-		BSPExportTimeoutVar:     "60000",
-		MetricExportTimeoutVar:  "60000",
-		HistogramAggregationVar: "base2_exponential_bucket_histogram",
+		BSPExportTimeoutVar:    "60000",
+		MetricExportTimeoutVar: "60000",
 	} {
 		_, err := Configure(context.Background(), Options{Env: envOf(map[string]string{name: value})})
 		if err == nil || !strings.Contains(err.Error(), name) {
 			t.Errorf("%s=%s: Configure = %v, want a refusal naming it", name, value, err)
 		}
+	}
+}
+
+// A SHAPE THE ENGINE SETS ITSELF IS REPORTED, NOT REFUSED: a vendor snippet
+// asking for exponential histograms still boots, and the operator reads at
+// boot that every histogram is exported at the engine's own boundaries.
+//
+// Not parallel: it captures the process-wide logger and installs providers.
+//
+// Mutations: refuse the variable again (Configure fails); stop reporting it
+// (no line).
+func TestAHistogramAggregationIsReportedAndBoots(t *testing.T) {
+	logs := captureLogs(t)
+	install(t, Options{Env: envOf(map[string]string{
+		HistogramAggregationVar: "base2_exponential_bucket_histogram",
+	})})
+	if !strings.Contains(logs.String(), "otel_variable_not_honoured") ||
+		!strings.Contains(logs.String(), HistogramAggregationVar) {
+		t.Errorf("a histogram aggregation the engine does not honour was not "+
+			"reported at boot: %s", logs.String())
 	}
 }
 
