@@ -4078,8 +4078,12 @@ repository declared a moment ago may not have reached this node's copy, and is
 answered `404`.
 
 A refusal is the read surface's: `404 not_found` for a repository that is not
-declared (and, with `detail`, for a company that hosts no code), `400
-bad_params` naming the parameter or the level refused, `503 unavailable` with
+declared, with `"reason": "not_declared"`, and for a company that hosts no
+code, with `"reason": "not_hosted"` — told apart by the `reason` rather than
+the sentence, because they are remedied differently: a repository is declared
+in `code.repos`, and declaring one changes nothing until the company sets
+`code.native` — `400 bad_params` naming the parameter or the level refused,
+`503 unavailable` with
 `Retry-After` for what clears by waiting — this node behind the code log, no
 quorum, no data node serving the read — and `500 query_failed` for anything
 else. A company that hosts code on a node that serves none of it now — or a
@@ -4129,9 +4133,10 @@ answer, and one still running **`202 Accepted`**, with its address in
 What can be refused without reading the repository is refused at once, having
 read nothing — so a retry costs nothing either:
 
-- `404 not_found` for a repository that is not declared (its `detail` naming
-  `code.repos`), and for one **this node holds no copy of**, which carries
-  `"reason": "not_held"` beside it: a git node keeps a copy only of the
+- `404 not_found` for a repository that is not declared (`"reason":
+  "not_declared"`, its `detail` naming `code.repos`), for a company that hosts
+  no code (`"reason": "not_hosted"`, as on the reads), and for one **this node
+  holds no copy of**, which carries `"reason": "not_held"` beside it: a git node keeps a copy only of the
   repositories it has served and not evicted, and building one to check would
   be a download of the whole repository that then evicts a warm one. Verify the
   git nodes that serve the repository — with requests routed by repository, one
