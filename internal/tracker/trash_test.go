@@ -26,9 +26,9 @@ func removed(t *testing.T, r *roundTrip, id string) bool {
 //
 // Tombstone was defined, applied, routed as a `removed` notification and
 // readable with `removed=true` — and nothing in the tree could produce one. A
-// task could be PURGED, destroying every row on every node with no inverse,
-// and could not be removed; the restore path the applier carries could never
-// run at all.
+// task could be PURGED, destroying every row on every data node with no
+// inverse, and could not be removed; the restore path the applier carries
+// could never run at all.
 func TestATaskCanBeRemovedAndRestored(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

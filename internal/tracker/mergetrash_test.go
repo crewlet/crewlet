@@ -159,10 +159,10 @@ func TestATaskIsNeverFiledUnderItsOwnSubtree(t *testing.T) {
 // heard of IS waited for.
 //
 // The two absences are different facts. A purge leaves a marker that outlives
-// the row, so a task carrying one is gone on every node and for good; it was
-// answered "not on this node", which told a caller to come back to a task that
-// will never return. Only a task with no row and no marker may be one this
-// node has not applied yet.
+// the row, so a task carrying one is gone on every data node and for good; it
+// was answered "not on this node", which told a caller to come back to a task
+// that will never return. Only a task with no row and no marker may be one
+// this node has not applied yet.
 func TestAPurgedParentIsRefusedAndAnUnknownOneIsWaitedFor(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

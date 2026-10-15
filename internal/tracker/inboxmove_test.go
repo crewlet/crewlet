@@ -125,13 +125,13 @@ func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 // filled.
 //
 // A purge deletes the notices its task's records routed — they hold excerpts,
-// and destroying content is what a purge is for — on every node at once. An
-// applier that announced only what it ADDED told nobody: a person whose inbox
-// listed the task went on seeing notices no node held until their screen's
-// next poll, and opening one answered that the task does not exist. So the
-// recipients of what a purge deletes move too, by ZERO — a notice deleted may
-// have been read long ago, and the count claims nothing it cannot know — while
-// the lead the purge itself wakes moves by its one new notice.
+// and destroying content is what a purge is for — on every data node at once.
+// An applier that announced only what it ADDED told nobody: a person whose
+// inbox listed the task went on seeing notices no node held until their
+// screen's next poll, and opening one answered that the task does not exist.
+// So the recipients of what a purge deletes move too, by ZERO — a notice
+// deleted may have been read long ago, and the count claims nothing it cannot
+// know — while the lead the purge itself wakes moves by its one new notice.
 func TestAPurgeSaysWhoseInboxItEmptied(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)

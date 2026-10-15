@@ -27,8 +27,8 @@ import (
 // given — beside an excerpt, an inbox notice keeps an excerpt of its own, and
 // turn records and the dependency mirror stayed keyed on an id nothing
 // resolves. So a task purged because it held something that must not be kept
-// stayed readable on every node for the life of the company, while the purge
-// report and the docs said it was destroyed.
+// stayed readable on every data node for the life of the company, while the
+// purge report and the docs said it was destroyed.
 //
 // What survives is the purge's own account — that it happened, to which key,
 // by whom and why — the lead's `purged` notice, which is read through it, and
