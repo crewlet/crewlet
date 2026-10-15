@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // The second way an answer reaches a parked run — named by its turn — and the
@@ -368,6 +369,29 @@ func TestTheAnswerDeskRefusesAnAnswerNamingNoQuestion(t *testing.T) {
 	given.LaunchID = "launch-1"
 	if err := desk.Deliver(t.Context(), given); err != nil {
 		t.Fatalf("the desk refused an answer naming its question: %v", err)
+	}
+}
+
+// THE DESK FILES AN ANSWER UNDER THE CALL THAT GAVE IT — the operator's
+// `tool.call`, whose trace the person's audit record names — rather than in no
+// trace at all.
+//
+// Mutation, red here: deliver under an empty trace again.
+func TestTheAnswerDeskFilesAnAnswerUnderItsCall(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	desk := AnswerDesk{Pending: rig.pending, Queue: rig.queue}
+	given, _ := givenFor("t1")
+	given.LaunchID = "launch-1"
+	call := events.NewTrace()
+	if err := desk.Deliver(tracing.WithRemote(t.Context(), call), given); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	rig.queue.mu.Lock()
+	ev := rig.queue.published[len(rig.queue.published)-1].event
+	rig.queue.mu.Unlock()
+	if got := ev.Trace(); got != call {
+		t.Errorf("the answer is filed under %+v, want the call's %+v", got, call)
 	}
 }
 

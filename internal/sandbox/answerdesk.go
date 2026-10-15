@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // AnswerDesk is where an answer BY TURN is accepted: it reads the run the
@@ -57,7 +58,10 @@ func (d AnswerDesk) Deliver(ctx context.Context, given types.SandboxAnswerGiven)
 		// no question is never resumed with ([Coordinator.AnswerByTurn]).
 		return fmt.Errorf("sandbox: the answer for run %s names no question it answers", given.TurnID)
 	}
-	ev := events.New(given, events.TraceContext{})
+	// THE CALL'S TRACE — the operator's `tool.call` — so the answer and the
+	// audit record of the person who gave it sit in one trace, rather than
+	// the answer in none.
+	ev := events.New(given, tracing.TraceOf(ctx))
 	ev.Source = types.OperatorSource
 	if err := d.Queue.Publish(ctx, inbox, ev); err != nil {
 		return fmt.Errorf("sandbox: delivering the answer for run %s to %s: %w",

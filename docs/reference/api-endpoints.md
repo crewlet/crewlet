@@ -1988,6 +1988,16 @@ published it — and the backup route publishes from the node that took the copy
 company's content and already lives in the history of the object it changed;
 the audit says who called what, and what became of it.
 
+**Each call is one trace.** Every operator tool call — a proven read included —
+runs in a `tool.call` [span](../guides/deployment.md#how-traces-flow) of its
+own, a root naming the tool (`crewlet.tool`) and the transport
+(`crewlet.transport`: `act` or `mcp`). The `operator_acted` record is filed
+under it, and so is everything the call caused: the records its tool
+publishes (a `seat_paused`, the `sandbox_answer_given` an answer by turn puts
+on a seat's inbox), and a model call it makes — an `answer_knowledge` question
+is an `llm.auxiliary` span beneath it, with its `auxiliary_spend` record. So
+`GET /events/trace/{trace_id}` on an audit row reads the whole call.
+
 **A listing carries what a row needs without its payload.** `GET /events`
 never returns payloads, so the store promotes the runtime audit's dimensions
 into each row's `tags`: `actor_seat` (the bound person), `tool` (an

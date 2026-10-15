@@ -123,8 +123,9 @@
 // seat's auxiliary chain, opened by the one seam every such call passes
 // (internal/engine's auxiliary seam), which files the call's spend record under
 // it. The callers that held no span hold one: a reflection pass restores its
-// turn's trace and runs in `learning.reflect` beneath it, and a background
-// learning pass roots a trace of its own per tick ([StartRoot]).
+// turn's trace and runs in `learning.reflect` beneath it, a background
+// learning pass roots a trace of its own per tick ([StartRoot]), and a
+// person's call on the operator surface runs in a `tool.call` of its own.
 //
 // A PROCESS THE ENGINE STARTS is handed its parent in its ENVIRONMENT —
 // TRACEPARENT and TRACESTATE, the propagator's fields upper-cased

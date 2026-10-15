@@ -1223,6 +1223,7 @@ flowchart TD
     D["<b>agent.turn.onboarding / .execute / .review / .judge</b><br/>one span per phase"]
     E["<b>llm.round</b><br/>one per model round trip"]
     F["<b>tool.call</b><br/>one per call, including the refused ones"]
+    O["<b>tool.call</b> on the operator surface<br/>a person's call, a root of its own"]
     G["<b>agent.turn.resume</b><br/>a suspended run re-entering, days later"]
     L["<b>llm.auxiliary</b><br/>one per call on a seat's auxiliary chain"]
     R["<b>learning.reflect</b><br/>reflection on the turn, after it"]
@@ -1239,6 +1240,7 @@ flowchart TD
     C --> R
     R --> L
     P --> L
+    O --> L
     L --> H
     E -.->|"TRACEPARENT"| J
     F -.->|"TRACEPARENT (run_sandbox)"| K
@@ -1252,7 +1254,9 @@ flowchart TD
 **The engine's own spans are these, and only these:** `webhook.receive` and
 `schedule.fire`, which start work; `agent.turn`, and `agent.turn.resume` for a
 suspended run re-entering; one `agent.turn.<phase>` per phase — `onboarding`,
-`execute`, `review` and `judge`; `llm.round`; `tool.call`; `llm.auxiliary`,
+`execute`, `review` and `judge`; `llm.round`; `tool.call` — a seat's, and a
+person's on the [operator surface](../reference/api-endpoints.md#the-runtime-audit-sourceoperator),
+where each call is a root naming its transport (`crewlet.transport`); `llm.auxiliary`,
 one per call on a seat's [auxiliary chain](../concepts/agent-learning.md#what-the-auxiliary-calls-cost)
 — the turn-start context, a rewrite, reflection, a background learning pass, a
 person's question — carrying the call's `crewlet.stage` and `crewlet.purpose`;
@@ -1269,8 +1273,9 @@ itself — see [Spans from Claude](#spans-from-claude).
 **Every model call has a parent.** A call is made in `llm.round` or in
 `llm.auxiliary`, so the SDK's span and the API's are never the root of a trace
 of their own, and the callers that used to hold no span hold one now: a
-reflection pass runs in `learning.reflect` under the turn it reflects on, and a
-background pass in a root of its own. Where nothing above an auxiliary call
+reflection pass runs in `learning.reflect` under the turn it reflects on, a
+background pass in a root of its own, and a person's question on the operator
+surface in that call's `tool.call`. Where nothing above an auxiliary call
 holds a span even so, `llm.auxiliary` is the root. The call's `auxiliary_spend`
 record names the call's own span either way, so the record and the spans of the
 call it records are always one trace.

@@ -3,6 +3,8 @@ package operator
 import (
 	"context"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -73,8 +75,24 @@ func BoundSeat(chart func() *org.Organization, lookup org.EnvLookup, operatorID 
 // read-only hint is unknown is audited as the write it may be, the same rule
 // the act transport admits it by. A name the catalogue does not hold is not a
 // call at all.
+//
+// # Every call is a `tool.call` span
+//
+// Opened here, the frame every transport passes, as tools.Surface opens it for
+// a seat's call. Without it a person's call ran under no span: the model call answering
+// their question (an `llm.auxiliary` span, with its provider's spans beneath)
+// rooted one trace, the call's spend record another and its audit record a
+// third, and nothing joined the three. Now all of them, and every record the
+// tool publishes, are one trace under this span. The request carries no
+// trace of its own to join — the API's routes are not spanned (see
+// internal/tracing) — so the span is a root.
 func (s *Server) dispatch(ctx context.Context, transport, requestID, name string,
 	args map[string]any) (tools.Result, bool, error) {
+
+	ctx, span := tracing.Start(ctx, "api.operator", "tool.call",
+		attribute.String("crewlet.tool", name),
+		attribute.String("crewlet.transport", transport))
+	defer span.End()
 
 	// THE CALLER'S SEAT IS RESOLVED ONCE, here or at the transport's
 	// admission, and the tool's actor and the audit record both read that
@@ -86,6 +104,20 @@ func (s *Server) dispatch(ctx context.Context, transport, requestID, name string
 		ctx = withSeat(ctx, seat)
 	}
 	result, served, err := s.catalogue.call(ctx, name, args)
+	switch {
+	case !served:
+		// Every transport refuses a name the catalogue does not hold
+		// before it dispatches, so this answers nothing to describe.
+	case err != nil:
+		tracing.Fail(span, err)
+	default:
+		outcome := "ok"
+		if result.Failed {
+			outcome = "failed"
+		}
+		span.SetAttributes(attribute.Bool("crewlet.tool_failed", result.Failed),
+			attribute.String("crewlet.tool_outcome", outcome))
+	}
 	if !served || readOnly(name) {
 		return result, served, err
 	}
