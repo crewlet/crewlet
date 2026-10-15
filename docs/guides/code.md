@@ -222,8 +222,9 @@ it means](../concepts/code-host.md#what-git-prints-and-what-it-means).
 owner, default branch and its head, refs, packs, size and last push — and
 `-repo web` shows one in detail with its newest pushes: who made each and what
 became of every ref, `ng` with git's reason where a push was refused. Run it
-beside a node's Tier A file, or with `-url` and `-token`; it reads with the
-same token git uses, as the person it is bound to:
+beside a node's Tier A file, or anywhere with `-url` and the token exported in
+`CREWLET_API_TOKEN`, which needs no Tier A file at all; it reads with the same
+token git uses, as the person it is bound to:
 
 ```sh
 crewlet code status

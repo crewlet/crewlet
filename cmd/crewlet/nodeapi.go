@@ -68,6 +68,13 @@ func nodeBaseURL(boot *config.Bootstrap, override, surface string) (string, erro
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
+// exportedToken is the token the operator exported in [apiTokenEnv], or "" —
+// the first default of every node client's token, and the one that needs no
+// Tier A file to read.
+func exportedToken() string {
+	return strings.TrimSpace(os.Getenv(apiTokenEnv))
+}
+
 // nodeTokenOrEmpty is the bearer token to send, or "" when there is none.
 //
 // The environment FIRST, then Tier A's first token. The order matters: a
@@ -77,7 +84,7 @@ func nodeBaseURL(boot *config.Bootstrap, override, surface string) (string, erro
 // authenticates; the id is stamped as the author of the write, which is why
 // the environment variable exists at all.
 func nodeTokenOrEmpty(boot *config.Bootstrap) string {
-	if fromEnv := strings.TrimSpace(os.Getenv(apiTokenEnv)); fromEnv != "" {
+	if fromEnv := exportedToken(); fromEnv != "" {
 		return fromEnv
 	}
 	if len(boot.API.Auth.Tokens) > 0 {
