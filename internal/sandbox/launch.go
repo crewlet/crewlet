@@ -59,8 +59,12 @@ type TurnRef struct {
 	PartitionKey    string
 	ConversationKey string
 
-	TraceID string
-	SpanID  string
+	// TraceID and SpanID are the span the run is launched from, and
+	// TraceUnsampled that trace's sampling decision — written onto the row
+	// as [PendingRun] spells them, and read back through [TurnRef.Trace].
+	TraceID        string
+	SpanID         string
+	TraceUnsampled bool
 
 	// Reply is who is waiting for this turn, persisted so the resumed turn
 	// inherits the same delivery obligation. See [PendingRun.Reply].
@@ -79,6 +83,13 @@ type TurnRef struct {
 	// what a question addressed to "requester" is put to. See
 	// [PendingRun.Requester].
 	Requester string
+}
+
+// Trace is the span the run is launched from, its decision included — the
+// TurnRef half of [PendingRun.Trace], read by the launch for the started
+// announcement and for the TRACEPARENT the box is handed.
+func (t TurnRef) Trace() events.TraceContext {
+	return events.TraceContext{TraceID: t.TraceID, SpanID: t.SpanID, Unsampled: t.TraceUnsampled}
 }
 
 // LaunchRequest is everything one detached coding run needs.
@@ -213,6 +224,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		ConversationKey: req.Turn.ConversationKey,
 		Reply:           req.Turn.Reply,
 		TraceID:         req.Turn.TraceID, SpanID: req.Turn.SpanID,
+		// AND ITS DECISION, which the resume restores and the box's
+		// TRACEPARENT carries: see [PendingRun.TraceUnsampled].
+		TraceUnsampled:  req.Turn.TraceUnsampled,
 		DelegationDepth: req.Turn.Depth, DelegationChain: req.Turn.Chain,
 		WorkItem: req.Turn.WorkItem,
 		// Who asked, for the park that resolves a question's audience:
@@ -257,7 +271,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 
 	handle, err := runner.Start(ctx, box, RunRequest{
 		Brief: buildBrief(req),
-		Env:   withTelemetry(m, req),
+		Env:   withTelemetry(ctx, m, req),
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -302,9 +316,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		WorkItem:        req.Turn.WorkItem,
 		Task:            Summarise(req.Brief),
 	}
-	ev := events.New(started, events.TraceContext{
-		TraceID: req.Turn.TraceID, ParentSpanID: req.Turn.SpanID,
-	})
+	ev := events.New(started, req.Turn.Trace().Beneath())
 	ev.Source = req.Turn.Role
 
 	// TWO PUBLISHES, as for a completion. The events copy is the
@@ -481,11 +493,11 @@ func buildBrief(req LaunchRequest) string {
 // declares what a box gets, and a deployment that points its coding agents at
 // its own collector directly has said so deliberately — silently overriding
 // it would be the engine choosing where somebody else's telemetry goes.
-func withTelemetry(m *Manager, req LaunchRequest) map[string]string {
+func withTelemetry(ctx context.Context, m *Manager, req LaunchRequest) map[string]string {
 	if m.telemetry == nil {
 		return req.Spec.Env
 	}
-	added := m.telemetry.RunEnv(req.Turn.TraceID, req.Turn.SpanID,
+	added := m.telemetry.RunEnv(ctx, req.Turn.Trace(),
 		req.Turn.TurnID, req.Turn.AgentHandle, otelTokenTTL(req.Spec))
 	if len(added) == 0 {
 		return req.Spec.Env
@@ -527,8 +539,8 @@ func otelTokenTTL(spec Spec) time.Duration {
 // end up inside a box that a test cannot look into, and getting the order
 // wrong sends somebody else's spans to the engine — silently, because they do
 // arrive somewhere.
-func RunEnvFor(m *Manager, req LaunchRequest) map[string]string {
-	return withTelemetry(m, req)
+func RunEnvFor(ctx context.Context, m *Manager, req LaunchRequest) map[string]string {
+	return withTelemetry(ctx, m, req)
 }
 
 // launchModel is the model a launch points its coding agent at, empty when it

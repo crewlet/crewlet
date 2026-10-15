@@ -153,6 +153,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	}{
 		{"AudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem",
 			testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem},
+		{"TheTracesDecisionSurvivesEveryWriteToTheRow",
+			testTheTracesDecisionSurvivesEveryWriteToTheRow},
 	}
 	for _, tc := range raw {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2511,6 +2513,71 @@ func testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem(
 		t.Fatalf("move: %v %v", ok, err)
 	}
 	check("the ownership move")
+}
+
+func testTheTracesDecisionSurvivesEveryWriteToTheRow(
+	t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns,
+) {
+	// THE RESUME RESTORES THE RUN'S TRACE OFF THE ROW — days later, on
+	// whichever node holds the seat — and every span the resumed turn opens,
+	// and the TRACEPARENT of any box it launches next, inherits what it
+	// restored. So the sampling decision the launch wrote has to survive
+	// every write between the launch and the resume, exactly as the ids do: a
+	// run launched from an unsampled turn that resumed sampled exported its
+	// second half under a parent nobody exported.
+	unsampled := events.TraceContext{
+		TraceID: "4bf92f3577b34da6a3ce929d0e0e4736", SpanID: "00f067aa0ba902b7",
+		Unsampled: true,
+	}
+	r := run("t1")
+	r.TraceID, r.SpanID, r.TraceUnsampled = unsampled.TraceID, unsampled.SpanID, true
+	mustLaunched(t, s, r)
+	claimed := mustClaim(t, s, "t1")
+	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
+		Question: "which branch?", Audience: "requester", AskedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("park: %v", err)
+	}
+	resumed, won, err := s.ClaimForResume(t.Context(), "t1", answerTo(t, s, "t1"), sandbox.Fence{})
+	if err != nil || !won {
+		t.Fatalf("claim the answer: won=%v err=%v", won, err)
+	}
+	for name, got := range map[string]sandbox.PendingRun{
+		"claimed": claimed, "resumed": resumed, "read back": mustGet(t, s, "t1"),
+	} {
+		if got.Trace() != unsampled {
+			t.Errorf("%s: the run's trace is %+v, want %+v", name, got.Trace(), unsampled)
+		}
+	}
+
+	// A SAMPLED RUN'S ROW CARRIES NO KEY, and a row that names no decision
+	// reads as sampled — the field is additive, so a row written before it
+	// existed is a sampled one.
+	keyOf := func(turnID string) (json.RawMessage, bool) {
+		t.Helper()
+		record, found, err := runs.SandboxRun(t.Context(), turnID)
+		if err != nil || !found {
+			t.Fatalf("read the raw row %s: found=%v err=%v", turnID, found, err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(record.Value, &fields); err != nil {
+			t.Fatalf("decode the raw row %s: %v", turnID, err)
+		}
+		v, ok := fields["trace_unsampled"]
+		return v, ok
+	}
+	if v, ok := keyOf("t1"); !ok || string(v) != "true" {
+		t.Errorf("an unsampled run's row carries trace_unsampled=%s (present: %v)", v, ok)
+	}
+	sampled := run("t2")
+	sampled.TraceID, sampled.SpanID = unsampled.TraceID, unsampled.SpanID
+	mustLaunched(t, s, sampled)
+	if v, ok := keyOf("t2"); ok {
+		t.Errorf("a sampled run's row carries trace_unsampled=%s", v)
+	}
+	if mustGet(t, s, "t2").Trace().Unsampled {
+		t.Error("a row that names no decision read as unsampled")
+	}
 }
 
 func testCollectPublishesThePhase(t *testing.T, s sandbox.PendingStore) {

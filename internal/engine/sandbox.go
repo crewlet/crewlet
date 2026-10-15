@@ -445,8 +445,7 @@ func (e *Engine) resumePanicked(ctx context.Context, run sandbox.PendingRun, pan
 			agentID = id
 		}
 	}
-	trace := events.TraceContext{TraceID: run.TraceID, SpanID: run.SpanID}
-	if breach := panicBreach(role, agentID, run.TurnID, run.WorkKey, trace, panicked); breach != nil {
+	if breach := panicBreach(role, agentID, run.TurnID, run.WorkKey, run.Trace(), panicked); breach != nil {
 		e.observe(ctx, breach)
 	}
 	return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, turn.AbandonedPanicked, panicked)
@@ -517,9 +516,11 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// with the wait between them visible as the gap it actually is. Every
 	// run carries ids: the launch takes them from the active span, minting
 	// a fresh trace when there is none.
-	ctx = tracing.WithRemote(ctx, events.TraceContext{
-		TraceID: in.Run.TraceID, SpanID: in.Run.SpanID,
-	})
+	//
+	// AND ITS DECISION, off the same row: the resumed half is exported
+	// exactly when the half that suspended was, whichever node resumes it
+	// and whatever that node's own sampler would have said.
+	ctx = tracing.WithRemote(ctx, in.Run.Trace())
 	ctx, span := tracing.Start(ctx, "engine", "agent.turn.resume",
 		attribute.String("crewlet.seat", in.Turn.Handle()),
 		attribute.String("crewlet.turn_id", in.Run.TurnID),
@@ -1195,7 +1196,8 @@ func (e *Engine) launchFence(handle string) (sandbox.Fence, bool) {
 // deriving it a second time here.
 //
 // The TRACE comes from the ACTIVE span, so the box's spans nest under the call
-// that started them rather than appearing as unrelated work minutes later.
+// that started them rather than appearing as unrelated work minutes later —
+// the span's sampling decision with it.
 // TurnRef carried these two since the OTLP receiver was written and the
 // run_sandbox path left both empty: PendingRun.TraceID was always "", RunEnv
 // minted no telemetry token for any launch (it refuses to scope one to an
@@ -1212,6 +1214,10 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.T
 		AgentID: t.AgentID(), AgentHandle: t.Handle(), Role: role,
 		Depth: t.Depth, Chain: t.Chain,
 		TraceID: runTrace.TraceID, SpanID: runTrace.SpanID,
+		// AND THE SPAN'S SAMPLING DECISION, which the resume restores and
+		// the box's TRACEPARENT carries as its flag — a run launched from
+		// an unsampled turn is one the operator's sampler decided against.
+		TraceUnsampled: runTrace.Unsampled,
 		// BOTH CONVERSATION VALUES, field for field with [turnctx.Turn] so
 		// a swapped pair reads as one. The row has carried a conversation
 		// since it was written and nothing set it: with it empty a resumed

@@ -468,9 +468,10 @@ type Event struct {
 
     // OpenTelemetry trace context — captured at construction from the
     // active span.
-    TraceID      string // W3C 32-char hex, groups causally related events
-    SpanID       string // W3C 16-char hex, identifies this event in the trace
-    ParentSpanID string // links to the event/span that caused this one
+    TraceID        string // W3C 32-char hex, groups causally related events
+    SpanID         string // W3C 16-char hex, identifies this event in the trace
+    ParentSpanID   string // links to the event/span that caused this one
+    TraceUnsampled bool   // the trace's sampling decision; omitted when sampled
 
     // Turn-engine bookkeeping, so an agent woken by a colleague handoff
     // inherits the correct depth and chain.
@@ -669,12 +670,26 @@ flowchart TD
    everything it causes hangs under. An inbound W3C `traceparent` is honoured
    if one is present, which is what makes a delivery forwarded through your own
    gateway join your trace rather than start a second one.
-2. Events carry `trace_id` / `span_id` / `parent_span_id` in the envelope. That
-   is the only carrier — the queue backends move an event's bytes and nothing
-   else — and it is what crosses the broker, the store and a node boundary.
+2. Events carry `trace_id` / `span_id` / `parent_span_id` in the envelope —
+   and the trace's sampling decision, `trace_unsampled`. That is the only
+   carrier — the queue backends move an event's bytes and nothing else — and it
+   is what crosses the broker, the store and a node boundary.
 3. When an event wakes a seat, the dispatcher restores its trace onto the
    context before the turn runs, so the turn's span is a child of the span that
-   caused it rather than a new root.
+   caused it rather than a new root — and is sampled exactly when the span that
+   caused it was.
+
+**The sampling decision travels with the ids.** A trace is decided once, where
+it starts (see [Deployment — OTLP Export](../guides/deployment.md#otlp-export)
+for the sampler), and every hop after that continues it as decided rather than
+deciding again: a node that re-decided a trace in flight would export children
+under a parent that was never exported, or drop half a tree. `trace_unsampled`
+is written only when the trace is **not** sampled, so a sampled event's wire
+shape is the one it always had and an event that names no decision is sampled.
+The store keeps the three ids as columns and the decision only in the stored
+payload, because nothing restores a trace from a stored row: a turn continues
+its trigger's trace off the event that woke it, and a resumed coding run its own
+off the run's record, which keeps the decision beside its ids.
 
 **The trace is passed, never captured.** An event's trace is an argument to its
 constructor (`events.New(payload, trace)`), and the caller derives that
@@ -682,9 +697,10 @@ argument from the context with `tracing.TraceOf(ctx)`. This is deliberate: an
 event that read an *ambient* span at construction would be one whose trace
 depends on which frame happened to build it.
 
-`TraceOf` never returns empty. Inside a span it reports that span's ids; with
-no span open it mints a fresh root, which is what every publisher in the engine
-used to do by hand. So there is no "events published outside a span lose their
+`TraceOf` never returns empty. Inside a span it reports that span's ids and
+decision; with no span open it mints a fresh root — decided by the node's
+sampler, as a root that opens a span is — which is what every publisher in the
+engine used to do by hand. So there is no "events published outside a span lose their
 trace" case any more — the older behaviour, where such an event got an empty
 `trace_id` and became unreachable from the work it belonged to, is gone.
 

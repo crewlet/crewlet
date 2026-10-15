@@ -448,9 +448,7 @@ func (r *Reflector) Handle(ctx context.Context, ev *events.Event) queue.Result {
 		log.DebugContext(ctx, "reflection_skipped_unreadable_event", "type", eventTypeOf(ev))
 		return queue.Ack()
 	}
-	r.Reflect(ctx, due.Turn, events.TraceContext{
-		TraceID: ev.TraceID, SpanID: ev.SpanID, ParentSpanID: ev.ParentSpanID,
-	})
+	r.Reflect(ctx, due.Turn, ev.Trace())
 	return queue.Ack()
 }
 

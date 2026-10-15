@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
@@ -777,6 +778,14 @@ type PendingRun struct {
 	TraceID string `json:"trace_id"`
 	SpanID  string `json:"span_id"`
 
+	// TraceUnsampled is that trace's SAMPLING DECISION, which the resume
+	// restores with the ids and the box's TRACEPARENT carries as its flag
+	// — see [events.TraceContext.Unsampled]. Without it a run launched
+	// from an unsampled turn resumed sampled, days later, under a parent
+	// nobody exported. Written only when true, so a sampled run's row
+	// carries no key and a row that names no decision reads as sampled.
+	TraceUnsampled bool `json:"trace_unsampled,omitempty"`
+
 	DelegationDepth int      `json:"delegation_depth"`
 	DelegationChain []string `json:"delegation_chain"`
 
@@ -922,6 +931,15 @@ func (r PendingRun) Paused() bool { return !r.PausedAt.IsZero() }
 
 // HasBox reports whether a box exists for this run at all.
 func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
+
+// Trace is the span the run was launched from, as the envelope spells a trace:
+// what the resume restores as its remote parent, and — [events.TraceContext.Beneath]
+// it — what every event the coordinator publishes about the run is filed under.
+// The ONE reading of the row's three trace fields, so none of those sites can
+// carry the ids and leave the decision behind.
+func (r PendingRun) Trace() events.TraceContext {
+	return events.TraceContext{TraceID: r.TraceID, SpanID: r.SpanID, Unsampled: r.TraceUnsampled}
+}
 
 // HeldSince is when this run's box started being held as a snapshot nothing is
 // driving, and whether it is being held at all.

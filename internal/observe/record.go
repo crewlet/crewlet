@@ -84,6 +84,14 @@ func Record(ev *events.Event) (store.EventRecord, bool) {
 	if d, ok := delivery(ev); ok {
 		filed, payload = d.filed, d.bytes
 	}
+	// THE THREE TRACE IDS ARE COLUMNS, AND THE SAMPLING DECISION IS NOT. The
+	// ids are what a trace query filters and the dashboard's tree joins on;
+	// the decision is read only where a trace is RESTORED, and nothing
+	// restores one from a stored row — a turn continues its trigger's trace
+	// off the event that woke it, and a resumed run its own off the run's
+	// row. Every row but a webhook delivery's — whose payload is the vendor's
+	// own body — still holds it, in the payload, which is the event as it was
+	// published.
 	return store.EventRecord{
 		// SET HERE, from the bytes body already produced. The store
 		// derives it when a caller does not, and this is the one

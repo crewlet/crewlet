@@ -559,14 +559,16 @@ func TestLifecycleEventsHangOffTheTurnThatCausedThem(t *testing.T) {
 
 	ev := due(settledTurn(), events.NewTrace())
 	ev.ParentSpanID = "aaaaaaaaaaaaaaaa"
+	// AND THE TURN'S SAMPLING DECISION, unsampled because sampled is the
+	// zero value a pass that dropped it would publish.
+	ev.TraceUnsampled = true
 	r.Handle(context.Background(), ev)
 
 	for _, kind := range []string{"persist_decider_completed", "reflection_completed"} {
 		got := pub.last(t, kind)
-		if got.TraceID != ev.TraceID || got.SpanID != ev.SpanID || got.ParentSpanID != ev.ParentSpanID {
-			t.Errorf("%s carries trace %q/%q/%q, want the turn's %q/%q/%q — otherwise it renders "+
-				"as background work with no cause", kind, got.TraceID, got.SpanID, got.ParentSpanID,
-				ev.TraceID, ev.SpanID, ev.ParentSpanID)
+		if got.Trace() != ev.Trace() {
+			t.Errorf("%s carries trace %+v, want the turn's %+v — otherwise it renders "+
+				"as background work with no cause", kind, got.Trace(), ev.Trace())
 		}
 		if got.Source != "Dev" {
 			t.Errorf("%s source = %q, want the seat", kind, got.Source)

@@ -932,9 +932,7 @@ func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun) error {
 	}
 	// Carry the original trace so the completion turn nests under the turn
 	// that started the job rather than opening a root of its own.
-	announcement := events.New(completion, events.TraceContext{
-		TraceID: run.TraceID, ParentSpanID: run.SpanID,
-	})
+	announcement := events.New(completion, run.Trace().Beneath())
 	announcement.Source = run.Role
 
 	if err := w.queue.Publish(ctx, topics.Event(completion.EventType()), announcement); err != nil {
