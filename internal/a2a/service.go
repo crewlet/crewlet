@@ -177,7 +177,13 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 		named := *ask.WorkItem
 		request.WorkItem, request.WorkItemBasis = &named, ask.WorkItemBasis
 	}
-	wake := events.New(request, events.TraceContext{})
+	// THE ASKER'S TRACE — the `a2a_ask` call's span — so the answering turn
+	// is a child of the ask that caused it, and the answer, which carries the
+	// ask's trace on ([Answer.CausedBy]), wakes the asker inside the same one:
+	// the whole exchange reads as one trace, as the channel's own records
+	// above already do. It went out with none, so each half of every
+	// exchange rooted a trace of its own, decided by its own node.
+	wake := events.New(request, tracing.TraceOf(ctx))
 	wake.Timestamp = now
 	wake.Source = ask.Requester
 	// The ASK is the delegation, so this is the leg that charges.
