@@ -199,10 +199,16 @@ func TestAnEventOnARestoredTraceIsPublishedBeneathIt(t *testing.T) {
 // told its run was sampled. And it is rendered from tc ALONE: the caller's own
 // context holds a span here, which a trace tc cannot name must not leak into.
 //
+// The caller's span has to be REAL for the clearing to be tested at all: on a
+// provider that opens no span the "caller's span" is the zero context, which
+// renders nothing whether or not it is cleared. So the case configures its own
+// provider and asserts the launching span is valid before it relies on it.
+//
 // Mutations: render it as `"00-" + TraceID + "-" + SpanID + "-01"` and the
 // unsampled case goes red; stop clearing the caller's span and the no-trace
-// case renders the caller's.
+// and unparseable-trace cases render the caller's.
 func TestATraceparentCarriesTheTracesDecision(t *testing.T) {
+	configure(t, nil)
 	const traceID, spanID = "4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7"
 	for _, tc := range []struct {
 		name  string
@@ -220,12 +226,19 @@ func TestATraceparentCarriesTheTracesDecision(t *testing.T) {
 		// No span to hang under, so nothing a child could parent itself to.
 		{"no span", events.TraceContext{TraceID: traceID}, ""},
 		{"no trace", events.TraceContext{}, ""},
+		// A span named in a trace nothing can parse: WithRemote cannot use
+		// it, so only the clearing stands between it and the caller's span.
+		{"an unparseable trace", events.TraceContext{TraceID: "not-hex", SpanID: spanID}, ""},
 		{"a malformed span", events.TraceContext{TraceID: traceID, SpanID: "span-1"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Under a context holding a span of its own, which tc replaces.
 			ctx, span := Start(context.Background(), "test", "launching")
 			defer span.End()
+			if !span.SpanContext().IsValid() {
+				t.Fatal("the launching span is not valid, so there is no caller's span " +
+					"for the clearing to remove and the case tests nothing")
+			}
 			got := Traceparent(ctx, tc.trace)
 			if got != tc.want {
 				t.Fatalf("Traceparent(%+v) = %q, want %q", tc.trace, got, tc.want)
@@ -254,18 +267,26 @@ func TestATraceparentCarriesTheTracesDecision(t *testing.T) {
 // there is no span, rather than a parent invented for it.
 //
 // The span is opened beneath a restored parent of each decision, so the case
-// does not depend on whichever root rule another test left configured.
+// does not depend on whichever root rule another test left configured — and
+// it is asserted to BE a span this process opened: on a provider that opens
+// none, Start hands back the restored parent itself, and the case would be
+// testing a remote span rather than the round it names.
 //
 // Mutations: inject into a MapCarrier and return it as is (every name is
 // lower-case, so every case goes red); return an empty map instead of nil
 // for no span (the span-less cases); force sampled in WithRemote (the
 // unsampled case).
 func TestAProcessIsHandedTheSpanItRunsBeneath(t *testing.T) {
+	configure(t, nil)
 	const traceID, parentID = "4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7"
 	for _, unsampled := range []bool{false, true} {
 		parent := WithRemote(context.Background(),
 			events.TraceContext{TraceID: traceID, SpanID: parentID, Unsampled: unsampled})
 		ctx, span := Start(parent, "test", "llm.round")
+		if sc := span.SpanContext(); sc.IsRemote() || sc.SpanID().String() == parentID {
+			t.Fatalf("unsampled=%v: llm.round is the restored parent (remote=%v span=%s), "+
+				"not a span this process opened", unsampled, sc.IsRemote(), sc.SpanID())
+		}
 		flags := "-01"
 		if unsampled {
 			flags = "-00"
