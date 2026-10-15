@@ -599,8 +599,9 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 
 # THE BENCHMARKS THE DESIGN'S CAPACITY FIGURES COME FROM, so each figure is
 # measured rather than derived: the object store on every backend
-# (objstoretest.Bench, the broker's bucket at three replicas among them, and
-# the SHA-256 floor under every verified byte), an arbitrated write end to end
+# (objstoretest.Bench, the broker's bucket at three replicas among them, the
+# SHA-256 floor under every verified byte, and what one throttle costs a burst
+# of requests to an S3 bucket), an arbitrated write end to end
 # and the applier's drain (internal/statelog), the store's own drain
 # (internal/store), a git process through the pool end to end and
 # receive-pack's index-pack at one thread (internal/code/gitproc), the git

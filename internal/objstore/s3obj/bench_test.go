@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -217,6 +218,83 @@ func BenchmarkUploadBesideSlowReads(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkAThrottledBurst measures what one throttle costs a burst: five
+// hundred heads sent by thirty-two loops — a git node's sync of five hundred
+// packs, near enough — to a bucket answering each 150 ms after it arrives, the
+// middle of S3's own first byte, from a FRESH client, as at boot and as after
+// its gate was lifted for a quiet minute.
+//
+//   - `throttle=none` throttles nothing, which is the burst's floor: sixteen
+//     rounds of a first byte.
+//   - `throttle=first` answers the burst's first request with a `SlowDown`,
+//     which cuts the gate to seven tenths of the thirty-two out when it comes
+//     back.
+//   - `throttle=quiet` answers a lone head with a `SlowDown` BEFORE the burst,
+//     the client having run one round of thirty-two and then gone quiet —
+//     what a node between two syncs meets when a fleet sits at the prefix's
+//     rate and the bucket throttles requests spread across it — so the cut
+//     comes back with one attempt out of a node that runs thirty-two.
+//   - `throttle=open` answers the client's check at open with a `SlowDown`:
+//     a node throttled before it has had more than one attempt out, which
+//     has no width to keep and climbs from one.
+func BenchmarkAThrottledBurst(b *testing.B) {
+	for _, throttle := range []string{"none", "first", "quiet", "open"} {
+		b.Run("bucket=fake/rtt=150ms/throttle="+throttle, func(b *testing.B) {
+			srv := s3fake.Start(b, "files")
+			srv.Put("k", []byte("an object"))
+			srv.Latency = burstFirstByte
+			for b.Loop() {
+				b.StopTimer()
+				if throttle == "open" {
+					srv.FailNext(1, http.StatusServiceUnavailable, "SlowDown")
+				}
+				backend := openFake(b, srv, "")
+				switch throttle {
+				case "first":
+					srv.FailNext(1, http.StatusServiceUnavailable, "SlowDown")
+				case "quiet":
+					heads(b, backend, burstLoops)
+					srv.FailNext(1, http.StatusServiceUnavailable, "SlowDown")
+					if _, err := backend.Stat(b.Context(), "k"); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StartTimer()
+				heads(b, backend, burstHeads)
+			}
+		})
+	}
+}
+
+// heads sends n heads of one object through backend from burstLoops loops,
+// each sending its next as its last is answered.
+func heads(b *testing.B, backend *s3obj.Backend, n int64) {
+	var (
+		left  atomic.Int64
+		loops sync.WaitGroup
+	)
+	left.Store(n)
+	for range burstLoops {
+		loops.Go(func() {
+			for left.Add(-1) >= 0 {
+				if _, err := backend.Stat(b.Context(), "k"); err != nil {
+					b.Error(err)
+					return
+				}
+			}
+		})
+	}
+	loops.Wait()
+}
+
+// burstHeads, burstLoops and burstFirstByte are BenchmarkAThrottledBurst's
+// burst: five hundred heads by thirty-two loops, each answered 150 ms late.
+const (
+	burstHeads     = 500
+	burstLoops     = 32
+	burstFirstByte = 150 * time.Millisecond
+)
 
 // slowReads is how many slow downloads BenchmarkUploadBesideSlowReads runs
 // beside its upload: three, the most that held the node's whole allowance

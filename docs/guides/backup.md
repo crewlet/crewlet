@@ -215,7 +215,11 @@ What is worth knowing about it:
   times, a second, two and four apart, within the time one read of it is given
   — since a reset or a stall part way through one of millions of reads is no
   reason to refuse hours of copying (`backup_objects_retried` counts the ones
-  that needed it). One the store still does not answer for may be intact there,
+  that needed it). On `s3` each of those reads already asks a request the
+  bucket refused again until the read cannot begin within a minute, so a
+  bucket that fails one object every time spends that object's whole read
+  time — about two minutes for a small file — on two such reads rather than
+  four. One the store still does not answer for may be intact there,
   so it **fails the backup** (`POST /backup` answers 503
   `objects_unreachable`), naming it: take it again once the store answers. The
   **first** such object stops the backup, with nothing left in flight — it is

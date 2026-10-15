@@ -14,6 +14,11 @@
 // refuses it — so a reader that holds the later ranges of one read to the
 // first one's tag is tested against a bucket that holds it to the tag.
 //
+// It REFUSES WHAT A CASE ASKS IT TO, with the S3 error the case names: the next
+// few requests whatever they are ([Server.FailNext]) — a bucket that throttles
+// or fails for a while and recovers — or every upload of one part
+// ([Server.FailPart]).
+//
 // It does its OWN WORK AT MEMORY SPEED — a body read into one buffer of its
 // declared length, an entity tag computed once per object or part by a
 // hardware-accelerated checksum, an assembly sized before it is copied into, a
@@ -121,6 +126,13 @@ type Server struct {
 	// bucket requests of its own. Set it before the first request.
 	GetHook func(key string, start int64)
 
+	// PartHook, where set, is called with the number of every UploadPart
+	// once the bucket has read its body and before it answers it — a part
+	// [Server.FailPart] refuses or [Server.HoldPart] holds included — so a
+	// test can hold a part's answer back until a moment it chooses. It is
+	// called without the bucket's lock. Set it before the first request.
+	PartHook func(number int32)
+
 	// Untagged answers every GetObject and HeadObject with no ETag, as no
 	// S3 does — for a case to see what a reader makes of a bucket that
 	// gives it nothing to hold an object to. Set it before the first
@@ -148,10 +160,17 @@ type Server struct {
 	// thousand objects listed a thousand at a time sorted five million keys
 	// a pass — the fake's cost, which a benchmark would report as the
 	// backend's.
-	sorted   []string
-	uploads  map[string]*upload
-	nextID   int
-	failPart int32
+	sorted  []string
+	uploads map[string]*upload
+	nextID  int
+	// failPart is the part number [Server.FailPart] refuses, and what with;
+	// zero refuses none.
+	failPart     int32
+	failPartWith refusal
+	// failNext is how many requests [Server.FailNext] still refuses, and
+	// failNextWith what with.
+	failNext     int
+	failNextWith refusal
 	// held is the part [Server.HoldPart] holds, or nil.
 	held *heldPart
 	// undated is the keys whose listings leave the date out.
@@ -372,12 +391,53 @@ func (s *Server) Parts(key string) int {
 	return s.objects[key].parts
 }
 
-// FailPart makes every upload of part number n fail with a server error, for
-// the test that a failed part abandons its upload; zero fails none.
-func (s *Server) FailPart(n int32) {
+// FailPart makes every upload of part number n answer the S3 error status
+// and code — for the test that a refused part abandons its upload; zero
+// refuses none.
+//
+// A REFUSAL THE CLIENT TAKES AS FINAL is what such a test wants: a client error
+// such as `403 AccessDenied`. A throttle or a server error is one the client
+// asks again until its deadline, so a part refused with one for good is a part
+// that fails only when its deadline does.
+func (s *Server) FailPart(n int32, status int, code string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.failPart = n
+	s.failPart, s.failPartWith = n, refusal{status: status, code: code}
+}
+
+// FailNext makes the next n requests the bucket is sent — whatever they are —
+// answer the S3 error status and code before anything else is made of them,
+// and the requests after them be answered as ever: a bucket that throttles,
+// or fails, for a while and then recovers.
+//
+// A refused request is still a request: [Server.Requests] and
+// [Server.RequestsOf] count it, and it waits out [Server.Latency] like any
+// other, a provider's refusal costing its round trip as its answer does.
+func (s *Server) FailNext(n int, status int, code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failNext, s.failNextWith = n, refusal{status: status, code: code}
+}
+
+// refuseNext answers true, having answered the request with the refusal, for a
+// request [Server.FailNext] still refuses.
+//
+// ITS BODY IS READ FIRST, so the client hears the refusal rather than a
+// connection the server closed under a body it was still sending.
+func (s *Server) refuseNext(w http.ResponseWriter, r *http.Request) bool {
+	s.mu.Lock()
+	refuse := s.failNext > 0
+	with := s.failNextWith
+	if refuse {
+		s.failNext--
+	}
+	s.mu.Unlock()
+	if !refuse {
+		return false
+	}
+	_, _ = io.Copy(io.Discard, r.Body)
+	s.fail(w, r, with.status, with.code)
+	return true
 }
 
 // HoldPart makes every upload of part number n wait, its body read and no
@@ -425,6 +485,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.count(op)
+	if s.refuseNext(w, r) {
+		return
+	}
 	switch {
 	case key == "" && r.Method == http.MethodHead:
 		w.WriteHeader(http.StatusOK)
@@ -672,6 +735,9 @@ func (s *Server) putPart(w http.ResponseWriter, r *http.Request, q map[string][]
 		s.fail(w, r, http.StatusBadRequest, "IncompleteBody")
 		return
 	}
+	if s.PartHook != nil {
+		s.PartHook(int32(number))
+	}
 	s.mu.Lock()
 	held := s.held
 	s.mu.Unlock()
@@ -686,8 +752,8 @@ func (s *Server) putPart(w http.ResponseWriter, r *http.Request, q map[string][]
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.failPart == int32(number) {
-		s.fail(w, r, http.StatusInternalServerError, "InternalError")
+	if s.failPart != 0 && s.failPart == int32(number) {
+		s.fail(w, r, s.failPartWith.status, s.failPartWith.code)
 		return
 	}
 	u, ok := s.uploads[id]
