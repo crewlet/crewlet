@@ -83,6 +83,11 @@ type waiterRig struct {
 	// current is what the waiter's manager source answers: the rig's own
 	// manager unless a case swaps it, the way an apply does.
 	current atomic.Pointer[Manager]
+
+	// trace is the trace every launch is made in, for a case about it. The
+	// zero value launches under the rig's own placeholder ids, which no
+	// tracer can parse.
+	trace events.TraceContext
 }
 
 // managers is the rig's manager source, as the coordinator's is the engine's.
@@ -167,6 +172,9 @@ func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 		// The model the launch pointed its agent at, which the run's own
 		// phase record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
+	}
+	if r.trace.TraceID != "" {
+		run.TraceID, run.SpanID, run.TraceUnsampled = r.trace.TraceID, r.trace.SpanID, r.trace.Unsampled
 	}
 	if _, err := r.pending.BeginLaunch(ctx, run, lease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)

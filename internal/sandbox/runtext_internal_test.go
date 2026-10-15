@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 type condenseCall struct {
@@ -25,11 +27,15 @@ type fakeCondenser struct {
 	answer func(part RunPart, text string, budget int) (string, error)
 	// cost is what every call reports it spent, an answer or not.
 	cost AuxTokens
+	// spans is the span context each call was handed, in order: the
+	// parent the engine's real condenser opens its `llm.auxiliary` under.
+	spans []trace.SpanContext
 }
 
-func (f *fakeCondenser) Condense(_ context.Context, run PendingRun, part RunPart, text string,
+func (f *fakeCondenser) Condense(ctx context.Context, run PendingRun, part RunPart, text string,
 	budget int) (string, AuxTokens, error) {
 	f.calls = append(f.calls, condenseCall{run.AgentHandle, run.TurnID, part, len(text), budget})
+	f.spans = append(f.spans, trace.SpanContextFromContext(ctx))
 	answer, err := f.answer(part, text, budget)
 	return answer, f.cost, err
 }

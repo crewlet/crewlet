@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // ErrResumeUnavailable reports that this node cannot resume the run a
@@ -787,11 +788,20 @@ func (c *Coordinator) adjust(handle string, holding, awaiting int) {
 	c.runs[handle] = runs
 }
 
-// OnEvent routes a seat's control-topic delivery.
+// OnEvent routes a seat's control-topic delivery, in the trace the delivery
+// was filed in.
+//
+// The queue hands a consumer a context with no span, so the delivery's trace
+// is restored here — as notify.Handle restores a delivery's — before anything
+// is decided or logged: a recount, a refusal for a seat held elsewhere and a
+// completion already claimed are all lines about a run, and a line about a run
+// belongs in the run's trace. A run's events are published beneath the span it
+// was launched from, so this restores the same span the run's row names.
 func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	if ev == nil {
 		return nil
 	}
+	ctx = tracing.WithRemote(ctx, ev.Trace())
 	switch payload := ev.Data.(type) {
 	case *types.SandboxRunStarted:
 		return c.OnStarted(ctx, *payload)
@@ -907,6 +917,21 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 			"turn_id", ev.TurnID, "launch_id", ev.LaunchID)
 		return nil
 	}
+
+	// THE RUN'S OWN TRACE, from the row just claimed, which is the
+	// authority the resume restores it from too — never the completion's
+	// envelope, which a caller could have published under anything.
+	// Everything from here works for the run: the collection, the
+	// condensation of a report too long to carry (an `llm.auxiliary` call
+	// on the seat's auxiliary chain, with the SDK's span beneath it and an
+	// `auxiliary_spend` record filed under the run's turn), the charge, the
+	// park and a failed collection's retry. Left on the consumer's bare
+	// context, every one of those calls rooted a trace of its own, decided
+	// by the root rule afresh — an unsampled run's condensation exported,
+	// a sampled one's filed outside its trace — and one condensation split
+	// into as many spend records as it made calls, since a record coalesces
+	// only the calls of one trace.
+	ctx = tracing.WithRemote(ctx, run.Trace())
 
 	result, err := c.collect(ctx, run)
 	if err != nil {
