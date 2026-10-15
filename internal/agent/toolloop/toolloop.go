@@ -1308,6 +1308,15 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 		if err != nil {
 			tracing.Fail(roundSpan, err)
+			// A BILLED FAILURE KEEPS ITS BILL ON THE SPAN, as the phase
+			// record keeps it below: the refused rounds are exactly the
+			// ones a reader of the span is hunting, and a span that
+			// dropped what they cost under-reported them alone.
+			billed := llm.Billed(completion, err)
+			if billed != nil {
+				roundSpan.SetAttributes(roundUsage(billed,
+					cmp.Or(billed.StopReason, llm.StopRefusal))...)
+			}
 			roundSpan.End()
 			err = fmt.Errorf("toolloop: %s round %d: %w", cfg.Surface.Phase(), roundsUsed, err)
 			// A REFUSAL ENDS THE PHASE, AND IS ON ITS RECORD AS A ROUND.
@@ -1317,7 +1326,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			// prompt was read — so it is recorded and charged like any
 			// round, or every refusal would be the one call the budget
 			// never saw and the phase record would end a round early.
-			if billed := llm.Billed(completion, err); billed != nil {
+			if billed != nil {
 				// The response's own stop reason, which on a refusal is
 				// [llm.StopRefusal]; a refusal that named none is still one.
 				account(billed, took, cmp.Or(billed.StopReason, llm.StopRefusal))
@@ -1332,19 +1341,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			}
 			return nil, err
 		}
-		// crewlet.* rather than the GenAI conventions' gen_ai.usage.*, on
-		// purpose: the Anthropic SDK's span beneath this one carries those
-		// for the same call, and so do the Claude API's own spans, which is
-		// already two copies a collector must not add together. Under the
-		// conventional names this round would be a third.
-		roundSpan.SetAttributes(
-			attribute.String("crewlet.model", completion.Model),
-			attribute.Int("crewlet.input_tokens", completion.InputTokens),
-			attribute.Int("crewlet.output_tokens", completion.OutputTokens),
-			attribute.Int("crewlet.cache_read_tokens", completion.CacheRead),
-			attribute.Int("crewlet.cache_write_tokens", completion.CacheWrite),
-			attribute.Int("crewlet.tool_calls", len(completion.ToolCalls)),
-			attribute.String("crewlet.stop_reason", string(completion.StopReason)))
+		roundSpan.SetAttributes(roundUsage(completion, completion.StopReason)...)
 		roundSpan.End()
 		account(completion, took, completion.StopReason)
 
@@ -1871,5 +1868,25 @@ func FormatReasoningAndContent(reasoning, content string) string {
 		return "<think>" + reasoning + "</think>"
 	default:
 		return "<think>" + reasoning + "</think>\n" + content
+	}
+}
+
+// roundUsage is what `llm.round` records of a completion the round was billed
+// for: the model that served it, its token counts, the tool calls it asked for
+// and why it stopped.
+//
+// crewlet.* rather than the GenAI conventions' gen_ai.usage.*, on purpose: the
+// Anthropic SDK's span beneath this one carries those for the same call, and so
+// do the Claude API's own spans, which is already two copies a collector must
+// not add together. Under the conventional names this round would be a third.
+func roundUsage(c *llm.Completion, stop llm.StopReason) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		attribute.String("crewlet.model", c.Model),
+		attribute.Int("crewlet.input_tokens", c.InputTokens),
+		attribute.Int("crewlet.output_tokens", c.OutputTokens),
+		attribute.Int("crewlet.cache_read_tokens", c.CacheRead),
+		attribute.Int("crewlet.cache_write_tokens", c.CacheWrite),
+		attribute.Int("crewlet.tool_calls", len(c.ToolCalls)),
+		attribute.String("crewlet.stop_reason", string(stop)),
 	}
 }
