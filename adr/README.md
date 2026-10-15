@@ -98,18 +98,22 @@ six false statements by the time anybody checked.
 
 ## The records
 
+The last column is a copy of each record's `Enforced-by`, so it is held to
+it: `internal/adr` fails when a row names other tests than its record does,
+or says `nothing` where the record names a gate.
+
 | # | Decision | Enforced by |
 |---|---|---|
 | [0001](0001-one-broker-carries-the-stream-and-the-coordination-store.md) | One broker carries both the stream and the coordination store | `TestNoPackageBuildsASubjectByHand`, `queuetest` |
 | [0002](0002-the-stream-is-the-write-ahead-log.md) | The stream is the write-ahead log; the SQL estate is derived | `TestOnlyTheApplierWritesTheReplicatedEstate` |
 | [0003](0003-fleet-agreement-state-lives-in-coordination.md) | Fleet-agreement state lives in coordination, never a node's own file | `TestEveryNodeTableSaysWhoHasToAgreeOnIt` |
-| [0004](0004-a-node-keeps-two-database-files.md) | A node keeps two database files, and nothing spans them | `TestNoStatementSpansTwoFiles` |
+| [0004](0004-a-node-keeps-two-database-files.md) | A node keeps two database files, and nothing spans them | `TestNoStatementSpansTwoFiles`, `TestNoTableIsDeclaredInBothEstates` |
 | [0005](0005-ownership-is-three-valued.md) | "Do I hold this?" has three answers, never two | the `(value, error)` signature |
-| [0006](0006-event-evolution-is-additive-only.md) | Event evolution is additive-only and unknown types round-trip | `TestAnUnknownTypesLargeIntegersSurviveARoundTrip` |
+| [0006](0006-event-evolution-is-additive-only.md) | Event evolution is additive-only and unknown types round-trip | `TestAnUnknownTypesLargeIntegersSurviveARoundTrip`, `TestUnknownTypeSurvivesIntact`, `TestPayloadTagsMatchTheWireContract` |
 | [0007](0007-turso-is-the-only-store-driver.md) | Turso is the only store driver, and it bounds the release matrix | `TestTursoIsTheOnlyDriverInTheBinary` |
-| [0008](0008-a-shared-rule-gets-one-implementation.md) | A rule more than one package needs gets exactly one implementation | `TestNoClientSitsOnTheProcessGlobalPool` and its siblings |
+| [0008](0008-a-shared-rule-gets-one-implementation.md) | A rule more than one package needs gets exactly one implementation | `TestNoClientSitsOnTheProcessGlobalPool`, `TestNoPackageBuildsASubjectByHand`, `TestOnlyOneClockReadsTheWallTime`, `TestOnlyOnePlaceWritesARunningStreamsConfiguration`, `TestTheReviewSchemaOffersExactlyWhatTheDecoderAccepts` |
 | [0009](0009-one-activation-pointer-applied-per-node.md) | Which revision is current is fleet-wide; applying it is per node | nothing — declared |
-| [0010](0010-tracing-is-configured-by-the-standard-otel-environment.md) | Tracing is configured by the standard OTel environment, not by Tier A | `TestTheExporterAndTheReceiverResolveOneDestination` |
+| [0010](0010-tracing-is-configured-by-the-standard-otel-environment.md) | Tracing is configured by the standard OTel environment, not by Tier A | `TestTheExporterAndTheReceiverResolveOneDestination`, `TestTheResolverReadsTheEnvironmentAsTheSDKDoes`, `TestTheSamplingDecisionCrossesTheQueue`, `TestTheVendorSwitchesTurnNothingOff`, `TestTheSpanCarriesNoContentWhateverTheEnvironmentSays`, `TestAClaudeCodeCallIsHandedTraceContextAndNoTelemetryDestination`, `TestTheRunnersSwitchesTravelOnlyBesideAnEndpoint`, `TestClaudeCodeSwitchesItsTracesOnAndNothingElse`, `TestClaudeCodeIsToldToExportNoContent` |
 | [0011](0011-tier-a-is-the-root-of-trust.md) | Tier A resolves from the environment and nothing else | `TestTierAIsNeverResolvedFromTheSecretStore` |
 | [0012](0012-a-wake-is-derived-not-published.md) | A wake is derived from a durable record, never published by the writer | `TestAnUnreachableClaimStorePublishesAnyway` |
 | [0013](0013-a-seats-identity-is-derived.md) | A seat's identity is derived, never looked up | `TestDeriveAgentIDIsStable` |
@@ -123,10 +127,10 @@ six false statements by the time anybody checked.
 | [0021](0021-fleet-turn-detail-is-a-scatter.md) | The fleet's turn-level detail is read from every node at query time, and every answer says which nodes it covers | `TestEventReadsGoThroughTheFleet`, `queries.FleetEvents` |
 | [0022](0022-a-turn-is-charged-to-one-work-item.md) | A turn is charged to one work item, per segment, and never split | `TestTaskSpendNeverExceedsTheRollup` |
 | [0023](0023-a-decision-is-a-structured-ask.md) | A decision is a structured ask, and the engine enforces only its shape, its answer and its promise | `TestADecisionIsValidatedField`, `TestAChoiceMustNameAnOptionOfTheAskItAnswers`, `TestAnInformedAnswerOwesTheChatSurface` |
-| [0024](0024-the-dashboard-acts-as-the-person-its-token-is-bound-to.md) | The dashboard acts as the person its token is bound to, and nobody else acts through it | `TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat`, `TestAnUnboundOrAnonymousCallerCannotAct` |
+| [0024](0024-the-dashboard-acts-as-the-person-its-token-is-bound-to.md) | The dashboard acts as the person its token is bound to, and nobody else acts through it | `TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat`, `TestAnUnboundOrAnonymousCallerCannotAct`, `TestACallIsMadeAndAuditedAsTheSeatItWasAdmittedAs` |
 | [0025](0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md) | A node without data reaches the estate through a node that holds it | `TestASeatOnAStatelessNodeWritesThroughADataNode` |
 | [0026](0026-the-estate-names-an-object-and-a-store-keeps-its-bytes.md) | The estate names an object, and a store the fleet shares keeps its bytes | `TestEveryTableThatNamesAnObjectIsDeclared` |
-| [0027](0027-a-deletion-from-the-shared-store-needs-no-lock.md) | A deletion from the shared store needs no lock | `TestAPutNamingAnOldKeyIsRefused`, `TestTheGraceOutlastsTheLongestUnrecordedUpload`, `TestEveryPutMintsAKeyNeverWrittenBefore`, `TestAnObjectIsJudgedByBothItsInstants`, `TestAnIncompleteEstateDeletesNothing` |
+| [0027](0027-a-deletion-from-the-shared-store-needs-no-lock.md) | A deletion from the shared store needs no lock | `TestAPutNamingAnOldKeyIsRefused`, `TestTheGraceOutlastsTheLongestUnrecordedUpload`, `TestEveryPutMintsAKeyNeverWrittenBefore`, `TestAnObjectIsJudgedByBothItsInstants`, `TestAnIncompleteEstateDeletesNothing`, `TestAnUnfinishedUploadIsAbandonedOnlyAfterTheGrace` |
 | [0028](0028-the-semantic-first-stage-is-an-index.md) | The semantic first stage is an index | `TestIVFRecallMeetsTheFloorCurve`, `TestEveryHolderBuildsTheSameIndex`, `TestAPartialRepublicationStillFilesEveryRow`, `TestTheIndexWaitsForTheLog` |
 | [0029](0029-a-derived-id-older-than-the-ledger-is-rebased.md) | A derived operation id older than the ledger is rebased, by every attempt, onto an instant the fleet records | `TestAnAttemptRebasesOnlyPastTheHorizon`, `TestALaterAttemptIsJudgedAtItsOwnClock`, `TestALaterAttemptInheritsTheRebaseWhileItCan`, `TestADispatchPastTheHorizonMintsAtItsAttempt`, `TestAResumePastTheHorizonMintsAtItsAttemptOrItsHalfsRebase`, `TestTheRetentionsOutlastWhatTheyCover` |
-| [0030](0030-a-managed-company-document-names-its-writers.md) | A managed company document names its writers, and every other credential is refused a change | `TestAManagedDocumentRefusesEveryOtherCredential`, `TestTheProgrammaticWritesAreJudgedByTheirAuthor`, `TestAReloadOfAManagedDocumentIsOpenToEveryCredential`, `TestAManagedDocumentRefusesAConnectBeforeSealing`, `TestAManagedDocumentRefusesAGitHubAppBeforeGitHubIsAsked`, `TestAManagedDocumentRefusesTheOfflineWrites` |
+| [0030](0030-a-managed-company-document-names-its-writers.md) | A managed company document names its writers, and every other credential is refused a change | `TestAManagedDocumentRefusesEveryOtherCredential`, `TestTheProgrammaticWritesAreJudgedByTheirAuthor`, `TestAReloadOfAManagedDocumentIsOpenToEveryCredential`, `TestAManagedRefusalComesBeforeTheRequestIsRead`, `TestAManagedDocumentRefusesAConnectBeforeSealing`, `TestAManagedDocumentRefusesAGitHubAppBeforeGitHubIsAsked`, `TestAManagedDocumentRefusesTheOfflineWrites` |
