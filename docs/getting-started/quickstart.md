@@ -25,8 +25,8 @@ Crewlet uses a [two-tier config](../concepts/configuration.md):
 ## 0. There is no infrastructure to start
 
 Crewlet is one binary. Its event stream is a NATS JetStream server it
-embeds, and its database is a local file it creates — so a company runs with
-no broker to operate and nothing to point a DSN at. Both slots take an
+embeds, and its database is two local files it creates — so a company runs
+with no broker to operate and nothing to point a DSN at. The stream takes an
 external address when a deployment outgrows that; see
 [Deployment](../guides/deployment.md).
 

@@ -6,7 +6,7 @@ survivable without one.
 
 The short version: **`crewlet backup` takes a verified copy of a running
 node**, without stopping it. It goes through the engine because it has to —
-the store file is locked to that process and the embedded broker binds no
+the store's files are locked to that process and the embedded broker binds no
 socket, so nothing outside the engine can read either estate. The cold
 runbook further down remains the belt to that braces.
 
@@ -673,7 +673,7 @@ read — and restored — from it by whoever holds the keyring. See
 
 ## What not to do
 
-- **Do not copy the store file while the engine runs.** A live WAL database
+- **Do not copy the store's files while the engine runs.** A live WAL database
   copied mid-write is a torn copy; the engine's exclusive lock and the
   driver's one-process rule exist precisely because there is no safe second
   opener. `crewlet backup` is the supported way to copy a running node,
@@ -693,8 +693,8 @@ read — and restored — from it by whoever holds the keyring. See
 ## Filesystem snapshots — the other online option
 
 An **atomic** volume or filesystem snapshot (LVM, ZFS, btrfs, EBS) that
-captures the store file, its `-wal`, and `stream.store_dir` at one instant is
-a crash image: restoring it recovers exactly as if the node had lost power at
+captures both of the store's files (`store.path` and `store.replicated_path`),
+each with its `-wal`, and `stream.store_dir` at one instant is a crash image: restoring it recovers exactly as if the node had lost power at
 that moment — WAL replay on the store, unacked work redelivered from the
 mailboxes. A non-atomic copy of a live tree is **not** this, and gets no such
 guarantee.

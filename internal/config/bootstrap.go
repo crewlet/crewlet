@@ -31,8 +31,8 @@ import (
 // A Tier A naming a broker, a database DSN and a vector store under one
 // `providers:` block is the obvious shape, and none of it is what this engine
 // runs on: the stream is NATS JetStream (embedded by
-// default, so a company needs no external service at all), the store is one
-// local file, and coordination is its own slot. Tier A therefore names the
+// default, so a company needs no external service at all), the store is two
+// local files, and coordination is its own slot. Tier A therefore names the
 // two SLOTS and the store directly rather than a provider bag — see
 // [Stream], [Coordination] and [Store], and [Bootstrap.Validate] for the
 // combinations that are refused.
@@ -1371,7 +1371,8 @@ func (s *Store) validate(path Path) error {
 	var p problems
 	if s.Path == "" {
 		p.add(at(path, "path"), ErrMissing,
-			"the store is a local file this node owns; name one (e.g. %q)",
+			"the node's own store is a local file this node owns; name one "+
+				"(e.g. %q)",
 			DefaultStorePath)
 	}
 	// THE SAME FILE TWICE IS TWO EXCLUSIVE LOCKS ON ONE PATH, which this

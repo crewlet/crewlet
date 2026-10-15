@@ -102,8 +102,8 @@ nothing, because a seat's recent turns are not similar work.
 ## Core infrastructure
 
 **There is none to choose.** The engine is one binary: its event stream is a
-NATS JetStream server it embeds, and its store is a local file it creates and
-owns exclusively. A single host runs a whole company with nothing else
+NATS JetStream server it embeds, and its store is two local files it creates
+and owns exclusively. A single host runs a whole company with nothing else
 installed, in development and in production alike.
 
 Two slots change once a deployment outgrows one node:
