@@ -302,6 +302,33 @@ func TestTheModelIsReadUnderItsNormalizedID(t *testing.T) {
 	}
 }
 
+// AN ID IS ESCAPED ONCE, BY THE SDK. An id the table does not know is whatever
+// the entry wrote, and a gateway alias may carry a space or a `#`. Escaped here
+// as well as by the SDK, the endpoint was asked for a model literally named
+// `team%20alias%20%232`, answered that it had none, and an entry it serves
+// read "not served". The endpoint answers only the id itself, decoded, so a
+// second escape fails the read rather than passing it.
+func TestAnUnknownModelIDReachesTheModelsAPIAsWritten(t *testing.T) {
+	t.Parallel()
+	const id = "team alias #2" // what Normalize leaves of the entry's model
+	api, url := serveDoctor(t, func(w http.ResponseWriter, asked string) {
+		if asked != id {
+			notFound(w, asked)
+			return
+		}
+		writeJSON(w, http.StatusOK, currentRecord(id))
+	}, refuses(t))
+	d := doctorProvider(t, url, "gateway/"+id, nil).
+		Diagnose(context.Background(), DiagnoseOptions{Key: "claude"})
+	reads := api.requests(http.MethodGet)
+	if len(reads) != 1 || reads[0].path != "/v1/models/"+id {
+		t.Fatalf("reads = %+v, want one read of /v1/models/%s", reads, id)
+	}
+	if !strings.HasPrefix(d.ModelsAPI, "served") {
+		t.Fatalf("models api = %q, want the record the endpoint serves", d.ModelsAPI)
+	}
+}
+
 // A GATEWAY THAT DOES NOT SERVE /v1/models IS NOT A FAILURE. The entry's
 // requests never read it, and the round is what says whether the model
 // answers — so "not served" is reported and nothing is a problem.
@@ -563,6 +590,45 @@ func TestTheReportRendersEveryLine(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("report lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+// THE REPORT NAMES WHERE CALLS GO AND NONE OF THE CREDENTIAL. A gateway's
+// password is commonly written into base_url's userinfo, and a key into its
+// query, and the report is what an operator pastes into a ticket. What it
+// prints is where every call goes: the query and the fragment are never sent
+// (each request's path is resolved against base_url, which replaces both), and
+// a base_url with no host cannot be split into its parts at all.
+func TestTheEndpointLineCarriesNoCredential(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ baseURL, want string }{
+		{"https://gw.example:8443/anthropic/", "https://gw.example:8443/anthropic/"},
+		{"https://gateway-user:hunter2@gw.example/anthropic/?key=sk-ant-secret#frag",
+			"https://gw.example/anthropic/ (its userinfo is not shown)"},
+		{"https://gw.example/anthropic?key=sk-ant-secret", "https://gw.example/anthropic"},
+		{"gateway-user:hunter2@gw.example", "not shown — base_url is not a URL with a scheme and a host, " +
+			"so no part of it can be told apart from a credential"},
+		{"https://gateway-user:hunter2@gw.example:port/", "not shown — base_url is not a URL with a scheme " +
+			"and a host, so no part of it can be told apart from a credential"},
+	} {
+		if got := endpointLine(tc.baseURL); got != tc.want {
+			t.Errorf("endpointLine(%q) = %q, want %q", tc.baseURL, got, tc.want)
+		}
+	}
+
+	// And end to end: the line the doctor renders for an entry whose
+	// base_url carries a password.
+	_, url := serveDoctor(t, notFound, refuses(t))
+	withUser := strings.Replace(url, "://", "://gateway-user:hunter2@", 1)
+	d := doctorProvider(t, withUser, "claude-opus-5-5", nil).
+		Diagnose(context.Background(), DiagnoseOptions{Key: "claude"})
+	var out strings.Builder
+	d.Render(&out)
+	if strings.Contains(out.String(), "hunter2") || strings.Contains(out.String(), "gateway-user") {
+		t.Fatalf("the report carries base_url's userinfo:\n%s", out.String())
+	}
+	if want := "endpoint      : " + url + " (its userinfo is not shown)\n"; !strings.Contains(out.String(), want) {
+		t.Fatalf("report lacks %q:\n%s", want, out.String())
 	}
 }
 
