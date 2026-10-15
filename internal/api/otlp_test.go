@@ -3,6 +3,8 @@ package api_test
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/crewlet/crewlet/internal/api"
@@ -151,9 +154,14 @@ func TestAnExportTheReceiverCannotReadIsRefused(t *testing.T) {
 	a := newApp(t, api.Options{OtelReceiver: receiver})
 	path := "/otlp/" + tokenFor(t, receiver, otlpTrace) + "/v1/traces"
 
+	// Valid protobuf past the bound — a field the message does not know,
+	// repeated — so it is its size that refuses it.
 	var bomb bytes.Buffer
 	zw := gzip.NewWriter(&bomb)
-	_, _ = zw.Write(make([]byte, sandbox.MaxOtelPayload+1))
+	field := protowire.AppendBytes(protowire.AppendTag(nil, 15, protowire.BytesType), make([]byte, 64<<10))
+	for range sandbox.MaxOtelPayload/len(field) + 1 {
+		_, _ = zw.Write(field)
+	}
 	_ = zw.Close()
 
 	for _, tc := range []struct {
@@ -297,4 +305,37 @@ func closedToReads() *config.Bootstrap {
 	b.API.Auth.AllowAnonymousRead = false
 	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
 	return &b
+}
+
+// EACH REFUSAL IS THE ANSWER OTLP/HTTP GIVES IT. A receiver at its decoding
+// budget is the one refusal that is not the box's fault and that waiting
+// fixes, so it is the one answer an exporter retries — a 503 with a
+// Retry-After — while the rest are final.
+//
+// Mutation: answer a busy receiver 400 like a malformed export and the box
+// drops a batch nothing was wrong with.
+func TestARefusedExportIsAnsweredAsOTLPAsks(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		err        error
+		status     int
+		code       string
+		retryAfter string
+	}{
+		{fmt.Errorf("decoding: %w", sandbox.ErrOtelBusy), http.StatusServiceUnavailable, "overloaded", "1"},
+		{sandbox.ErrOtelUnsupported, http.StatusUnsupportedMediaType, "invalid_body", ""},
+		{sandbox.ErrOtelTooLarge, http.StatusRequestEntityTooLarge, "body_too_large", ""},
+		{sandbox.ErrOtelMalformed, http.StatusBadRequest, "invalid_body", ""},
+	} {
+		rec := httptest.NewRecorder()
+		api.RefuseOTLP(rec, tc.err)
+		var body struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != tc.status || body.Error != tc.code || rec.Header().Get("Retry-After") != tc.retryAfter {
+			t.Errorf("%v: answered %d %q Retry-After %q, want %d %q %q", tc.err, rec.Code, body.Error,
+				rec.Header().Get("Retry-After"), tc.status, tc.code, tc.retryAfter)
+		}
+	}
 }
