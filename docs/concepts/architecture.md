@@ -186,8 +186,9 @@ back what it wrote.
 | `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. A session lives in the process holding the seat, which may serve no API at all, so the node a call reaches relays it to that node over the broker (`internal/httprelay`) and the box dials one address for the whole fleet. |
 | `/health` · `/ready` | The two probes — [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
 
-**`workers` is nine company-wide singletons, each held on its own
-`worker:DUTY` lease.**
+**`workers` runs the company-wide singletons, each held on its own
+`worker:DUTY` lease.** A `workers` node holds data too, because the duties read
+and write this node's own copy of the replicated estate.
 
 | Lease | Duty |
 |---|---|
@@ -199,6 +200,7 @@ back what it wrote.
 | `worker:retention` | The state logs' trim: each domain's floor terms evaluated, what all of them permit purged, and the conclusion published. |
 | `worker:embeddings` | The knowledge base's embeddings, computed once for the company and published as records every data node applies. |
 | `worker:iam_sweep` | The identity estate's retention: a sweep record for every bucket that is due, which every data node's applier carries out. |
+| `worker:trash-reaper` | The trash's term and the assistant's retention: hourly, purges what has been in the knowledge base's or the artifacts' trash past thirty days, and the Dashboard Assistant's conversations unused for `assistant.retention_days` (the company's own setting) or owned by a person the identity estate removed, each through its domain's own purge record, as the engine. |
 | `worker:object-collector` | The [object store](object-store.md)'s collection and audit: hourly, the objects no row names and the uploads that never finished; daily, that every object a row names is there and whole. |
 
 **Four more services run on every node, whatever the roles say, and a fifth on every data node.**

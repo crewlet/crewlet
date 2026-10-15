@@ -50,7 +50,7 @@ not a request handler you can route, it is a place where things run:
 | Moves to the satellite | Stays on the core |
 |---|---|
 | The agent instance, its state and its turns | The HTTP API, the dashboard, every integration's webhooks |
-| **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | Every [singleton duty](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the sweeps, the trim, the sandbox waiter, the learning passes |
+| **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | Every [singleton duty](../concepts/seat-ownership.md#singleton-duties) — the scheduler tick, the sandbox waiter, the maintenance sweep, the identity sweep, the trim, the embeddings, the learning passes, the integration reconcile, the object store's collector and the trash reaper — on whichever core node holds `workers` |
 | Its LLM calls, its knowledge searches, its tool calls | Every other seat's agents and MCP servers |
 | Its sandbox launches, if the role is sandboxed | The company config, the leases and the ledgers — all shared, in the coordination slot |
 
