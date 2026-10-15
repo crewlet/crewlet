@@ -463,3 +463,29 @@ func TestModelNamesProviderIsDeclaredOnlyWhereItIsMeasured(t *testing.T) {
 		t.Error("cli.overrides.model_names_provider did not reach the profile")
 	}
 }
+
+// THE TWO PROMPT COUNTS ARE DECLARED TOGETHER, on stdout as for a usage file:
+// the backend charges the vendor's counts only when both resolve, so a profile
+// declaring one estimates every call while the doctor says otherwise.
+func TestAUsageDeclarationNamesBothPromptCountsOrNeither(t *testing.T) {
+	t.Parallel()
+	for name, usage := range map[string]map[string]any{
+		"input alone":  {"input": []any{[]any{"usage", "input_tokens"}}},
+		"output alone": {"output": []any{[]any{"usage", "output_tokens"}}},
+	} {
+		_, err := Load("custom", map[string]any{
+			"binary": "x", "complete_args": []any{"-p"}, "text_paths": []any{[]any{"result"}},
+			"usage": usage,
+		})
+		if err == nil || !strings.Contains(err.Error(), "declared together") {
+			t.Errorf("%s: want a refusal naming the pair, got %v", name, err)
+		}
+	}
+	p, err := Load("claude-code", map[string]any{"usage": map[string]any{"cache_read": []any{}}})
+	if err != nil {
+		t.Fatalf("an override leaving both counts declared was refused: %v", err)
+	}
+	if !p.ReadsUsage() {
+		t.Error("a json profile declaring both counts does not read usage")
+	}
+}

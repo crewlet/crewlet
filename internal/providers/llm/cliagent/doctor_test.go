@@ -170,10 +170,13 @@ func TestTheSmokeTestNamesAnEmptyAnswerRatherThanQuotingIt(t *testing.T) {
 			"binary": os.Args[0], "complete_args": []any{"-test.run=TestCLIAgentFakeCLI"},
 			"model_args": []any{}, "output": "json",
 			"text_paths": []any{[]any{"result"}},
-			"usage":      map[string]any{"output": []any{[]any{"usage", "output_tokens"}}},
+			"usage": map[string]any{
+				"input":  []any{[]any{"usage", "input_tokens"}},
+				"output": []any{[]any{"usage", "output_tokens"}},
+			},
 		},
 		Env: fakeChildEnv(map[string]string{
-			"FAKE_STDOUT": `{"result":"","usage":{"output_tokens":627}}`,
+			"FAKE_STDOUT": `{"result":"","usage":{"input_tokens":41,"output_tokens":627}}`,
 		}),
 	})
 	if err != nil {
@@ -209,7 +212,6 @@ func TestTheSmokeTestPassesOnAWorkingEnvelope(t *testing.T) {
 		Overrides: map[string]any{
 			"binary": os.Args[0], "complete_args": []any{"-test.run=TestCLIAgentFakeCLI"},
 			"model_args": []any{}, "output": "text",
-			"usage": map[string]any{"input": []any{[]any{"in"}}},
 		},
 		Env: fakeChildEnv(map[string]string{"FAKE_STDOUT": reply}),
 	})

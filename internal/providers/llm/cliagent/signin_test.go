@@ -252,7 +252,7 @@ func TestAnAnsweredSmokeTestClearsANoSignInProblem(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			p := fakeProvider(t, tc.env, map[string]any{"usage": map[string]any{"input": []any{[]any{"in"}}}})
+			p := fakeProvider(t, tc.env, nil)
 			d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 			var problem string
 			for _, line := range d.Problems {

@@ -826,6 +826,14 @@ counts are estimated at four characters per token — an approximation, but
 keep moving or a seat on this backend would run with no ceiling.
 `crewlet llm doctor` tells you which of the two you are getting.
 
+**Both prompt counts come from the CLI's report, or neither does.** A report
+where `usage.input` resolves and `usage.output` does not — or the reverse —
+is a profile whose other path has drifted from the CLI, not a call that cost
+nothing on that side, so the call is estimated rather than charged a real
+input against an output of zero. A stream may carry the two on different
+events. For the same reason a profile declares `usage.input` and
+`usage.output` together, or neither.
+
 **A CLI can report its tokens honestly and still not put them in the
 answer.** Hermes's one-shot entry point is `hermes -z`, whose whole contract
 is "single prompt in, final response text out, nothing else on stdout or
@@ -852,10 +860,10 @@ partial overlay would pair one source's input count with another's output
 count, and the sum is what a budget is charged. (The two cache figures are
 not part of that test — a provider that caches nothing reports neither, and
 zero is the true answer there.) For the same reason a profile setting
-`usage_file_args` must declare **both** `usage.input` and `usage.output`:
-declaring one means every call quietly falls back to an estimate while
-`crewlet llm doctor` reports the vendor's own figures, which is precisely
-what that line exists to settle.
+`usage_file_args` must declare **both** `usage.input` and `usage.output`, as
+every profile must: declaring one means every call quietly falls back to an
+estimate while `crewlet llm doctor` reports the vendor's own figures, which
+is precisely what that line exists to settle.
 
 **Not every vendor's richer channel is worth taking.** `pi` has one —
 `--mode json` streams every session event and carries real counts — and this
@@ -1250,7 +1258,7 @@ key by key; lists and single values replace wholesale.
 | `event_type_path` | Where a `jsonl` line names its event kind. |
 | `text_events` | The event kinds whose text is the answer. |
 | `error_paths` | A boolean the CLI sets when it failed despite exiting zero. |
-| `usage` | `{input, output, cache_read, cache_write}`: where the token counts are. |
+| `usage` | `{input, output, cache_read, cache_write}`: where the token counts are. `input` and `output` are declared together or not at all. |
 | `usage_file_args` | The flag asking the CLI to write its counts to a file, with `{usage_file}`. |
 | `config_env` | A vendor's own relocation variable, mapped to a directory under the seat home — relative, and never climbing out of it. |
 | `env` | Fixed child environment. Never a credential, never `token_env` or `api_key_env`, and never a variable [the engine sets itself](#engine-owned-variables). |
