@@ -253,11 +253,11 @@ makes a running fleet re-read them.
 
 Read by `crewlet run` at startup, and by [`crewlet llm doctor`](cli.md#crewlet-llm), the one
 other command that calls a model; never by `crewlet validate`. The endpoint, header,
-protocol, compression, TLS and exporter variables are resolved by **one resolver** for
+protocol, compression, TLS, timeout and exporter variables are resolved by **one resolver** for
 every reader in the engine, so its own span exporter and the [sandbox OTLP forwarder](../concepts/code-sandbox.md),
 which passes on a coding box's traces, send them to the same place with the same credential. A value that can never work
 is refused at startup, naming the variable to change; a telemetry *typo* that has a safe
-reading (a sampler ratio, an export interval) warns and carries on.
+reading (a sampler ratio, an export interval, an export timeout) warns and carries on.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
@@ -273,6 +273,8 @@ reading (a sampler ratio, an export interval) warns and carries on.
 | `OTEL_EXPORTER_OTLP_CERTIFICATE` | The PEM file of the certificate authorities an `https://` collector is verified against, instead of the system's roots. A file that cannot be read or holds no PEM certificate is refused at startup naming the variable and the path, and so is one beside an `http://` endpoint, which has no TLS to use it with. | `/etc/crewlet/collector-ca.pem` |
 | `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY` | The PEM files of the client certificate presented to an `https://` collector that requires one, and its private key — a **pair**: one without the other, or a key that does not match the certificate, is refused at startup. | `/etc/crewlet/client.pem` |
 | `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`, `…_TRACES_CLIENT_CERTIFICATE`, `…_TRACES_CLIENT_KEY` (and the `METRICS_` forms) | One signal's TLS material, overriding the base: its certificate replaces the base certificate, and its pair replaces the base pair. A pair is never taken half from one level and half from the other: one half of a signal's pair without the other is refused at startup naming the missing variable, even beside a complete base pair, rather than falling back to the base pair as the OpenTelemetry SDK does. | `/etc/crewlet/traces-ca.pem` |
+| `OTEL_EXPORTER_OTLP_TIMEOUT` | How long one export may take, in milliseconds — the **one** bound every layer of the engine's own export is held to: each attempt the exporter makes, the batch of spans it is handed, a metric collection, and the final flush at shutdown. Default `5000`, shorter than the specification's ten seconds because the engine's whole API shutdown grace is five. A value that is not a whole number above zero — `0` included, which the OpenTelemetry SDK reads as no bound at all — warns `otel_export_timeout_invalid` and is set aside; one longer than the eight-second final flush warns `otel_export_timeout_past_flush`, because the last export at shutdown is cut there whatever it says. The sandbox forwarder resolves it alike and bounds each forward by its own ten seconds instead, since a box's exporter waits on the forward and is told how long at launch. | `10000` |
+| `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT`, `OTEL_EXPORTER_OTLP_METRICS_TIMEOUT` | One signal's timeout, overriding the base. A value set aside here leaves the base to decide. | `2000` |
 | `OTEL_EXPORTER_OTLP_INSECURE`, `OTEL_EXPORTER_OTLP_<SIGNAL>_INSECURE` | Says nothing the endpoint's scheme does not: `http://` is plaintext and `https://` is TLS, whatever case the scheme is written in. Accepted when it agrees with the scheme; `true` beside `https://`, `false` beside `http://`, or a value that is neither `true` nor `false` is refused at startup. | `true` |
 | `OTEL_TRACES_EXPORTER` | `otlp` (default) or `none`. `none` switches trace export off whatever the endpoint says — the engine's own spans and the traces the sandbox forwarder would pass on alike. Span ids still flow into every event either way. Anything else, a list included, is refused at startup. | `none` |
 | `OTEL_METRICS_EXPORTER` | The same, for metrics: `none` with an endpoint set is "traces yes, metrics no". | `none` |
@@ -331,9 +333,22 @@ sends: a gRPC `Export` call where the protocol is `grpc`, gzipped where the comp
 is, verified against the certificate and presenting the client pair the TLS variables
 name.
 
-`OTEL_EXPORTER_OTLP_TIMEOUT` and its per-signal forms are read by the OpenTelemetry SDK
-itself, for the engine's own exports; the forwarder bounds each forward with a timeout of
-its own (ten seconds), since a box waits on it.
+**What the OpenTelemetry SDK still reads for itself.** The engine hands its exporters
+everything the resolver read — endpoint, headers, protocol, compression, TLS and timeout
+— so the SDK's own reading of those variables never decides anything. A few variables
+it covers nothing of, and the SDK reads them from the process environment as it
+documents them: `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_BSP_MAX_QUEUE_SIZE` and
+`OTEL_BSP_MAX_EXPORT_BATCH_SIZE` (how spans are batched), the span limits
+(`OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT`, `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT`,
+`OTEL_SPAN_EVENT_COUNT_LIMIT`, `OTEL_SPAN_LINK_COUNT_LIMIT`,
+`OTEL_EVENT_ATTRIBUTE_COUNT_LIMIT`, `OTEL_LINK_ATTRIBUTE_COUNT_LIMIT` and the general
+`OTEL_ATTRIBUTE_COUNT_LIMIT` and `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT`),
+`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` and `OTEL_METRICS_EXEMPLAR_FILTER`.
+Three it would read and the engine then overrides are **refused at startup** instead,
+naming what decides: `OTEL_BSP_EXPORT_TIMEOUT` and `OTEL_METRIC_EXPORT_TIMEOUT`, because
+`OTEL_EXPORTER_OTLP_TIMEOUT` bounds every layer of an export, and
+`OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION`, because every histogram the
+engine records is bucketed at its own fixed boundaries.
 
 None of these variables reaches a coding box from the engine's environment. A box is handed
 an OTLP environment of its own — the receiver as its base endpoint, empty headers, the

@@ -64,7 +64,7 @@ func TestEveryInstrumentRegistersAgainstTheProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configureMeter: %v", err)
 	}
-	defer func() { _ = shutdownMeter(t.Context(), mp) }()
+	defer func() { _ = shutdownMeter(t.Context(), mp, otlpenv.Destination{}) }()
 
 	// Recording into every instrument must reach the recorder, whatever
 	// its kind — a kind the registration forgot would silently drop.

@@ -2,15 +2,15 @@
 
 - **Status:** accepted
 - **Authority:** `internal/tracing`
-- **Enforced-by:** `internal/tracing.TestTheExporterAndTheReceiverResolveOneDestination`, which holds the engine's span exporter and the sandbox receiver to one traces destination, `internal/tracing.TestTheResolverReadsTheEnvironmentAsTheSDKDoes`, which holds that destination to what the OTel SDK itself sends, `internal/tracing.TestTheSamplingDecisionCrossesTheQueue`, which holds a trace continued on a node whose sampler says otherwise to the decision its root made, and `internal/providers/llm/anthropic.TestTheVendorSwitchesTurnNothingOff` and `internal/providers/llm/anthropic.TestTheSpanCarriesNoContentWhateverTheEnvironmentSays`, which hold the Anthropic SDK's own spans to this configuration rather than to its `ANTHROPIC_OPEN_TELEMETRY*` variables, and `internal/providers/llm/cliagent.TestAClaudeCodeCallIsHandedTraceContextAndNoTelemetryDestination`, which holds a vendor CLI on the engine host to receiving the round's trace context and none of the engine's telemetry configuration, and `internal/sandbox.TestTheRunnersSwitchesTravelOnlyBesideAnEndpoint` with `internal/sandbox/codingagent.TestClaudeCodeSwitchesItsTracesOnAndNothingElse` and `TestClaudeCodeIsToldToExportNoContent`, which hold a vendor CLI in a box to exporting its traces — only its traces, with no content — through the receiver and nowhere else, and `internal/sandbox.TestAnImagesPerSignalVariablesDecideNothing` with `TestTheOperatorsTelemetryEnvironmentWins`, which hold what a box's exporter resolves to the receiver whatever per-signal variable its image carries, and to the operator's collector where `role.sandbox.env` names one, and `internal/sandbox/codingagent.TestClaudeCodeIsHandedTheRunsTelemetryAboveItsSettingsFiles`, which holds what the launch decided over a settings file the box carries, and `cmd/crewlet.TestDoctorIsTracedFromTheOTelEnvironment` with `TestDoctorExaminesEachEntryInARootSpanOfItsOwn`, which hold the one command outside a node that calls a model to this configuration and to a span over every call it makes
+- **Enforced-by:** `internal/tracing.TestTheExporterAndTheReceiverResolveOneDestination`, which holds the engine's span exporter and the sandbox receiver to one traces destination, `internal/tracing.TestTheResolverReadsTheEnvironmentAsTheSDKDoes`, which holds that destination to what the OTel SDK itself sends, `internal/tracing.TestOneTimeoutBoundsEveryLayerOfAnExport`, which holds every bound an export passes to the one timeout the resolver read rather than to the SDK's own reading, `internal/tracing.TestTheSamplingDecisionCrossesTheQueue`, which holds a trace continued on a node whose sampler says otherwise to the decision its root made, and `internal/providers/llm/anthropic.TestTheVendorSwitchesTurnNothingOff` and `internal/providers/llm/anthropic.TestTheSpanCarriesNoContentWhateverTheEnvironmentSays`, which hold the Anthropic SDK's own spans to this configuration rather than to its `ANTHROPIC_OPEN_TELEMETRY*` variables, and `internal/providers/llm/cliagent.TestAClaudeCodeCallIsHandedTraceContextAndNoTelemetryDestination`, which holds a vendor CLI on the engine host to receiving the round's trace context and none of the engine's telemetry configuration, and `internal/sandbox.TestTheRunnersSwitchesTravelOnlyBesideAnEndpoint` with `internal/sandbox/codingagent.TestClaudeCodeSwitchesItsTracesOnAndNothingElse` and `TestClaudeCodeIsToldToExportNoContent`, which hold a vendor CLI in a box to exporting its traces — only its traces, with no content — through the receiver and nowhere else, and `internal/sandbox.TestAnImagesPerSignalVariablesDecideNothing` with `TestTheOperatorsTelemetryEnvironmentWins`, which hold what a box's exporter resolves to the receiver whatever per-signal variable its image carries, and to the operator's collector where `role.sandbox.env` names one, and `internal/sandbox/codingagent.TestClaudeCodeIsHandedTheRunsTelemetryAboveItsSettingsFiles`, which holds what the launch decided over a settings file the box carries, and `cmd/crewlet.TestDoctorIsTracedFromTheOTelEnvironment` with `TestDoctorExaminesEachEntryInARootSpanOfItsOwn`, which hold the one command outside a node that calls a model to this configuration and to a span over every call it makes
 - **Measured:** the provider is installed unconditionally and only the exporter is switched on, so `trace_id` reaches `crewlet_events` — an indexed column, and what `GET /events/trace/{id}` answers on — with no collector anywhere
 - **Cost-when-tried:** OTel's own built-in default provider is a no-op that passes the parent's span context through, which silently reinstates the bug this package removed. `internal/tracing`'s `init` installs a working one for that reason. And two readers of one set of variable names disagreed three ways while a test asserting the names passed — see "How it is held"
 - **Tag-status:** unreleased
 
 ## The decision
 
-The OTLP endpoints, headers, protocols, compression, TLS material and exporter
-switches, the service name
+The OTLP endpoints, headers, protocols, compression, TLS material, export
+timeouts and exporter switches, the service name
 and resource attributes, and the sampler and its ratio are the `OTEL_*`
 environment variables every collector's own documentation uses. There is no
 `tracing:` block in the Tier A file, and there will not be one.
@@ -23,10 +23,16 @@ turn that started them, and forwards the traces the box exports — traces alone
 the one signal any runner switches on in a box, so a box's token is worth spans
 in its run's trace and nothing else. **Both resolve the
 OTLP variables through one resolver, `internal/otlpenv`**, and neither reads
-them itself — the engine hands its exporters everything the resolver read, so
-the SDK's own reading of the same variables never decides anything, and the
-forwarder sends what a box exported the way those exporters send: the resolved
-protocol (a gRPC `Export` call to a gRPC collector), compression and TLS.
+them itself — the engine hands its exporters everything the resolver read, the
+timeout bounding the batch processor and the metric reader as well as the
+exporter, so the SDK's own reading of those variables never decides anything,
+and the forwarder sends what a box exported the way those exporters send: the
+resolved protocol (a gRPC `Export` call to a gRPC collector), compression and
+TLS. What the SDK still reads for itself is what the resolver covers nothing
+of — how spans are batched, the span limits, a metric exporter's temporality —
+and a variable it would read only for an explicit setting to override is
+refused by name; the list is the environment reference's
+([environment variables](../docs/reference/environment-variables.md#opentelemetry-optional)).
 
 **The tracer is always running; only the exporter is optional.** A trace id is
 not merely an exporter's concern here — it is an indexed column in the event
@@ -146,7 +152,7 @@ So the variables are read in one place, `internal/otlpenv`, which mirrors the
 OTel Go SDK's own reading of them, and two tests hold the arrangement: the
 agreement test resolves a table of environments through each half's own entry
 point and requires equal destinations — endpoint, headers, protocol, compression,
-TLS material, whether the signal was switched off — and equal refusals; the
+TLS material, timeout, whether the signal was switched off — and equal refusals; the
 conformance tests build the SDK's exporter from the environment alone and
 require it to send where, with what, compressed as and trusting what the
 resolver said.

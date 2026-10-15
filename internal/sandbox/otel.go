@@ -139,6 +139,14 @@ type OtelReceiverOptions struct {
 // must not hold the receiver's handlers open — the exporter inside the box
 // retries anyway, so a dropped batch costs a gap in a trace rather than data
 // nobody can reconstruct.
+//
+// ITS OWN, and not the timeout [otlpenv] resolves into [OtelReceiverOptions]'s
+// Upstream from OTEL_EXPORTER_OTLP_TIMEOUT: that bounds the engine's own
+// exports, while a forward is waited on synchronously by a box whose exporter
+// is told how long to wait ([OtelAnswerWithin]) from this value, at a launch
+// that cannot know what a later forward will be held to. So the receiver
+// resolves the timeout alike, as the agreement test holds, and does not honour
+// it.
 const OtelForwardTimeout = 10 * time.Second
 
 // OtelAnswerWithin is how long a box's exporter is told to wait for the
