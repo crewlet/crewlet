@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -71,6 +72,45 @@ func TestTheHoldersAreTheLiveDataNodes(t *testing.T) {
 	}
 	if len(live) != 1 || live[0].NodeID != "data-a" {
 		t.Errorf("the estate is held by %v, want the one live data node", live)
+	}
+}
+
+// THE ROUTED DATA NODES ARE THE ROUTER'S OWN PLACEMENT: every live data node
+// the WATCHED view names, sorted — the set a keyed operation's rendezvous order
+// is computed over — and never a node without `data`; and a view that has not
+// listed is UNKNOWN, never "none", since a caller waiting for the fleet's
+// routing to be whole must not read an unlisted view as a fleet of nobody.
+func TestTheRoutedDataNodesAreTheRoutersPlacement(t *testing.T) {
+	t.Parallel()
+	backend := coordmem.New()
+	claimPresences(t, backend, map[string][]string{
+		"data-b": {"data"}, "data-a": {"data", "seats"}, "agent-1": {"seats"},
+	})
+	view, err := coord.NewLeaseView(backend, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &Engine{dataView: view}
+	if nodes, err := e.RoutedDataNodes(); !errors.Is(err, coord.ErrUnavailable) {
+		t.Errorf("a view that has never listed routes to %v (%v), want unknown", nodes, err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = view.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitUntil(t, 5*time.Second, "the view to list", func() bool { return !view.ListedAt().IsZero() })
+	nodes, err := e.RoutedDataNodes()
+	if err != nil {
+		t.Fatalf("RoutedDataNodes: %v", err)
+	}
+	placed, err := e.estatePlacement().Holders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"data-a", "data-b"}; !slices.Equal(nodes, want) || !slices.Equal(nodes, placed) {
+		t.Errorf("the router asks %v by RoutedDataNodes and %v by its placement, want both %v",
+			nodes, placed, want)
 	}
 }
 
