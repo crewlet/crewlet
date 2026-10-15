@@ -526,9 +526,9 @@ func prepareHome(home string) (string, error) {
 // Version is the git this pool runs.
 func (p *Pool) Version() Version { return p.version }
 
-// PackReuse is the pack.allowPackReuse value this binary accepts: "multi" at
-// [MultiPackReuse] or newer, "true" before — chosen once, so the cache's serve
-// configuration has one source.
+// PackReuse is the pack.allowPackReuse value this binary serves a whole
+// pack with: "multi" at [MultiPackReuse] or newer, "true" before — chosen
+// once, so the cache's serve configuration has one source.
 func (p *Pool) PackReuse() string { return p.reuse }
 
 // Slots is the size of the lane class c waits in (an unknown class: 0).

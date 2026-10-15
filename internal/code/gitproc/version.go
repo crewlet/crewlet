@@ -20,10 +20,22 @@ import (
 // swapped by an atomic rename rather than raise this.
 var MinVersion = Version{2, 40, 0}
 
-// MultiPackReuse is the first git that accepts pack.allowPackReuse=multi: 2.43
-// refuses the value outright ("bad boolean config value 'multi'"), so the
-// value a cache serves with is chosen per binary ([Pool.PackReuse]).
-var MultiPackReuse = Version{2, 44, 0}
+// MultiPackReuse is the first git whose pack.allowPackReuse=multi sends a
+// pack its client can read, so the value a cache serves with is chosen per
+// binary ([Pool.PackReuse]). 2.43 refuses the value outright ("bad boolean
+// config value 'multi'"); 2.44 to 2.47 accept it, and reusing from several
+// packs that hold one object — which a cache's are, since receive-pack
+// completes each thin push with the bases it borrowed from the packs before
+// it — send that object twice or a delta without its base, and the client's
+// index-pack refuses the whole pack: every full clone of a repository the
+// maintainer had written a bitmap for failed on 2.47.3, the git the engine
+// image installs ("REF_DELTA … already resolved", "pack has N unresolved
+// deltas"). 2.48.0 is the release that fixed it (tb/multi-pack-reuse-dupfix,
+// "Object reuse code based on multi-pack-index sent an unwanted copy of
+// object"), measured against the same repositories. An older git reuses from
+// the bitmap's preferred pack alone, which costs a clone CPU and never its
+// pack.
+var MultiPackReuse = Version{2, 48, 0}
 
 // Version is a git release, compared on (Major, Minor, Patch).
 type Version struct{ Major, Minor, Patch int }

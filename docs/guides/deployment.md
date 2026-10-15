@@ -1097,7 +1097,12 @@ cache on its own disk. What such a node needs from its host:
 - **git 2.40 or newer on its `PATH`.** The node runs the host's own git as a
   subprocess per request and checks its version at boot: an older one refuses
   the boot, naming the version and the path it found. The published image ships
-  2.47 (Debian trixie).
+  2.47 (Debian trixie). On git 2.48 or newer a clone is sent from every pack
+  the cache holds verbatim (multi-pack reuse); an older git reuses only the
+  bitmap's preferred pack — 2.43 and older cannot reuse from several, and 2.44
+  to 2.47 send a pack the client refuses when they do — so a clone there costs
+  the node more CPU. The node logs which it chose (`pack_reuse` on
+  `code_git_ready`).
 - **A volume for `git.cache_dir`.** The cache holds every repository the node
   serves, whole, and a cold sync writes everything it downloads at the speed
   the object store delivers it — so a volume of its own is worth it: its own
